@@ -720,6 +720,7 @@
                     <span class="auth-name" id="authName" hidden></span>
                 </div>
                 <button class="icon-btn-text" type="button" onclick="newChat(); closeDrawer();">New chat</button>
+                <button class="icon-btn-text" type="button" onclick="appSignOut();" title="Sign out of this app instance">Sign out</button>
             </div>
         </div>
     </div>
@@ -988,6 +989,14 @@
                 }
             } catch (error) {
                 showStatus('error', 'Auth failed: ' + error.message);
+            }
+        }
+
+        async function appSignOut() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+            } finally {
+                location.href = '/login.html';
             }
         }
 
