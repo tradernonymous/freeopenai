@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-15%20passing-22c55e?style=for-the-badge" alt="15 tests passing">
+  <img src="https://img.shields.io/badge/tests-21%20passing-22c55e?style=for-the-badge" alt="21 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed reply. Copy or retry any response. History saves to your browser and survives a reload.
+      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Copy or retry any response. History saves to your browser and survives a reload.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -73,6 +73,12 @@
     <td valign="top">
       <h3>♿ Accessible by default</h3>
       Keyboard navigation on the model picker, a focus-trapped help dialog, and live-region announcements for new messages.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🖼️ Image generation</h3>
+      Toggle the image icon next to the input to generate a picture instead of chatting. Click any result to zoom in or download it.
     </td>
   </tr>
 </table>
@@ -114,8 +120,10 @@ Puter.js supports several dozen OpenAI model ids beyond this curated list (o1, o
 | Send a message | Type and press `Enter` (`Shift+Enter` for a newline) |
 | Switch model | Click the model pill in the chat header, or open the **Models** tab |
 | Attach a file | Paperclip icon — text files only, 200KB max |
+| Generate an image | Image icon next to the input — describes what to draw instead of chatting |
+| View / download an image | Click any generated image to zoom in, with a download link |
 | Copy a reply | Copy icon under any assistant message |
-| Retry a reply | Retry icon under any assistant message — resends the same prompt |
+| Retry a reply | Retry icon under any assistant message — resends the same prompt (or regenerates the image) |
 | Start a new chat | **New chat** icon, top right — asks for confirmation first |
 | Sign in / out | Account icon, top right, or the **Settings** tab |
 
