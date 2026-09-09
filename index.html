@@ -682,7 +682,11 @@
         }
 
         @media (max-width: 380px) {
-            #viewChat .chat-bar-title { display: none; }
+            /* Hide the branding, not the whole cluster -- the history toggle
+               lives in here, and hiding it strands the sidebar on a 375px
+               phone with no way to open it. */
+            #viewChat .chat-bar-title .dot,
+            #viewChat .chat-bar-title span { display: none; }
             .effort-select { max-width: 76px; }
             .model-trigger span#modelLabel { max-width: 68px; }
         }
