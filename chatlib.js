@@ -540,6 +540,71 @@ const SYSTEM_PROMPT = [
   'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
 ].join('\n');
 
+// Puter is the default because it needs no key. The others are direct,
+// OpenAI-compatible endpoints reached through our own server, which holds the
+// key -- so the browser never sees one.
+const PUTER_PROVIDER = 'puter';
+
+// A direct provider answers in OpenAI's completion shape, with the message
+// wrapped in choices[]. Unwrap it so the rest of the app sees the same
+// { message } it gets from Puter and every existing helper keeps working.
+function normalizeProviderReply(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.message) return data;
+  const choice = Array.isArray(data.choices) ? data.choices[0] : null;
+  return choice && choice.message ? { message: choice.message, raw: data } : null;
+}
+
+// OpenRouter marks a zero-cost variant with a ":free" suffix. Cerebras and
+// NVIDIA don't -- their free tier is an account-level allowance, so every model
+// they list is free within it.
+function isFreeModelId(id) {
+  return /:free$/i.test(String(id || ''));
+}
+
+// Families that are good at code or long-form reasoning. This is a heuristic
+// over model names, not a benchmark: it decides ordering in a dropdown, and
+// being wrong costs a scroll, not a wrong answer.
+const CAPABLE_MODEL_PATTERN =
+  /(coder|code|deepseek|qwen ?3|qwen3|qwen2\.5|llama-?3\.[13]|llama-?4|kimi|glm|mistral-large|devstral|minimax|gpt-oss|nemotron|command-a|reasoner|thinking|r1\b)/i;
+
+function isCapableModelId(id) {
+  return CAPABLE_MODEL_PATTERN.test(String(id || ''));
+}
+
+// Providers return their whole catalogue -- OpenRouter's runs to hundreds --
+// including embedding and audio models that can only fail on a chat call.
+// Drop those, then float what the user actually wants to the top: free first,
+// then models suited to research and coding.
+function usableChatModels(models, limit = 60) {
+  const skip = /(embed|rerank|whisper|tts|moderation|guard|vision-only|image|dall-e|stable-diffusion|flux)/i;
+  const usable = (models || [])
+    .filter((m) => m && typeof m.id === 'string' && !skip.test(m.id))
+    .map((m) => ({
+      id: m.id,
+      ownedBy: m.ownedBy || m.owned_by,
+      free: isFreeModelId(m.id),
+      capable: isCapableModelId(m.id),
+    }));
+
+  const rank = (m) => (m.free ? 0 : 2) + (m.capable ? 0 : 1);
+  return usable
+    .map((m, index) => ({ m, index }))
+    // Keep the provider's own order within a rank, so "newest first" survives.
+    .sort((a, b) => rank(a.m) - rank(b.m) || a.index - b.index)
+    .map(({ m }) => m)
+    .slice(0, limit);
+}
+
+// One line under a model's name in the picker.
+function describeProviderModel(model) {
+  const parts = [];
+  if (model && model.free) parts.push('free');
+  if (model && model.capable) parts.push('code / research');
+  if (model && model.ownedBy && parts.length < 2) parts.push(model.ownedBy);
+  return parts.join(' · ');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -583,6 +648,12 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_HISTORY_MESSAGES,
     buildChatHistory,
     SYSTEM_PROMPT,
+    PUTER_PROVIDER,
+    normalizeProviderReply,
+    usableChatModels,
+    isFreeModelId,
+    isCapableModelId,
+    describeProviderModel,
     newConversation,
     sortConversations,
     upsertConversation,

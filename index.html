@@ -739,6 +739,7 @@
                                 </button>
                                 <div class="model-dropdown" id="modelDropdown" role="listbox" aria-label="Available models"></div>
                             </div>
+                            <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
                             <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
                             <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
@@ -1012,6 +1013,11 @@
         // updateEffortPicker reads it during initializeApp().
         const effortRejectedBy = new Set();
 
+        // Which service answers. 'puter' needs no key; the others go through our
+        // own server, which holds the key.
+        let selectedProvider = PUTER_PROVIDER;
+        let providerModels = [];
+
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
         let githubConnected = false;
@@ -1102,6 +1108,7 @@
             // Learn up front whether the GitHub tools should be offered to the
             // model, rather than waiting for the user to open Settings.
             refreshGithubStatus();
+            loadProviders();
             showStatus('success', 'Connected');
         }
 
@@ -1111,12 +1118,20 @@
             showStatus('error', 'Puter.js not loaded');
         }
 
+        // The dropdown shows the current provider's catalogue: the curated Puter
+        // list, or whatever the direct provider actually offers.
+        function activeModels() {
+            return selectedProvider === PUTER_PROVIDER
+                ? MODELS
+                : providerModels.map((m) => ({ id: m.id, name: m.id, desc: describeProviderModel(m) }));
+        }
+
         function renderModelOptions() {
             modelDropdown.innerHTML = '';
             modelsList.innerHTML = '';
             defaultModelSelect.innerHTML = '';
 
-            MODELS.forEach((m) => {
+            activeModels().forEach((m) => {
                 const opt = document.createElement('button');
                 opt.type = 'button';
                 opt.className = 'model-option' + (m.id === selectedModel ? ' active' : '');
@@ -1243,6 +1258,16 @@
         }
 
         function selectModel(modelId) {
+            if (selectedProvider !== PUTER_PROVIDER) {
+                if (!providerModels.some((m) => m.id === modelId)) return;
+                selectedModel = modelId;
+                localStorage.setItem('provider:' + selectedProvider + ':model', modelId);
+                renderModelOptions();
+                updateModelLabel();
+                updateEffortPicker();
+                showStatus('success', 'Model: ' + modelId);
+                return;
+            }
             if (!isValidModel(modelId)) return;
             selectedModel = modelId;
             modelDropdown.querySelectorAll('.model-option').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
@@ -1265,7 +1290,7 @@
         function updateEffortPicker() {
             const select = document.getElementById('effortSelect');
             if (!select) return;
-            const capable = supportsEffort(selectedModel) && !effortRejectedBy.has(selectedModel);
+            const capable = selectedProvider === PUTER_PROVIDER && supportsEffort(selectedModel) && !effortRejectedBy.has(selectedModel);
             select.hidden = !capable;
             if (!capable) return;
             if (!select.options.length) {
@@ -1289,7 +1314,7 @@
         }
 
         function updateModelLabel() {
-            const model = MODELS.find((m) => m.id === selectedModel);
+            const model = activeModels().find((m) => m.id === selectedModel);
             modelLabel.textContent = model ? model.name : selectedModel;
         }
 
@@ -1564,6 +1589,84 @@
         // Runs the model until it stops asking for tools, then hands back its
         // final message. Each tool call is announced in the transcript so the
         // user can see what the model touched.
+        async function loadProviders() {
+            const select = document.getElementById('providerSelect');
+            try {
+                const available = (await (await fetch('/api/llm/providers')).json()).filter((p) => p.configured);
+                if (!available.length) {
+                    select.hidden = true;
+                    return;
+                }
+                select.innerHTML = '';
+                [{ id: PUTER_PROVIDER, label: 'Puter' }, ...available].forEach((provider) => {
+                    const opt = document.createElement('option');
+                    opt.value = provider.id;
+                    opt.textContent = provider.label;
+                    select.appendChild(opt);
+                });
+                const saved = localStorage.getItem('puterChatProvider');
+                selectedProvider = available.some((p) => p.id === saved) ? saved : PUTER_PROVIDER;
+                select.value = selectedProvider;
+                select.hidden = false;
+                if (selectedProvider !== PUTER_PROVIDER) await loadProviderModels();
+            } catch {
+                select.hidden = true;
+            }
+        }
+
+        async function selectProvider(id) {
+            selectedProvider = id;
+            localStorage.setItem('puterChatProvider', id);
+            if (id === PUTER_PROVIDER) {
+                providerModels = [];
+                selectedModel = isValidModel(localStorage.getItem('puterChatModel') || '')
+                    ? localStorage.getItem('puterChatModel')
+                    : DEFAULT_MODEL;
+            } else {
+                await loadProviderModels();
+            }
+            renderModelOptions();
+            updateModelLabel();
+            updateEffortPicker();
+            showStatus('success', 'Provider: ' + id);
+        }
+
+        // The catalogue comes from the provider itself, so it can't go stale.
+        async function loadProviderModels() {
+            try {
+                const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(selectedProvider));
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Could not list models');
+                providerModels = usableChatModels(data);
+                if (!providerModels.length) throw new Error('No chat models returned');
+                const remembered = localStorage.getItem('provider:' + selectedProvider + ':model');
+                // providerModels is already sorted free-and-capable first, so
+                // the head of the list is the sensible default.
+                selectedModel = providerModels.some((m) => m.id === remembered) ? remembered : providerModels[0].id;
+            } catch (err) {
+                providerModels = [];
+                showStatus('error', 'Could not load models: ' + err.message);
+            }
+        }
+
+        // One call site for "ask a model", so the rest of the app doesn't care
+        // which service is answering.
+        async function callModel(convo, extra = {}) {
+            if (selectedProvider === PUTER_PROVIDER) {
+                return chatWithEffortFallback(selectedModel, (opts) =>
+                    puter.ai.chat(convo, { ...opts, ...extra })
+                );
+            }
+            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: selectedModel, messages: convo, ...extra }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Request failed');
+            return normalizeProviderReply(data);
+        }
+
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
@@ -1601,9 +1704,7 @@
 
         async function runChatWithTools(convo, chatModel) {
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                const response = await chatWithEffortFallback(chatModel, (opts) =>
-                    puter.ai.chat(convo, { ...opts, tools: GITHUB_TOOLS })
-                );
+                const response = await callModel(convo, { tools: GITHUB_TOOLS });
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
                 if (!calls.length) return { message, response };
@@ -1626,9 +1727,7 @@
             // start another chain -- to turn it into an answer instead of
             // discarding it.
             convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
-            const summary = await chatWithEffortFallback(chatModel, (opts) =>
-                puter.ai.chat(convo, opts)
-            );
+            const summary = await callModel(convo);
             return { message: (summary && summary.message) || null, response: summary, exhausted: true };
         }
 
@@ -1754,13 +1853,17 @@
                     return;
                 }
 
-                const response = await chatWithEffortFallback(chatModel, (opts) =>
-                    attachedImageFile
-                        // An image rides as its own argument, which has no place
-                        // in a message array, so that path stays single-message.
-                        ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
-                        : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
-                );
+                // Streaming is Puter-only for now; a direct provider answers in
+                // one piece, which the non-streaming branch below handles.
+                const response = selectedProvider !== PUTER_PROVIDER
+                    ? await callModel(buildConversation(outgoing))
+                    : await chatWithEffortFallback(chatModel, (opts) =>
+                        attachedImageFile
+                            // An image rides as its own argument, which has no
+                            // place in a message array, so that stays single.
+                            ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
+                            : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
+                    );
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {

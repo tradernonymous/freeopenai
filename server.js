@@ -427,6 +427,124 @@ function githubPutFile(req, res) {
   });
 }
 
+// Direct provider access, as an alternative to Puter. Each of these is
+// OpenAI-compatible, so one adapter covers all three: only the base URL, the
+// key and a couple of headers differ.
+//
+// Keys live here, never in the browser. The whole API surface already sits
+// behind the login gate, so a key can't be read by anyone who isn't signed in.
+const LLM_PROVIDERS = {
+  cerebras: {
+    label: 'Cerebras',
+    baseUrl: 'https://api.cerebras.ai/v1',
+    envVar: 'CEREBRAS_API_KEY',
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    envVar: 'OPENROUTER_API_KEY',
+    // Optional attribution headers OpenRouter documents for its leaderboards.
+    headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeOpenAI' }),
+  },
+  nvidia: {
+    label: 'NVIDIA',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    envVar: 'NVIDIA_API_KEY',
+  },
+};
+
+function providerConfig(id) {
+  const provider = LLM_PROVIDERS[id];
+  if (!provider) return null;
+  const key = process.env[provider.envVar];
+  if (!key) return null;
+  // A base URL override lets the same adapter reach a self-hosted NIM or a
+  // proxy, and lets the tests point at a local stand-in.
+  const baseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
+  return { ...provider, key, baseUrl };
+}
+
+// Which providers the user can actually pick. A provider with no key stays out
+// of the list rather than appearing and failing on first use.
+function llmProviders(req, res) {
+  sendJson(res, 200, Object.entries(LLM_PROVIDERS).map(([id, provider]) => ({
+    id,
+    label: provider.label,
+    configured: !!process.env[provider.envVar],
+  })));
+}
+
+async function providerFetch(req, provider, path, init = {}) {
+  const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
+  const res = await fetch(provider.baseUrl + path, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${provider.key}`,
+      'Content-Type': 'application/json',
+      ...extra,
+      ...(init.headers || {}),
+    },
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// Model lists are read from the provider at runtime rather than hardcoded, so
+// they can't go stale and a renamed model can't silently break a request.
+async function llmModels(req, res) {
+  const id = new URL(req.url, 'http://x').searchParams.get('provider');
+  const provider = providerConfig(id);
+  if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  try {
+    const { ok, status, data } = await providerFetch(req, provider, '/models');
+    if (!ok) return sendJson(res, status, { error: (data && data.error && data.error.message) || 'Could not list models' });
+    const models = (data && Array.isArray(data.data) ? data.data : [])
+      .map((m) => ({ id: m.id, ownedBy: m.owned_by }))
+      .filter((m) => m.id);
+    sendJson(res, 200, models);
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+function llmChat(req, res) {
+  const id = new URL(req.url, 'http://x').searchParams.get('provider');
+  const provider = providerConfig(id);
+  if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  readJsonBody(req, 1024 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    if (!body || !body.model || !Array.isArray(body.messages)) {
+      return sendJson(res, 400, { error: 'model and messages are required' });
+    }
+    try {
+      const { ok, status, data } = await providerFetch(req, provider, '/chat/completions', {
+        method: 'POST',
+        // Passed through rather than rebuilt: these are OpenAI-shaped already,
+        // and rebuilding would quietly drop anything new the caller sends.
+        body: JSON.stringify({
+          model: body.model,
+          messages: body.messages,
+          ...(body.tools ? { tools: body.tools } : {}),
+          ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+        }),
+      });
+      if (!ok) {
+        return sendJson(res, status, {
+          error: (data && data.error && (data.error.message || data.error)) || 'Provider request failed',
+        });
+      }
+      sendJson(res, 200, data);
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
@@ -485,6 +603,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
+    if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
+    if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
+    if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
