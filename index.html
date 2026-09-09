@@ -424,6 +424,7 @@
         const statusMessage = document.getElementById('statusMessage');
         const usageText = document.getElementById('usageText');
         const helpOverlay = document.getElementById('helpOverlay');
+        console.log('DOM elements loaded:', { modelTrigger, modelDropdown });
 
         // Initialize
         initializeApp();
@@ -431,6 +432,7 @@
         loadMessagesFromStorage();
 
         function initializeApp() {
+            console.log('initializeApp started');
             if (typeof puter === 'undefined') {
                 console.error('Puter.js not found');
                 showStatus('error', 'Puter.js not loaded');
