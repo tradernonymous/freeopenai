@@ -474,6 +474,25 @@ function llmProviders(req, res) {
   })));
 }
 
+// Providers disagree on error shape: some nest a message under error, some
+// return a bare string, some return nothing but a status. Dig out whatever is
+// there and keep the status code, which is often the most informative part.
+function describeProviderError(status, data) {
+  const raw = data && (data.error || data.message || data.detail);
+  let message = '';
+  if (typeof raw === 'string') message = raw;
+  else if (raw && typeof raw === 'object') message = raw.message || raw.code || JSON.stringify(raw);
+  if (!message && data && typeof data === 'object') message = JSON.stringify(data).slice(0, 300);
+
+  const hint =
+    status === 401 || status === 403 ? ' — check the API key for this provider'
+      : status === 402 ? ' — this model is not free on your plan'
+        : status === 404 ? ' — that model id is not available to your key'
+          : status === 429 ? ' — rate limited, wait a moment'
+            : '';
+  return `${status}: ${message || 'request failed'}${hint}`;
+}
+
 async function providerFetch(req, provider, path, init = {}) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
   const res = await fetch(provider.baseUrl + path, {
@@ -502,10 +521,22 @@ async function llmModels(req, res) {
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
   try {
     const { ok, status, data } = await providerFetch(req, provider, '/models');
-    if (!ok) return sendJson(res, status, { error: (data && data.error && data.error.message) || 'Could not list models' });
+    if (!ok) return sendJson(res, status, { error: describeProviderError(status, data) });
+    // OpenRouter publishes pricing and capability metadata alongside each
+    // model; Cerebras and NVIDIA return the bare OpenAI shape. Pass through
+    // whatever is there so the client can rank on facts instead of guessing
+    // from the model's name.
     const models = (data && Array.isArray(data.data) ? data.data : [])
-      .map((m) => ({ id: m.id, ownedBy: m.owned_by }))
-      .filter((m) => m.id);
+      .filter((m) => m && m.id)
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        ownedBy: m.owned_by,
+        pricing: m.pricing,
+        contextLength: m.context_length,
+        supportedParameters: m.supported_parameters,
+        outputModalities: m.architecture && m.architecture.output_modalities,
+      }));
     sendJson(res, 200, models);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
@@ -534,9 +565,10 @@ function llmChat(req, res) {
         }),
       });
       if (!ok) {
-        return sendJson(res, status, {
-          error: (data && data.error && (data.error.message || data.error)) || 'Provider request failed',
-        });
+        // Collapsing every upstream failure into one string made it impossible
+        // to tell a missing model from an empty balance from a bad key. Report
+        // what the provider actually said.
+        return sendJson(res, status, { error: describeProviderError(status, data) });
       }
       sendJson(res, 200, data);
     } catch (e) {

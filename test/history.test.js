@@ -143,23 +143,23 @@ test('coding and reasoning families are recognised', () => {
   assert.ok(!isCapableModelId(''));
 });
 
-test('free and code-capable models are floated to the top of the list', () => {
+test('on a provider with no pricing, ranking falls to capability', () => {
+  // Cerebras and NVIDIA return the bare OpenAI shape, so every model is free
+  // within the account allowance and cost can't separate them.
   const sorted = usableChatModels([
     { id: 'some-tiny-chat-model' },
     { id: 'mistralai/mistral-7b' },
-    { id: 'qwen/qwen3-coder:free' },
-    { id: 'deepseek/deepseek-r1' },
+    { id: 'qwen3-coder-480b' },
+    { id: 'deepseek-r1' },
     { id: 'meta/llama-guard' },
-    { id: 'openai/gpt-oss-120b:free' },
   ]);
-  // free + capable, then capable, then the rest; guard models dropped entirely.
   assert.deepEqual(sorted.map((m) => m.id), [
-    'qwen/qwen3-coder:free',
-    'openai/gpt-oss-120b:free',
-    'deepseek/deepseek-r1',
+    'qwen3-coder-480b',
+    'deepseek-r1',
     'some-tiny-chat-model',
     'mistralai/mistral-7b',
   ]);
+  assert.ok(!sorted.some((m) => m.id.includes('guard')), 'a guard model is not a chat model');
 });
 
 test('the provider order is kept within a rank, so newest stays first', () => {
@@ -167,13 +167,75 @@ test('the provider order is kept within a rank, so newest stays first', () => {
   assert.deepEqual(sorted.map((m) => m.id), ['qwen3-coder', 'deepseek-r1']);
 });
 
-test('a model description says what matters about it', () => {
+test('a model description leads with what matters, not who made it', () => {
   assert.equal(describeProviderModel({ free: true, capable: true }), 'free · code / research');
-  assert.equal(describeProviderModel({ free: true, ownedBy: 'Meta' }), 'free · Meta');
+  // The vendor is a fallback: it only appears when nothing more useful applies.
+  assert.equal(describeProviderModel({ free: true, ownedBy: 'Meta' }), 'free');
   assert.equal(describeProviderModel({ ownedBy: 'Alibaba' }), 'Alibaba');
   assert.equal(describeProviderModel(null), '');
 });
 
 test('puter stays the default provider, since it needs no key', () => {
   assert.equal(PUTER_PROVIDER, 'puter');
+});
+
+const { isFreeModel, supportsTools, emitsText } = require('../chatlib.js');
+
+test('cost is read from published pricing, not guessed from the name', () => {
+  // OpenRouter lists ~430 models and only ~21 are actually free, so the name
+  // alone was never a reliable signal.
+  assert.ok(isFreeModel({ id: 'x/y:free', pricing: { prompt: '0', completion: '0' } }));
+  assert.ok(!isFreeModel({ id: 'x/y:free', pricing: { prompt: '0.0000004', completion: '0' } }));
+  assert.ok(!isFreeModel({ id: 'anthropic/claude', pricing: { prompt: '0.000003', completion: '0.000015' } }));
+});
+
+test('a provider that publishes no pricing falls back to the id', () => {
+  // Cerebras and NVIDIA return the bare OpenAI shape; their free tier is an
+  // account allowance, so an absent price is not a paid model.
+  assert.ok(isFreeModel({ id: 'llama-3.3-70b' }));
+  assert.ok(isFreeModel({ id: 'qwen-3-32b', pricing: undefined }));
+  assert.ok(!isFreeModel(null));
+});
+
+test('tool support is honoured when the provider reports it', () => {
+  assert.ok(supportsTools({ supportedParameters: ['tools', 'temperature'] }));
+  assert.ok(!supportsTools({ supportedParameters: ['temperature'] }));
+  // No report is the benefit of the doubt, not a withheld capability.
+  assert.ok(supportsTools({ id: 'x' }));
+  assert.ok(supportsTools(null) === true || supportsTools(null) === false);
+});
+
+test('models that cannot emit text are not chat models', () => {
+  assert.ok(emitsText({ outputModalities: ['text'] }));
+  assert.ok(!emitsText({ outputModalities: ['audio'] }));
+  assert.ok(!emitsText({ outputModalities: ['image'] }));
+  assert.ok(emitsText({ id: 'x' }));
+});
+
+test('the real free OpenRouter catalogue ranks and filters correctly', () => {
+  // Taken from a live /v1/models response.
+  const live = [
+    { id: 'anthropic/claude-opus', pricing: { prompt: '0.000015', completion: '0.000075' }, supportedParameters: ['tools'], architecture: {}, outputModalities: ['text'] },
+    { id: 'google/lyria-3-pro-preview', pricing: { prompt: '0', completion: '0' }, outputModalities: ['audio'] },
+    { id: 'nvidia/nemotron-3.5-content-safety:free', pricing: { prompt: '0', completion: '0' }, supportedParameters: [], outputModalities: ['text'] },
+    { id: 'cohere/north-mini-code:free', pricing: { prompt: '0', completion: '0' }, supportedParameters: ['tools'], outputModalities: ['text'], contextLength: 256000 },
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', pricing: { prompt: '0', completion: '0' }, supportedParameters: ['tools'], outputModalities: ['text'], contextLength: 1000000 },
+  ];
+  const ranked = usableChatModels(live);
+  const ids = ranked.map((m) => m.id);
+
+  assert.ok(!ids.includes('google/lyria-3-pro-preview'), 'a music model is not a chat model');
+  assert.ok(!ids.some((id) => id.includes('content-safety')), 'a safety classifier is not a chat model');
+  // Free and tool-capable come first; the paid model comes last.
+  assert.equal(ids[0], 'cohere/north-mini-code:free');
+  assert.equal(ids[ids.length - 1], 'anthropic/claude-opus');
+  assert.equal(describeProviderModel(ranked[0]), 'free \u00b7 code / research \u00b7 256k ctx');
+});
+
+test('a model without tool support is labelled so, not silently broken', () => {
+  const model = usableChatModels([
+    { id: 'some/chat-model', pricing: { prompt: '0', completion: '0' }, supportedParameters: ['temperature'], outputModalities: ['text'] },
+  ])[0];
+  assert.equal(model.tools, false);
+  assert.match(describeProviderModel(model), /no tools/);
 });

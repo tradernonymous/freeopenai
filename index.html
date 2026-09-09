@@ -1751,10 +1751,18 @@
                     puter.ai.chat(convo, { ...opts, ...extra })
                 );
             }
+            // Tools go only to models that accept them; sending them to one
+            // that doesn't is a request that can only fail.
+            const chosen = providerModels.find((m) => m.id === selectedModel);
+            const payload = { model: selectedModel, messages: convo, ...extra };
+            if (payload.tools && chosen && chosen.tools === false) {
+                delete payload.tools;
+                showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
+            }
             const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: selectedModel, messages: convo, ...extra }),
+                body: JSON.stringify(payload),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Request failed');
