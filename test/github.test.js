@@ -25,3 +25,29 @@ test('decryptJson rejects malformed input', () => {
   assert.equal(decryptJson('shh', 'not.enough'), null);
   assert.equal(decryptJson('shh', 'not-a-real-token'), null);
 });
+
+const { sessionMatchesUser } = require('../github.js');
+
+test('a GitHub session only matches the account it was sealed for', () => {
+  assert.ok(sessionMatchesUser({ appUser: 'alice' }, 'alice'));
+  // The leak this closes: alice connects, logs out, bob signs in on the same
+  // browser and the surviving cookie hands him her repos.
+  assert.ok(!sessionMatchesUser({ appUser: 'alice' }, 'bob'));
+  assert.ok(!sessionMatchesUser({ appUser: 'alice' }, null));
+});
+
+test('sessions sealed with the gate off match only the gate-off state', () => {
+  assert.ok(sessionMatchesUser({ appUser: null }, null));
+  // Turning the login gate on must invalidate tokens sealed while it was off.
+  assert.ok(!sessionMatchesUser({ appUser: null }, 'alice'));
+});
+
+test('a session predating this field is treated as gate-off, not as a wildcard', () => {
+  assert.ok(sessionMatchesUser({ token: 'x' }, null));
+  assert.ok(!sessionMatchesUser({ token: 'x' }, 'alice'));
+});
+
+test('sessionMatchesUser rejects a missing session', () => {
+  assert.ok(!sessionMatchesUser(null, 'alice'));
+  assert.ok(!sessionMatchesUser(undefined, null));
+});
