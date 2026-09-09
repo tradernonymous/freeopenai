@@ -477,9 +477,20 @@
 
             // Model option selection
             modelDropdown.querySelectorAll('.model-option').forEach(opt => {
-                opt.addEventListener('click', () => {
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
                     selectModel(opt.dataset.model);
                     modelDropdown.classList.remove('open');
+                });
+            });
+
+            // Navigation buttons
+            document.querySelectorAll('.nav-icon-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.nav-icon-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const label = btn.getAttribute('title');
+                    showStatus('info', `Switched to ${label}`);
                 });
             });
 
@@ -563,11 +574,11 @@
         function addMessage(type, content) {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
 
-        const el = document.createElement('div');
-        el.className = `message ${type}`;
-        // Preserve line breaks in content for better readability
-        el.innerHTML = content.replace(/\n/g, '\u003cbr\u003e');
-        el.innerHTML = content.replace(/\n/g, '<br>');
+            const el = document.createElement('div');
+            el.className = `message ${type}`;
+            // Preserve line breaks for better context and spacing
+            el.innerHTML = content.replace(/\n/g, '<br>');
+            
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
