@@ -8,6 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Free OpenAI API | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
+    <script src="chatlib.js"></script>
     <style>
         :root {
             --bg: #000000;
@@ -51,27 +52,58 @@
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
-            justify-content: center;
+            justify-content: space-between;
             padding: 0 20px;
         }
+        .header-left, .header-right { display: flex; align-items: center; gap: 8px; }
+        .header-center { display: flex; align-items: center; gap: 4px; position: absolute; left: 50%; transform: translateX(-50%); }
         .header-title {
             font-size: 18px;
             font-weight: 600;
         }
+        .auth-area { display: flex; align-items: center; gap: 6px; }
+        .auth-name { font-size: 12px; color: var(--text-dim); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .nav-icon-btn {
+            width: 36px; height: 36px;
+            border-radius: var(--r-sm);
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            display: grid; place-items: center;
+            transition: var(--transition);
+        }
+        .nav-icon-btn svg { width: 18px; height: 18px; }
+        .nav-icon-btn:hover { background: var(--surface-2); color: var(--text); }
+        .nav-icon-btn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--border); }
+
+        /* Load error banner */
+        .load-error-banner {
+            display: none; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 10px 16px; background: #3a1414; border-bottom: 1px solid var(--danger);
+            color: #ffb4b4; font-size: 13px;
+        }
+        .load-error-banner.visible { display: flex; }
+        .load-error-banner button { background: var(--danger); color: #000; border: none; border-radius: var(--r-sm); padding: 6px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
 
         /* Main layout - full viewport */
         main { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
         .chat-wrapper { flex: 1; display: flex; flex-direction: column; background: var(--bg-elevated); overflow: hidden; }
 
+        /* Views */
+        .view { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+        .view.active { display: flex; }
+
         /* Chat card - full size */
-.chat-card {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    overflow: visible;
-}
+        .chat-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            overflow: visible;
+        }
 
         /* Chat header bar */
         .chat-bar {
@@ -145,7 +177,7 @@
             color: var(--text); font-size: 13px; cursor: pointer;
             text-align: left; transition: var(--transition);
         }
-        .model-option:hover { background: var(--surface-2); }
+        .model-option:hover, .model-option:focus-visible { background: var(--surface-2); outline: none; }
         .model-option.active { background: var(--accent-bg); color: var(--accent); }
         .model-option .model-name { font-weight: 500; }
         .model-option .model-desc { font-size: 11px; color: var(--text-muted); margin-left: auto; }
@@ -171,7 +203,18 @@
         @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .message.user { align-self: flex-end; background: var(--accent-bg); color: var(--text); border-bottom-right-radius: 4px; }
         .message.bot { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-        .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; }
+        .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; text-align: center; }
+        .message.system.error { color: var(--danger); }
+
+        .message-actions { display: flex; gap: 4px; margin-top: 8px; }
+        .msg-action-btn {
+            width: 24px; height: 24px; border-radius: 6px;
+            background: transparent; border: 1px solid transparent;
+            color: var(--text-muted); cursor: pointer;
+            display: grid; place-items: center; transition: var(--transition);
+        }
+        .msg-action-btn:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+        .msg-action-btn svg { width: 13px; height: 13px; }
 
         /* Typing indicator */
         .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 8px 16px; align-self: flex-start; color: var(--text-muted); font-size: 12px; }
@@ -197,6 +240,14 @@
             padding: 12px 16px;
         }
         .input-row { display: flex; align-items: flex-end; gap: 8px; max-width: 900px; margin: 0 auto; }
+        .attachment-chip {
+            display: flex; align-items: center; gap: 8px; max-width: 900px; margin: 0 auto 8px;
+            padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
+            background: var(--surface); font-size: 12px; color: var(--text-dim);
+        }
+        .attachment-chip button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
+        .attachment-chip button:hover { color: var(--danger); }
+        .attachment-chip[hidden] { display: none; }
         .icon-btn-sm {
             width: 40px; height: 40px; flex-shrink: 0;
             border-radius: var(--r);
@@ -249,6 +300,36 @@
         .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
         .status-dot.error { background: var(--danger); }
 
+        /* Settings / Models views */
+        .settings-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        .settings-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 16px;
+            padding: 14px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2);
+        }
+        .settings-row strong { display: block; font-size: 13px; }
+        .settings-hint { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+        .settings-row select {
+            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; max-width: 55%;
+        }
+        .icon-btn-text {
+            padding: 8px 14px; border-radius: var(--r-sm); background: var(--surface);
+            border: 1px solid var(--border); color: var(--text); font-size: 12px; cursor: pointer;
+            transition: var(--transition); white-space: nowrap;
+        }
+        .icon-btn-text:hover { border-color: var(--accent); color: var(--accent); }
+        .icon-btn-text.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+        .models-list { display: flex; flex-direction: column; gap: 8px; }
+        .model-card {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px; border: 1px solid var(--border); border-radius: var(--r);
+            background: var(--surface-2); cursor: pointer; text-align: left; color: var(--text); font: inherit;
+        }
+        .model-card:hover, .model-card:focus-visible { border-color: var(--accent); outline: none; }
+        .model-card.active { border-color: var(--accent); background: var(--accent-bg); }
+        .model-card .model-desc { color: var(--text-muted); font-size: 12px; }
+
         /* Help modal */
         .modal-overlay {
             position: fixed; inset: 0; z-index: 200;
@@ -281,6 +362,7 @@
         /* Responsive */
         @media (max-width: 640px) {
             header { padding: 0 12px; height: 52px; }
+            .auth-name { display: none; }
             .chat-bar { padding: 0 12px; height: 52px; }
             .chat-messages { padding: 14px 12px; }
             .message { max-width: 92%; font-size: 15px; }
@@ -303,91 +385,138 @@
             </div>
         </div>
         <div class="header-center">
-            <button class="nav-icon-btn active" title="Chat" aria-label="Chat">
+            <button class="nav-icon-btn active" data-view="chat" title="Chat" aria-label="Chat">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             </button>
-            <button class="nav-icon-btn" title="Models" aria-label="Models">
+            <button class="nav-icon-btn" data-view="models" title="Models" aria-label="Models">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
             </button>
-            <button class="nav-icon-btn" title="Settings" aria-label="Settings">
+            <button class="nav-icon-btn" data-view="settings" title="Settings" aria-label="Settings">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
         </div>
         <div class="header-right">
+            <div class="auth-area">
+                <span class="auth-name" id="authName" hidden></span>
+                <button class="icon-btn" id="authButton" title="Sign in" aria-label="Sign in" onclick="handleAuthClick()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </button>
+            </div>
             <button class="icon-btn" title="New Chat" aria-label="New Chat" onclick="newChat()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             </button>
         </div>
     </header>
 
+    <div class="load-error-banner" id="loadErrorBanner" role="alert">
+        <span id="loadErrorText">Puter.js failed to load.</span>
+        <button type="button" onclick="location.reload()">Reload</button>
+    </div>
+
     <main>
         <div class="chat-wrapper">
-            <div class="chat-card">
-                <div class="chat-bar">
-                    <div class="chat-bar-title">
-                        <span class="dot"></span>
-                        <span>Free OpenAI API</span>
-                    </div>
-                    <div class="chat-bar-actions">
-                        <div style="position: relative;">
-                            <button class="model-trigger" id="modelTrigger" aria-label="Select Model" aria-haspopup="listbox">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-                                <span id="modelLabel">GPT-5.4 Nano</span>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                            </button>
-                            <div class="model-dropdown" id="modelDropdown" role="listbox">
-                                <button class="model-option active" data-model="gpt-5.4-nano" role="option"><span class="model-name">GPT-5.4 Nano</span><span class="model-desc">Fast, Cheap</span></button>
-                                <button class="model-option" data-model="gpt-5.6-sol" role="option"><span class="model-name">GPT-5.6 Sol</span><span class="model-desc">Flagship</span></button>
-                                <button class="model-option" data-model="gpt-5.6-terra" role="option"><span class="model-name">GPT-5.6 Terra</span><span class="model-desc">Mid-tier</span></button>
-                                <button class="model-option" data-model="gpt-5.6-luna" role="option"><span class="model-name">GPT-5.6 Luna</span><span class="model-desc">Small, Cheap</span></button>
-                                <button class="model-option" data-model="gpt-6-astra" role="option"><span class="model-name">GPT-6 Astra</span><span class="model-desc">Newest, Powerful</span></button>
-                                <button class="model-option" data-model="gpt-4o" role="option"><span class="model-name">GPT-4o</span><span class="model-desc">Balanced</span></button>
-                                <button class="model-option" data-model="gpt-4o-mini" role="option"><span class="model-name">GPT-4o Mini</span><span class="model-desc">Fast</span></button>
-                            </div>
+            <div class="view active" id="viewChat">
+                <div class="chat-card">
+                    <div class="chat-bar">
+                        <div class="chat-bar-title">
+                            <span class="dot"></span>
+                            <span>Free OpenAI API</span>
                         </div>
-                        <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
-                        </button>
-                        <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        </button>
+                        <div class="chat-bar-actions">
+                            <div style="position: relative;">
+                                <button class="model-trigger" id="modelTrigger" aria-label="Select Model" aria-haspopup="listbox" aria-expanded="false">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                                    <span id="modelLabel">Model</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </button>
+                                <div class="model-dropdown" id="modelDropdown" role="listbox" aria-label="Available models"></div>
+                            </div>
+                            <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
+                            </button>
+                            <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="chat-messages" id="chatMessages" aria-live="polite" aria-relevant="additions">
+                        <div class="empty-state" id="emptyState">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 14v1c0 1.1.9 2 2 2v2.93zm6.9-2.54L7.77 6.87A7.93 7.93 0 0 1 12 5c4.97 0 9 4.03 9 9 0 2.29-.77 4.4-2.1 6.39z"/></svg>
+                            <h3>Start a conversation</h3>
+                            <p>Sign in, pick a model, and send a message to begin.</p>
+                        </div>
+                    </div>
+
+                    <div class="chat-input-area">
+                        <div class="attachment-chip" id="attachmentChip" hidden>
+                            <span id="attachmentName"></span>
+                            <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
+                        </div>
+                        <div class="input-row">
+                            <button class="icon-btn-sm" type="button" onclick="document.getElementById('fileInput').click();" aria-label="Attach text file" title="Attach text file (.txt, .md, .csv, .json, .js, .ts, .log, .yml)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                                <input type="file" id="fileInput" style="display: none;" accept=".txt,.md,.csv,.json,.js,.ts,.log,.yml,.yaml" onchange="handleFileSelect(this)">
+                            </button>
+                            <textarea class="chat-input" id="chatInput" placeholder="Ask anything..." rows="1" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                            <button class="send-btn" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
+                        </div>
+                    </div>
+
+                    <div class="status-bar">
+                        <div class="status-left">
+                            <span class="status-dot" id="statusDot"></span>
+                            <span id="statusMessage" aria-live="polite">Ready</span>
+                        </div>
+                        <span id="usageText" style="display:none;">0 requests</span>
                     </div>
                 </div>
+            </div>
 
-                <div class="chat-messages" id="chatMessages">
-                    <div class="empty-state" id="emptyState">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 14v1c0 1.1.9 2 2 2v2.93zm6.9-2.54L7.77 6.87A7.93 7.93 0 0 1 12 5c4.97 0 9 4.03 9 9 0 2.29-.77 4.4-2.1 6.39z"/></svg>
-                        <h3>Start a conversation</h3>
-                        <p>Select a model and send a message to begin. All OpenAI models available free via Puter.js.</p>
-                    </div>
+            <div class="view" id="viewModels">
+                <div class="chat-bar">
+                    <div class="chat-bar-title"><span>Models</span></div>
                 </div>
-
-                <div class="chat-input-area">
-                    <div class="input-row">
-                        <button class="icon-btn-sm" type="button" onclick="document.getElementById('fileInput').click();" aria-label="Attach file" title="Attach file">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                            <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)" multiple>
-                        </button>
-                        <textarea class="chat-input" id="chatInput" placeholder="Ask anything..." rows="1" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
-                        <button class="send-btn" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
-                    </div>
+                <div class="settings-body">
+                    <div class="models-list" id="modelsList"></div>
                 </div>
+            </div>
 
-                <div class="status-bar">
-                    <div class="status-left">
-                        <span class="status-dot" id="statusDot"></span>
-                        <span id="statusMessage">Ready</span>
+            <div class="view" id="viewSettings">
+                <div class="chat-bar">
+                    <div class="chat-bar-title"><span>Settings</span></div>
+                </div>
+                <div class="settings-body">
+                    <div class="settings-row">
+                        <div>
+                            <strong>Default model</strong>
+                            <p class="settings-hint">Used for new messages.</p>
+                        </div>
+                        <select id="defaultModelSelect" aria-label="Default model"></select>
                     </div>
-                    <span id="usageText" style="display:none;">0 requests</span>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Account</strong>
+                            <p class="settings-hint" id="settingsAuthStatus">Not signed in</p>
+                        </div>
+                        <button class="icon-btn-text" id="settingsAuthButton" onclick="handleAuthClick()">Sign in</button>
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Conversation history</strong>
+                            <p class="settings-hint">Stored only in this browser (localStorage). No server-side copy exists.</p>
+                        </div>
+                        <button class="icon-btn-text danger" onclick="newChat()">Clear history</button>
+                    </div>
                 </div>
             </div>
         </div>
     </main>
 
     <div class="modal-overlay" id="helpOverlay" onclick="closeHelp();">
-        <div class="modal" onclick="event.stopPropagation();">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" onclick="event.stopPropagation();">
             <div class="modal-header">
-                <h3>How It Works</h3>
+                <h3 id="helpTitle">How It Works</h3>
                 <button class="modal-close" onclick="closeHelp();" aria-label="Close">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -397,8 +526,8 @@
                     <li><strong>No API keys</strong> — Sign in with Google, Telegram, or Magic Key</li>
                     <li><strong>User-pays model</strong> — Each user covers their own AI costs</li>
                     <li><strong>Serverless</strong> — No setup required, works immediately</li>
-                    <li><strong>All OpenAI models</strong> — GPT-5, GPT-6, GPT-4o family</li>
-                    <li><strong>Free unlimited</strong> — Generous free tier limits</li>
+                    <li><strong>OpenAI models</strong> — GPT-4o and o1 family via Puter.js</li>
+                    <li><strong>Free tier</strong> — Generous free usage limits</li>
                 </ul>
             </div>
         </div>
@@ -407,10 +536,13 @@
     <script>
         // Global state
         let currentUser = null;
-        let selectedModel = 'gpt-5.4-nano';
+        let selectedModel = DEFAULT_MODEL;
         let messages = [];
         let isTyping = false;
         let usageCount = 0;
+        let pendingAttachment = null;
+        let puterReady = false;
+        let lastFocusedBeforeModal = null;
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -424,7 +556,21 @@
         const statusMessage = document.getElementById('statusMessage');
         const usageText = document.getElementById('usageText');
         const helpOverlay = document.getElementById('helpOverlay');
-        console.log('DOM elements loaded:', { modelTrigger, modelDropdown });
+        const authButton = document.getElementById('authButton');
+        const authName = document.getElementById('authName');
+        const settingsAuthStatus = document.getElementById('settingsAuthStatus');
+        const settingsAuthButton = document.getElementById('settingsAuthButton');
+        const defaultModelSelect = document.getElementById('defaultModelSelect');
+        const modelsList = document.getElementById('modelsList');
+        const loadErrorBanner = document.getElementById('loadErrorBanner');
+        const loadErrorText = document.getElementById('loadErrorText');
+        const attachmentChip = document.getElementById('attachmentChip');
+        const attachmentName = document.getElementById('attachmentName');
+        const views = {
+            chat: document.getElementById('viewChat'),
+            models: document.getElementById('viewModels'),
+            settings: document.getElementById('viewSettings'),
+        };
 
         // Initialize
         initializeApp();
@@ -432,72 +578,199 @@
         loadMessagesFromStorage();
 
         function initializeApp() {
-            console.log('initializeApp started');
             if (typeof puter === 'undefined') {
-                console.error('Puter.js not found');
-                showStatus('error', 'Puter.js not loaded');
+                showLoadError('Puter.js failed to load. Check your connection and reload.');
                 return;
             }
+            puterReady = true;
 
-            puter.auth.onAuthStateChanged((user) => {
-                currentUser = user;
-            });
+            if (puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
+                puter.auth.onAuthStateChanged((user) => {
+                    currentUser = user;
+                    updateAuthUI();
+                });
+            }
 
+            renderModelOptions();
             loadUserPreferences();
             updateModelLabel();
+            updateAuthUI();
             showStatus('success', 'Connected');
         }
 
-        function setupEventListeners() {
-            // Model dropdown toggle
-            modelTrigger.addEventListener('click', (e) => {
-                e.stopPropagation();
-                modelDropdown.classList.toggle('open');
-                console.log('modelTrigger clicked, dropdown open:', modelDropdown.classList.contains('open'));
-            });
-
-            // Model option selection
-            modelDropdown.querySelectorAll('.model-option').forEach(opt => {
-                opt.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    selectModel(opt.dataset.model);
-                    modelDropdown.classList.remove('open');
-                });
-            });
-
-            // Navigation buttons
-            document.querySelectorAll('.nav-icon-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    document.querySelectorAll('.nav-icon-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    const label = btn.getAttribute('title');
-                    showStatus('info', `Switched to ${label}`);
-                });
-            });
-
-            // Close dropdown on outside click
-            document.addEventListener('click', () => modelDropdown.classList.remove('open'));
-
-            // File input
-            document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+        function showLoadError(msg) {
+            loadErrorText.textContent = msg;
+            loadErrorBanner.classList.add('visible');
+            showStatus('error', 'Puter.js not loaded');
         }
 
-        function selectModel(model) {
-            selectedModel = model;
-            modelDropdown.querySelectorAll('.model-option').forEach(opt => {
-                opt.classList.toggle('active', opt.dataset.model === model);
+        function renderModelOptions() {
+            modelDropdown.innerHTML = '';
+            modelsList.innerHTML = '';
+            defaultModelSelect.innerHTML = '';
+
+            MODELS.forEach((m) => {
+                const opt = document.createElement('button');
+                opt.type = 'button';
+                opt.className = 'model-option' + (m.id === selectedModel ? ' active' : '');
+                opt.dataset.model = m.id;
+                opt.setAttribute('role', 'option');
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'model-name';
+                nameSpan.textContent = m.name;
+                const descSpan = document.createElement('span');
+                descSpan.className = 'model-desc';
+                descSpan.textContent = m.desc;
+                opt.appendChild(nameSpan);
+                opt.appendChild(descSpan);
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectModel(m.id);
+                    closeModelDropdown();
+                    modelTrigger.focus();
+                });
+                modelDropdown.appendChild(opt);
+
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = 'model-card' + (m.id === selectedModel ? ' active' : '');
+                card.dataset.model = m.id;
+                const cardName = document.createElement('span');
+                cardName.className = 'model-name';
+                cardName.textContent = m.name;
+                const cardDesc = document.createElement('span');
+                cardDesc.className = 'model-desc';
+                cardDesc.textContent = m.desc;
+                card.appendChild(cardName);
+                card.appendChild(cardDesc);
+                card.addEventListener('click', () => {
+                    selectModel(m.id);
+                    switchView('chat');
+                });
+                modelsList.appendChild(card);
+
+                const sel = document.createElement('option');
+                sel.value = m.id;
+                sel.textContent = m.name;
+                defaultModelSelect.appendChild(sel);
             });
-            modelLabel.textContent = modelDropdown.querySelector(`[data-model="${model}"] .model-name`).textContent;
+
+            defaultModelSelect.value = selectedModel;
+        }
+
+        function setupEventListeners() {
+            modelTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleModelDropdown();
+            });
+
+            modelTrigger.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openModelDropdown();
+                    focusModelOption(0);
+                }
+            });
+
+            modelDropdown.addEventListener('keydown', handleModelDropdownKeydown);
+
+            document.querySelectorAll('.nav-icon-btn').forEach((btn) => {
+                btn.addEventListener('click', () => switchView(btn.dataset.view));
+            });
+
+            document.addEventListener('click', () => closeModelDropdown());
+            document.addEventListener('keydown', handleModalKeydown);
+
+            defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
+        }
+
+        function switchView(name) {
+            Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
+            document.querySelectorAll('.nav-icon-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+        }
+
+        function toggleModelDropdown() {
+            if (modelDropdown.classList.contains('open')) closeModelDropdown();
+            else openModelDropdown();
+        }
+        function openModelDropdown() {
+            modelDropdown.classList.add('open');
+            modelTrigger.setAttribute('aria-expanded', 'true');
+        }
+        function closeModelDropdown() {
+            modelDropdown.classList.remove('open');
+            modelTrigger.setAttribute('aria-expanded', 'false');
+        }
+
+        function focusModelOption(index) {
+            const opts = Array.from(modelDropdown.querySelectorAll('.model-option'));
+            if (!opts.length) return;
+            const i = ((index % opts.length) + opts.length) % opts.length;
+            opts[i].focus();
+        }
+
+        function handleModelDropdownKeydown(e) {
+            const opts = Array.from(modelDropdown.querySelectorAll('.model-option'));
+            const current = opts.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); focusModelOption(current + 1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); focusModelOption(current - 1); }
+            else if (e.key === 'Escape') { e.preventDefault(); closeModelDropdown(); modelTrigger.focus(); }
+        }
+
+        function selectModel(modelId) {
+            if (!isValidModel(modelId)) return;
+            selectedModel = modelId;
+            modelDropdown.querySelectorAll('.model-option').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
+            modelsList.querySelectorAll('.model-card').forEach((card) => card.classList.toggle('active', card.dataset.model === modelId));
+            defaultModelSelect.value = modelId;
+            updateModelLabel();
             saveUserPreferences();
             showStatus('success', 'Model: ' + modelLabel.textContent);
         }
 
         function updateModelLabel() {
-            const opt = modelDropdown.querySelector(`[data-model="${selectedModel}"]`);
-            if (opt) modelLabel.textContent = opt.querySelector('.model-name').textContent;
+            const model = MODELS.find((m) => m.id === selectedModel);
+            modelLabel.textContent = model ? model.name : selectedModel;
+        }
+
+        function updateAuthUI() {
+            const signedIn = !!currentUser;
+            const name = signedIn ? (currentUser.username || currentUser.email || currentUser.name || 'Signed in') : '';
+
+            authButton.title = signedIn ? 'Sign out' : 'Sign in';
+            authButton.setAttribute('aria-label', authButton.title);
+            authName.hidden = !signedIn;
+            authName.textContent = name;
+
+            settingsAuthStatus.textContent = signedIn ? `Signed in as ${name}` : 'Not signed in — required to chat';
+            settingsAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
+        }
+
+        async function handleAuthClick() {
+            if (!puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
+            try {
+                if (currentUser) {
+                    if (typeof puter.auth.signOut === 'function') {
+                        await puter.auth.signOut();
+                        currentUser = null;
+                        updateAuthUI();
+                        showStatus('success', 'Signed out');
+                    } else {
+                        showStatus('error', 'Sign-out is not supported');
+                    }
+                } else if (typeof puter.auth.signIn === 'function') {
+                    await puter.auth.signIn();
+                    showStatus('success', 'Signed in');
+                } else {
+                    showStatus('error', 'Sign-in is not supported');
+                }
+            } catch (error) {
+                showStatus('error', 'Auth failed: ' + error.message);
+            }
         }
 
         function newChat() {
+            if (messages.length && !confirm('Start a new chat? This clears the current conversation.')) return;
             messages = [];
             chatMessages.innerHTML = '';
             chatMessages.appendChild(emptyState);
@@ -508,10 +781,6 @@
             showStatus('success', 'New chat started');
         }
 
-        function sendWelcomePrompt() {
-            sendPrompt("Hello! I'm ready to help with any questions or tasks. What would you like to work on?");
-        }
-
         function sendPrompt(promptText) {
             if (!promptText?.trim()) return;
             chatInput.value = promptText;
@@ -519,11 +788,26 @@
             sendMessage();
         }
 
-        async function sendMessage() {
-            const message = chatInput.value.trim();
-            if (!message || isTyping) return;
+        function retryMessage(userText) {
+            sendPrompt(userText);
+        }
 
-            addMessage('user', message);
+        async function sendMessage() {
+            const raw = chatInput.value.trim();
+            if (!raw || isTyping) return;
+            if (!puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
+            if (puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
+                addMessage('system', 'Please sign in to chat (see the account icon above).', { error: true });
+                return;
+            }
+
+            let outgoing = raw;
+            if (pendingAttachment) {
+                outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
+            }
+
+            addMessage('user', raw);
+            clearAttachment();
             chatInput.value = '';
             chatInput.style.height = '44px';
             sendButton.disabled = true;
@@ -534,36 +818,124 @@
                 usageCount++;
                 updateUsageDisplay();
 
-                const response = await puter.ai.chat(message, { model: selectedModel, stream: false });
-
+                const response = await puter.ai.chat(outgoing, { model: selectedModel, stream: true });
                 removeTypingIndicator();
-                addMessage('bot', response);
-                saveMessageToHistory('user', message);
-                saveMessageToHistory('bot', response);
+
+                if (response && typeof response[Symbol.asyncIterator] === 'function') {
+                    const bubble = createBotBubble();
+                    let full = '';
+                    for await (const part of response) {
+                        const chunk = typeof part === 'string' ? part : (part && part.text) || '';
+                        if (chunk) {
+                            full += chunk;
+                            setMessageContent(bubble, full);
+                        }
+                    }
+                    finalizeMessage(bubble, full, raw);
+                } else {
+                    const text = typeof response === 'string'
+                        ? response
+                        : (response && (response.message?.content || response.text)) || JSON.stringify(response);
+                    addMessage('bot', text, { retryText: raw });
+                }
+
                 showStatus('success', 'Sent');
             } catch (error) {
                 removeTypingIndicator();
-                console.error('Error:', error);
+                console.error('Chat request failed:', error);
                 showStatus('error', 'Failed: ' + error.message);
-                // addMessage('system', 'Error processing request. Please try again.');
+                addMessage('system', 'Error: ' + error.message, { error: true });
             } finally {
                 sendButton.disabled = false;
                 isTyping = false;
             }
         }
 
-        function addMessage(type, content) {
+        function setMessageContent(el, content) {
+            el.dataset.rawContent = content;
+            const textEl = el.querySelector('.message-text');
+            textEl.innerHTML = escapeHtml(content).replace(/\n/g, '<br>');
+        }
+
+        function buildMessageActions(retryText) {
+            const bar = document.createElement('div');
+            bar.className = 'message-actions';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'msg-action-btn';
+            copyBtn.type = 'button';
+            copyBtn.title = 'Copy';
+            copyBtn.setAttribute('aria-label', 'Copy message');
+            copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+            copyBtn.addEventListener('click', () => copyText(copyBtn.closest('.message').dataset.rawContent || ''));
+            bar.appendChild(copyBtn);
+
+            if (retryText) {
+                const retryBtn = document.createElement('button');
+                retryBtn.className = 'msg-action-btn';
+                retryBtn.type = 'button';
+                retryBtn.title = 'Retry';
+                retryBtn.setAttribute('aria-label', 'Retry message');
+                retryBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/></svg>';
+                retryBtn.addEventListener('click', () => retryMessage(retryText));
+                bar.appendChild(retryBtn);
+            }
+
+            return bar;
+        }
+
+        function copyText(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text)
+                    .then(() => showStatus('success', 'Copied'))
+                    .catch(() => showStatus('error', 'Copy failed'));
+            } else {
+                showStatus('error', 'Clipboard unavailable');
+            }
+        }
+
+        function createBotBubble() {
+            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            const textEl = document.createElement('div');
+            textEl.className = 'message-text';
+            el.appendChild(textEl);
+            setMessageContent(el, '');
+            chatMessages.appendChild(el);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return el;
+        }
+
+        function finalizeMessage(el, content, retryText) {
+            setMessageContent(el, content);
+            el.appendChild(buildMessageActions(retryText));
+            messages.push({ type: 'bot', content, timestamp: Date.now() });
+            persistMessages();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addMessage(type, content, opts = {}) {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
 
             const el = document.createElement('div');
-            el.className = `message ${type}`;
-            // Preserve line breaks for better context and spacing
-            el.innerHTML = content.replace(/\n/g, '<br>');
-            
+            el.className = `message ${type}` + (opts.error ? ' error' : '');
+            const textEl = document.createElement('div');
+            textEl.className = 'message-text';
+            el.appendChild(textEl);
+            setMessageContent(el, content);
+
+            if (type === 'bot') {
+                el.appendChild(buildMessageActions(opts.retryText));
+            }
+
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            messages.push({ type, content, timestamp: Date.now() });
+            messages.push({ type, content, timestamp: Date.now(), error: !!opts.error });
+            persistMessages();
+
+            return el;
         }
 
         function showTypingIndicator() {
@@ -594,16 +966,38 @@
         }
 
         function handleFileSelect(input) {
-            const files = input.files;
-            if (files?.length) {
-                showStatus('info', `${files.length} file(s) selected`);
-                input.value = '';
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (!isAttachableFile(file.name)) {
+                showStatus('error', 'Only text-based files can be attached');
+                return;
             }
+            if (file.size > 200 * 1024) {
+                showStatus('error', 'File too large (200KB max)');
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                pendingAttachment = { name: file.name, content: String(reader.result) };
+                attachmentName.textContent = file.name;
+                attachmentChip.hidden = false;
+                showStatus('success', 'Attached ' + file.name);
+            };
+            reader.onerror = () => showStatus('error', 'Failed to read file');
+            reader.readAsText(file);
+        }
+
+        function clearAttachment() {
+            pendingAttachment = null;
+            attachmentChip.hidden = true;
+            attachmentName.textContent = '';
         }
 
         function loadUserPreferences() {
             const saved = localStorage.getItem('puterChatModel');
-            if (saved) { selectedModel = saved; updateModelLabel(); }
+            selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
+            updateModelLabel();
         }
 
         function saveUserPreferences() {
@@ -617,19 +1011,36 @@
             }
         }
 
+        function persistMessages() {
+            try {
+                localStorage.setItem('puterChatMessages', JSON.stringify(messages.slice(-200)));
+            } catch (e) {
+                console.error('Failed to persist messages:', e);
+            }
+        }
+
         function loadMessagesFromStorage() {
             const saved = localStorage.getItem('puterChatMessages');
             if (saved) {
                 try {
                     messages = JSON.parse(saved);
                     renderSavedMessages();
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    console.error('Failed to load saved messages:', e);
+                }
             }
         }
 
         function renderSavedMessages() {
-            if (messages.length) emptyState.style.display = 'none';
-            messages.forEach(msg => addMessage(msg.type, msg.content));
+            const saved = messages;
+            messages = [];
+            if (saved.length) emptyState.style.display = 'none';
+            saved.forEach((msg, i) => {
+                const retryText = (msg.type === 'bot' && saved[i - 1] && saved[i - 1].type === 'user')
+                    ? saved[i - 1].content
+                    : undefined;
+                addMessage(msg.type, msg.content, { retryText, error: msg.error });
+            });
         }
 
         function showStatus(type, msg) {
@@ -643,8 +1054,28 @@
             }, 2500);
         }
 
-        function toggleHelp() { helpOverlay.classList.toggle('open'); }
-        function closeHelp() { helpOverlay.classList.remove('open'); }
+        function toggleHelp() { openHelp(); }
+        function openHelp() {
+            lastFocusedBeforeModal = document.activeElement;
+            helpOverlay.classList.add('open');
+            helpOverlay.querySelector('.modal-close').focus();
+        }
+        function closeHelp() {
+            helpOverlay.classList.remove('open');
+            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
+        }
+        function handleModalKeydown(e) {
+            if (!helpOverlay.classList.contains('open')) return;
+            if (e.key === 'Escape') { closeHelp(); return; }
+            if (e.key !== 'Tab') return;
+            const focusable = helpOverlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+
         function refreshPage() { showStatus('info', 'Refreshing...'); location.reload(); }
     </script>
 </body>

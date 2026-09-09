@@ -16,10 +16,10 @@
 ### 💎 CORE CAPABILITIES
 
 - **🟢 NEON-DARK UI** — A high-contrast black, white, and `#00ff88` aesthetic designed for deep focus and mobile responsiveness (`100dvh`).
-- **🌀 MODEL QUANTUM SWITCHING** — Instant toggle between 7+ cutting-edge models including:
-  - `GPT-6 Astra` (The Vanguard)
-  - `GPT-5.6 Sol/Terra/Luna` (The Flagships)
-  - `GPT-4o` (The Balanced)
+- **🌀 MODEL QUANTUM SWITCHING** — Instant toggle between OpenAI models served through Puter.js:
+  - `GPT-4o` (Balanced)
+  - `GPT-4o Mini` (Fast, cheap — default)
+  - `o1` / `o1 Mini` (Reasoning)
 - **📱 MOBILE-FIRST ARCHITECTURE** — Built with safe-area insets and a 16px input-font standard to eliminate iOS/Android zoom issues.
 - **💾 LOCAL PERSISTENCE** — Zero-backend storage; your conversations live in `localStorage` for maximum privacy and speed.
 - **🚀 ZERO-CONFIG DEPLOY** — Native Railway integration for instant global availability.
@@ -46,8 +46,20 @@ python -m http.server 8000
 ### 🧬 TECHNICAL STACK
 - **Engine:** `Puter.js v2` (AI Infrastructure)
 - **UI:** Vanilla HTML5 / CSS3 (Custom Properties) / Modern JavaScript
-- **Server:** Node.js (Express-style static server)
+- **Server:** Node.js (zero-dependency, built on the core `http` module — no Express)
 - **Deployment:** Railway.app
+
+---
+
+### 🧪 DEVELOPMENT
+
+```bash
+npm install   # installs eslint (dev-only, no runtime deps)
+npm test      # runs the Node test suite (server + shared chat logic)
+npm run lint  # lints server.js, chatlib.js, and the test suite
+```
+
+CI (`.github/workflows/ci.yml`) runs `npm run lint` and `npm test` on every push and PR to `main`.
 
 ---
 
