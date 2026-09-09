@@ -553,7 +553,7 @@
                 removeTypingIndicator();
                 console.error('Error:', error);
                 showStatus('error', 'Failed: ' + error.message);
-                addMessage('system', 'Error processing request. Please try again.');
+                // addMessage('system', 'Error processing request. Please try again.');
             } finally {
                 sendButton.disabled = false;
                 isTyping = false;
@@ -563,9 +563,11 @@
         function addMessage(type, content) {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
 
-            const el = document.createElement('div');
-            el.className = `message ${type}`;
-            el.textContent = content;
+        const el = document.createElement('div');
+        el.className = `message ${type}`;
+        // Preserve line breaks in content for better readability
+        el.innerHTML = content.replace(/\n/g, '\u003cbr\u003e');
+        el.innerHTML = content.replace(/\n/g, '<br>');
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
