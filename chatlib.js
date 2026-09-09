@@ -165,6 +165,108 @@ function renderMarkdownLite(rawText) {
     .replace(blockTokenPattern, (_m, i) => codeBlocks[Number(i)]);
 }
 
+// Tools the model can call when a GitHub account is connected. OpenAI-style
+// function specs, which is what puter.ai.chat() expects for its `tools`
+// option. Each one maps to an /api/github/* route on our own server, so the
+// access token stays in its httpOnly cookie and never reaches the model.
+const GITHUB_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_repos',
+      description: "List the signed-in user's public repositories. Call this first when you don't know the exact repo name.",
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_files',
+      description: 'List the files and folders at a path in a repository. Use it to find a file before reading it. Leave path empty for the repository root.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name", e.g. "octocat/hello-world".' },
+          path: { type: 'string', description: 'Folder path inside the repo. Empty string for the root.' },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_read_file',
+      description: 'Read the full text of one file in a repository. Always read a file before rewriting it, so you keep the parts you are not changing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Path to the file inside the repo, e.g. "src/index.js".' },
+        },
+        required: ['repo', 'path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_commit_file',
+      description: 'Write a file to a repository and commit it. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every commit before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Path to the file inside the repo.' },
+          content: { type: 'string', description: 'The complete new contents of the file.' },
+          message: { type: 'string', description: 'Commit message.' },
+        },
+        required: ['repo', 'path', 'content', 'message'],
+      },
+    },
+  },
+];
+
+// Stop the tool loop from running away if a model keeps calling tools forever.
+const MAX_TOOL_ROUNDS = 6;
+
+const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
+
+function isGithubTool(name) {
+  return GITHUB_TOOL_NAMES.includes(name);
+}
+
+// Tool arguments arrive as a JSON string from the model, and a model can emit
+// malformed JSON. Never throw on it — an empty object lets the tool itself
+// report the missing argument back to the model, which can then retry.
+function parseToolArgs(raw) {
+  if (raw && typeof raw === 'object') return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// One plain line describing what the model is about to do, used both in the
+// transcript and in the commit confirmation dialog.
+function describeToolCall(name, args = {}) {
+  const repo = args.repo || 'a repo';
+  switch (name) {
+    case 'github_list_repos':
+      return 'Listing your GitHub repositories';
+    case 'github_list_files':
+      return `Listing ${args.path ? `"${args.path}" in ` : 'the root of '}${repo}`;
+    case 'github_read_file':
+      return `Reading "${args.path || '?'}" from ${repo}`;
+    case 'github_commit_file':
+      return `Committing "${args.path || '?'}" to ${repo}`;
+    default:
+      return `Running ${name}`;
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -180,5 +282,11 @@ if (typeof module !== 'undefined' && module.exports) {
     isVisionCapable,
     DOCUMENT_EXTENSIONS,
     isDocumentFile,
+    GITHUB_TOOLS,
+    GITHUB_TOOL_NAMES,
+    MAX_TOOL_ROUNDS,
+    isGithubTool,
+    parseToolArgs,
+    describeToolCall,
   };
 }
