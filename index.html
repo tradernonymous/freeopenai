@@ -451,6 +451,7 @@
             modelTrigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 modelDropdown.classList.toggle('open');
+                console.log('modelTrigger clicked, dropdown open:', modelDropdown.classList.contains('open'));
             });
 
             // Model option selection
