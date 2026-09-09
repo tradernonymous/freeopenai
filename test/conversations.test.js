@@ -94,3 +94,39 @@ test('nothing to migrate returns null rather than an empty chat', () => {
   assert.equal(migrateLegacyMessages(null, 'id', 0), null);
   assert.equal(migrateLegacyMessages('not an array', 'id', 0), null);
 });
+
+const { conversationToMarkdown } = require('../chatlib.js');
+
+test('a conversation copies out as readable markdown', () => {
+  const md = conversationToMarkdown(
+    [{ type: 'user', content: 'What is flexbox?' }, { type: 'bot', content: 'A layout model.' }],
+    'Layout question'
+  );
+  assert.equal(md, '# Layout question\n\n## You\n\nWhat is flexbox?\n\n## Assistant\n\nA layout model.');
+});
+
+test('tool-activity and error notices stay out of the copy', () => {
+  // These are the app talking to itself; pasting them into an issue is noise.
+  const md = conversationToMarkdown([
+    { type: 'user', content: 'read my readme' },
+    { type: 'system', content: 'Reading "README.md" from me/demo' },
+    { type: 'system', content: 'Error: No usage left for request.' },
+    { type: 'bot', content: 'Here it is.' },
+  ]);
+  assert.ok(!md.includes('Reading "README.md"'));
+  assert.ok(!md.includes('No usage left'));
+  assert.ok(md.includes('read my readme'));
+  assert.ok(md.includes('Here it is.'));
+});
+
+test('the title is optional and blank messages are skipped', () => {
+  assert.equal(conversationToMarkdown([{ type: 'user', content: 'hi' }]), '## You\n\nhi');
+  assert.equal(conversationToMarkdown([{ type: 'user', content: '   ' }]), '');
+  assert.equal(conversationToMarkdown([]), '');
+  assert.equal(conversationToMarkdown(null), '');
+});
+
+test('code fences survive the round trip intact', () => {
+  const md = conversationToMarkdown([{ type: 'bot', content: '```js\nconst x = 1;\n```' }]);
+  assert.ok(md.includes('```js\nconst x = 1;\n```'));
+});

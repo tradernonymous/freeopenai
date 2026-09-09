@@ -469,6 +469,20 @@ function estimateCostWarning(modelId, effort, toolsEnabled) {
   return 'Heads up: ' + reasons.join(' + ') + ' uses your Puter credits quickly.';
 }
 
+// Renders a conversation as markdown for the clipboard. Tool-activity lines
+// and error notices are the app talking to itself, so they stay out -- what
+// gets pasted into an issue or a doc should be the exchange, nothing else.
+function conversationToMarkdown(messages, title) {
+  const lines = title ? ['# ' + title, ''] : [];
+  for (const message of messages || []) {
+    if (!message || message.type === 'system') continue;
+    const text = String(message.content == null ? '' : message.content).trim();
+    if (!text) continue;
+    lines.push(message.type === 'user' ? '## You' : '## Assistant', '', text, '');
+  }
+  return lines.join('\n').trim();
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -507,6 +521,7 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_CONVERSATIONS,
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
+    conversationToMarkdown,
     newConversation,
     sortConversations,
     upsertConversation,

@@ -253,6 +253,10 @@
         .message.system.error { color: var(--danger); }
 
         .message-actions { display: flex; gap: 2px; margin-top: 10px; margin-left: -6px; }
+        /* User bubbles sit on the right, so their actions do too. */
+        .message.user .message-actions { justify-content: flex-end; margin-left: 0; margin-right: -6px; }
+        .msg-action-btn.copied, .code-copy-btn.copied { color: var(--accent); border-color: var(--accent); }
+        .history-head-actions { display: flex; align-items: center; gap: 2px; }
         .msg-action-btn {
             width: 24px; height: 24px; border-radius: 6px;
             background: transparent; border: 1px solid transparent;
@@ -705,9 +709,14 @@
                     <aside class="history-sidebar" id="historySidebar" aria-label="Chat history">
                         <div class="history-head">
                             <span>Chats</span>
-                            <button class="icon-btn" type="button" onclick="startNewConversation()" title="New chat" aria-label="New chat">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                            </button>
+                            <div class="history-head-actions">
+                                <button class="icon-btn" type="button" onclick="copyConversation(this)" title="Copy this whole chat" aria-label="Copy this whole chat">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                                </button>
+                                <button class="icon-btn" type="button" onclick="startNewConversation()" title="New chat" aria-label="New chat">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+                                </button>
+                            </div>
                         </div>
                         <div class="history-list" id="historyList"></div>
                     </aside>
@@ -1888,7 +1897,7 @@
                 btn.setAttribute('aria-label', 'Copy code');
                 btn.addEventListener('click', () => {
                     const code = pre.querySelector('code');
-                    copyText(code ? code.textContent : pre.textContent);
+                    copyText(code ? code.textContent : pre.textContent, btn);
                 });
                 pre.appendChild(btn);
             });
@@ -1939,7 +1948,7 @@
             copyBtn.title = 'Copy';
             copyBtn.setAttribute('aria-label', 'Copy message');
             copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-            copyBtn.addEventListener('click', () => copyText(copyBtn.closest('.message').dataset.rawContent || ''));
+            copyBtn.addEventListener('click', () => copyText(copyBtn.closest('.message').dataset.rawContent || '', copyBtn));
             bar.appendChild(copyBtn);
 
             if (retryText) {
@@ -1959,14 +1968,46 @@
             return bar;
         }
 
-        function copyText(text) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text)
-                    .then(() => showStatus('success', 'Copied'))
-                    .catch(() => showStatus('error', 'Copy failed'));
-            } else {
+        function copyText(text, button) {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
                 showStatus('error', 'Clipboard unavailable');
+                return;
             }
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    showStatus('success', 'Copied');
+                    flashCopied(button);
+                })
+                .catch(() => showStatus('error', 'Copy failed'));
+        }
+
+        // The status bar sits at the bottom of the screen, far from the button
+        // that was clicked. Confirming on the button itself is what people
+        // actually look at.
+        function flashCopied(button) {
+            if (!button || button.dataset.flashing) return;
+            const original = button.innerHTML;
+            const isTextButton = button.classList.contains('code-copy-btn');
+            button.dataset.flashing = '1';
+            button.classList.add('copied');
+            button.innerHTML = isTextButton
+                ? 'Copied'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+            setTimeout(() => {
+                button.innerHTML = original;
+                button.classList.remove('copied');
+                delete button.dataset.flashing;
+            }, 1200);
+        }
+
+        // The whole exchange as markdown, for pasting into an issue or a doc.
+        function copyConversation(button) {
+            if (!messages.length) {
+                showStatus('error', 'Nothing to copy yet');
+                return;
+            }
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            copyText(conversationToMarkdown(messages, convo && convo.title), button);
         }
 
         function createBotBubble() {
@@ -2004,6 +2045,10 @@
 
             if (type === 'bot') {
                 el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost));
+            } else if (type === 'user') {
+                // Copy only -- retrying your own message is what the composer
+                // is for, and a second button here would just be noise.
+                el.appendChild(buildMessageActions(null, false, false));
             }
 
             chatMessages.appendChild(el);
