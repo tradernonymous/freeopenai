@@ -1564,6 +1564,17 @@
         // Runs the model until it stops asking for tools, then hands back its
         // final message. Each tool call is announced in the transcript so the
         // user can see what the model touched.
+        // Everything the model needs to answer this turn: how to behave, what has
+        // been said already, and the new message. `messages` already holds the
+        // live user turn by the time this runs, so history is taken up to it.
+        function buildConversation(outgoing) {
+            return [
+                { role: 'system', content: SYSTEM_PROMPT },
+                ...buildChatHistory(messages.slice(0, -1)),
+                { role: 'user', content: outgoing },
+            ];
+        }
+
         // Build the options for a chat call in one place, so the effort setting
         // can't be sent to a model that doesn't take it.
         function chatOptions(chatModel, extra = {}) {
@@ -1726,7 +1737,7 @@
                 // the image argument has no place in a message array.
                 if (githubConnected && !attachedImageFile) {
                     const { message, exhausted } = await runChatWithTools(
-                        [{ role: 'user', content: outgoing }],
+                        buildConversation(outgoing),
                         chatModel
                     );
                     removeTypingIndicator();
@@ -1745,8 +1756,10 @@
 
                 const response = await chatWithEffortFallback(chatModel, (opts) =>
                     attachedImageFile
+                        // An image rides as its own argument, which has no place
+                        // in a message array, so that path stays single-message.
                         ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
-                        : puter.ai.chat(outgoing, { ...opts, stream: true })
+                        : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
                 );
                 removeTypingIndicator();
 
