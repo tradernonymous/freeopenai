@@ -30,6 +30,9 @@ const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 const loginAttempts = new Map();
 const GITHUB_COOKIE = 'fo_gh';
 const GITHUB_STATE_COOKIE = 'fo_gh_state';
+// Marks an "add another account" trip, so the callback can tell the user when
+// GitHub silently handed back the account they already had.
+const GITHUB_ADD_COOKIE = 'fo_gh_add';
 const GITHUB_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GITHUB_SCOPE = 'public_repo';
 let sessionSecret = process.env.SESSION_SECRET;
@@ -191,7 +194,11 @@ function githubAuthorize(req, res) {
   }
   const state = crypto.randomBytes(16).toString('hex');
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`);
+  const adding = new URL(req.url, 'http://x').searchParams.get('add') === '1';
+  res.setHeader('Set-Cookie', [
+    `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`,
+    `${GITHUB_ADD_COOKIE}=${adding ? '1' : ''}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${adding ? 600 : 0}${secure}`,
+  ]);
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: githubRedirectUri(req),
@@ -237,7 +244,10 @@ async function githubCallback(req, res) {
     const { data: user } = await githubApiFetch(tokenData.access_token, 'https://api.github.com/user');
     // Keep any accounts already connected. Reconnecting the same GitHub login
     // replaces its entry rather than adding a duplicate.
-    const existing = accountsOf(getGithubSession(req)).filter((a) => a.login !== (user && user.login));
+    const connected = accountsOf(getGithubSession(req));
+    const wasAlreadyConnected = connected.some((a) => a.login === (user && user.login));
+    const wasAddingAnother = cookies[GITHUB_ADD_COOKIE] === '1';
+    const existing = connected.filter((a) => a.login !== (user && user.login));
     const accounts = [
       ...existing,
       { token: tokenData.access_token, login: user && user.login, avatarUrl: user && user.avatar_url },
@@ -250,9 +260,16 @@ async function githubCallback(req, res) {
     });
     res.setHeader('Set-Cookie', [
       `${GITHUB_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+      `${GITHUB_ADD_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
       `${GITHUB_COOKIE}=${sealed}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}${secure}`,
     ]);
-    res.writeHead(302, { Location: '/?view=settings' });
+    // Asking for another account and getting the same one back is GitHub
+    // reusing whoever is signed in at github.com. Say so, or the click looks
+    // like it did nothing at all.
+    const sameAgain = wasAddingAnother && wasAlreadyConnected;
+    res.writeHead(302, {
+      Location: '/?view=settings' + (sameAgain ? '&gh=same&login=' + encodeURIComponent(user.login) : ''),
+    });
     res.end();
   } catch (err) {
     res.writeHead(502, { 'Content-Type': 'text/plain' });
