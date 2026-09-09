@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-75%20passing-22c55e?style=for-the-badge" alt="75 tests passing">
+  <img src="https://img.shields.io/badge/tests-97%20passing-22c55e?style=for-the-badge" alt="97 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Copy or retry any response. History saves to your browser and survives a reload.
+      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Copy or retry any response.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -105,6 +105,10 @@
   </tr>
   <tr>
     <td valign="top">
+      <h3>🗂️ Saved chats</h3>
+      Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
+    </td>
+    <td valign="top">
       <h3>📱 Built for a phone</h3>
       A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, and controls that shrink rather than shove each other off the screen.
     </td>
@@ -157,7 +161,10 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | View / download an image | Click any generated image to zoom in, with a download link |
 | Copy a reply | Copy icon under any assistant message |
 | Retry a reply | Retry icon under any assistant message — resends the same prompt (or regenerates the image) |
-| Start a new chat | **New chat** icon, top right — asks for confirmation first |
+| Start a new chat | The **+** in the sidebar, or **New chat** in the drawer — the previous chat is kept |
+| Reopen an old chat | Click it in the sidebar |
+| Delete one chat | The **×** on its sidebar row |
+| Hide the sidebar | The ☰ button at the left of the chat bar |
 | Show a model's thinking | Click the **Reasoning** strip above a reply (reasoning-capable models only) |
 | Connect GitHub | **Settings** tab → **Connect GitHub** → load or commit a file in any of your public repos |
 | Ask the model to use GitHub | Once connected, just say it in chat — *"read my README and fix the typos"*. Each repo action shows in the transcript, and commits ask first. |
@@ -245,6 +252,18 @@ Up to **three accounts** can be connected at once. Which one acts on a repo is r
 
 > Untick **Expire user access tokens** when registering the OAuth App. Refresh tokens aren't implemented, so an expiring token would silently disconnect after 8 hours.
 
+### 🩹 Provider quirks the app works around
+
+Puter fronts several providers, and they disagree in ways that surface as raw API errors. These are handled rather than passed through:
+
+| Quirk | What the app does |
+| --- | --- |
+| Claude returns `message.content` as an array of blocks, not a string | Normalizes both shapes, so replies don't render as `[object Object]` |
+| Claude asks for tools with `tool_use` blocks, not `message.tool_calls` | Normalizes to one shape the tool loop understands |
+| Some Claude models reject the effort setting with a `thinking.type` error | Retries once without it, then hides the picker for that model |
+| A reply object carries `model`, `id`, `usage` | Strips them before echoing the turn back, which the provider rejects otherwise |
+| Codex model ids need an `openai/` prefix | Baked into the model list |
+
 <br>
 
 <a name="architecture"></a>
@@ -266,7 +285,9 @@ chatlib.js      shared, dependency-free logic (model list, HTML escaping,
 auth.js         session-cookie signing and credential checking
 github.js       AES-256-GCM sealing for the stored GitHub token
 server.js       zero-dependency static server + the login and GitHub routes
-test/           node --test suite for server.js, chatlib.js, auth.js, github.js
+test/           node --test suite for server.js, chatlib.js, auth.js, github.js,
+                the GitHub tools, the conversation store, and a boot check that
+                runs index.html's script against a stub DOM
 .github/        CI: lint + tests on every push and pull request
 ```
 
@@ -280,7 +301,7 @@ test/           node --test suite for server.js, chatlib.js, auth.js, github.js
 
 ## ⚠️ Disclaimer
 
-FreeOpenAI is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser's `localStorage`; clearing site data or switching browsers loses them.
+FreeOpenAI is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser's `localStorage` — the last 50, each capped at 200 messages. Clearing site data or switching browsers loses them; there is no server-side copy to restore from.
 
 <p align="center">
   <sub>MIT licensed · Built on <a href="https://puter.com">Puter.js</a> · <a href="#contents">Back to top ↑</a></sub>
