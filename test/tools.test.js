@@ -193,3 +193,25 @@ test('repo-scoped tools accept an optional account argument', () => {
     assert.ok(!spec.function.parameters.required.includes('account'), `${name} must not require it`);
   }
 });
+
+const { isEffortUnsupportedError } = require('../chatlib.js');
+
+test('the exact Anthropic refusal seen in production is recognised', () => {
+  const real = new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"\\"thinking.type.enabled\\" is not supported for this model. Use \\"thinking.type.adaptive\\" and \\"output_config.effort\\" to control thinking behavior."},"request_id":"req_011CetbKm3SuCmpdTrLt2pzK"}');
+  assert.ok(isEffortUnsupportedError(real));
+});
+
+test('effort refusals are recognised however they are wrapped', () => {
+  assert.ok(isEffortUnsupportedError('400 reasoning_effort is not supported'));
+  assert.ok(isEffortUnsupportedError({ message: 'invalid_request_error: thinking.type is unsupported' }));
+  assert.ok(isEffortUnsupportedError({ error: '400 output_config.effort not supported' }));
+});
+
+test('unrelated failures are left alone, so they are not silently retried', () => {
+  assert.ok(!isEffortUnsupportedError('429 rate limited'));
+  assert.ok(!isEffortUnsupportedError('500 internal error'));
+  assert.ok(!isEffortUnsupportedError(new Error('Network request failed')));
+  assert.ok(!isEffortUnsupportedError('400 model not found'));
+  assert.ok(!isEffortUnsupportedError(null));
+  assert.ok(!isEffortUnsupportedError(''));
+});

@@ -1241,7 +1241,7 @@
         function updateEffortPicker() {
             const select = document.getElementById('effortSelect');
             if (!select) return;
-            const capable = supportsEffort(selectedModel);
+            const capable = supportsEffort(selectedModel) && !effortRejectedBy.has(selectedModel);
             select.hidden = !capable;
             if (!capable) return;
             if (!select.options.length) {
@@ -1548,15 +1548,38 @@
         // user can see what the model touched.
         // Build the options for a chat call in one place, so the effort setting
         // can't be sent to a model that doesn't take it.
+        // Models that turned out to reject an effort setting at runtime, despite
+        // being on the capable list. Remembered for the session so one refusal
+        // doesn't become a refusal on every message.
+        const effortRejectedBy = new Set();
+
         function chatOptions(chatModel, extra = {}) {
             const opts = { model: chatModel, ...extra };
-            if (selectedEffort && supportsEffort(chatModel)) opts.reasoning_effort = selectedEffort;
+            if (selectedEffort && supportsEffort(chatModel) && !effortRejectedBy.has(chatModel)) {
+                opts.reasoning_effort = selectedEffort;
+            }
             return opts;
+        }
+
+        // Runs a chat call, and if the model refuses the effort setting, drops
+        // it and tries once more rather than failing the message.
+        async function chatWithEffortFallback(chatModel, call) {
+            try {
+                return await call(chatOptions(chatModel));
+            } catch (error) {
+                if (!selectedEffort || effortRejectedBy.has(chatModel) || !isEffortUnsupportedError(error)) throw error;
+                effortRejectedBy.add(chatModel);
+                updateEffortPicker();
+                showStatus('info', 'This model rejects an effort setting — retrying without it');
+                return call(chatOptions(chatModel));
+            }
         }
 
         async function runChatWithTools(convo, chatModel) {
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                const response = await puter.ai.chat(convo, chatOptions(chatModel, { tools: GITHUB_TOOLS }));
+                const response = await chatWithEffortFallback(chatModel, (opts) =>
+                    puter.ai.chat(convo, { ...opts, tools: GITHUB_TOOLS })
+                );
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
                 if (!calls.length) return { message, response };
@@ -1697,9 +1720,11 @@
                     return;
                 }
 
-                const response = attachedImageFile
-                    ? await puter.ai.chat(outgoing, attachedImageFile, chatOptions(chatModel, { stream: true }))
-                    : await puter.ai.chat(outgoing, chatOptions(chatModel, { stream: true }));
+                const response = await chatWithEffortFallback(chatModel, (opts) =>
+                    attachedImageFile
+                        ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
+                        : puter.ai.chat(outgoing, { ...opts, stream: true })
+                );
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
