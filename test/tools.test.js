@@ -179,3 +179,17 @@ test('all three Claude models take an effort setting', () => {
     assert.ok(supportsEffort(id), `${id} should support effort`);
   }
 });
+
+test('a commit description always names the identity it will land under', () => {
+  // Never let a confirm dialog be vague about which account is committing.
+  assert.match(describeToolCall('github_commit_file', { repo: 'alice/x', path: 'a.md' }), / as alice$/);
+  assert.match(describeToolCall('github_commit_file', { repo: 'org/x', path: 'a.md', account: 'bob' }), / as bob$/);
+});
+
+test('repo-scoped tools accept an optional account argument', () => {
+  for (const name of ['github_list_files', 'github_read_file', 'github_commit_file']) {
+    const spec = GITHUB_TOOLS.find((t) => t.function.name === name);
+    assert.ok(spec.function.parameters.properties.account, `${name} needs an account argument`);
+    assert.ok(!spec.function.parameters.required.includes('account'), `${name} must not require it`);
+  }
+});

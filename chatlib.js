@@ -174,7 +174,7 @@ const GITHUB_TOOLS = [
     type: 'function',
     function: {
       name: 'github_list_repos',
-      description: "List the signed-in user's public repositories. Call this first when you don't know the exact repo name.",
+      description: "List the public repositories of every connected GitHub account. Each result carries the account that can reach it. Call this first when you don't know the exact repo name, or which account owns it.",
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -188,6 +188,7 @@ const GITHUB_TOOLS = [
         properties: {
           repo: { type: 'string', description: 'Repository as "owner/name", e.g. "octocat/hello-world".' },
           path: { type: 'string', description: 'Folder path inside the repo. Empty string for the root.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
         },
         required: ['repo'],
       },
@@ -203,6 +204,7 @@ const GITHUB_TOOLS = [
         properties: {
           repo: { type: 'string', description: 'Repository as "owner/name".' },
           path: { type: 'string', description: 'Path to the file inside the repo, e.g. "src/index.js".' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
         },
         required: ['repo', 'path'],
       },
@@ -220,6 +222,7 @@ const GITHUB_TOOLS = [
           path: { type: 'string', description: 'Path to the file inside the repo.' },
           content: { type: 'string', description: 'The complete new contents of the file.' },
           message: { type: 'string', description: 'Commit message.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
         },
         required: ['repo', 'path', 'content', 'message'],
       },
@@ -253,15 +256,21 @@ function parseToolArgs(raw) {
 // transcript and in the commit confirmation dialog.
 function describeToolCall(name, args = {}) {
   const repo = args.repo || 'a repo';
+  const as = args.account ? ` as ${args.account}` : '';
   switch (name) {
     case 'github_list_repos':
       return 'Listing your GitHub repositories';
     case 'github_list_files':
       return `Listing ${args.path ? `"${args.path}" in ` : 'the root of '}${repo}`;
     case 'github_read_file':
-      return `Reading "${args.path || '?'}" from ${repo}`;
-    case 'github_commit_file':
-      return `Committing "${args.path || '?'}" to ${repo}`;
+      return `Reading "${args.path || '?'}" from ${repo}${as}`;
+    case 'github_commit_file': {
+      // A commit dialog must always name the identity it will land under, so
+      // fall back to the repo owner -- which is the account the server picks
+      // when the model didn't name one.
+      const owner = args.account || String(args.repo || '').split('/')[0];
+      return `Committing "${args.path || '?'}" to ${repo}${owner ? ` as ${owner}` : ''}`;
+    }
     default:
       return `Running ${name}`;
   }

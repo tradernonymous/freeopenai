@@ -12,7 +12,15 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { encryptJson, decryptJson, sessionMatchesUser } = require('./github.js');
+const {
+  encryptJson,
+  decryptJson,
+  sessionMatchesUser,
+  MAX_GITHUB_ACCOUNTS,
+  normalizeGithubSession,
+  accountsOf,
+  pickAccount,
+} = require('./github.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -141,7 +149,18 @@ function getGithubSession(req) {
   const session = decryptJson(sessionSecret, cookies[GITHUB_COOKIE]);
   if (!session || typeof session.exp !== 'number' || session.exp <= Date.now()) return null;
   if (!sessionMatchesUser(session, currentAppUser(req))) return null;
-  return session;
+  return normalizeGithubSession(session);
+}
+
+// Resolves the account a repo request should run as, answering the caller
+// directly when it can't be decided rather than guessing.
+function resolveAccount(req, res, repo) {
+  const picked = pickAccount(getGithubSession(req), repo, new URL(req.url, 'http://x').searchParams.get('account'));
+  if (picked.error) {
+    sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
+    return null;
+  }
+  return picked.account;
 }
 
 async function githubApiFetch(token, url, options = {}) {
@@ -216,11 +235,17 @@ async function githubCallback(req, res) {
     }
 
     const { data: user } = await githubApiFetch(tokenData.access_token, 'https://api.github.com/user');
+    // Keep any accounts already connected. Reconnecting the same GitHub login
+    // replaces its entry rather than adding a duplicate.
+    const existing = accountsOf(getGithubSession(req)).filter((a) => a.login !== (user && user.login));
+    const accounts = [
+      ...existing,
+      { token: tokenData.access_token, login: user && user.login, avatarUrl: user && user.avatar_url },
+    ].slice(-MAX_GITHUB_ACCOUNTS);
+
     const sealed = encryptJson(sessionSecret, {
       appUser: currentAppUser(req),
-      token: tokenData.access_token,
-      login: user && user.login,
-      avatarUrl: user && user.avatar_url,
+      accounts,
       exp: Date.now() + GITHUB_TOKEN_TTL_MS,
     });
     res.setHeader('Set-Cookie', [
@@ -236,30 +261,66 @@ async function githubCallback(req, res) {
 }
 
 function githubStatus(req, res) {
-  const session = getGithubSession(req);
-  sendJson(res, 200, session
-    ? { connected: true, login: session.login, avatarUrl: session.avatarUrl }
-    : { connected: false });
+  const accounts = accountsOf(getGithubSession(req));
+  sendJson(res, 200, {
+    connected: accounts.length > 0,
+    accounts: accounts.map((a) => ({ login: a.login, avatarUrl: a.avatarUrl })),
+    canAddMore: accounts.length < MAX_GITHUB_ACCOUNTS,
+    // Kept so an older cached page still shows the right thing.
+    login: accounts.length ? accounts[0].login : undefined,
+  });
 }
 
 function githubDisconnect(req, res) {
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  const only = new URL(req.url, 'http://x').searchParams.get('account');
+  const remaining = only ? accountsOf(getGithubSession(req)).filter((a) => a.login !== only) : [];
+
+  if (remaining.length) {
+    const sealed = encryptJson(sessionSecret, {
+      appUser: currentAppUser(req),
+      accounts: remaining,
+      exp: Date.now() + GITHUB_TOKEN_TTL_MS,
+    });
+    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=${sealed}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}${secure}`);
+  } else {
+    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  }
   sendJson(res, 200, { ok: true });
 }
 
 async function githubRepos(req, res) {
-  const session = getGithubSession(req);
-  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
+  const accounts = accountsOf(getGithubSession(req));
+  if (!accounts.length) return sendJson(res, 401, { error: 'GitHub not connected' });
   try {
-    const { ok, status, data } = await githubApiFetch(
-      session.token,
-      'https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator'
+    const perAccount = await Promise.all(
+      accounts.map(async (account) => {
+        const { ok, data } = await githubApiFetch(
+          account.token,
+          'https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator'
+        );
+        if (!ok || !Array.isArray(data)) return [];
+        return data
+          .filter((r) => !r.private)
+          .map((r) => ({
+            fullName: r.full_name,
+            description: r.description,
+            defaultBranch: r.default_branch,
+            // Which connected account can reach this repo. The model passes it
+            // back so an org repo doesn't have to be guessed at.
+            account: account.login,
+          }));
+      })
     );
-    if (!ok) return sendJson(res, status, { error: 'Could not list repos' });
-    const repos = (Array.isArray(data) ? data : [])
-      .filter((r) => !r.private)
-      .map((r) => ({ fullName: r.full_name, description: r.description, defaultBranch: r.default_branch }));
+    // The same repo can be visible to two accounts; keep one row per pairing
+    // but never two identical ones.
+    const seen = new Set();
+    const repos = perAccount.flat().filter((r) => {
+      const key = r.account + '/' + r.fullName;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     sendJson(res, 200, repos);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
@@ -267,16 +328,16 @@ async function githubRepos(req, res) {
 }
 
 async function githubListDir(req, res) {
-  const session = getGithubSession(req);
-  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
   const query = new URL(req.url, 'http://x').searchParams;
   const repo = query.get('repo');
   const dirPath = query.get('path') || '';
   if (!repo) return sendJson(res, 400, { error: 'repo is required' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
   const encoded = dirPath ? dirPath.split('/').map(encodeURIComponent).join('/') : '';
   try {
     const { ok, status, data } = await githubApiFetch(
-      session.token,
+      account.token,
       `https://api.github.com/repos/${repo}/contents/${encoded}`
     );
     if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not list path' });
@@ -290,15 +351,15 @@ async function githubListDir(req, res) {
 }
 
 async function githubGetFile(req, res) {
-  const session = getGithubSession(req);
-  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
   const query = new URL(req.url, 'http://x').searchParams;
   const repo = query.get('repo');
   const filePath = query.get('path');
   if (!repo || !filePath) return sendJson(res, 400, { error: 'repo and path are required' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
   try {
     const { ok, status, data } = await githubApiFetch(
-      session.token,
+      account.token,
       `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`
     );
     if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not read file' });
@@ -310,17 +371,20 @@ async function githubGetFile(req, res) {
 }
 
 function githubPutFile(req, res) {
-  const session = getGithubSession(req);
-  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
   readJsonBody(req, 512 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
-    const { repo, path: filePath, content, message, sha } = body || {};
+    const { repo, path: filePath, content, message, sha, account: requested } = body || {};
     if (!repo || !filePath || typeof content !== 'string' || !message) {
       return sendJson(res, 400, { error: 'repo, path, content, and message are required' });
     }
+    const picked = pickAccount(getGithubSession(req), repo, requested);
+    if (picked.error) {
+      return sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
+    }
+    const account = picked.account;
     try {
       const { ok, status, data } = await githubApiFetch(
-        session.token,
+        account.token,
         `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`,
         {
           method: 'PUT',
@@ -329,7 +393,12 @@ function githubPutFile(req, res) {
         }
       );
       if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not commit file' });
-      sendJson(res, 200, { sha: data.content.sha, htmlUrl: data.content.html_url, commitUrl: data.commit.html_url });
+      sendJson(res, 200, {
+        sha: data.content.sha,
+        htmlUrl: data.content.html_url,
+        commitUrl: data.commit.html_url,
+        account: account.login,
+      });
     } catch (e) {
       sendJson(res, 502, { error: e.message });
     }
