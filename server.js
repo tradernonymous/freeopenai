@@ -12,6 +12,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
+const { encryptJson, decryptJson } = require('./github.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -19,6 +20,10 @@ const PUBLIC_PATHS = new Set(['/login.html', '/api/login']);
 const LOGIN_RATE_LIMIT = 10;
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 const loginAttempts = new Map();
+const GITHUB_COOKIE = 'fo_gh';
+const GITHUB_STATE_COOKIE = 'fo_gh_state';
+const GITHUB_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const GITHUB_SCOPE = 'public_repo';
 let sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) {
   sessionSecret = crypto.randomBytes(32).toString('hex');
@@ -103,6 +108,196 @@ function handleLogout(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function requestOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+function githubRedirectUri(req) {
+  return `${requestOrigin(req)}/api/github/callback`;
+}
+
+function getGithubSession(req) {
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const session = decryptJson(sessionSecret, cookies[GITHUB_COOKIE]);
+  if (!session || typeof session.exp !== 'number' || session.exp <= Date.now()) return null;
+  return session;
+}
+
+async function githubApiFetch(token, url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'freeopenai-app',
+      ...(options.headers || {}),
+    },
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+function githubAuthorize(req, res) {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId || !process.env.GITHUB_CLIENT_SECRET) {
+    res.writeHead(500, { 'Content-Type': 'text/plain' });
+    res.end('GitHub connector is not configured — set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.');
+    return;
+  }
+  const state = crypto.randomBytes(16).toString('hex');
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`);
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: githubRedirectUri(req),
+    scope: GITHUB_SCOPE,
+    state,
+  });
+  res.writeHead(302, { Location: `https://github.com/login/oauth/authorize?${params}` });
+  res.end();
+}
+
+async function githubCallback(req, res) {
+  const query = new URL(req.url, 'http://x').searchParams;
+  const code = query.get('code');
+  const state = query.get('state');
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${GITHUB_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+
+  if (!code || !state || state !== cookies[GITHUB_STATE_COOKIE]) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('GitHub sign-in failed (state mismatch) — please try connecting again from Settings.');
+    return;
+  }
+
+  try {
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: githubRedirectUri(req),
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('GitHub sign-in failed: ' + (tokenData.error_description || tokenData.error || 'unknown error'));
+      return;
+    }
+
+    const { data: user } = await githubApiFetch(tokenData.access_token, 'https://api.github.com/user');
+    const sealed = encryptJson(sessionSecret, {
+      token: tokenData.access_token,
+      login: user && user.login,
+      avatarUrl: user && user.avatar_url,
+      exp: Date.now() + GITHUB_TOKEN_TTL_MS,
+    });
+    res.setHeader('Set-Cookie', [
+      `${GITHUB_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+      `${GITHUB_COOKIE}=${sealed}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}${secure}`,
+    ]);
+    res.writeHead(302, { Location: '/?view=settings' });
+    res.end();
+  } catch (err) {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('GitHub sign-in failed: ' + err.message);
+  }
+}
+
+function githubStatus(req, res) {
+  const session = getGithubSession(req);
+  sendJson(res, 200, session
+    ? { connected: true, login: session.login, avatarUrl: session.avatarUrl }
+    : { connected: false });
+}
+
+function githubDisconnect(req, res) {
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  sendJson(res, 200, { ok: true });
+}
+
+async function githubRepos(req, res) {
+  const session = getGithubSession(req);
+  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
+  try {
+    const { ok, status, data } = await githubApiFetch(
+      session.token,
+      'https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator'
+    );
+    if (!ok) return sendJson(res, status, { error: 'Could not list repos' });
+    const repos = (Array.isArray(data) ? data : [])
+      .filter((r) => !r.private)
+      .map((r) => ({ fullName: r.full_name, description: r.description, defaultBranch: r.default_branch }));
+    sendJson(res, 200, repos);
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+async function githubGetFile(req, res) {
+  const session = getGithubSession(req);
+  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  const filePath = query.get('path');
+  if (!repo || !filePath) return sendJson(res, 400, { error: 'repo and path are required' });
+  try {
+    const { ok, status, data } = await githubApiFetch(
+      session.token,
+      `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`
+    );
+    if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not read file' });
+    if (Array.isArray(data) || !data.content) return sendJson(res, 400, { error: 'Path is a directory, not a file' });
+    sendJson(res, 200, { content: Buffer.from(data.content, 'base64').toString('utf8'), sha: data.sha, path: data.path });
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+function githubPutFile(req, res) {
+  const session = getGithubSession(req);
+  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
+  readJsonBody(req, 512 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const { repo, path: filePath, content, message, sha } = body || {};
+    if (!repo || !filePath || typeof content !== 'string' || !message) {
+      return sendJson(res, 400, { error: 'repo, path, content, and message are required' });
+    }
+    try {
+      const { ok, status, data } = await githubApiFetch(
+        session.token,
+        `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, content: Buffer.from(content, 'utf8').toString('base64'), sha: sha || undefined }),
+        }
+      );
+      if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not commit file' });
+      sendJson(res, 200, { sha: data.content.sha, htmlUrl: data.content.html_url, commitUrl: data.commit.html_url });
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
@@ -133,15 +328,6 @@ function createRequestHandler(root) {
       handleLogin(req, res);
       return;
     }
-    if (req.method === 'POST' && urlPath === '/api/logout') {
-      handleLogout(req, res);
-      return;
-    }
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD' });
-      res.end('Method Not Allowed');
-      return;
-    }
 
     if (urlPath === '/login.html' && isAuthenticated(req)) {
       const redirectTo = new URL(req.url, 'http://x').searchParams.get('redirect');
@@ -151,6 +337,10 @@ function createRequestHandler(root) {
     }
 
     if (!PUBLIC_PATHS.has(urlPath) && !isAuthenticated(req)) {
+      if (urlPath.startsWith('/api/')) {
+        sendJson(res, 401, { error: 'Not signed in' });
+        return;
+      }
       if (isAssetPath(urlPath)) {
         res.writeHead(401);
         res.end('Unauthorized');
@@ -158,6 +348,21 @@ function createRequestHandler(root) {
       }
       res.writeHead(302, { Location: '/login.html?redirect=' + encodeURIComponent(urlPath) });
       res.end();
+      return;
+    }
+
+    if (urlPath === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
+    if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
+    if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
+    if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
+    if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
+    if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
+    if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
+    if (urlPath === '/api/github/file' && req.method === 'PUT') return githubPutFile(req, res);
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD' });
+      res.end('Method Not Allowed');
       return;
     }
 

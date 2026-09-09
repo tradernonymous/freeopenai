@@ -181,8 +181,8 @@
         }
         .message {
             max-width: 85%;
-            font-size: 15px;
-            line-height: 1.65;
+            font-size: 11px;
+            line-height: 1.6;
             word-wrap: break-word;
             animation: slideIn 150ms ease;
         }
@@ -208,6 +208,36 @@
         }
         .msg-action-btn:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
         .msg-action-btn svg { width: 13px; height: 13px; }
+
+        /* Collapsible "thinking" block shown above a bot reply for reasoning models */
+        .message-reasoning {
+            margin-bottom: 8px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-sm);
+            background: var(--surface);
+            overflow: hidden;
+        }
+        .message-reasoning > summary {
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 9px;
+            color: var(--text-muted);
+            list-style: none;
+            user-select: none;
+        }
+        .message-reasoning > summary::-webkit-details-marker { display: none; }
+        .message-reasoning > summary:hover { color: var(--text-dim); }
+        .message-reasoning[open] > summary { border-bottom: 1px solid var(--border); }
+        .reasoning-text {
+            padding: 6px 8px;
+            font-size: 7px;
+            line-height: 1.8;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 220px;
+            overflow-y: auto;
+        }
 
         /* Markdown-rendered content inside a message */
         .message-text strong { font-weight: 700; }
@@ -352,7 +382,7 @@
             border: none;
             background: transparent;
             color: var(--text);
-            font-size: 15px; font-family: inherit;
+            font-size: 14px; font-family: inherit;
             outline: none; resize: none;
         }
         .composer-input::placeholder { color: var(--text-muted); }
@@ -388,6 +418,18 @@
         .settings-row select {
             background: var(--surface); color: var(--text); border: 1px solid var(--border);
             border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; max-width: 55%;
+        }
+        .settings-row-column { flex-direction: column; align-items: stretch; gap: 12px; }
+        .github-browser { display: flex; flex-direction: column; gap: 8px; }
+        .github-browser-row { display: flex; gap: 8px; }
+        .github-browser-row select, .github-browser-row input {
+            flex: 1; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; font-family: inherit;
+        }
+        .github-file-content {
+            width: 100%; min-height: 160px; resize: vertical; background: var(--surface); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px; font-size: 12px;
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
         .icon-btn-text {
             padding: 8px 14px; border-radius: var(--r-sm); background: var(--surface);
@@ -654,10 +696,55 @@
                         </div>
                         <button class="icon-btn-text danger" onclick="newChat()">Clear history</button>
                     </div>
+                    <div class="settings-row" id="githubDisconnectedRow">
+                        <div>
+                            <strong>GitHub</strong>
+                            <p class="settings-hint" id="githubStatusHint">Not connected. Connect to browse and commit to your public repos.</p>
+                        </div>
+                        <button class="icon-btn-text" id="githubConnectBtn" onclick="location.href='/api/github/authorize'">Connect GitHub</button>
+                    </div>
+                    <div class="settings-row settings-row-column" id="githubConnectedPanel" hidden>
+                        <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                            <div>
+                                <strong>GitHub</strong>
+                                <p class="settings-hint" id="githubConnectedHint">Connected</p>
+                            </div>
+                            <button class="icon-btn-text danger" onclick="githubDisconnect()">Disconnect</button>
+                        </div>
+                        <div class="github-browser">
+                            <div class="github-browser-row">
+                                <select id="githubRepoSelect" aria-label="Repository"></select>
+                                <input type="text" id="githubPathInput" placeholder="path/to/file.js">
+                                <button class="icon-btn-text" onclick="githubLoadFile()">Load</button>
+                            </div>
+                            <textarea id="githubFileContent" class="github-file-content" placeholder="File contents..." spellcheck="false"></textarea>
+                            <div class="github-browser-row">
+                                <input type="text" id="githubCommitMessage" placeholder="Commit message">
+                                <button class="icon-btn-text" onclick="githubCommit()">Commit</button>
+                            </div>
+                            <p class="settings-hint" id="githubActionStatus"></p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </main>
+
+    <div class="modal-overlay" id="githubConfirmOverlay">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="githubConfirmTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="githubConfirmTitle">Commit to GitHub?</h3>
+            </div>
+            <div class="modal-body">
+                <p id="githubConfirmText"></p>
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" onclick="githubConfirmResolve('once')">Allow once</button>
+                <button class="icon-btn-text" onclick="githubConfirmResolve('always')">Always allow this session</button>
+                <button class="icon-btn-text danger" onclick="githubConfirmResolve('cancel')">Cancel</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal-overlay" id="helpOverlay" onclick="closeHelp();">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" onclick="event.stopPropagation();">
@@ -767,6 +854,7 @@
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
         const drawerOverlay = document.getElementById('drawerOverlay');
+        const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
         const attachTrigger = document.getElementById('attachTrigger');
         const attachMenu = document.getElementById('attachMenu');
         const fileInput = document.getElementById('fileInput');
@@ -793,6 +881,11 @@
                     currentUser = user;
                     updateAuthUI();
                 });
+            }
+
+            if (new URLSearchParams(location.search).get('view') === 'settings') {
+                switchView('settings');
+                history.replaceState(null, '', location.pathname);
             }
 
             renderModelOptions();
@@ -902,6 +995,7 @@
         function switchView(name) {
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
             document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+            if (name === 'settings') refreshGithubStatus();
         }
 
         function switchViewFromDrawer(name) {
@@ -992,6 +1086,107 @@
             }
         }
 
+        let githubAlwaysAllow = false;
+        let githubConfirmResolver = null;
+
+        function askGithubConfirm(text) {
+            if (githubAlwaysAllow) return Promise.resolve(true);
+            document.getElementById('githubConfirmText').textContent = text;
+            document.getElementById('githubConfirmOverlay').classList.add('open');
+            return new Promise((resolve) => { githubConfirmResolver = resolve; });
+        }
+
+        function githubConfirmResolve(choice) {
+            document.getElementById('githubConfirmOverlay').classList.remove('open');
+            if (choice === 'always') githubAlwaysAllow = true;
+            if (githubConfirmResolver) githubConfirmResolver(choice !== 'cancel');
+            githubConfirmResolver = null;
+        }
+
+        async function refreshGithubStatus() {
+            try {
+                const res = await fetch('/api/github/status');
+                const data = await res.json();
+                document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
+                document.getElementById('githubConnectedPanel').hidden = !data.connected;
+                if (data.connected) {
+                    document.getElementById('githubConnectedHint').textContent = 'Connected as ' + data.login;
+                    githubLoadRepos();
+                }
+            } catch {
+                // Leave the disconnected state showing on network failure.
+            }
+        }
+
+        async function githubLoadRepos() {
+            const select = document.getElementById('githubRepoSelect');
+            try {
+                const res = await fetch('/api/github/repos');
+                const repos = await res.json();
+                select.innerHTML = '';
+                (Array.isArray(repos) ? repos : []).forEach((r) => {
+                    const opt = document.createElement('option');
+                    opt.value = r.fullName;
+                    opt.textContent = r.fullName;
+                    select.appendChild(opt);
+                });
+            } catch {
+                select.innerHTML = '<option>Could not load repos</option>';
+            }
+        }
+
+        async function githubDisconnect() {
+            await fetch('/api/github/disconnect', { method: 'POST' });
+            githubAlwaysAllow = false;
+            refreshGithubStatus();
+        }
+
+        async function githubLoadFile() {
+            const repo = document.getElementById('githubRepoSelect').value;
+            const path = document.getElementById('githubPathInput').value.trim();
+            const statusEl = document.getElementById('githubActionStatus');
+            const contentEl = document.getElementById('githubFileContent');
+            if (!repo || !path) { statusEl.textContent = 'Pick a repo and enter a file path.'; return; }
+            statusEl.textContent = 'Loading...';
+            try {
+                const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+                const data = await res.json();
+                if (!res.ok) { statusEl.textContent = data.error || 'Could not load file'; return; }
+                contentEl.value = data.content;
+                contentEl.dataset.sha = data.sha;
+                statusEl.textContent = 'Loaded ' + path;
+            } catch {
+                statusEl.textContent = 'Network error loading file.';
+            }
+        }
+
+        async function githubCommit() {
+            const repo = document.getElementById('githubRepoSelect').value;
+            const path = document.getElementById('githubPathInput').value.trim();
+            const content = document.getElementById('githubFileContent');
+            const message = document.getElementById('githubCommitMessage').value.trim() || `Update ${path}`;
+            const statusEl = document.getElementById('githubActionStatus');
+            if (!repo || !path) { statusEl.textContent = 'Pick a repo and enter a file path.'; return; }
+
+            const ok = await askGithubConfirm(`Commit "${path}" to ${repo}?`);
+            if (!ok) { statusEl.textContent = 'Commit cancelled.'; return; }
+
+            statusEl.textContent = 'Committing...';
+            try {
+                const res = await fetch('/api/github/file', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha }),
+                });
+                const data = await res.json();
+                if (!res.ok) { statusEl.textContent = data.error || 'Commit failed'; return; }
+                content.dataset.sha = data.sha;
+                statusEl.textContent = 'Committed ' + path;
+            } catch {
+                statusEl.textContent = 'Network error committing file.';
+            }
+        }
+
         async function appSignOut() {
             try {
                 await fetch('/api/logout', { method: 'POST' });
@@ -1077,19 +1272,27 @@
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
                     const bubble = createBotBubble();
                     let full = '';
+                    let reasoning = '';
                     for await (const part of response) {
-                        const chunk = typeof part === 'string' ? part : (part && part.text) || '';
+                        const think = extractReasoning(part);
+                        if (think) {
+                            reasoning += think;
+                            setReasoningContent(bubble, reasoning);
+                        }
+                        const isReasoningPart = part && typeof part !== 'string' && part.type === 'reasoning';
+                        const chunk = typeof part === 'string' ? part : (!isReasoningPart && part && part.text) || '';
                         if (chunk) {
                             full += chunk;
                             setMessageContent(bubble, full);
                         }
                     }
-                    finalizeMessage(bubble, full, raw, hadAttachment);
+                    finalizeMessage(bubble, full, raw, hadAttachment, reasoning);
                 } else {
                     const text = typeof response === 'string'
                         ? response
                         : (response && (response.message?.content || response.text)) || JSON.stringify(response);
-                    addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment });
+                    const reasoning = (response && response.message && response.message.reasoning) || '';
+                    addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
                 }
 
                 showStatus('success', 'Sent');
@@ -1196,6 +1399,39 @@
             });
         }
 
+        // Reasoning models (Claude extended thinking, the GPT "pro reasoning" tiers)
+        // return their scratchpad separately from the answer. Show it in a
+        // collapsed <details> above the reply so it's there when wanted and out
+        // of the way otherwise. Text goes in via textContent, never innerHTML.
+        function setReasoningContent(el, text) {
+            let box = el.querySelector('.message-reasoning');
+            if (!text) {
+                if (box) box.remove();
+                return;
+            }
+            if (!box) {
+                box = document.createElement('details');
+                box.className = 'message-reasoning';
+                const summary = document.createElement('summary');
+                summary.textContent = 'Reasoning';
+                const body = document.createElement('div');
+                body.className = 'reasoning-text';
+                box.appendChild(summary);
+                box.appendChild(body);
+                el.insertBefore(box, el.firstChild);
+            }
+            box.querySelector('.reasoning-text').textContent = text;
+            el.dataset.rawReasoning = text;
+        }
+
+        // Puter streams reasoning as chunks tagged type: 'reasoning'; non-streaming
+        // replies carry it on message.reasoning. Normalize both to a plain string.
+        function extractReasoning(part) {
+            if (!part || typeof part === 'string') return '';
+            if (part.type === 'reasoning') return part.text || part.reasoning || '';
+            return part.reasoning || '';
+        }
+
         function buildMessageActions(retryText, isImageRetry, attachmentLost) {
             const bar = document.createElement('div');
             bar.className = 'message-actions';
@@ -1249,10 +1485,11 @@
             return el;
         }
 
-        function finalizeMessage(el, content, retryText, attachmentLost) {
+        function finalizeMessage(el, content, retryText, attachmentLost, reasoning) {
             setMessageContent(el, content);
+            setReasoningContent(el, reasoning);
             el.appendChild(buildMessageActions(retryText, false, attachmentLost));
-            messages.push({ type: 'bot', content, timestamp: Date.now() });
+            messages.push({ type: 'bot', content, reasoning: reasoning || undefined, timestamp: Date.now() });
             persistMessages();
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
@@ -1266,6 +1503,7 @@
             textEl.className = 'message-text';
             el.appendChild(textEl);
             setMessageContent(el, content);
+            if (opts.reasoning) setReasoningContent(el, opts.reasoning);
 
             if (type === 'bot') {
                 el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost));
@@ -1274,7 +1512,7 @@
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            messages.push({ type, content, timestamp: Date.now(), error: !!opts.error });
+            messages.push({ type, content, reasoning: opts.reasoning || undefined, timestamp: Date.now(), error: !!opts.error });
             persistMessages();
 
             return el;
@@ -1528,7 +1766,7 @@
                 const retryText = (msg.type === 'bot' && saved[i - 1] && saved[i - 1].type === 'user')
                     ? saved[i - 1].content
                     : undefined;
-                addMessage(msg.type, msg.content, { retryText, error: msg.error });
+                addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
             });
         }
 
@@ -1567,6 +1805,7 @@
         function getModalCloser(overlay) {
             if (overlay === helpOverlay) return closeHelp;
             if (overlay === drawerOverlay) return closeDrawer;
+            if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
             return closeImageLightbox;
         }
 

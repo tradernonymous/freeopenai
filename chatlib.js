@@ -16,9 +16,16 @@ const MODELS = [
   { id: 'gpt-5.4-nano', name: 'GPT-5.4 Nano', desc: 'Fast, cheap' },
   { id: 'gpt-4o', name: 'GPT-4o', desc: 'Balanced' },
   { id: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: 'Fast' },
-  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', desc: 'Coding, latest' },
-  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', desc: 'Coding' },
-  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', desc: 'Coding, max context' },
+  // Codex models require the "openai/" prefix on Puter.js — see
+  // https://developer.puter.com/tutorials/free-unlimited-codex-api/
+  { id: 'openai/gpt-5.3-codex', name: 'GPT-5.3 Codex', desc: 'Coding, latest' },
+  { id: 'openai/gpt-5.2-codex', name: 'GPT-5.2 Codex', desc: 'Coding' },
+  { id: 'openai/gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', desc: 'Coding, max context' },
+  // Claude models take their id directly, no prefix — see
+  // https://developer.puter.com/tutorials/free-unlimited-claude-35-sonnet-api/
+  { id: 'claude-opus-5', name: 'Claude Opus 5', desc: 'Anthropic, most capable' },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', desc: 'Anthropic, balanced' },
+  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', desc: 'Anthropic, fast' },
 ];
 
 const DEFAULT_MODEL = 'gpt-5.4-nano';
