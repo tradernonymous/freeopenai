@@ -4,6 +4,7 @@ const {
   GITHUB_TOOLS,
   GITHUB_TOOL_NAMES,
   MAX_TOOL_ROUNDS,
+  TOOL_ROUNDS_EXHAUSTED_PROMPT,
   isGithubTool,
   parseToolArgs,
   describeToolCall,
@@ -32,8 +33,18 @@ test('tool names are unique and recognised by isGithubTool', () => {
   assert.ok(!isGithubTool(undefined));
 });
 
-test('the tool loop is bounded', () => {
-  assert.ok(MAX_TOOL_ROUNDS > 1 && MAX_TOOL_ROUNDS <= 10);
+test('the tool loop is bounded, with room for real multi-file work', () => {
+  // Find a repo, list a folder, read two files, commit one: five rounds before
+  // anything unusual happens. Six used to cut ordinary requests short.
+  assert.ok(MAX_TOOL_ROUNDS >= 10, 'too low for ordinary requests');
+  assert.ok(MAX_TOOL_ROUNDS <= 20, 'every round is a billed call');
+});
+
+test('hitting the ceiling asks for a summary rather than giving up', () => {
+  assert.match(TOOL_ROUNDS_EXHAUSTED_PROMPT, /stop using tools/i);
+  assert.match(TOOL_ROUNDS_EXHAUSTED_PROMPT, /still left to do/i);
+  // Without file paths the follow-up request can't resume anywhere useful.
+  assert.match(TOOL_ROUNDS_EXHAUSTED_PROMPT, /file paths/i);
 });
 
 test('parseToolArgs handles the shapes a model actually emits', () => {
