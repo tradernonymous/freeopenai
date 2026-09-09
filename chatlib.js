@@ -231,7 +231,19 @@ const GITHUB_TOOLS = [
 ];
 
 // Stop the tool loop from running away if a model keeps calling tools forever.
-const MAX_TOOL_ROUNDS = 6;
+// Real work crosses more steps than it looks: finding a repo, listing a folder,
+// reading two files and committing one is already five. Six was low enough that
+// ordinary requests hit the ceiling, and every round is a billed call, so this
+// is a ceiling rather than a budget -- the number to keep down is how many
+// rounds a request needs, not how many it may have.
+const MAX_TOOL_ROUNDS = 12;
+
+// Asked of the model when the ceiling is reached, so an expensive run ends with
+// an answer about what it found rather than being thrown away.
+const TOOL_ROUNDS_EXHAUSTED_PROMPT =
+  'Stop using tools now and answer directly. Summarise what you found, what you ' +
+  'changed if anything, and what is still left to do. Be specific about file ' +
+  'paths so the next request can pick up from here.';
 
 const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
 
@@ -501,6 +513,7 @@ if (typeof module !== 'undefined' && module.exports) {
     GITHUB_TOOLS,
     GITHUB_TOOL_NAMES,
     MAX_TOOL_ROUNDS,
+    TOOL_ROUNDS_EXHAUSTED_PROMPT,
     isGithubTool,
     parseToolArgs,
     describeToolCall,

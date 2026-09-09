@@ -1610,7 +1610,15 @@
                     convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
                 }
             }
-            return { message: null, response: null, exhausted: true };
+            // Out of rounds. Everything read so far is still in `convo` and was
+            // paid for, so spend one more call -- without tools, so it can't
+            // start another chain -- to turn it into an answer instead of
+            // discarding it.
+            convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
+            const summary = await chatWithEffortFallback(chatModel, (opts) =>
+                puter.ai.chat(convo, opts)
+            );
+            return { message: (summary && summary.message) || null, response: summary, exhausted: true };
         }
 
         // No PDF library: every browser already writes one from a print, and on
@@ -1723,15 +1731,14 @@
                     );
                     removeTypingIndicator();
                     if (exhausted) {
-                        addMessage('system', 'Stopped after too many GitHub steps. Try a smaller request.', { error: true });
-                    } else {
-                        const text = extractMessageText(message) || '(no reply)';
-                        addMessage('bot', text, {
-                            retryText: raw,
-                            attachmentLost: hadAttachment,
-                            reasoning: extractMessageReasoning(message),
-                        });
+                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} GitHub steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
                     }
+                    const text = extractMessageText(message) || '(no reply)';
+                    addMessage('bot', text, {
+                        retryText: raw,
+                        attachmentLost: hadAttachment,
+                        reasoning: extractMessageReasoning(message),
+                    });
                     showStatus('success', 'Sent');
                     return;
                 }
