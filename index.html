@@ -1267,7 +1267,7 @@
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 const response = await puter.ai.chat(convo, { model: chatModel, tools: GITHUB_TOOLS });
                 const message = (response && response.message) || null;
-                const calls = (message && message.tool_calls) || [];
+                const calls = extractToolCalls(message);
                 if (!calls.length) return { message, response };
 
                 convo.push(message);
@@ -1375,11 +1375,11 @@
                     if (exhausted) {
                         addMessage('system', 'Stopped after too many GitHub steps. Try a smaller request.', { error: true });
                     } else {
-                        const text = (message && (message.content || message.text)) || '(no reply)';
+                        const text = extractMessageText(message) || '(no reply)';
                         addMessage('bot', text, {
                             retryText: raw,
                             attachmentLost: hadAttachment,
-                            reasoning: (message && message.reasoning) || '',
+                            reasoning: extractMessageReasoning(message),
                         });
                     }
                     showStatus('success', 'Sent');
@@ -1401,7 +1401,7 @@
                             reasoning += think;
                             setReasoningContent(bubble, reasoning);
                         }
-                        const isReasoningPart = part && typeof part !== 'string' && part.type === 'reasoning';
+                        const isReasoningPart = part && typeof part !== 'string' && (part.type === 'reasoning' || part.type === 'thinking');
                         const chunk = typeof part === 'string' ? part : (!isReasoningPart && part && part.text) || '';
                         if (chunk) {
                             full += chunk;
@@ -1412,8 +1412,8 @@
                 } else {
                     const text = typeof response === 'string'
                         ? response
-                        : (response && (response.message?.content || response.text)) || JSON.stringify(response);
-                    const reasoning = (response && response.message && response.message.reasoning) || '';
+                        : extractMessageText(response.message) || response.text || JSON.stringify(response);
+                    const reasoning = extractMessageReasoning(response && response.message);
                     addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
                 }
 
@@ -1550,7 +1550,9 @@
         // replies carry it on message.reasoning. Normalize both to a plain string.
         function extractReasoning(part) {
             if (!part || typeof part === 'string') return '';
-            if (part.type === 'reasoning') return part.text || part.reasoning || '';
+            if (part.type === 'reasoning' || part.type === 'thinking') {
+                return part.text || part.thinking || part.reasoning || '';
+            }
             return part.reasoning || '';
         }
 
