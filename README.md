@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-47%20passing-22c55e?style=for-the-badge" alt="47 tests passing">
+  <img src="https://img.shields.io/badge/tests-75%20passing-22c55e?style=for-the-badge" alt="75 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -92,7 +92,21 @@
   <tr>
     <td valign="top">
       <h3>🐙 GitHub connector</h3>
-      Connect a GitHub account in Settings and the model can browse, read, and commit files in your public repos straight from the chat. The token is encrypted into an httpOnly cookie and every write asks first.
+      Connect up to three GitHub accounts in Settings and the model can browse, read, and commit files in your public repos straight from the chat. Tokens are encrypted into an httpOnly cookie and every write asks first.
+    </td>
+    <td valign="top">
+      <h3>🎚️ Reasoning effort</h3>
+      On models that take one, a picker sets how hard to think — <code>none</code> through <code>xhigh</code>. It stays hidden on models that would ignore it.
+    </td>
+    <td valign="top">
+      <h3>📄 PDF in and out</h3>
+      Attach a PDF or DOCX and its text rides along with your message. Save any conversation back out as a PDF from the drawer — no library, just the browser's own printer.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>📱 Built for a phone</h3>
+      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, and controls that shrink rather than shove each other off the screen.
     </td>
   </tr>
 </table>
@@ -138,7 +152,7 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | --- | --- |
 | Send a message | Type and press `Enter` (`Shift+Enter` for a newline) |
 | Switch model | Click the model pill in the chat header, or open the **Models** tab |
-| Attach a file | Paperclip icon — text files only, 200KB max |
+| Attach a file | Paperclip icon — an image, a PDF/DOCX, or a text file |
 | Generate an image | Image icon next to the input — describes what to draw instead of chatting |
 | View / download an image | Click any generated image to zoom in, with a download link |
 | Copy a reply | Copy icon under any assistant message |
@@ -147,6 +161,8 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | Show a model's thinking | Click the **Reasoning** strip above a reply (reasoning-capable models only) |
 | Connect GitHub | **Settings** tab → **Connect GitHub** → load or commit a file in any of your public repos |
 | Ask the model to use GitHub | Once connected, just say it in chat — *"read my README and fix the typos"*. Each repo action shows in the transcript, and commits ask first. |
+| Set reasoning effort | The picker beside the model pill, on models that support it |
+| Save the chat as a PDF | **Save chat as PDF** in the drawer — prints through your browser, so on a phone it lands in the share sheet |
 | Sign in / out | Account icon, top right, or the **Settings** tab |
 
 <br>
@@ -192,7 +208,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 
-> The GitHub token is sealed with AES-256-GCM using `SESSION_SECRET` and stored in an httpOnly cookie — browser JavaScript never sees it. The connector asks for the `public_repo` scope only, and every commit needs an explicit confirmation.
+> GitHub tokens are sealed with AES-256-GCM using `SESSION_SECRET` and stored in an httpOnly cookie — browser JavaScript never sees them. The connector asks for the `public_repo` scope only, every commit needs an explicit confirmation, and each token is bound to the app account that connected it, so a shared browser can't leak repo access between users.
 
 <br>
 
@@ -211,6 +227,23 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 ```
 
 Your app is live at `https://<project>.up.railway.app` a few seconds later.
+
+### 🐙 Working with GitHub
+
+Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` (from a [GitHub OAuth App](https://github.com/settings/developers) whose callback URL is `https://<your-app>/api/github/callback`) and a **Connect GitHub** row appears in Settings.
+
+Once connected, the model can work with your repos directly:
+
+| Tool | What it does |
+| --- | --- |
+| `github_list_repos` | Lists public repos across every connected account |
+| `github_list_files` | Lists a folder, so it can find a path |
+| `github_read_file` | Reads one file |
+| `github_commit_file` | Writes and commits — **always asks you first** |
+
+Up to **three accounts** can be connected at once. Which one acts on a repo is resolved in a fixed order: an explicitly named account, then the repo's owner, and otherwise it refuses and asks — it never tries tokens in turn until one works, because guessing wrong on a write means committing under the wrong identity.
+
+> Untick **Expire user access tokens** when registering the OAuth App. Refresh tokens aren't implemented, so an expiring token would silently disconnect after 8 hours.
 
 <br>
 
@@ -234,6 +267,7 @@ auth.js         session-cookie signing and credential checking
 github.js       AES-256-GCM sealing for the stored GitHub token
 server.js       zero-dependency static server + the login and GitHub routes
 test/           node --test suite for server.js, chatlib.js, auth.js, github.js
+.github/        CI: lint + tests on every push and pull request
 ```
 
 </details>
