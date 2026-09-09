@@ -59,3 +59,69 @@ test('describeToolCall survives missing arguments', () => {
   assert.match(describeToolCall('github_read_file', {}), /a repo/);
   assert.match(describeToolCall('something_else', {}), /something_else/);
 });
+
+const { extractMessageText, extractMessageReasoning, extractToolCalls } = require('../chatlib.js');
+
+test('extractMessageText reads an OpenAI-style string reply', () => {
+  assert.equal(extractMessageText({ content: 'hello' }), 'hello');
+  assert.equal(extractMessageText('hello'), 'hello');
+  assert.equal(extractMessageText({ text: 'hello' }), 'hello');
+});
+
+test('extractMessageText reads a Claude content-block array', () => {
+  // The exact shape that rendered as "[object Object]" in production.
+  assert.equal(extractMessageText({ content: [{ type: 'text', text: 'hello' }] }), 'hello');
+  assert.equal(
+    extractMessageText({ content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }),
+    'ab'
+  );
+});
+
+test('extractMessageText never returns the string "[object Object]"', () => {
+  const shapes = [
+    { content: [{ type: 'text', text: 'ok' }] },
+    { content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'ok' }] },
+    { content: [] },
+    { content: null },
+    {},
+    null,
+    undefined,
+  ];
+  for (const shape of shapes) {
+    assert.ok(!extractMessageText(shape).includes('[object Object]'), JSON.stringify(shape));
+  }
+});
+
+test('extractMessageText leaves thinking blocks out of the answer', () => {
+  const message = { content: [{ type: 'thinking', thinking: 'secret' }, { type: 'text', text: 'answer' }] };
+  assert.equal(extractMessageText(message), 'answer');
+});
+
+test('extractMessageReasoning handles both providers', () => {
+  assert.equal(extractMessageReasoning({ reasoning: 'because' }), 'because');
+  assert.equal(
+    extractMessageReasoning({ content: [{ type: 'thinking', thinking: 'step 1' }, { type: 'text', text: 'answer' }] }),
+    'step 1'
+  );
+  assert.equal(extractMessageReasoning({ content: 'plain' }), '');
+  assert.equal(extractMessageReasoning(null), '');
+});
+
+test('extractToolCalls normalizes Claude tool_use blocks to the OpenAI shape', () => {
+  const openai = { tool_calls: [{ id: 'c1', function: { name: 'github_read_file', arguments: '{}' } }] };
+  assert.equal(extractToolCalls(openai)[0].function.name, 'github_read_file');
+
+  const claude = { content: [{ type: 'tool_use', id: 'tu1', name: 'github_read_file', input: { repo: 'a/b' } }] };
+  const normalized = extractToolCalls(claude);
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].id, 'tu1');
+  assert.equal(normalized[0].function.name, 'github_read_file');
+  // parseToolArgs accepts the already-parsed object Claude gives us.
+  assert.deepEqual(parseToolArgs(normalized[0].function.arguments), { repo: 'a/b' });
+});
+
+test('extractToolCalls returns an empty list when there are none', () => {
+  assert.deepEqual(extractToolCalls({ content: [{ type: 'text', text: 'hi' }] }), []);
+  assert.deepEqual(extractToolCalls({}), []);
+  assert.deepEqual(extractToolCalls(null), []);
+});

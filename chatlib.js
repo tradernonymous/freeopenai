@@ -267,6 +267,58 @@ function describeToolCall(name, args = {}) {
   }
 }
 
+// Providers disagree about the shape of an assistant message. OpenAI puts the
+// answer in message.content as a plain string; Claude returns an array of
+// content blocks and hides the text at content[0].text. Reading .content
+// directly renders "[object Object]" for every Claude reply, so everything
+// goes through here instead.
+function extractMessageText(message) {
+  if (!message) return '';
+  if (typeof message === 'string') return message;
+  const content = message.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (!block) return '';
+        // Thinking blocks are the reasoning summary, not the answer.
+        if (block.type === 'thinking' || block.type === 'reasoning') return '';
+        return block.text || '';
+      })
+      .join('');
+  }
+  return message.text || '';
+}
+
+// Claude carries extended thinking as blocks inside the same content array,
+// while OpenAI-style replies use a separate message.reasoning field.
+function extractMessageReasoning(message) {
+  if (!message || typeof message === 'string') return '';
+  if (typeof message.reasoning === 'string' && message.reasoning) return message.reasoning;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((b) => b && (b.type === 'thinking' || b.type === 'reasoning'))
+      .map((b) => b.thinking || b.text || '')
+      .join('');
+  }
+  return '';
+}
+
+// Same split for tool calls: OpenAI-style replies expose message.tool_calls,
+// Claude emits tool_use blocks in the content array. Normalize to the
+// OpenAI shape, which is what the tool loop is written against.
+function extractToolCalls(message) {
+  if (!message || typeof message === 'string') return [];
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length) return message.tool_calls;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((b) => b && b.type === 'tool_use')
+      .map((b) => ({ id: b.id, function: { name: b.name, arguments: b.input || {} } }));
+  }
+  return [];
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -288,5 +340,8 @@ if (typeof module !== 'undefined' && module.exports) {
     isGithubTool,
     parseToolArgs,
     describeToolCall,
+    extractMessageText,
+    extractMessageReasoning,
+    extractToolCalls,
   };
 }
