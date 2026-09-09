@@ -205,6 +205,11 @@ function githubAuthorize(req, res) {
     scope: GITHUB_SCOPE,
     state,
   });
+  // Without this, GitHub silently reuses whichever account is signed in at
+  // github.com and hands back the one already connected, so "add another
+  // account" appears to do nothing. prompt=select_account forces the picker.
+  // https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+  if (adding) params.set('prompt', 'select_account');
   res.writeHead(302, { Location: `https://github.com/login/oauth/authorize?${params}` });
   res.end();
 }
