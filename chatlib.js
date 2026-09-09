@@ -319,6 +319,43 @@ function extractToolCalls(message) {
   return [];
 }
 
+// How hard a reasoning model should think before answering. Puter passes this
+// through as reasoning_effort; see
+// https://docs.puter.com/AI/chat/ for the accepted values.
+const EFFORT_LEVELS = [
+  { id: 'none', name: 'None', desc: 'No thinking at all' },
+  { id: 'minimal', name: 'Minimal', desc: 'Barely any' },
+  { id: 'low', name: 'Low', desc: 'Quick' },
+  { id: 'medium', name: 'Medium', desc: 'Balanced' },
+  { id: 'high', name: 'High', desc: 'Thorough' },
+  { id: 'xhigh', name: 'Extra high', desc: 'Slowest, most thorough' },
+];
+
+// Empty means "send nothing and let the model do whatever it does by
+// default", which is how the app behaved before this option existed.
+const DEFAULT_EFFORT = '';
+
+// Only the reasoning tiers take an effort setting. Sending it to a model that
+// ignores it would put a control on screen that silently does nothing, so the
+// picker stays hidden for everything not listed here.
+const EFFORT_CAPABLE_MODEL_IDS = [
+  'gpt-6-astra-pro',
+  'gpt-5.6-sol-pro',
+  'gpt-5.6-terra-pro',
+  'gpt-5.6-luna-pro',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-haiku-4-5',
+];
+
+function supportsEffort(modelId) {
+  return EFFORT_CAPABLE_MODEL_IDS.includes(modelId);
+}
+
+function isValidEffort(value) {
+  return EFFORT_LEVELS.some((level) => level.id === value);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -343,5 +380,10 @@ if (typeof module !== 'undefined' && module.exports) {
     extractMessageText,
     extractMessageReasoning,
     extractToolCalls,
+    EFFORT_LEVELS,
+    DEFAULT_EFFORT,
+    EFFORT_CAPABLE_MODEL_IDS,
+    supportsEffort,
+    isValidEffort,
   };
 }

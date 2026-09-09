@@ -142,6 +142,13 @@
             white-space: nowrap;
         }
         .model-trigger:hover { border-color: var(--accent); color: var(--accent); }
+        .effort-select {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--r-sm); color: var(--text-dim);
+            font-family: inherit; font-size: 12px; padding: 6px 8px;
+            cursor: pointer; transition: var(--transition);
+        }
+        .effort-select:hover { border-color: var(--accent); color: var(--accent); }
         .model-trigger svg { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
         .model-dropdown {
             position: absolute; top: calc(100% + 4px); right: 16px;
@@ -571,6 +578,7 @@
                                 </button>
                                 <div class="model-dropdown" id="modelDropdown" role="listbox" aria-label="Available models"></div>
                             </div>
+                            <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
                             <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
                             </button>
@@ -816,6 +824,11 @@
         // Global state
         let currentUser = null;
         let selectedModel = DEFAULT_MODEL;
+        // Reasoning effort. Empty means "send nothing", which is how the app
+        // behaved before the picker existed. Declared with the other state
+        // because initializeApp() runs further up the file than the functions
+        // that read it.
+        let selectedEffort = DEFAULT_EFFORT;
         let messages = [];
         let isTyping = false;
         let usageCount = 0;
@@ -1042,8 +1055,39 @@
             modelsList.querySelectorAll('.model-card').forEach((card) => card.classList.toggle('active', card.dataset.model === modelId));
             defaultModelSelect.value = modelId;
             updateModelLabel();
+            updateEffortPicker();
             saveUserPreferences();
             showStatus('success', 'Model: ' + modelLabel.textContent);
+        }
+
+        function selectEffort(value) {
+            selectedEffort = isValidEffort(value) ? value : DEFAULT_EFFORT;
+            localStorage.setItem('puterChatEffort', selectedEffort);
+            showStatus('success', selectedEffort ? 'Effort: ' + selectedEffort : 'Effort: model default');
+        }
+
+        // The picker only exists for models that actually read the setting, so
+        // it can never sit on screen doing nothing.
+        function updateEffortPicker() {
+            const select = document.getElementById('effortSelect');
+            if (!select) return;
+            const capable = supportsEffort(selectedModel);
+            select.hidden = !capable;
+            if (!capable) return;
+            if (!select.options.length) {
+                const auto = document.createElement('option');
+                auto.value = '';
+                auto.textContent = 'Effort: default';
+                select.appendChild(auto);
+                EFFORT_LEVELS.forEach((level) => {
+                    const opt = document.createElement('option');
+                    opt.value = level.id;
+                    opt.textContent = 'Effort: ' + level.name.toLowerCase();
+                    opt.title = level.desc;
+                    select.appendChild(opt);
+                });
+            }
+            select.value = selectedEffort;
         }
 
         function updateModelLabel() {
@@ -1263,9 +1307,17 @@
         // Runs the model until it stops asking for tools, then hands back its
         // final message. Each tool call is announced in the transcript so the
         // user can see what the model touched.
+        // Build the options for a chat call in one place, so the effort setting
+        // can't be sent to a model that doesn't take it.
+        function chatOptions(chatModel, extra = {}) {
+            const opts = { model: chatModel, ...extra };
+            if (selectedEffort && supportsEffort(chatModel)) opts.reasoning_effort = selectedEffort;
+            return opts;
+        }
+
         async function runChatWithTools(convo, chatModel) {
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                const response = await puter.ai.chat(convo, { model: chatModel, tools: GITHUB_TOOLS });
+                const response = await puter.ai.chat(convo, chatOptions(chatModel, { tools: GITHUB_TOOLS }));
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
                 if (!calls.length) return { message, response };
@@ -1387,8 +1439,8 @@
                 }
 
                 const response = attachedImageFile
-                    ? await puter.ai.chat(outgoing, attachedImageFile, { model: chatModel, stream: true })
-                    : await puter.ai.chat(outgoing, { model: chatModel, stream: true });
+                    ? await puter.ai.chat(outgoing, attachedImageFile, chatOptions(chatModel, { stream: true }))
+                    : await puter.ai.chat(outgoing, chatOptions(chatModel, { stream: true }));
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
@@ -1848,7 +1900,10 @@
         function loadUserPreferences() {
             const saved = localStorage.getItem('puterChatModel');
             selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
+            const savedEffort = localStorage.getItem('puterChatEffort');
+            selectedEffort = isValidEffort(savedEffort) ? savedEffort : DEFAULT_EFFORT;
             updateModelLabel();
+            updateEffortPicker();
         }
 
         function saveUserPreferences() {
