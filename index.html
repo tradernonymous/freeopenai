@@ -112,7 +112,10 @@
         }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-        .chat-bar-actions { display: flex; align-items: center; gap: 4px; }
+        .chat-bar-actions { display: flex; align-items: center; gap: 4px; min-width: 0; }
+        /* The menu button is the only way to reach the drawer, so it never shrinks
+           and never scrolls off; the model and effort controls give way instead. */
+        .chat-bar-actions > .menu-trigger-btn, .chat-bar-actions > .icon-btn { flex-shrink: 0; }
         .icon-btn {
             width: 32px; height: 32px;
             border-radius: var(--r-sm);
@@ -427,6 +430,11 @@
             border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; max-width: 55%;
         }
         .settings-row-column { flex-direction: column; align-items: stretch; gap: 12px; }
+        .github-panel-head {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 10px; width: 100%; flex-wrap: wrap;
+        }
+        .github-panel-head > div { min-width: 0; }
         .github-accounts { display: flex; flex-direction: column; gap: 6px; width: 100%; }
         .github-account {
             display: flex; align-items: center; gap: 8px;
@@ -434,7 +442,8 @@
             border-radius: var(--r-sm); padding: 6px 8px; font-size: 12px;
         }
         .github-account img { width: 20px; height: 20px; border-radius: 50%; }
-        .github-account .gh-login { flex: 1; color: var(--text-dim); }
+        .github-account .gh-login { flex: 1; min-width: 0; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .github-account button { flex-shrink: 0; }
         .github-account button {
             background: none; border: none; color: var(--text-muted);
             cursor: pointer; font-size: 12px; padding: 2px 6px;
@@ -540,6 +549,38 @@
         .drawer-footer .auth-area { display: flex; align-items: center; gap: 8px; min-width: 0; }
         .drawer-footer .auth-name { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+        /* Printing is how a chat becomes a PDF -- every browser can write one,
+           and on a phone it appears in the share sheet. Everything that isn't
+           the transcript is furniture, so it goes. */
+        @media print {
+            html, body { height: auto; overflow: visible; background: #fff; color: #000; }
+            .drawer, .drawer-overlay, .chat-input-area, .status-bar, .chat-bar,
+            .message-actions, .code-copy-btn, .modal-overlay, .load-error-banner,
+            .empty-state, .typing-indicator { display: none !important; }
+            main, .chat-wrapper, .chat-card, .view { display: block; height: auto; overflow: visible; }
+            .view { position: static; }
+            .view:not(.active) { display: none; }
+            .chat-messages { display: block; height: auto; overflow: visible; padding: 0; }
+            .message {
+                max-width: 100%; font-size: 11pt; line-height: 1.5; color: #000;
+                margin: 0 0 14pt; padding: 0; animation: none;
+                /* A reply shouldn't be split across a page break if it fits. */
+                break-inside: avoid;
+            }
+            .message.user {
+                background: #f0f0f0; border: 1px solid #ddd; border-radius: 6pt;
+                padding: 8pt 10pt; max-width: 100%;
+            }
+            .message.system { color: #666; font-size: 9pt; text-align: left; }
+            .message-text pre { background: #f6f6f6; border: 1px solid #ddd; padding: 8pt; }
+            .message-text pre code { font-size: 9pt; }
+            /* Only print the model's thinking if the reader chose to show it. */
+            .message-reasoning:not([open]) { display: none; }
+            .message-reasoning { border: 1px solid #ddd; background: #fafafa; }
+            .reasoning-text { max-height: none; color: #444; font-size: 7pt; }
+            .message-image-wrap img { max-width: 100%; }
+        }
+
         /* Responsive */
         @media (max-width: 640px) {
             .drawer-footer .auth-name { max-width: 120px; }
@@ -553,7 +594,23 @@
             .status-bar { padding: 0 12px; }
             .model-dropdown { position: fixed; top: calc(52px + env(safe-area-inset-top) + 8px); right: 10px; left: 10px; min-width: 0; }
             /* iOS: prevent input zoom */
-            .composer-input, .model-trigger { font-size: 16px; }
+            .composer-input, .model-trigger, .effort-select { font-size: 16px; }
+            /* A phone header can't hold "Effort: extra high" and still leave room
+               for the menu button, so the picker shows the level alone. */
+            .effort-select { max-width: 92px; padding: 6px 4px; }
+            .effort-select option { font-size: 14px; }
+            .model-trigger { padding: 6px 8px; }
+            /* Stacked so the file path and its button aren't fighting for 375px. */
+            .github-browser-row { flex-direction: column; }
+            .github-browser-row button { width: 100%; }
+            .github-panel-head button { width: 100%; }
+            /* The blanket ".settings-row button { width: 100% }" rule below has
+               equal specificity and comes later, so this needs one more class
+               to keep the account name from being squeezed to nothing. */
+            .github-accounts .github-account button { width: auto; max-width: none; }
+            .settings-row-column .settings-hint { width: 100%; }
+            /* 7px is deliberate, but it must still scroll rather than run off. */
+            .reasoning-text { max-height: 160px; }
             .composer-input { min-height: 40px; }
             .composer-attach, .composer-send { width: 40px; height: 40px; }
             .settings-body { padding: 14px; }
@@ -564,6 +621,8 @@
 
         @media (max-width: 380px) {
             #viewChat .chat-bar-title { display: none; }
+            .effort-select { max-width: 76px; }
+            .model-trigger span#modelLabel { max-width: 68px; }
         }
     </style>
 </head>
@@ -725,7 +784,7 @@
                         <button class="icon-btn-text" id="githubConnectBtn" onclick="location.href='/api/github/authorize'">Connect GitHub</button>
                     </div>
                     <div class="settings-row settings-row-column" id="githubConnectedPanel" hidden>
-                        <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+                        <div class="github-panel-head">
                             <div>
                                 <strong>GitHub</strong>
                                 <p class="settings-hint" id="githubConnectedHint">Connected</p>
@@ -821,6 +880,10 @@
                 <button class="drawer-nav-btn" type="button" data-view="settings" onclick="switchViewFromDrawer('settings')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     Settings
+                </button>
+                <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                    Save chat as PDF
                 </button>
             </nav>
             <div class="drawer-footer">
@@ -1091,14 +1154,18 @@
             select.hidden = !capable;
             if (!capable) return;
             if (!select.options.length) {
+                // Just the level name: "Effort: extra high" doesn't fit a phone
+                // header, and a truncated "Effort: ..." tells the user nothing.
+                // The label lives in the select's title and aria-label instead.
                 const auto = document.createElement('option');
                 auto.value = '';
-                auto.textContent = 'Effort: default';
+                auto.textContent = 'Default';
+                auto.title = 'Let the model decide';
                 select.appendChild(auto);
                 EFFORT_LEVELS.forEach((level) => {
                     const opt = document.createElement('option');
                     opt.value = level.id;
-                    opt.textContent = 'Effort: ' + level.name.toLowerCase();
+                    opt.textContent = level.name;
                     opt.title = level.desc;
                     select.appendChild(opt);
                 });
@@ -1404,6 +1471,20 @@
                 }
             }
             return { message: null, response: null, exhausted: true };
+        }
+
+        // No PDF library: every browser already writes one from a print, and on
+        // a phone it lands in the share sheet as "Save to Files".
+        function exportChatPdf() {
+            closeDrawer();
+            if (!messages.length) {
+                showStatus('error', 'Nothing to save yet');
+                return;
+            }
+            // Print styles only emit the active view, so make sure it's the chat.
+            switchView('chat');
+            // Let the drawer finish closing, or it prints over the transcript.
+            setTimeout(() => window.print(), 250);
         }
 
         async function appSignOut() {
