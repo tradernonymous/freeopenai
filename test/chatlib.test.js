@@ -6,11 +6,17 @@ test('DEFAULT_MODEL is one of the known models', () => {
   assert.ok(isValidModel(DEFAULT_MODEL));
 });
 
-test('isValidModel rejects fictional model ids', () => {
-  assert.equal(isValidModel('gpt-6-astra'), false);
-  assert.equal(isValidModel('gpt-5.6-sol'), false);
+test('isValidModel rejects ids outside the curated list', () => {
+  assert.equal(isValidModel('gpt-7-nova'), false);
+  assert.equal(isValidModel('made-up-model'), false);
   assert.equal(isValidModel(''), false);
   assert.equal(isValidModel(undefined), false);
+});
+
+test('isValidModel accepts every curated model id', () => {
+  for (const m of MODELS) {
+    assert.equal(isValidModel(m.id), true);
+  }
 });
 
 test('MODELS is non-empty and every entry has an id/name', () => {
