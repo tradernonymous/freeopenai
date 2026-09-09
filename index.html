@@ -892,6 +892,9 @@
             loadUserPreferences();
             updateModelLabel();
             updateAuthUI();
+            // Learn up front whether the GitHub tools should be offered to the
+            // model, rather than waiting for the user to open Settings.
+            refreshGithubStatus();
             showStatus('success', 'Connected');
         }
 
@@ -1088,6 +1091,9 @@
 
         let githubAlwaysAllow = false;
         let githubConfirmResolver = null;
+        // Whether the chat should offer the GitHub tools to the model. Refreshed
+        // on load and whenever the connector's state changes.
+        let githubConnected = false;
 
         function askGithubConfirm(text) {
             if (githubAlwaysAllow) return Promise.resolve(true);
@@ -1107,6 +1113,7 @@
             try {
                 const res = await fetch('/api/github/status');
                 const data = await res.json();
+                githubConnected = !!data.connected;
                 document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
                 document.getElementById('githubConnectedPanel').hidden = !data.connected;
                 if (data.connected) {
@@ -1138,6 +1145,7 @@
         async function githubDisconnect() {
             await fetch('/api/github/disconnect', { method: 'POST' });
             githubAlwaysAllow = false;
+            githubConnected = false;
             refreshGithubStatus();
         }
 
@@ -1185,6 +1193,95 @@
             } catch {
                 statusEl.textContent = 'Network error committing file.';
             }
+        }
+
+        // Executes one tool the model asked for, against our own /api/github/*
+        // routes. Always resolves to a string: the model reads failures as
+        // ordinary results and can correct itself, so throwing here would only
+        // break the loop that is trying to recover.
+        async function runGithubTool(name, args) {
+            try {
+                if (name === 'github_list_repos') {
+                    const res = await fetch('/api/github/repos');
+                    const data = await res.json();
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list repos');
+                    return JSON.stringify(data);
+                }
+
+                if (name === 'github_list_files') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
+                    return JSON.stringify(data);
+                }
+
+                if (name === 'github_read_file') {
+                    if (!args.repo || !args.path) return 'Error: repo and path are required.';
+                    const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
+                    // Remember the blob sha so a later commit to the same path
+                    // updates that exact version instead of being rejected.
+                    githubShaCache[args.repo + ':' + args.path] = data.sha;
+                    return data.content;
+                }
+
+                if (name === 'github_commit_file') {
+                    if (!args.repo || !args.path || typeof args.content !== 'string') {
+                        return 'Error: repo, path, and content are required.';
+                    }
+                    const approved = await askGithubConfirm(describeToolCall(name, args) + '?');
+                    if (!approved) return 'The user declined this commit. Do not try it again unless they ask.';
+                    const res = await fetch('/api/github/file', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            path: args.path,
+                            content: args.content,
+                            message: args.message || `Update ${args.path}`,
+                            sha: githubShaCache[args.repo + ':' + args.path],
+                        }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
+                    githubShaCache[args.repo + ':' + args.path] = data.sha;
+                    return 'Committed. ' + data.commitUrl;
+                }
+
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
+        const githubShaCache = {};
+
+        // Runs the model until it stops asking for tools, then hands back its
+        // final message. Each tool call is announced in the transcript so the
+        // user can see what the model touched.
+        async function runChatWithTools(convo, chatModel) {
+            for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                const response = await puter.ai.chat(convo, { model: chatModel, tools: GITHUB_TOOLS });
+                const message = (response && response.message) || null;
+                const calls = (message && message.tool_calls) || [];
+                if (!calls.length) return { message, response };
+
+                convo.push(message);
+                for (const call of calls) {
+                    const fn = (call && call.function) || {};
+                    const args = parseToolArgs(fn.arguments);
+                    addMessage('system', describeToolCall(fn.name, args));
+                    const result = isGithubTool(fn.name)
+                        ? await runGithubTool(fn.name, args)
+                        : 'Error: unknown tool ' + fn.name;
+                    convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
+                }
+            }
+            return { message: null, response: null, exhausted: true };
         }
 
         async function appSignOut() {
@@ -1264,6 +1361,31 @@
                 updateUsageDisplay();
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
+
+                // With GitHub connected the model gets repo tools, which needs a
+                // message array to carry tool results back. That path is
+                // non-streaming; an image attachment keeps the plain path since
+                // the image argument has no place in a message array.
+                if (githubConnected && !attachedImageFile) {
+                    const { message, exhausted } = await runChatWithTools(
+                        [{ role: 'user', content: outgoing }],
+                        chatModel
+                    );
+                    removeTypingIndicator();
+                    if (exhausted) {
+                        addMessage('system', 'Stopped after too many GitHub steps. Try a smaller request.', { error: true });
+                    } else {
+                        const text = (message && (message.content || message.text)) || '(no reply)';
+                        addMessage('bot', text, {
+                            retryText: raw,
+                            attachmentLost: hadAttachment,
+                            reasoning: (message && message.reasoning) || '',
+                        });
+                    }
+                    showStatus('success', 'Sent');
+                    return;
+                }
+
                 const response = attachedImageFile
                     ? await puter.ai.chat(outgoing, attachedImageFile, { model: chatModel, stream: true })
                     : await puter.ai.chat(outgoing, { model: chatModel, stream: true });

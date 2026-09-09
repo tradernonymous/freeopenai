@@ -251,6 +251,29 @@ async function githubRepos(req, res) {
   }
 }
 
+async function githubListDir(req, res) {
+  const session = getGithubSession(req);
+  if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  const dirPath = query.get('path') || '';
+  if (!repo) return sendJson(res, 400, { error: 'repo is required' });
+  const encoded = dirPath ? dirPath.split('/').map(encodeURIComponent).join('/') : '';
+  try {
+    const { ok, status, data } = await githubApiFetch(
+      session.token,
+      `https://api.github.com/repos/${repo}/contents/${encoded}`
+    );
+    if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not list path' });
+    // A file path returns an object rather than an array; say so plainly so
+    // the caller knows to read it instead of listing it.
+    if (!Array.isArray(data)) return sendJson(res, 400, { error: 'Path is a file, not a directory' });
+    sendJson(res, 200, data.map((e) => ({ name: e.name, path: e.path, type: e.type, size: e.size })));
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
 async function githubGetFile(req, res) {
   const session = getGithubSession(req);
   if (!session) return sendJson(res, 401, { error: 'GitHub not connected' });
@@ -357,6 +380,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
+    if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
     if (urlPath === '/api/github/file' && req.method === 'PUT') return githubPutFile(req, res);
 
