@@ -27,6 +27,13 @@
             --r-sm: 8px;
             --r-lg: 16px;
             --transition: 150ms ease;
+            /* Depth, kept monochrome so it reads as light rather than colour.
+               A hairline highlight along the top edge and a shadow beneath is
+               what makes a flat surface look raised. */
+            --lift: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 2px rgba(0,0,0,.6);
+            --lift-lg: inset 0 1px 0 rgba(255,255,255,.08), 0 8px 28px rgba(0,0,0,.65);
+            --glow: 0 0 0 3px var(--accent-bg), 0 0 22px rgba(255,255,255,.07);
+            --glass: rgba(10,10,10,.72);
             --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
 
@@ -41,6 +48,29 @@
             -webkit-tap-highlight-color: transparent;
         }
         a { color: inherit; text-decoration: none; }
+
+        /* Scrollbars. The browser default is a grey slab that ignores the
+           theme; this keeps the same monochrome palette and uses the same
+           highlight-plus-shadow trick as every other raised surface. */
+        * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #4a4a4a, #2e2e2e);
+            border-radius: 999px;
+            /* Inset border, so the thumb floats clear of the track edge. */
+            border: 2px solid transparent;
+            background-clip: padding-box;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #6a6a6a, #3f3f3f);
+            background-clip: padding-box;
+        }
+        ::-webkit-scrollbar-thumb:active { background: linear-gradient(180deg, #8a8a8a, #555); background-clip: padding-box; }
+        ::-webkit-scrollbar-corner { background: transparent; }
+        /* A horizontal scroller inside a message shouldn't get the full-size bar. */
+        .message-text pre::-webkit-scrollbar { height: 8px; }
 
         /* Menu trigger button, one per view's chat-bar (replaces the old top header) */
         .menu-trigger-btn {
@@ -137,6 +167,13 @@
 
         /* Chat header bar */
         .chat-bar {
+            /* Translucent, so content scrolling underneath is felt rather than
+               hidden behind an opaque slab. */
+            background: var(--glass);
+            backdrop-filter: blur(14px) saturate(140%);
+            -webkit-backdrop-filter: blur(14px) saturate(140%);
+            box-shadow: inset 0 -1px 0 rgba(255,255,255,.04);
+            position: relative; z-index: 20;
             height: 48px;
             display: flex;
             align-items: center;
@@ -187,7 +224,9 @@
             transition: var(--transition);
             white-space: nowrap;
         }
-        .model-trigger:hover { border-color: var(--accent); color: var(--accent); }
+        .model-trigger, .effort-select { box-shadow: var(--lift); }
+        .model-trigger:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--lift-lg); }
+        .effort-select:focus { outline: none; border-color: var(--border-strong); box-shadow: var(--glow); }
         .effort-select {
             background: var(--surface); border: 1px solid var(--border);
             border-radius: var(--r-sm); color: var(--text-dim);
@@ -197,17 +236,31 @@
         .effort-select:hover { border-color: var(--accent); color: var(--accent); }
         .model-trigger svg { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
         .model-dropdown {
-            position: absolute; top: calc(100% + 4px); right: 16px;
-            background: var(--surface);
+            position: absolute; top: calc(100% + 6px); right: 16px;
+            background: var(--glass);
+            backdrop-filter: blur(14px) saturate(140%);
+            -webkit-backdrop-filter: blur(14px) saturate(140%);
             border: 1px solid var(--border);
             border-radius: var(--r);
             padding: 4px;
-            min-width: 200px;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+            min-width: 240px; max-width: min(92vw, 380px);
+            box-shadow: var(--lift-lg);
             z-index: 50;
             display: none;
         }
-        .model-dropdown.open { display: block; animation: fadeIn 100ms ease; }
+        /* A provider can list dozens of models; without a ceiling the list ran
+           off the bottom of the screen with no way to reach the rest. */
+        .model-dropdown.open { display: flex; flex-direction: column; max-height: min(62vh, 460px); animation: fadeIn 120ms ease; }
+        .model-dropdown-search {
+            flex-shrink: 0; margin: 4px 4px 6px;
+            background: var(--surface-2); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--r-sm);
+            padding: 8px 10px; font: inherit; font-size: 13px; outline: none;
+            box-shadow: var(--lift);
+        }
+        .model-dropdown-search:focus { border-color: var(--border-strong); box-shadow: var(--glow); }
+        .model-dropdown-list { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+        .model-dropdown-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
         .model-option {
             display: flex; align-items: center; gap: 8px;
@@ -220,7 +273,9 @@
         .model-option:hover, .model-option:focus-visible { background: var(--surface-2); outline: none; }
         .model-option.active { background: var(--accent-bg); color: var(--accent); }
         .model-option .model-name { font-weight: 500; }
-        .model-option .model-desc { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+        .model-option .model-desc { font-size: 11px; color: var(--text-muted); margin-left: auto; text-align: right; }
+        .model-option:hover { box-shadow: var(--lift); }
+        .history-item:hover { box-shadow: var(--lift); }
 
         /* Chat messages area */
         .chat-messages {
@@ -242,11 +297,13 @@
         @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .message.user {
             align-self: flex-end;
-            background: var(--accent-bg);
+            background: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.07));
             color: var(--text);
             padding: 12px 16px;
+            border: 1px solid rgba(255,255,255,.09);
             border-radius: 18px;
             border-bottom-right-radius: 4px;
+            box-shadow: var(--lift);
         }
         .message.bot { align-self: stretch; max-width: 100%; padding: 2px 0; }
         .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; text-align: center; }
@@ -310,7 +367,8 @@
         }
         .message-text pre {
             position: relative;
-            background: var(--surface);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,.6);
+            background: linear-gradient(180deg, #0d0d0d, var(--surface));
             border: 1px solid var(--border);
             border-radius: var(--r-sm);
             padding: 10px 12px;
@@ -420,7 +478,9 @@
             padding: 6px 6px 6px 8px;
             transition: var(--transition);
         }
-        .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+        .composer { box-shadow: var(--lift); }
+        .composer:hover { border-color: var(--border-strong); }
+        .composer:focus-within { border-color: var(--accent); box-shadow: var(--glow), var(--lift); }
         .composer-attach, .composer-send {
             width: 36px; height: 36px; flex-shrink: 0;
             border-radius: 50%;
@@ -429,6 +489,9 @@
             display: grid; place-items: center;
             transition: var(--transition);
         }
+        .composer-send { box-shadow: var(--lift); }
+        .composer-send:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--lift-lg); }
+        .composer-send:active:not(:disabled) { transform: translateY(0); }
         .composer-attach { background: transparent; color: var(--text-dim); }
         .composer-attach:hover { background: var(--surface-2); color: var(--text); }
         .composer-attach.active { background: var(--accent-bg); color: var(--accent); }
@@ -737,7 +800,10 @@
                                     <span id="modelLabel">Model</span>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                                 </button>
-                                <div class="model-dropdown" id="modelDropdown" role="listbox" aria-label="Available models"></div>
+                                <div class="model-dropdown" id="modelDropdown" aria-label="Available models">
+                                    <input type="text" class="model-dropdown-search" id="modelSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelOptions(this.value)">
+                                    <div class="model-dropdown-list" id="modelDropdownList" role="listbox" aria-label="Available models"></div>
+                                </div>
                             </div>
                             <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
                             <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
@@ -1039,6 +1105,8 @@
         const sendButton = document.getElementById('sendButton');
         const modelTrigger = document.getElementById('modelTrigger');
         const modelDropdown = document.getElementById('modelDropdown');
+        const modelDropdownList = document.getElementById('modelDropdownList');
+        const modelSearch = document.getElementById('modelSearch');
         const modelLabel = document.getElementById('modelLabel');
         const emptyState = document.getElementById('emptyState');
         const statusDot = document.getElementById('statusDot');
@@ -1127,7 +1195,7 @@
         }
 
         function renderModelOptions() {
-            modelDropdown.innerHTML = '';
+            modelDropdownList.innerHTML = '';
             modelsList.innerHTML = '';
             defaultModelSelect.innerHTML = '';
 
@@ -1151,7 +1219,7 @@
                     closeModelDropdown();
                     modelTrigger.focus();
                 });
-                modelDropdown.appendChild(opt);
+                modelDropdownList.appendChild(opt);
 
                 const card = document.createElement('button');
                 card.type = 'button';
@@ -1232,9 +1300,35 @@
             if (modelDropdown.classList.contains('open')) closeModelDropdown();
             else openModelDropdown();
         }
+        // Sixty models is a lot to eyeball, so typing narrows the list. Only
+        // shown when there are enough entries for it to earn its space.
+        function filterModelOptions(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            modelDropdownList.querySelectorAll('.model-option').forEach((opt) => {
+                const match = !needle || opt.textContent.toLowerCase().includes(needle);
+                opt.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = modelDropdownList.querySelector('.model-dropdown-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = 'No model matches that.';
+                modelDropdownList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
+        }
+
         function openModelDropdown() {
             closeAttachMenu();
             modelDropdown.classList.add('open');
+            const many = modelDropdownList.querySelectorAll('.model-option').length > 8;
+            modelSearch.hidden = !many;
+            modelSearch.value = '';
+            filterModelOptions('');
+            if (many) modelSearch.focus();
             modelTrigger.setAttribute('aria-expanded', 'true');
         }
         function closeModelDropdown() {
@@ -1243,14 +1337,14 @@
         }
 
         function focusModelOption(index) {
-            const opts = Array.from(modelDropdown.querySelectorAll('.model-option'));
+            const opts = Array.from(modelDropdownList.querySelectorAll('.model-option:not([hidden])'));
             if (!opts.length) return;
             const i = ((index % opts.length) + opts.length) % opts.length;
             opts[i].focus();
         }
 
         function handleModelDropdownKeydown(e) {
-            const opts = Array.from(modelDropdown.querySelectorAll('.model-option'));
+            const opts = Array.from(modelDropdownList.querySelectorAll('.model-option:not([hidden])'));
             const current = opts.indexOf(document.activeElement);
             if (e.key === 'ArrowDown') { e.preventDefault(); focusModelOption(current + 1); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); focusModelOption(current - 1); }
@@ -1270,7 +1364,7 @@
             }
             if (!isValidModel(modelId)) return;
             selectedModel = modelId;
-            modelDropdown.querySelectorAll('.model-option').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
+            modelDropdownList.querySelectorAll('.model-option:not([hidden])').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
             modelsList.querySelectorAll('.model-card').forEach((card) => card.classList.toggle('active', card.dataset.model === modelId));
             defaultModelSelect.value = modelId;
             updateModelLabel();
