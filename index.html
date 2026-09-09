@@ -792,8 +792,8 @@
                             <button class="icon-btn-text danger" onclick="githubDisconnect()">Disconnect all</button>
                         </div>
                         <div class="github-accounts" id="githubAccountList"></div>
-                        <button class="icon-btn-text" id="githubAddAccountBtn" onclick="location.href='/api/github/authorize'">Add another account</button>
-                        <p class="settings-hint">To add a different account, sign out of github.com first — GitHub silently reuses whichever account is signed in there.</p>
+                        <button class="icon-btn-text" id="githubAddAccountBtn" onclick="location.href='/api/github/authorize?add=1'">Add another account</button>
+                        <p class="settings-hint" id="githubAddHint">GitHub connects whichever account is signed in at github.com. To add a <em>different</em> one, <a href="https://github.com/logout" target="_blank" rel="noopener" style="text-decoration:underline">sign out of GitHub</a> first, then come back and click Add.</p>
                         <div class="github-browser">
                             <div class="github-browser-row">
                                 <select id="githubRepoSelect" aria-label="Repository"></select>
@@ -975,8 +975,13 @@
                 });
             }
 
-            if (new URLSearchParams(location.search).get('view') === 'settings') {
+            const params = new URLSearchParams(location.search);
+            if (params.get('view') === 'settings') {
                 switchView('settings');
+                if (params.get('gh') === 'same') {
+                    // The click looked like it did nothing; explain why.
+                    githubSameAccountNotice = params.get('login') || '';
+                }
                 history.replaceState(null, '', location.pathname);
             }
 
@@ -1221,6 +1226,8 @@
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
         let githubConnected = false;
+        // Set when GitHub handed back an account that was already connected.
+        let githubSameAccountNotice = '';
 
         function askGithubConfirm(text) {
             if (githubAlwaysAllow) return Promise.resolve(true);
@@ -1250,6 +1257,15 @@
                             ? 'Connected as ' + accounts[0].login
                             : accounts.length + ' accounts connected';
                     renderGithubAccounts(accounts, data.canAddMore);
+                    if (githubSameAccountNotice) {
+                        const hint = document.getElementById('githubAddHint');
+                        hint.innerHTML =
+                            `<strong>Still just ${escapeHtml(githubSameAccountNotice)}.</strong> GitHub reconnected the account ` +
+                            `already signed in at github.com. To add a different one, ` +
+                            `<a href="https://github.com/logout" target="_blank" rel="noopener" style="text-decoration:underline">sign out of GitHub</a> ` +
+                            `(or open this app in a private window), then click Add again.`;
+                        githubSameAccountNotice = '';
+                    }
                     githubLoadRepos();
                 }
             } catch {
