@@ -427,6 +427,19 @@
             border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; max-width: 55%;
         }
         .settings-row-column { flex-direction: column; align-items: stretch; gap: 12px; }
+        .github-accounts { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+        .github-account {
+            display: flex; align-items: center; gap: 8px;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--r-sm); padding: 6px 8px; font-size: 12px;
+        }
+        .github-account img { width: 20px; height: 20px; border-radius: 50%; }
+        .github-account .gh-login { flex: 1; color: var(--text-dim); }
+        .github-account button {
+            background: none; border: none; color: var(--text-muted);
+            cursor: pointer; font-size: 12px; padding: 2px 6px;
+        }
+        .github-account button:hover { color: var(--danger); }
         .github-browser { display: flex; flex-direction: column; gap: 8px; }
         .github-browser-row { display: flex; gap: 8px; }
         .github-browser-row select, .github-browser-row input {
@@ -717,8 +730,11 @@
                                 <strong>GitHub</strong>
                                 <p class="settings-hint" id="githubConnectedHint">Connected</p>
                             </div>
-                            <button class="icon-btn-text danger" onclick="githubDisconnect()">Disconnect</button>
+                            <button class="icon-btn-text danger" onclick="githubDisconnect()">Disconnect all</button>
                         </div>
+                        <div class="github-accounts" id="githubAccountList"></div>
+                        <button class="icon-btn-text" id="githubAddAccountBtn" onclick="location.href='/api/github/authorize'">Add another account</button>
+                        <p class="settings-hint">To add a different account, sign out of github.com first — GitHub silently reuses whichever account is signed in there.</p>
                         <div class="github-browser">
                             <div class="github-browser-row">
                                 <select id="githubRepoSelect" aria-label="Repository"></select>
@@ -1158,15 +1174,47 @@
                 const res = await fetch('/api/github/status');
                 const data = await res.json();
                 githubConnected = !!data.connected;
+                const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
                 document.getElementById('githubConnectedPanel').hidden = !data.connected;
                 if (data.connected) {
-                    document.getElementById('githubConnectedHint').textContent = 'Connected as ' + data.login;
+                    document.getElementById('githubConnectedHint').textContent =
+                        accounts.length === 1
+                            ? 'Connected as ' + accounts[0].login
+                            : accounts.length + ' accounts connected';
+                    renderGithubAccounts(accounts, data.canAddMore);
                     githubLoadRepos();
                 }
             } catch {
                 // Leave the disconnected state showing on network failure.
             }
+        }
+
+        function renderGithubAccounts(accounts, canAddMore) {
+            const list = document.getElementById('githubAccountList');
+            list.innerHTML = '';
+            accounts.forEach((account) => {
+                const row = document.createElement('div');
+                row.className = 'github-account';
+                if (account.avatarUrl) {
+                    const img = document.createElement('img');
+                    img.src = account.avatarUrl;
+                    img.alt = '';
+                    row.appendChild(img);
+                }
+                const name = document.createElement('span');
+                name.className = 'gh-login';
+                name.textContent = account.login;
+                row.appendChild(name);
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.textContent = 'Remove';
+                remove.title = 'Disconnect ' + account.login;
+                remove.addEventListener('click', () => githubDisconnect(account.login));
+                row.appendChild(remove);
+                list.appendChild(row);
+            });
+            document.getElementById('githubAddAccountBtn').hidden = !canAddMore;
         }
 
         async function githubLoadRepos() {
@@ -1175,10 +1223,13 @@
                 const res = await fetch('/api/github/repos');
                 const repos = await res.json();
                 select.innerHTML = '';
-                (Array.isArray(repos) ? repos : []).forEach((r) => {
+                const list = Array.isArray(repos) ? repos : [];
+                const multiAccount = new Set(list.map((r) => r.account)).size > 1;
+                list.forEach((r) => {
                     const opt = document.createElement('option');
                     opt.value = r.fullName;
-                    opt.textContent = r.fullName;
+                    opt.dataset.account = r.account || '';
+                    opt.textContent = multiAccount && r.account ? `${r.fullName}  (${r.account})` : r.fullName;
                     select.appendChild(opt);
                 });
             } catch {
@@ -1186,11 +1237,18 @@
             }
         }
 
-        async function githubDisconnect() {
-            await fetch('/api/github/disconnect', { method: 'POST' });
+        async function githubDisconnect(login) {
+            const url = '/api/github/disconnect' + (login ? '?account=' + encodeURIComponent(login) : '');
+            await fetch(url, { method: 'POST' });
             githubAlwaysAllow = false;
             githubConnected = false;
             refreshGithubStatus();
+        }
+
+        function selectedRepoAccount() {
+            const select = document.getElementById('githubRepoSelect');
+            const opt = select.options[select.selectedIndex];
+            return (opt && opt.dataset.account) || '';
         }
 
         async function githubLoadFile() {
@@ -1201,7 +1259,8 @@
             if (!repo || !path) { statusEl.textContent = 'Pick a repo and enter a file path.'; return; }
             statusEl.textContent = 'Loading...';
             try {
-                const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+                const account = selectedRepoAccount();
+                const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}` + (account ? '&account=' + encodeURIComponent(account) : ''));
                 const data = await res.json();
                 if (!res.ok) { statusEl.textContent = data.error || 'Could not load file'; return; }
                 contentEl.value = data.content;
@@ -1228,7 +1287,7 @@
                 const res = await fetch('/api/github/file', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha }),
+                    body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha, account: selectedRepoAccount() }),
                 });
                 const data = await res.json();
                 if (!res.ok) { statusEl.textContent = data.error || 'Commit failed'; return; }
@@ -1254,7 +1313,7 @@
 
                 if (name === 'github_list_files') {
                     if (!args.repo) return 'Error: repo is required.';
-                    const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}`;
+                    const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}${accountParam(args)}`;
                     const res = await fetch(url);
                     const data = await res.json();
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
@@ -1263,13 +1322,13 @@
 
                 if (name === 'github_read_file') {
                     if (!args.repo || !args.path) return 'Error: repo and path are required.';
-                    const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}`;
+                    const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}${accountParam(args)}`;
                     const res = await fetch(url);
                     const data = await res.json();
                     if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
                     // Remember the blob sha so a later commit to the same path
                     // updates that exact version instead of being rejected.
-                    githubShaCache[args.repo + ':' + args.path] = data.sha;
+                    githubShaCache[shaKey(args)] = data.sha;
                     return data.content;
                 }
 
@@ -1287,13 +1346,14 @@
                             path: args.path,
                             content: args.content,
                             message: args.message || `Update ${args.path}`,
-                            sha: githubShaCache[args.repo + ':' + args.path],
+                            sha: githubShaCache[shaKey(args)],
+                            account: args.account,
                         }),
                     });
                     const data = await res.json();
                     if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
-                    githubShaCache[args.repo + ':' + args.path] = data.sha;
-                    return 'Committed. ' + data.commitUrl;
+                    githubShaCache[shaKey(args)] = data.sha;
+                    return `Committed as ${data.account}. ${data.commitUrl}`;
                 }
 
                 return 'Error: unknown tool ' + name;
@@ -1303,6 +1363,16 @@
         }
 
         const githubShaCache = {};
+
+        function accountParam(args) {
+            return args.account ? '&account=' + encodeURIComponent(args.account) : '';
+        }
+
+        // Two accounts can see the same path in different repos, and the same
+        // repo through different tokens, so the blob sha is cached per account.
+        function shaKey(args) {
+            return `${args.account || ''}:${args.repo}:${args.path}`;
+        }
 
         // Runs the model until it stops asking for tools, then hands back its
         // final message. Each tool call is announced in the transcript so the
