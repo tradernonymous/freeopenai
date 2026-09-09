@@ -495,6 +495,51 @@ function conversationToMarkdown(messages, title) {
   return lines.join('\n').trim();
 }
 
+// How much of the conversation travels with each message. Sending history
+// costs tokens, but sending none costs far more: without it the model
+// re-discovers the same facts every turn, re-listing repositories and asking
+// which one you meant, which is several billed calls to get back to where it
+// already was.
+const MAX_HISTORY_MESSAGES = 12;
+
+// Rebuilds the exchange as chat turns. System lines are the app narrating
+// itself -- tool activity, error notices -- and are left out; feeding them back
+// invites the model to comment on them. Trailing user messages are dropped
+// because the caller appends the live one itself.
+function buildChatHistory(messages, limit = MAX_HISTORY_MESSAGES) {
+  const turns = [];
+  for (const message of messages || []) {
+    if (!message || (message.type !== 'user' && message.type !== 'bot')) continue;
+    const text = String(message.content == null ? '' : message.content).trim();
+    if (!text) continue;
+    turns.push({ role: message.type === 'user' ? 'user' : 'assistant', content: text });
+  }
+  const recent = turns.slice(-limit);
+  // A history that opens on an assistant turn reads as a reply to nothing.
+  while (recent.length && recent[0].role === 'assistant') recent.shift();
+  return recent;
+}
+
+// Answer-first instructions, in the spirit of the i-have-adhd skill
+// (https://github.com/ayghri/i-have-adhd). The tool rules exist because each
+// clarifying question is a paid round trip: asking which repository when the
+// user already named one costs the same as reading the file would have.
+const SYSTEM_PROMPT = [
+  'You are a concise assistant inside a chat app. Lead with the answer or the action, never with a preamble.',
+  'Do not open with "Great question", do not close with "Hope this helps" or "Let me know".',
+  '',
+  'You have the conversation so far. Use it. Never ask for something the user already told you.',
+  '',
+  'When GitHub tools are available:',
+  '- If the user gives a repository URL or an owner/name, use it. Do not ask which repository.',
+  '- Reading and listing are safe and cheap. Just do them; never ask permission to read.',
+  '- Never answer "say proceed and I will do it". If you can act, act now.',
+  '- Committing is the only step that needs approval, and the app already asks the user itself.',
+  '- Read a file before rewriting it, and send the complete new contents.',
+  '',
+  'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
+].join('\n');
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -535,6 +580,9 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
     conversationToMarkdown,
+    MAX_HISTORY_MESSAGES,
+    buildChatHistory,
+    SYSTEM_PROMPT,
     newConversation,
     sortConversations,
     upsertConversation,
