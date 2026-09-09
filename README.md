@@ -58,7 +58,7 @@
     </td>
     <td width="33%" valign="top">
       <h3>🔀 Model switching</h3>
-      Swap between GPT-4o, GPT-4o Mini, o1, and o1 Mini from the header, the Models tab, or Settings. Your pick is remembered next visit.
+      Swap between GPT-6 Astra, the GPT-5.6 family, GPT-5.4 Nano, and GPT-4o from the header, the Models tab, or Settings. Your pick is remembered next visit.
     </td>
   </tr>
   <tr>
