@@ -6,18 +6,46 @@
 // for the full list (several dozen ids across the GPT-5.x/4.1/o-series/Codex lines).
 const MODELS = [
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', desc: 'Newest, most capable' },
+  { id: 'gpt-6-astra-pro', name: 'GPT-6 Astra Pro', desc: 'Astra, pro reasoning' },
   { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', desc: 'Flagship' },
+  { id: 'gpt-5.6-sol-pro', name: 'GPT-5.6 Sol Pro', desc: 'Sol, pro reasoning' },
   { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', desc: 'Mid-tier' },
+  { id: 'gpt-5.6-terra-pro', name: 'GPT-5.6 Terra Pro', desc: 'Terra, pro reasoning' },
   { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', desc: 'Small, cheap' },
+  { id: 'gpt-5.6-luna-pro', name: 'GPT-5.6 Luna Pro', desc: 'Luna, pro reasoning' },
   { id: 'gpt-5.4-nano', name: 'GPT-5.4 Nano', desc: 'Fast, cheap' },
   { id: 'gpt-4o', name: 'GPT-4o', desc: 'Balanced' },
   { id: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: 'Fast' },
+  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', desc: 'Coding, latest' },
+  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', desc: 'Coding' },
+  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', desc: 'Coding, max context' },
 ];
 
 const DEFAULT_MODEL = 'gpt-5.4-nano';
 
 function isValidModel(id) {
   return MODELS.some((m) => m.id === id);
+}
+
+// Curated models confirmed (via developer.puter.com's per-model spec pages) to
+// accept image input. Not every model in MODELS supports vision, so image
+// attachments fall back to DEFAULT_VISION_MODEL when the user's selected
+// model isn't one of these.
+const VISION_MODEL_IDS = ['gpt-5.6-luna', 'gpt-5.4-nano', 'gpt-4o'];
+const DEFAULT_VISION_MODEL = 'gpt-5.4-nano';
+
+function isVisionCapable(id) {
+  return VISION_MODEL_IDS.includes(id);
+}
+
+// Extensions handled by each attach menu option. "document" files are parsed
+// client-side (PDF via pdf.js, DOCX via mammoth.js) into plain text; "file"
+// covers the original plain-text attach behavior.
+const DOCUMENT_EXTENSIONS = ['.pdf', '.docx'];
+
+function isDocumentFile(filename) {
+  const lower = String(filename).toLowerCase();
+  return DOCUMENT_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 function escapeHtml(str) {
@@ -140,5 +168,10 @@ if (typeof module !== 'undefined' && module.exports) {
     isAttachableFile,
     renderMarkdownLite,
     detectsImageIntent,
+    VISION_MODEL_IDS,
+    DEFAULT_VISION_MODEL,
+    isVisionCapable,
+    DOCUMENT_EXTENSIONS,
+    isDocumentFile,
   };
 }

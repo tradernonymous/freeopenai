@@ -42,30 +42,10 @@
         }
         a { color: inherit; text-decoration: none; }
 
-        /* Header */
-        header {
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            height: 56px;
-            background: var(--bg);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 20px;
-        }
-        .header-left, .header-right { display: flex; align-items: center; gap: 8px; }
-        .header-center { display: flex; align-items: center; gap: 4px; position: absolute; left: 50%; transform: translateX(-50%); }
-        .header-title {
-            font-size: 18px;
-            font-weight: 600;
-        }
-        .auth-area { display: flex; align-items: center; gap: 6px; }
-        .auth-name { font-size: 12px; color: var(--text-dim); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-        .nav-icon-btn {
-            width: 36px; height: 36px;
+        /* Menu trigger button, one per view's chat-bar (replaces the old top header) */
+        .menu-trigger-btn {
+            position: relative;
+            width: 32px; height: 32px;
             border-radius: var(--r-sm);
             background: transparent;
             border: 1px solid transparent;
@@ -74,9 +54,15 @@
             display: grid; place-items: center;
             transition: var(--transition);
         }
-        .nav-icon-btn svg { width: 18px; height: 18px; }
-        .nav-icon-btn:hover { background: var(--surface-2); color: var(--text); }
-        .nav-icon-btn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--border); }
+        .menu-trigger-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+        .menu-trigger-btn svg { width: 16px; height: 16px; }
+        .menu-trigger-btn .signed-in-dot {
+            position: absolute; top: 2px; right: 2px;
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--border-strong);
+            border: 1.5px solid var(--bg-elevated);
+        }
+        .menu-trigger-btn.signed-in .signed-in-dot { background: #22c55e; }
 
         /* Load error banner */
         .load-error-banner {
@@ -311,6 +297,32 @@
         .attachment-chip button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
         .attachment-chip button:hover { color: var(--danger); }
         .attachment-chip[hidden] { display: none; }
+        .attachment-thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
+        .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+        .attach-menu {
+            position: absolute; bottom: calc(100% + 8px); left: 0;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--r);
+            padding: 4px;
+            min-width: 190px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+            z-index: 50;
+            display: none;
+        }
+        .attach-menu.open { display: block; animation: fadeIn 100ms ease; }
+        .attach-menu-item {
+            display: flex; align-items: center; gap: 10px;
+            width: 100%; padding: 9px 12px;
+            border-radius: var(--r-sm);
+            background: transparent; border: none;
+            color: var(--text); font-size: 13px; cursor: pointer;
+            text-align: left; transition: var(--transition);
+        }
+        .attach-menu-item svg { width: 16px; height: 16px; color: var(--text-dim); flex-shrink: 0; }
+        .attach-menu-item:hover, .attach-menu-item:focus-visible { background: var(--surface-2); outline: none; }
+        .attach-menu-item .attach-item-hint { font-size: 11px; color: var(--text-muted); }
 
         .composer {
             display: flex; align-items: flex-end; gap: 4px;
@@ -424,11 +436,51 @@
         .modal-body li::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-top: 6px; flex-shrink: 0; }
         .modal-body strong { color: var(--text); }
 
+        /* Right-side drawer (replaces the header's Chat/Models/Settings/account/New chat) */
+        .drawer-overlay { justify-content: flex-end; align-items: stretch; padding: 0; }
+        .drawer-panel {
+            width: min(300px, 85vw);
+            height: 100%;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 220ms ease;
+            animation: none;
+        }
+        .drawer-overlay.open .drawer-panel { transform: translateX(0); }
+        .drawer-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: calc(16px + env(safe-area-inset-top)) 16px 16px 16px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .drawer-title { font-size: 15px; font-weight: 600; }
+        .drawer-nav { display: flex; flex-direction: column; gap: 4px; padding: 12px; }
+        .drawer-nav-btn {
+            display: flex; align-items: center; gap: 12px;
+            width: 100%; padding: 12px 14px;
+            border-radius: var(--r);
+            background: transparent; border: 1px solid transparent;
+            color: var(--text-dim); font-size: 14px; font-weight: 500;
+            cursor: pointer; text-align: left; transition: var(--transition);
+        }
+        .drawer-nav-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+        .drawer-nav-btn:hover { background: var(--surface-2); color: var(--text); }
+        .drawer-nav-btn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--border); }
+        .drawer-footer {
+            margin-top: auto;
+            padding: 12px; border-top: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+        .drawer-footer .auth-area { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .drawer-footer .auth-name { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
         /* Responsive */
         @media (max-width: 640px) {
-            header { padding: 0 10px; height: 52px; }
-            .auth-name { display: none; }
-            .header-center { gap: 2px; }
+            .drawer-footer .auth-name { max-width: 120px; }
             .chat-bar { padding: 0 10px; height: 52px; gap: 6px; }
             #viewChat .chat-bar-title span:last-child { display: none; }
             .model-trigger span#modelLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -437,7 +489,7 @@
             .message.user { max-width: 88%; }
             .chat-input-area { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             .status-bar { padding: 0 12px; }
-            .model-dropdown { position: fixed; top: 108px; right: 10px; left: 10px; min-width: 0; }
+            .model-dropdown { position: fixed; top: calc(52px + env(safe-area-inset-top) + 8px); right: 10px; left: 10px; min-width: 0; }
             /* iOS: prevent input zoom */
             .composer-input, .model-trigger { font-size: 16px; }
             .composer-input { min-height: 40px; }
@@ -454,36 +506,6 @@
     </style>
 </head>
 <body>
-    <header>
-        <div class="header-left">
-            <div class="logo">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 14v1c0 1.1.9 2 2 2v2.93zm6.9-2.54L7.77 6.87A7.93 7.93 0 0 1 12 5c4.97 0 9 4.03 9 9 0 2.29-.77 4.4-2.1 6.39z"/></svg>
-            </div>
-        </div>
-        <div class="header-center">
-            <button class="nav-icon-btn active" data-view="chat" title="Chat" aria-label="Chat">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            </button>
-            <button class="nav-icon-btn" data-view="models" title="Models" aria-label="Models">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-            </button>
-            <button class="nav-icon-btn" data-view="settings" title="Settings" aria-label="Settings">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </button>
-        </div>
-        <div class="header-right">
-            <div class="auth-area">
-                <span class="auth-name" id="authName" hidden></span>
-                <button class="icon-btn" id="authButton" title="Sign in" aria-label="Sign in" onclick="handleAuthClick()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                </button>
-            </div>
-            <button class="icon-btn" title="New Chat" aria-label="New Chat" onclick="newChat()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            </button>
-        </div>
-    </header>
-
     <div class="load-error-banner" id="loadErrorBanner" role="alert">
         <span id="loadErrorText">Puter.js failed to load.</span>
         <button type="button" onclick="location.reload()">Reload</button>
@@ -513,6 +535,10 @@
                             <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             </button>
+                            <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                                <span class="signed-in-dot"></span>
+                            </button>
                         </div>
                     </div>
 
@@ -526,14 +552,43 @@
 
                     <div class="chat-input-area">
                         <div class="attachment-chip" id="attachmentChip" hidden>
-                            <span id="attachmentName"></span>
+                            <img class="attachment-thumb" id="attachmentThumb" alt="" hidden>
+                            <span class="attachment-name" id="attachmentName"></span>
                             <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
                         </div>
                         <div class="composer">
-                            <button class="composer-attach" type="button" onclick="document.getElementById('fileInput').click();" aria-label="Attach text file" title="Attach text file (.txt, .md, .csv, .json, .js, .ts, .log, .yml)">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                                <input type="file" id="fileInput" style="display: none;" accept=".txt,.md,.csv,.json,.js,.ts,.log,.yml,.yaml" onchange="handleFileSelect(this)">
-                            </button>
+                            <div style="position: relative;">
+                                <button class="composer-attach" type="button" id="attachTrigger" onclick="event.stopPropagation(); toggleAttachMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Attach" title="Attach an image, document, or file">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <defs>
+                                            <linearGradient id="clipGradient" x1="0" y1="0" x2="1" y2="1">
+                                                <stop offset="0" stop-color="#22d3ee">
+                                                    <animate attributeName="stop-color" values="#22d3ee;#a78bfa;#f472b6;#22d3ee" dur="4s" repeatCount="indefinite"/>
+                                                </stop>
+                                                <stop offset="1" stop-color="#f472b6">
+                                                    <animate attributeName="stop-color" values="#f472b6;#22d3ee;#a78bfa;#f472b6" dur="4s" repeatCount="indefinite"/>
+                                                </stop>
+                                            </linearGradient>
+                                        </defs>
+                                        <path stroke="url(#clipGradient)" d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                                    </svg>
+                                </button>
+                                <div class="attach-menu" id="attachMenu" role="listbox" aria-label="Attachment type">
+                                    <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="image" onclick="selectAttachKind('image')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                                        <span>Image<br><span class="attach-item-hint">Photo — sent for the model to see</span></span>
+                                    </button>
+                                    <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="document" onclick="selectAttachKind('document')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+                                        <span>Documents<br><span class="attach-item-hint">.pdf, .docx — text is extracted</span></span>
+                                    </button>
+                                    <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="file" onclick="selectAttachKind('file')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+                                        <span>Files<br><span class="attach-item-hint">.txt, .md, .json, code, etc.</span></span>
+                                    </button>
+                                </div>
+                                <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
+                            </div>
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
@@ -555,6 +610,12 @@
             <div class="view" id="viewModels">
                 <div class="chat-bar">
                     <div class="chat-bar-title"><span>Models</span></div>
+                    <div class="chat-bar-actions">
+                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span class="signed-in-dot"></span>
+                        </button>
+                    </div>
                 </div>
                 <div class="settings-body">
                     <div class="models-list" id="modelsList"></div>
@@ -564,6 +625,12 @@
             <div class="view" id="viewSettings">
                 <div class="chat-bar">
                     <div class="chat-bar-title"><span>Settings</span></div>
+                    <div class="chat-bar-actions">
+                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span class="signed-in-dot"></span>
+                        </button>
+                    </div>
                 </div>
                 <div class="settings-body">
                     <div class="settings-row">
@@ -623,6 +690,40 @@
         </div>
     </div>
 
+    <div class="modal-overlay drawer-overlay" id="drawerOverlay" onclick="closeDrawer();">
+        <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Menu" onclick="event.stopPropagation();">
+            <div class="drawer-header">
+                <span class="drawer-title">Free OpenAI API</span>
+                <button class="modal-close" type="button" onclick="closeDrawer();" aria-label="Close menu">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <nav class="drawer-nav">
+                <button class="drawer-nav-btn active" type="button" data-view="chat" onclick="switchViewFromDrawer('chat')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    Chat
+                </button>
+                <button class="drawer-nav-btn" type="button" data-view="models" onclick="switchViewFromDrawer('models')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                    Models
+                </button>
+                <button class="drawer-nav-btn" type="button" data-view="settings" onclick="switchViewFromDrawer('settings')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Settings
+                </button>
+            </nav>
+            <div class="drawer-footer">
+                <div class="auth-area">
+                    <button class="icon-btn" id="authButton" title="Sign in" aria-label="Sign in" onclick="handleAuthClick()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </button>
+                    <span class="auth-name" id="authName" hidden></span>
+                </div>
+                <button class="icon-btn-text" type="button" onclick="newChat(); closeDrawer();">New chat</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Global state
         let currentUser = null;
@@ -634,6 +735,8 @@
         let puterReady = false;
         let lastFocusedBeforeModal = null;
         let imageMode = false;
+        let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
+        const loadedScripts = {};
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -657,10 +760,15 @@
         const loadErrorText = document.getElementById('loadErrorText');
         const attachmentChip = document.getElementById('attachmentChip');
         const attachmentName = document.getElementById('attachmentName');
+        const attachmentThumb = document.getElementById('attachmentThumb');
         const imageModeBtn = document.getElementById('imageModeBtn');
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
+        const drawerOverlay = document.getElementById('drawerOverlay');
+        const attachTrigger = document.getElementById('attachTrigger');
+        const attachMenu = document.getElementById('attachMenu');
+        const fileInput = document.getElementById('fileInput');
         const views = {
             chat: document.getElementById('viewChat'),
             models: document.getElementById('viewModels'),
@@ -767,13 +875,24 @@
                 }
             });
 
-            modelDropdown.addEventListener('keydown', handleModelDropdownKeydown);
-
-            document.querySelectorAll('.nav-icon-btn').forEach((btn) => {
-                btn.addEventListener('click', () => switchView(btn.dataset.view));
+            attachTrigger.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openAttachMenu();
+                    focusAttachOption(0);
+                } else if (e.key === 'Escape' && attachMenu.classList.contains('open')) {
+                    e.preventDefault();
+                    closeAttachMenu();
+                }
             });
 
-            document.addEventListener('click', () => closeModelDropdown());
+            modelDropdown.addEventListener('keydown', handleModelDropdownKeydown);
+            attachMenu.addEventListener('keydown', handleAttachMenuKeydown);
+
+            document.addEventListener('click', () => {
+                closeModelDropdown();
+                closeAttachMenu();
+            });
             document.addEventListener('keydown', handleModalKeydown);
 
             defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
@@ -781,7 +900,12 @@
 
         function switchView(name) {
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
-            document.querySelectorAll('.nav-icon-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+            document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+        }
+
+        function switchViewFromDrawer(name) {
+            switchView(name);
+            closeDrawer();
         }
 
         function toggleModelDropdown() {
@@ -789,6 +913,7 @@
             else openModelDropdown();
         }
         function openModelDropdown() {
+            closeAttachMenu();
             modelDropdown.classList.add('open');
             modelTrigger.setAttribute('aria-expanded', 'true');
         }
@@ -839,6 +964,8 @@
 
             settingsAuthStatus.textContent = signedIn ? `Signed in as ${name}` : 'Not signed in — required to chat';
             settingsAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
+
+            document.querySelectorAll('.menu-trigger-btn').forEach((btn) => btn.classList.toggle('signed-in', signedIn));
         }
 
         async function handleAuthClick() {
@@ -908,8 +1035,10 @@
             const generateImage = imageMode || detectsImageIntent(raw);
             if (imageMode) toggleImageMode();
 
+            const attachedImageFile = pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.file : null;
+            const hadAttachment = !!pendingAttachment;
             let outgoing = raw;
-            if (pendingAttachment) {
+            if (pendingAttachment && pendingAttachment.kind === 'text') {
                 outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
             }
 
@@ -930,7 +1059,10 @@
                 usageCount++;
                 updateUsageDisplay();
 
-                const response = await puter.ai.chat(outgoing, { model: selectedModel, stream: true });
+                const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
+                const response = attachedImageFile
+                    ? await puter.ai.chat(outgoing, attachedImageFile, { model: chatModel, stream: true })
+                    : await puter.ai.chat(outgoing, { model: chatModel, stream: true });
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
@@ -943,12 +1075,12 @@
                             setMessageContent(bubble, full);
                         }
                     }
-                    finalizeMessage(bubble, full, raw);
+                    finalizeMessage(bubble, full, raw, hadAttachment);
                 } else {
                     const text = typeof response === 'string'
                         ? response
                         : (response && (response.message?.content || response.text)) || JSON.stringify(response);
-                    addMessage('bot', text, { retryText: raw });
+                    addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment });
                 }
 
                 showStatus('success', 'Sent');
@@ -963,12 +1095,25 @@
             }
         }
 
+        const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
+
         async function sendImageGeneration(promptText) {
             try {
                 usageCount++;
                 updateUsageDisplay();
 
-                const imgEl = await puter.ai.txt2img(promptText, { model: 'gpt-image-2' });
+                let imgEl;
+                let lastError;
+                for (const model of IMAGE_MODELS) {
+                    try {
+                        imgEl = await puter.ai.txt2img(promptText, { model });
+                        break;
+                    } catch (error) {
+                        lastError = error;
+                    }
+                }
+                if (!imgEl) throw lastError;
+
                 removeTypingIndicator();
                 addImageMessage(promptText, imgEl);
                 showStatus('success', 'Image ready');
@@ -1042,7 +1187,7 @@
             });
         }
 
-        function buildMessageActions(retryText, isImageRetry) {
+        function buildMessageActions(retryText, isImageRetry, attachmentLost) {
             const bar = document.createElement('div');
             bar.className = 'message-actions';
 
@@ -1059,10 +1204,13 @@
                 const retryBtn = document.createElement('button');
                 retryBtn.className = 'msg-action-btn';
                 retryBtn.type = 'button';
-                retryBtn.title = 'Retry';
-                retryBtn.setAttribute('aria-label', 'Retry message');
+                retryBtn.title = attachmentLost ? 'Retry (attachment will not be resent)' : 'Retry';
+                retryBtn.setAttribute('aria-label', attachmentLost ? 'Retry message (attachment will not be resent)' : 'Retry message');
                 retryBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/></svg>';
-                retryBtn.addEventListener('click', () => retryMessage(retryText, isImageRetry));
+                retryBtn.addEventListener('click', () => {
+                    if (attachmentLost) showStatus('info', "Attachment can't be resent — retrying with text only");
+                    retryMessage(retryText, isImageRetry);
+                });
                 bar.appendChild(retryBtn);
             }
 
@@ -1092,9 +1240,9 @@
             return el;
         }
 
-        function finalizeMessage(el, content, retryText) {
+        function finalizeMessage(el, content, retryText, attachmentLost) {
             setMessageContent(el, content);
-            el.appendChild(buildMessageActions(retryText));
+            el.appendChild(buildMessageActions(retryText, false, attachmentLost));
             messages.push({ type: 'bot', content, timestamp: Date.now() });
             persistMessages();
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -1111,7 +1259,7 @@
             setMessageContent(el, content);
 
             if (type === 'bot') {
-                el.appendChild(buildMessageActions(opts.retryText));
+                el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost));
             }
 
             chatMessages.appendChild(el);
@@ -1150,10 +1298,142 @@
             }
         }
 
-        function handleFileSelect(input) {
+        function toggleAttachMenu() {
+            if (attachMenu.classList.contains('open')) closeAttachMenu();
+            else openAttachMenu();
+        }
+        function openAttachMenu() {
+            closeModelDropdown();
+            attachMenu.classList.add('open');
+            attachTrigger.setAttribute('aria-expanded', 'true');
+        }
+        function closeAttachMenu() {
+            attachMenu.classList.remove('open');
+            attachTrigger.setAttribute('aria-expanded', 'false');
+        }
+        function focusAttachOption(index) {
+            const opts = Array.from(attachMenu.querySelectorAll('.attach-menu-item'));
+            if (!opts.length) return;
+            const i = ((index % opts.length) + opts.length) % opts.length;
+            opts[i].focus();
+        }
+        function handleAttachMenuKeydown(e) {
+            const opts = Array.from(attachMenu.querySelectorAll('.attach-menu-item'));
+            const current = opts.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); opts[(current + 1 + opts.length) % opts.length]?.focus(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); opts[(current - 1 + opts.length) % opts.length]?.focus(); }
+            else if (e.key === 'Escape') { e.preventDefault(); closeAttachMenu(); attachTrigger.focus(); }
+        }
+
+        function selectAttachKind(kind) {
+            pendingAttachmentKind = kind;
+            closeAttachMenu();
+            fileInput.accept = kind === 'image'
+                ? 'image/*'
+                : kind === 'document'
+                    ? '.pdf,.docx'
+                    : '.txt,.md,.csv,.json,.js,.ts,.log,.yml,.yaml';
+            fileInput.click();
+        }
+
+        function loadScriptOnce(url, integrity) {
+            if (!loadedScripts[url]) {
+                loadedScripts[url] = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = url;
+                    s.crossOrigin = 'anonymous';
+                    if (integrity) s.integrity = integrity;
+                    s.onload = () => resolve();
+                    s.onerror = () => {
+                        delete loadedScripts[url];
+                        reject(new Error('Failed to load ' + url));
+                    };
+                    document.head.appendChild(s);
+                });
+            }
+            return loadedScripts[url];
+        }
+
+        const PDFJS_VERSION = '3.11.174';
+        const MAMMOTH_VERSION = '1.12.2';
+        // SRI hashes pinned to the exact CDN files above (from cdnjs' published sri metadata)
+        // so a tampered/compromised CDN response is rejected instead of silently executed.
+        const PDFJS_SRI = 'sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==';
+        const MAMMOTH_SRI = 'sha512-AnEJW9a1Eels9e8WrJPSECJq607agw+P705HEFYHRz8d2Elmfrer/XVEsSSgir/uJg1iVmVc5E2zsL9V3WU9FQ==';
+        // Note: pdf.worker.min.js is loaded by pdf.js itself via the Worker() constructor,
+        // which has no integrity option, so it can't be SRI-pinned from here.
+
+        async function extractPdfText(file) {
+            await loadScriptOnce(`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.js`, PDFJS_SRI);
+            if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+            }
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let text = '';
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const content = await page.getTextContent();
+                text += content.items.map((item) => item.str).join(' ') + '\n\n';
+            }
+            return text.trim();
+        }
+
+        async function extractDocxText(file) {
+            await loadScriptOnce(`https://cdnjs.cloudflare.com/ajax/libs/mammoth/${MAMMOTH_VERSION}/mammoth.browser.min.js`, MAMMOTH_SRI);
+            const arrayBuffer = await file.arrayBuffer();
+            const result = await mammoth.extractRawText({ arrayBuffer });
+            return result.value.trim();
+        }
+
+        const MAX_DOCUMENT_TEXT_LENGTH = 20000;
+
+        function truncateExtractedText(text) {
+            if (text.length <= MAX_DOCUMENT_TEXT_LENGTH) return text;
+            return text.slice(0, MAX_DOCUMENT_TEXT_LENGTH) + '\n\n[...truncated, document was longer]';
+        }
+
+        async function handleFileSelect(input) {
             const file = input.files && input.files[0];
             input.value = '';
             if (!file) return;
+
+            if (pendingAttachmentKind === 'image') {
+                if (!file.type.startsWith('image/')) {
+                    showStatus('error', 'Please choose an image file');
+                    return;
+                }
+                if (file.size > 8 * 1024 * 1024) {
+                    showStatus('error', 'Image too large (8MB max)');
+                    return;
+                }
+                setPendingAttachment({ kind: 'image', file, name: file.name, previewUrl: URL.createObjectURL(file) });
+                showStatus('success', 'Attached ' + file.name);
+                return;
+            }
+
+            if (pendingAttachmentKind === 'document') {
+                if (!isDocumentFile(file.name)) {
+                    showStatus('error', 'Only .pdf and .docx are supported here');
+                    return;
+                }
+                if (file.size > 15 * 1024 * 1024) {
+                    showStatus('error', 'File too large (15MB max)');
+                    return;
+                }
+                try {
+                    showStatus('info', 'Reading ' + file.name + '...');
+                    const lower = file.name.toLowerCase();
+                    const rawText = lower.endsWith('.pdf') ? await extractPdfText(file) : await extractDocxText(file);
+                    setPendingAttachment({ kind: 'text', name: file.name, content: truncateExtractedText(rawText) });
+                    showStatus('success', 'Attached ' + file.name);
+                } catch (error) {
+                    console.error('Document parse failed:', error);
+                    showStatus('error', 'Could not read ' + file.name);
+                }
+                return;
+            }
+
             if (!isAttachableFile(file.name)) {
                 showStatus('error', 'Only text-based files can be attached');
                 return;
@@ -1164,19 +1444,34 @@
             }
             const reader = new FileReader();
             reader.onload = () => {
-                pendingAttachment = { name: file.name, content: String(reader.result) };
-                attachmentName.textContent = file.name;
-                attachmentChip.hidden = false;
+                setPendingAttachment({ kind: 'text', name: file.name, content: String(reader.result) });
                 showStatus('success', 'Attached ' + file.name);
             };
             reader.onerror = () => showStatus('error', 'Failed to read file');
             reader.readAsText(file);
         }
 
+        function setPendingAttachment(attachment) {
+            if (pendingAttachment && pendingAttachment.previewUrl) URL.revokeObjectURL(pendingAttachment.previewUrl);
+            pendingAttachment = attachment;
+            attachmentName.textContent = attachment.name;
+            attachmentChip.hidden = false;
+            if (attachment.kind === 'image') {
+                attachmentThumb.src = attachment.previewUrl;
+                attachmentThumb.hidden = false;
+            } else {
+                attachmentThumb.hidden = true;
+                attachmentThumb.src = '';
+            }
+        }
+
         function clearAttachment() {
+            if (pendingAttachment && pendingAttachment.previewUrl) URL.revokeObjectURL(pendingAttachment.previewUrl);
             pendingAttachment = null;
             attachmentChip.hidden = true;
             attachmentName.textContent = '';
+            attachmentThumb.hidden = true;
+            attachmentThumb.src = '';
         }
 
         function loadUserPreferences() {
@@ -1249,10 +1544,27 @@
             helpOverlay.classList.remove('open');
             if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
         }
+
+        function openDrawer() {
+            lastFocusedBeforeModal = document.activeElement;
+            drawerOverlay.classList.add('open');
+            drawerOverlay.querySelector('.modal-close').focus();
+        }
+        function closeDrawer() {
+            drawerOverlay.classList.remove('open');
+            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
+        }
+
+        function getModalCloser(overlay) {
+            if (overlay === helpOverlay) return closeHelp;
+            if (overlay === drawerOverlay) return closeDrawer;
+            return closeImageLightbox;
+        }
+
         function handleModalKeydown(e) {
             const openOverlay = document.querySelector('.modal-overlay.open');
             if (!openOverlay) return;
-            const close = openOverlay === helpOverlay ? closeHelp : closeImageLightbox;
+            const close = getModalCloser(openOverlay);
             if (e.key === 'Escape') { close(); return; }
             if (e.key !== 'Tab') return;
             const focusable = openOverlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');

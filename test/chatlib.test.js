@@ -1,6 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MODELS, DEFAULT_MODEL, isValidModel, escapeHtml, isAttachableFile, renderMarkdownLite, detectsImageIntent } = require('../chatlib.js');
+const {
+  MODELS,
+  DEFAULT_MODEL,
+  isValidModel,
+  escapeHtml,
+  isAttachableFile,
+  renderMarkdownLite,
+  detectsImageIntent,
+  isVisionCapable,
+  DEFAULT_VISION_MODEL,
+  isDocumentFile,
+} = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
   assert.ok(isValidModel(DEFAULT_MODEL));
@@ -93,4 +104,24 @@ test('detectsImageIntent ignores prose that merely mentions an image-ish word', 
   assert.equal(detectsImageIntent('make a plan for my image website'), false);
   assert.equal(detectsImageIntent('what can you do for me?'), false);
   assert.equal(detectsImageIntent('create a budget spreadsheet'), false);
+});
+
+test('isVisionCapable accepts only confirmed vision models', () => {
+  assert.equal(isVisionCapable('gpt-4o'), true);
+  assert.equal(isVisionCapable('gpt-5.4-nano'), true);
+  assert.equal(isVisionCapable('gpt-5.6-luna'), true);
+  assert.equal(isVisionCapable('gpt-6-astra'), false);
+  assert.equal(isVisionCapable('made-up-model'), false);
+});
+
+test('DEFAULT_VISION_MODEL is itself vision-capable and a known model', () => {
+  assert.equal(isVisionCapable(DEFAULT_VISION_MODEL), true);
+  assert.equal(isValidModel(DEFAULT_VISION_MODEL), true);
+});
+
+test('isDocumentFile recognizes pdf and docx only', () => {
+  assert.equal(isDocumentFile('report.pdf'), true);
+  assert.equal(isDocumentFile('resume.DOCX'), true);
+  assert.equal(isDocumentFile('notes.txt'), false);
+  assert.equal(isDocumentFile('photo.png'), false);
 });
