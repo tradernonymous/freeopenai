@@ -264,3 +264,42 @@ test('toConversationMessage handles junk without throwing', () => {
   assert.deepEqual(toConversationMessage({}), { role: 'assistant', content: '' });
   assert.deepEqual(toConversationMessage({ tool_calls: [] }), { role: 'assistant', content: '' });
 });
+
+const { isOutOfCreditsError, isHeavyModel, estimateCostWarning, HEAVY_MODEL_IDS } = require('../chatlib.js');
+
+test('the exact out-of-credits error from production is recognised', () => {
+  assert.ok(isOutOfCreditsError('Error: No usage left for request.'));
+  assert.ok(isOutOfCreditsError(new Error('No usage left for request')));
+  assert.ok(isOutOfCreditsError('402 insufficient credits'));
+  assert.ok(isOutOfCreditsError({ message: 'quota exceeded' }));
+});
+
+test('ordinary failures are not mistaken for an empty balance', () => {
+  assert.ok(!isOutOfCreditsError('429 rate limited'));
+  assert.ok(!isOutOfCreditsError('500 internal error'));
+  assert.ok(!isOutOfCreditsError('400 bad request'));
+  assert.ok(!isOutOfCreditsError(null));
+});
+
+test('every heavy model id is a real model', () => {
+  for (const id of HEAVY_MODEL_IDS) {
+    assert.ok(MODELS.some((m) => m.id === id), `${id} is not in MODELS`);
+  }
+  assert.ok(isHeavyModel('claude-opus-5'));
+  assert.ok(!isHeavyModel('claude-haiku-4-5'));
+  assert.ok(!isHeavyModel('gpt-5.4-nano'));
+});
+
+test('the cost warning needs at least two expensive choices, not one', () => {
+  // One heavy choice on its own is normal use and shouldn't nag.
+  assert.equal(estimateCostWarning('claude-opus-5', '', false), '');
+  assert.equal(estimateCostWarning('gpt-5.4-nano', 'xhigh', false), '');
+  assert.equal(estimateCostWarning('gpt-5.4-nano', '', true), '');
+});
+
+test('the combination that emptied the allowance is called out by name', () => {
+  const warning = estimateCostWarning('claude-opus-5', 'xhigh', true);
+  assert.match(warning, /top-tier model/);
+  assert.match(warning, /xhigh reasoning effort/);
+  assert.match(warning, /each step is another request/);
+});

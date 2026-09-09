@@ -440,6 +440,35 @@ function toConversationMessage(message) {
   return turn;
 }
 
+// Puter runs a "User-Pays" model: free for whoever builds the app, billed to
+// whoever is signed in. On the free plan that's a fixed credit allowance, and
+// running out surfaces as a bare "No usage left for request", which reads like
+// a bug rather than a spent budget.
+function isOutOfCreditsError(error) {
+  const message = String((error && (error.message || error.error || error)) || '');
+  return /no usage left|insufficient (credit|fund)|usage limit|quota exceeded|out of credits|\b402\b/i.test(message);
+}
+
+// Models whose replies cost noticeably more per message. Used to warn before
+// an expensive run, not to stop anyone using them.
+const HEAVY_MODEL_IDS = ['claude-opus-5', 'gpt-6-astra', 'gpt-6-astra-pro', 'gpt-5.6-sol', 'gpt-5.6-sol-pro'];
+const HEAVY_EFFORT_LEVELS = ['high', 'xhigh'];
+
+function isHeavyModel(modelId) {
+  return HEAVY_MODEL_IDS.includes(modelId);
+}
+
+// The combination that empties an allowance fastest: a top-tier model, maximum
+// thinking, and a tool loop where every round is another billed call.
+function estimateCostWarning(modelId, effort, toolsEnabled) {
+  const reasons = [];
+  if (isHeavyModel(modelId)) reasons.push('a top-tier model');
+  if (HEAVY_EFFORT_LEVELS.includes(effort)) reasons.push(`${effort} reasoning effort`);
+  if (toolsEnabled) reasons.push('GitHub tools, where each step is another request');
+  if (reasons.length < 2) return '';
+  return 'Heads up: ' + reasons.join(' + ') + ' uses your Puter credits quickly.';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -471,6 +500,10 @@ if (typeof module !== 'undefined' && module.exports) {
     supportsEffort,
     isValidEffort,
     isEffortUnsupportedError,
+    isOutOfCreditsError,
+    HEAVY_MODEL_IDS,
+    isHeavyModel,
+    estimateCostWarning,
     MAX_CONVERSATIONS,
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
