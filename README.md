@@ -1,73 +1,193 @@
-# 🌌 FREEOPENAI <span style="color: #00ff88;">// THE FUTURE OF AI ACCESS</span>
-
 <p align="center">
-  <img src="https://media.giphy.com/media/3o7aCTfyhYVYcVnB3G/giphy.gif" width="600" alt="FreeOpenAI Demo" style="border-radius: 15px; box-shadow: 0 0 20px rgba(0,255,136,0.3);">
+  <img src="https://media.giphy.com/media/3o7aCTfyhYVYcVnB3G/giphy.gif" width="600" alt="FreeOpenAI demo">
 </p>
 
----
+<p align="center">
+  <b>A free, serverless chat UI for OpenAI models — no API key, no backend, no bill in your name.</b><br>
+  Sign in once through Puter · pick a model · chat · your Puter account covers the usage.
+</p>
 
-### ⚡ SYSTEM OVERVIEW
-**FreeOpenAI** is a hyper-minimalist, futuristic chat engine designed for absolute efficiency. By leveraging the **Puter.js** ecosystem, it bypasses the need for private API keys, delivering raw access to the world's most powerful LLMs through a sleek, mobile-optimized interface.
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
+  <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
+  <img src="https://img.shields.io/badge/tests-14%20passing-22c55e?style=for-the-badge" alt="14 tests passing">
+  <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
+  <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
+</p>
 
-> **`STATUS: ONLINE`** | **`LATENCY: MINIMAL`** | **`ACCESS: UNLIMITED`**
+<p align="center">
+  <a href="#quickstart"><img src="https://img.shields.io/badge/🚀%20Quick%20start-run%20it%20locally-0b1030?style=flat-square&labelColor=22d3ee" alt="Quick start"></a>
+  &nbsp;
+  <a href="#deploy"><img src="https://img.shields.io/badge/☁️%20Deploy-Railway%20in%203%20steps-0b1030?style=flat-square&labelColor=8b5cf6" alt="Deploy"></a>
+  &nbsp;
+  <a href="#features"><img src="https://img.shields.io/badge/🧠%20How%20it%20works-no%20backend%2C%20no%20keys-0b1030?style=flat-square&labelColor=f472b6" alt="How it works"></a>
+</p>
 
----
+<br>
 
-### 💎 CORE CAPABILITIES
+<a name="contents"></a>
 
-- **🟢 NEON-DARK UI** — A high-contrast black, white, and `#00ff88` aesthetic designed for deep focus and mobile responsiveness (`100dvh`).
-- **🌀 MODEL QUANTUM SWITCHING** — Instant toggle between OpenAI models served through Puter.js:
-  - `GPT-4o` (Balanced)
-  - `GPT-4o Mini` (Fast, cheap — default)
-  - `o1` / `o1 Mini` (Reasoning)
-- **📱 MOBILE-FIRST ARCHITECTURE** — Built with safe-area insets and a 16px input-font standard to eliminate iOS/Android zoom issues.
-- **💾 LOCAL PERSISTENCE** — Zero-backend storage; your conversations live in `localStorage` for maximum privacy and speed.
-- **🚀 ZERO-CONFIG DEPLOY** — Native Railway integration for instant global availability.
+## 🧭 Contents
 
----
+- ✨ [Features](#features)
+- 🧠 [Models](#models)
+- ⌨️ [Using the app](#usage)
+- 🚀 [Quick start](#quickstart)
+- ⚙️ [Configuration](#config)
+- ☁️ [Deploy to Railway](#deploy)
+- 🏗️ [Architecture](#architecture)
+- ⚠️ [Disclaimer](#disclaimer)
 
-### 🛠️ RAPID DEPLOYMENT
+<br>
 
-#### 🛰️ CLOUD (Railway)
-1. **Link GitHub** → Select `tradernonymous/freeopenai`.
-2. **Auto-Detect** → Railway identifies `package.json` → `npm start`.
-3. **Live** → Your AI dashboard is now accessible via `https://*.railway.app`.
+<a name="features"></a>
 
-#### 💻 LOCAL (Python)
+## ✨ Features
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>💬 Chat</h3>
+      Ask anything and get a streamed reply. Copy or retry any response. History saves to your browser and survives a reload.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔐 Sign in with Puter</h3>
+      Google, Telegram, or a Magic Key — no account with this app, no API key, no server-side secret. Your Puter account meters the usage.
+    </td>
+    <td width="33%" valign="top">
+      <h3>🔀 Model switching</h3>
+      Swap between GPT-4o, GPT-4o Mini, o1, and o1 Mini from the header, the Models tab, or Settings. Your pick is remembered next visit.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>📎 Attachments</h3>
+      Attach a small text file (<code>.txt .md .csv .json .js .ts .log .yml</code>) and its contents ride along with your next message.
+    </td>
+    <td valign="top">
+      <h3>⚙️ Settings</h3>
+      Default model, sign-in state, and a one-click "clear history" — all local, nothing leaves your browser.
+    </td>
+    <td valign="top">
+      <h3>♿ Accessible by default</h3>
+      Keyboard navigation on the model picker, a focus-trapped help dialog, and live-region announcements for new messages.
+    </td>
+  </tr>
+</table>
+
+<br>
+
+<a name="models"></a>
+
+## 🧠 Models
+
+All served through Puter.js — no OpenAI account or key required on your end.
+
+| Model | Description | Id |
+| --- | --- | :---: |
+| **GPT-4o** | Balanced, general-purpose | `gpt-4o` |
+| **GPT-4o Mini** | Fast and cheap — the default | `gpt-4o-mini` |
+| **o1** | Reasoning-focused | `o1` |
+| **o1 Mini** | Fast reasoning | `o1-mini` |
+
+> A model id restored from a previous session is checked against this list before use — a stale or tampered value always falls back to the default instead of silently failing.
+
+<br>
+
+<a name="usage"></a>
+
+## ⌨️ Using the app
+
+| Action | How |
+| --- | --- |
+| Send a message | Type and press `Enter` (`Shift+Enter` for a newline) |
+| Switch model | Click the model pill in the chat header, or open the **Models** tab |
+| Attach a file | Paperclip icon — text files only, 200KB max |
+| Copy a reply | Copy icon under any assistant message |
+| Retry a reply | Retry icon under any assistant message — resends the same prompt |
+| Start a new chat | **New chat** icon, top right — asks for confirmation first |
+| Sign in / out | Account icon, top right, or the **Settings** tab |
+
+<br>
+
+<a name="quickstart"></a>
+
+## 🚀 Quick start
+
 ```bash
 git clone https://github.com/tradernonymous/freeopenai.git
 cd freeopenai
-python -m http.server 8000
-# Access via http://localhost:8000/index.html
+npm install
+npm start
+# → http://localhost:3000
 ```
 
----
-
-### 🧬 TECHNICAL STACK
-- **Engine:** `Puter.js v2` (AI Infrastructure)
-- **UI:** Vanilla HTML5 / CSS3 (Custom Properties) / Modern JavaScript
-- **Server:** Node.js (zero-dependency, built on the core `http` module — no Express)
-- **Deployment:** Railway.app
-
----
-
-### 🧪 DEVELOPMENT
+**Run the tests**
 
 ```bash
-npm install   # installs eslint (dev-only, no runtime deps)
-npm test      # runs the Node test suite (server + shared chat logic)
-npm run lint  # lints server.js, chatlib.js, and the test suite
+npm test      # node --test — server logic + shared chat helpers
+npm run lint  # eslint
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm run lint` and `npm test` on every push and PR to `main`.
+<br>
+
+<a name="config"></a>
+
+## ⚙️ Configuration
+
+Nothing to configure to get running — no API key, no `.env` file. The only variable the server reads:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | Port the static server listens on |
+
+<br>
+
+<a name="deploy"></a>
+
+## ☁️ Deploy to Railway
+
+```bash
+# 1 · push this repo to your own GitHub account (or use it as-is)
+
+# 2 · in Railway: New Project → Deploy from GitHub repo → select the repo
+
+# 3 · Railway auto-detects package.json and runs `npm start` — no env vars needed
+```
+
+Your app is live at `https://<project>.up.railway.app` a few seconds later.
+
+<br>
+
+<a name="architecture"></a>
+
+## 🏗️ Architecture
+
+**Request path.** Browser loads `index.html` → Puter.js authenticates the user and meters usage → the page calls `puter.ai.chat()` directly from the browser → the reply streams back into the chat. `server.js` only ever serves static files — it never sees a message or a model response.
+
+<details>
+<summary><b>🗂️ Project layout</b> &nbsp;·&nbsp; click to expand</summary>
+
+```text
+index.html      chat UI: markup, styles, and all client-side logic
+chatlib.js      shared, dependency-free logic (model list, HTML escaping,
+                attachment allowlist) — used by the page and by the tests
+server.js       zero-dependency static file server (Node's core http module)
+test/           node --test suite for server.js and chatlib.js
+```
+
+</details>
+
+<br>
 
 ---
 
-### 🤝 PROTOCOL
-**Contributing:** Open to PRs for new model integrations, UI polish, or security hardening.  
-**License:** `MIT` — Free to use, modify, and distribute.
+<a name="disclaimer"></a>
 
----
+## ⚠️ Disclaimer
+
+FreeOpenAI is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser's `localStorage`; clearing site data or switching browsers loses them.
+
 <p align="center">
-  <kbd><code>git clone https://github.com/tradernonymous/freeopenai.git</code></kbd>
+  <sub>MIT licensed · Built on <a href="https://puter.com">Puter.js</a> · <a href="#contents">Back to top ↑</a></sub>
 </p>
