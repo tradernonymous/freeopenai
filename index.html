@@ -189,24 +189,32 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 20px;
+            max-width: 768px;
+            width: 100%;
+            margin: 0 auto;
         }
         .message {
             max-width: 85%;
-            padding: 12px 16px;
-            border-radius: 14px;
-            font-size: 14px;
-            line-height: 1.6;
+            font-size: 15px;
+            line-height: 1.65;
             word-wrap: break-word;
             animation: slideIn 150ms ease;
         }
         @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .message.user { align-self: flex-end; background: var(--accent-bg); color: var(--text); border-bottom-right-radius: 4px; }
-        .message.bot { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+        .message.user {
+            align-self: flex-end;
+            background: var(--accent-bg);
+            color: var(--text);
+            padding: 12px 16px;
+            border-radius: 18px;
+            border-bottom-right-radius: 4px;
+        }
+        .message.bot { align-self: stretch; max-width: 100%; padding: 2px 0; }
         .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; text-align: center; }
         .message.system.error { color: var(--danger); }
 
-        .message-actions { display: flex; gap: 4px; margin-top: 8px; }
+        .message-actions { display: flex; gap: 2px; margin-top: 10px; margin-left: -6px; }
         .msg-action-btn {
             width: 24px; height: 24px; border-radius: 6px;
             background: transparent; border: 1px solid transparent;
@@ -233,59 +241,59 @@
         .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
         .empty-state p { font-size: 13px; max-width: 280px; line-height: 1.5; }
 
-        /* Input area - compact */
+        /* Input area - unified pill composer */
         .chat-input-area {
             border-top: 1px solid var(--border);
             background: var(--bg-elevated);
             padding: 12px 16px;
         }
-        .input-row { display: flex; align-items: flex-end; gap: 8px; max-width: 900px; margin: 0 auto; }
         .attachment-chip {
-            display: flex; align-items: center; gap: 8px; max-width: 900px; margin: 0 auto 8px;
+            display: flex; align-items: center; gap: 8px; max-width: 768px; margin: 0 auto 8px;
             padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
             background: var(--surface); font-size: 12px; color: var(--text-dim);
         }
         .attachment-chip button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
         .attachment-chip button:hover { color: var(--danger); }
         .attachment-chip[hidden] { display: none; }
-        .icon-btn-sm {
-            width: 40px; height: 40px; flex-shrink: 0;
-            border-radius: var(--r);
+
+        .composer {
+            display: flex; align-items: flex-end; gap: 4px;
+            max-width: 768px; margin: 0 auto;
             background: var(--surface);
             border: 1px solid var(--border);
-            color: var(--text-dim);
+            border-radius: 26px;
+            padding: 6px 6px 6px 8px;
+            transition: var(--transition);
+        }
+        .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+        .composer-attach, .composer-send {
+            width: 36px; height: 36px; flex-shrink: 0;
+            border-radius: 50%;
+            border: none;
             cursor: pointer;
             display: grid; place-items: center;
             transition: var(--transition);
         }
-        .icon-btn-sm:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
-        .icon-btn-sm svg { width: 18px; height: 18px; }
-        .chat-input {
-            flex: 1; min-height: 44px; max-height: 140px;
-            padding: 10px 16px;
-            border-radius: var(--r-lg);
-            border: 1px solid var(--border);
-            background: var(--surface);
-            color: var(--text);
-            font-size: 14px; font-family: inherit;
-            outline: none; resize: none;
-            transition: var(--transition);
-        }
-        .chat-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
-        .chat-input::placeholder { color: var(--text-muted); }
-        .send-btn {
-            width: 40px; height: 40px; flex-shrink: 0;
-            border-radius: var(--r);
-            background: var(--accent);
+        .composer-attach { background: transparent; color: var(--text-dim); }
+        .composer-attach:hover { background: var(--surface-2); color: var(--text); }
+        .composer-attach svg { width: 18px; height: 18px; }
+        .composer-input {
+            flex: 1; min-height: 36px; max-height: 140px;
+            padding: 8px 4px;
             border: none;
+            background: transparent;
+            color: var(--text);
+            font-size: 15px; font-family: inherit;
+            outline: none; resize: none;
+        }
+        .composer-input::placeholder { color: var(--text-muted); }
+        .composer-send {
+            background: var(--accent);
             color: #000;
             font-size: 16px; font-weight: 700;
-            cursor: pointer;
-            display: grid; place-items: center;
-            transition: var(--transition);
         }
-        .send-btn:hover:not(:disabled) { background: var(--accent); transform: scale(1.02); }
-        .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .composer-send:hover:not(:disabled) { transform: scale(1.05); }
+        .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
 
         /* Status bar - minimal */
         .status-bar {
@@ -361,19 +369,30 @@
 
         /* Responsive */
         @media (max-width: 640px) {
-            header { padding: 0 12px; height: 52px; }
+            header { padding: 0 10px; height: 52px; }
             .auth-name { display: none; }
-            .chat-bar { padding: 0 12px; height: 52px; }
-            .chat-messages { padding: 14px 12px; }
-            .message { max-width: 92%; font-size: 15px; }
+            .header-center { gap: 2px; }
+            .chat-bar { padding: 0 10px; height: 52px; gap: 6px; }
+            #viewChat .chat-bar-title span:last-child { display: none; }
+            .model-trigger span#modelLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .chat-messages { padding: 14px 12px; gap: 22px; }
+            .message { max-width: 96%; }
+            .message.user { max-width: 88%; }
             .chat-input-area { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             .status-bar { padding: 0 12px; }
             .model-dropdown { position: fixed; top: 108px; right: 10px; left: 10px; min-width: 0; }
             /* iOS: prevent input zoom */
-            .chat-input, .model-trigger { font-size: 16px; }
-            .chat-input { min-height: 46px; }
-            .icon-btn-sm, .send-btn { width: 44px; height: 44px; }
+            .composer-input, .model-trigger { font-size: 16px; }
+            .composer-input { min-height: 40px; }
+            .composer-attach, .composer-send { width: 40px; height: 40px; }
+            .settings-body { padding: 14px; }
+            .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
             .empty-state p { font-size: 14px; }
+        }
+
+        @media (max-width: 380px) {
+            #viewChat .chat-bar-title { display: none; }
         }
     </style>
 </head>
@@ -453,13 +472,13 @@
                             <span id="attachmentName"></span>
                             <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
                         </div>
-                        <div class="input-row">
-                            <button class="icon-btn-sm" type="button" onclick="document.getElementById('fileInput').click();" aria-label="Attach text file" title="Attach text file (.txt, .md, .csv, .json, .js, .ts, .log, .yml)">
+                        <div class="composer">
+                            <button class="composer-attach" type="button" onclick="document.getElementById('fileInput').click();" aria-label="Attach text file" title="Attach text file (.txt, .md, .csv, .json, .js, .ts, .log, .yml)">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
                                 <input type="file" id="fileInput" style="display: none;" accept=".txt,.md,.csv,.json,.js,.ts,.log,.yml,.yaml" onchange="handleFileSelect(this)">
                             </button>
-                            <textarea class="chat-input" id="chatInput" placeholder="Ask anything..." rows="1" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
-                            <button class="send-btn" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
+                            <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                            <button class="composer-send" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
                         </div>
                     </div>
 
@@ -526,7 +545,7 @@
                     <li><strong>No API keys</strong> — Sign in with Google, Telegram, or Magic Key</li>
                     <li><strong>User-pays model</strong> — Each user covers their own AI costs</li>
                     <li><strong>Serverless</strong> — No setup required, works immediately</li>
-                    <li><strong>OpenAI models</strong> — GPT-4o and o1 family via Puter.js</li>
+                    <li><strong>OpenAI models</strong> — GPT-6 Astra, the GPT-5.6 and GPT-4o families via Puter.js</li>
                     <li><strong>Free tier</strong> — Generous free usage limits</li>
                 </ul>
             </div>
@@ -809,7 +828,7 @@
             addMessage('user', raw);
             clearAttachment();
             chatInput.value = '';
-            chatInput.style.height = '44px';
+            chatInput.style.height = '36px';
             sendButton.disabled = true;
             isTyping = true;
             showTypingIndicator();
@@ -953,7 +972,7 @@
         }
 
         function autoResize(ta) {
-            ta.style.height = '44px';
+            ta.style.height = '36px';
             ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
             sendButton.disabled = !ta.value.trim();
         }
