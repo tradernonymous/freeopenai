@@ -405,6 +405,24 @@ function migrateLegacyMessages(legacyMessages, id, now) {
   return { id, title: deriveChatTitle(messages), messages, updatedAt: now };
 }
 
+// Puter translates reasoning_effort into each provider's own shape, and for
+// some Claude models it sends Anthropic's older "thinking.type: enabled",
+// which those models reject outright:
+//
+//   400 "thinking.type.enabled" is not supported for this model. Use
+//   "thinking.type.adaptive" and "output_config.effort" ...
+//
+// We can't change what Puter sends, so the app detects this specific refusal
+// and retries the request without an effort setting.
+function isEffortUnsupportedError(error) {
+  const message = String((error && (error.message || error.error || error)) || '');
+  if (!message) return false;
+  const mentionsThinking = /thinking\.type|output_config\.effort|reasoning_effort/i.test(message);
+  const mentionsEffort = /effort|thinking/i.test(message);
+  const isRejection = /not supported|unsupported|invalid_request_error|\b400\b/i.test(message);
+  return isRejection && (mentionsThinking || mentionsEffort);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -434,6 +452,7 @@ if (typeof module !== 'undefined' && module.exports) {
     EFFORT_CAPABLE_MODEL_IDS,
     supportsEffort,
     isValidEffort,
+    isEffortUnsupportedError,
     MAX_CONVERSATIONS,
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
