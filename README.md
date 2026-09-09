@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-41%20passing-22c55e?style=for-the-badge" alt="41 tests passing">
+  <img src="https://img.shields.io/badge/tests-47%20passing-22c55e?style=for-the-badge" alt="47 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -86,13 +86,13 @@
     </td>
     <td valign="top">
       <h3>🔒 Private deployments</h3>
-      Set <code>APP_USERS</code> and the whole app sits behind a username/password login, so a public Railway URL isn't open to the world.
+      Set <code>AUTH_USER_1</code> / <code>AUTH_PASS_1</code> and the whole app sits behind a username/password login, so a public Railway URL isn't open to the world.
     </td>
   </tr>
   <tr>
     <td valign="top">
       <h3>🐙 GitHub connector</h3>
-      Connect a GitHub account in Settings to read and commit files in your public repos. The token is encrypted into an httpOnly cookie and every write asks first.
+      Connect a GitHub account in Settings and the model can browse, read, and commit files in your public repos straight from the chat. The token is encrypted into an httpOnly cookie and every write asks first.
     </td>
   </tr>
 </table>
@@ -146,6 +146,7 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | Start a new chat | **New chat** icon, top right — asks for confirmation first |
 | Show a model's thinking | Click the **Reasoning** strip above a reply (reasoning-capable models only) |
 | Connect GitHub | **Settings** tab → **Connect GitHub** → load or commit a file in any of your public repos |
+| Ask the model to use GitHub | Once connected, just say it in chat — *"read my README and fix the typos"*. Each repo action shows in the transcript, and commits ask first. |
 | Sign in / out | Account icon, top right, or the **Settings** tab |
 
 <br>
@@ -184,7 +185,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the static server listens on |
-| `APP_USERS` | *(unset)* | Login gate, as `user:password` pairs separated by commas — e.g. `alice:s3cret,bob:hunter2`. Leave it unset and the app stays open to everyone. |
+| `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. |
+| `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
+| `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
@@ -224,7 +227,7 @@ Your app is live at `https://<project>.up.railway.app` a few seconds later.
 
 ```text
 index.html      chat UI: markup, styles, and all client-side logic
-login.html      username/password screen shown when APP_USERS is set
+login.html      username/password screen, shown once AUTH_USER_1/AUTH_PASS_1 are set
 chatlib.js      shared, dependency-free logic (model list, HTML escaping,
                 attachment allowlist) — used by the page and by the tests
 auth.js         session-cookie signing and credential checking
