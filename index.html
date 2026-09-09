@@ -1699,6 +1699,7 @@
             try {
                 usageCount++;
                 updateUsageDisplay();
+                maybeWarnAboutCost();
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
 
@@ -1763,12 +1764,42 @@
             } catch (error) {
                 removeTypingIndicator();
                 console.error('Chat request failed:', error);
-                showStatus('error', 'Failed: ' + error.message);
-                addMessage('system', 'Error: ' + error.message, { error: true });
+                if (isOutOfCreditsError(error)) {
+                    showStatus('error', 'Out of Puter credits');
+                    addMessage('system', outOfCreditsAdvice(), { error: true });
+                } else {
+                    showStatus('error', 'Failed: ' + error.message);
+                    addMessage('system', 'Error: ' + error.message, { error: true });
+                }
             } finally {
                 sendButton.disabled = false;
                 isTyping = false;
             }
+        }
+
+        // Running out of credits isn't a fault to debug, so say what happened
+        // and what actually reduces the burn.
+        function outOfCreditsAdvice() {
+            return [
+                "Your Puter account is out of credits, so the model didn't run.",
+                '',
+                'Puter bills whoever is signed in, not this app. Check the balance at puter.com/dashboard under Usage.',
+                '',
+                'What costs the most, in order:',
+                '- Top-tier models (Claude Opus 5, GPT-6 Astra) versus Haiku, Nano or 4o Mini',
+                '- High and extra-high reasoning effort versus the default',
+                '- GitHub work in chat, where every step the model takes is another request',
+            ].join('\n');
+        }
+
+        // Warned once per combination, so it informs without nagging.
+        const costWarningsShown = new Set();
+
+        function maybeWarnAboutCost() {
+            const warning = estimateCostWarning(selectedModel, selectedEffort, githubConnected);
+            if (!warning || costWarningsShown.has(warning)) return;
+            costWarningsShown.add(warning);
+            showStatus('info', warning);
         }
 
         const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
