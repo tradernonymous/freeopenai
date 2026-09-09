@@ -36,6 +36,19 @@ function isAttachableFile(filename) {
   return ATTACHABLE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
+// Catches plain-language image requests ("generate an image of a fox",
+// "draw me a logo") typed into normal chat, without requiring the user to
+// notice the dedicated image-mode toggle first. Deliberately conservative —
+// requires an image-ish noun right after the verb (optionally through
+// "me"/"us"/"a"/"an") — so it doesn't fire on prose that merely mentions
+// "image" elsewhere, e.g. "make a plan for my image website".
+const IMAGE_INTENT_PATTERN =
+  /^(?:please\s+)?(generate|create|draw|make|design|paint|render)\s+(?:me\s+|us\s+)?(?:an?\s+)?(image|picture|photo|photograph|illustration|graphic|logo|icon|artwork|drawing|sketch|wallpaper|poster|banner|avatar)\b/i;
+
+function detectsImageIntent(text) {
+  return IMAGE_INTENT_PATTERN.test(String(text).trim());
+}
+
 // Applies **bold**, *italic*, `inline code`, fenced code blocks, and -/1. lists
 // to already-HTML-escaped text. Only ever emits a small fixed set of tags
 // (strong/em/code/pre/ul/ol/li) around text that was escaped up front, so
@@ -126,5 +139,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ATTACHABLE_EXTENSIONS,
     isAttachableFile,
     renderMarkdownLite,
+    detectsImageIntent,
   };
 }

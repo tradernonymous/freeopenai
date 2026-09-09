@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MODELS, DEFAULT_MODEL, isValidModel, escapeHtml, isAttachableFile, renderMarkdownLite } = require('../chatlib.js');
+const { MODELS, DEFAULT_MODEL, isValidModel, escapeHtml, isAttachableFile, renderMarkdownLite, detectsImageIntent } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
   assert.ok(isValidModel(DEFAULT_MODEL));
@@ -78,4 +78,19 @@ test('renderMarkdownLite still escapes raw HTML with no markdown involved', () =
   const out = renderMarkdownLite('<script>alert(1)</script>');
   assert.ok(!out.includes('<script>'));
   assert.match(out, /&lt;script&gt;/);
+});
+
+test('detectsImageIntent recognizes plain-language image requests', () => {
+  assert.equal(detectsImageIntent('generate an image of a fox'), true);
+  assert.equal(detectsImageIntent('create a picture of a sunset'), true);
+  assert.equal(detectsImageIntent('draw me a logo for my coffee shop'), true);
+  assert.equal(detectsImageIntent('Make an illustration of a robot'), true);
+  assert.equal(detectsImageIntent('please design a poster for the concert'), true);
+});
+
+test('detectsImageIntent ignores prose that merely mentions an image-ish word', () => {
+  assert.equal(detectsImageIntent('explain how image compression works'), false);
+  assert.equal(detectsImageIntent('make a plan for my image website'), false);
+  assert.equal(detectsImageIntent('what can you do for me?'), false);
+  assert.equal(detectsImageIntent('create a budget spreadsheet'), false);
 });
