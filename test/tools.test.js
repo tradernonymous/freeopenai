@@ -125,3 +125,57 @@ test('extractToolCalls returns an empty list when there are none', () => {
   assert.deepEqual(extractToolCalls({}), []);
   assert.deepEqual(extractToolCalls(null), []);
 });
+
+const {
+  EFFORT_LEVELS,
+  DEFAULT_EFFORT,
+  EFFORT_CAPABLE_MODEL_IDS,
+  supportsEffort,
+  isValidEffort,
+  MODELS,
+} = require('../chatlib.js');
+
+test('effort levels are exactly the six Puter accepts', () => {
+  assert.deepEqual(
+    EFFORT_LEVELS.map((l) => l.id),
+    ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  );
+  for (const level of EFFORT_LEVELS) {
+    assert.ok(level.name && level.desc, `${level.id} needs a name and description`);
+  }
+});
+
+test('the default sends nothing, preserving prior behaviour', () => {
+  assert.equal(DEFAULT_EFFORT, '');
+  assert.ok(!isValidEffort(DEFAULT_EFFORT), 'the default must not be a real level');
+});
+
+test('isValidEffort rejects anything not on the list', () => {
+  assert.ok(isValidEffort('xhigh'));
+  assert.ok(isValidEffort('none'));
+  assert.ok(!isValidEffort('ultra'));
+  assert.ok(!isValidEffort(''));
+  assert.ok(!isValidEffort(undefined));
+});
+
+test('every effort-capable id is a real model', () => {
+  for (const id of EFFORT_CAPABLE_MODEL_IDS) {
+    assert.ok(MODELS.some((m) => m.id === id), `${id} is not in MODELS`);
+  }
+});
+
+test('supportsEffort covers the reasoning tiers and nothing else', () => {
+  assert.ok(supportsEffort('claude-sonnet-5'));
+  assert.ok(supportsEffort('gpt-6-astra-pro'));
+  // Plain tiers and the coding models must not show the picker.
+  assert.ok(!supportsEffort('gpt-4o'));
+  assert.ok(!supportsEffort('gpt-5.4-nano'));
+  assert.ok(!supportsEffort('openai/gpt-5.3-codex'));
+  assert.ok(!supportsEffort(undefined));
+});
+
+test('all three Claude models take an effort setting', () => {
+  for (const id of ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5']) {
+    assert.ok(supportsEffort(id), `${id} should support effort`);
+  }
+});
