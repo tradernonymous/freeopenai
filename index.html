@@ -993,6 +993,17 @@
         // because initializeApp() runs further up the file than the functions
         // that read it.
         let selectedEffort = DEFAULT_EFFORT;
+        // Models that turned out to reject an effort setting at runtime, despite
+        // being on the capable list. Remembered for the session so one refusal
+        // doesn't become a refusal on every message. Declared up here because
+        // updateEffortPicker reads it during initializeApp().
+        const effortRejectedBy = new Set();
+
+        // Whether the chat should offer the GitHub tools to the model. Refreshed
+        // on load and whenever the connector's state changes.
+        let githubConnected = false;
+        // Set when GitHub handed back an account that was already connected.
+        let githubSameAccountNotice = '';
         let messages = [];
         let isTyping = false;
         let usageCount = 0;
@@ -1309,11 +1320,6 @@
 
         let githubAlwaysAllow = false;
         let githubConfirmResolver = null;
-        // Whether the chat should offer the GitHub tools to the model. Refreshed
-        // on load and whenever the connector's state changes.
-        let githubConnected = false;
-        // Set when GitHub handed back an account that was already connected.
-        let githubSameAccountNotice = '';
 
         function askGithubConfirm(text) {
             if (githubAlwaysAllow) return Promise.resolve(true);
@@ -1547,11 +1553,6 @@
         // user can see what the model touched.
         // Build the options for a chat call in one place, so the effort setting
         // can't be sent to a model that doesn't take it.
-        // Models that turned out to reject an effort setting at runtime, despite
-        // being on the capable list. Remembered for the session so one refusal
-        // doesn't become a refusal on every message.
-        const effortRejectedBy = new Set();
-
         function chatOptions(chatModel, extra = {}) {
             const opts = { model: chatModel, ...extra };
             if (selectedEffort && supportsEffort(chatModel) && !effortRejectedBy.has(chatModel)) {
