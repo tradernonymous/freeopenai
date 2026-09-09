@@ -365,6 +365,46 @@ function isValidEffort(value) {
   return EFFORT_LEVELS.some((level) => level.id === value);
 }
 
+// Conversations live in localStorage as a list, newest first. Capped so a
+// long-lived browser can't grow the store without bound -- localStorage is
+// only a few MB and a single overflowing write loses everything.
+const MAX_CONVERSATIONS = 50;
+const MAX_MESSAGES_PER_CONVERSATION = 200;
+
+// The first thing the user actually said, which is what makes a list of
+// chats scannable. Falls back rather than showing an empty row.
+function deriveChatTitle(messages, max = 40) {
+  const firstUser = (messages || []).find((m) => m && m.type === 'user' && String(m.content || '').trim());
+  const text = firstUser ? String(firstUser.content).trim().replace(/\s+/g, ' ') : '';
+  if (!text) return 'New chat';
+  return text.length > max ? text.slice(0, max - 1).trimEnd() + '…' : text;
+}
+
+function newConversation(id, now) {
+  return { id, title: 'New chat', messages: [], updatedAt: now };
+}
+
+// Newest first, with a stable tiebreak so equal timestamps don't reshuffle
+// the list on every render.
+function sortConversations(list) {
+  return [...(list || [])].sort((a, b) => (b.updatedAt - a.updatedAt) || String(a.id).localeCompare(String(b.id)));
+}
+
+// Replaces the matching conversation, or adds it, then trims to the cap.
+// Always returns a new array rather than mutating the caller's.
+function upsertConversation(list, convo) {
+  const rest = (list || []).filter((c) => c && c.id !== convo.id);
+  return sortConversations([...rest, convo]).slice(0, MAX_CONVERSATIONS);
+}
+
+// Chats were a single "puterChatMessages" array before this existed. Carry
+// them into the list as one conversation instead of dropping them.
+function migrateLegacyMessages(legacyMessages, id, now) {
+  if (!Array.isArray(legacyMessages) || !legacyMessages.length) return null;
+  const messages = legacyMessages.slice(-MAX_MESSAGES_PER_CONVERSATION);
+  return { id, title: deriveChatTitle(messages), messages, updatedAt: now };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -394,5 +434,12 @@ if (typeof module !== 'undefined' && module.exports) {
     EFFORT_CAPABLE_MODEL_IDS,
     supportsEffort,
     isValidEffort,
+    MAX_CONVERSATIONS,
+    MAX_MESSAGES_PER_CONVERSATION,
+    deriveChatTitle,
+    newConversation,
+    sortConversations,
+    upsertConversation,
+    migrateLegacyMessages,
   };
 }
