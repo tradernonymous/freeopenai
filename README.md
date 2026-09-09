@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://media.giphy.com/media/3o7aCTfyhYVYcVnB3G/giphy.gif" width="600" alt="FreeOpenAI demo">
+  <img src="docs/readme/hero.svg" alt="FreeOpenAI. Free access to OpenAI models, no key required." width="100%">
 </p>
 
 <p align="center">
@@ -42,7 +42,9 @@
 
 <a name="features"></a>
 
-## ✨ Features
+<img src="docs/readme/banner-features.svg" alt="Features" width="100%">
+
+<br>
 
 <table>
   <tr>
@@ -56,7 +58,7 @@
     </td>
     <td width="33%" valign="top">
       <h3>🔀 Model switching</h3>
-      Swap between GPT-4o, GPT-4o Mini, o1, and o1 Mini from the header, the Models tab, or Settings. Your pick is remembered next visit.
+      Swap between GPT-6 Astra, the GPT-5.6 family, GPT-5.4 Nano, and GPT-4o from the header, the Models tab, or Settings. Your pick is remembered next visit.
     </td>
   </tr>
   <tr>
@@ -79,16 +81,23 @@
 
 <a name="models"></a>
 
-## 🧠 Models
+<img src="docs/readme/banner-models.svg" alt="Models" width="100%">
+
+<br>
 
 All served through Puter.js — no OpenAI account or key required on your end.
 
 | Model | Description | Id |
 | --- | --- | :---: |
+| **GPT-6 Astra** | Newest, most capable — complex reasoning, coding, computer use | `gpt-6-astra` |
+| **GPT-5.6 Sol** | Flagship of the 5.6 family | `gpt-5.6-sol` |
+| **GPT-5.6 Terra** | Mid-tier | `gpt-5.6-terra` |
+| **GPT-5.6 Luna** | Smallest, cheapest of the 5.6 family | `gpt-5.6-luna` |
+| **GPT-5.4 Nano** | Fast, cheap — the default | `gpt-5.4-nano` |
 | **GPT-4o** | Balanced, general-purpose | `gpt-4o` |
-| **GPT-4o Mini** | Fast and cheap — the default | `gpt-4o-mini` |
-| **o1** | Reasoning-focused | `o1` |
-| **o1 Mini** | Fast reasoning | `o1-mini` |
+| **GPT-4o Mini** | Fast and cheap | `gpt-4o-mini` |
+
+Puter.js supports several dozen OpenAI model ids beyond this curated list (o1, o3, the GPT-5.x and 4.1 lines, Codex variants, and more) — see the [full list](https://developer.puter.com/tutorials/free-unlimited-openai-api/#list-of-supported-text-generation-models) if you want to wire up additional ones.
 
 > A model id restored from a previous session is checked against this list before use — a stale or tampered value always falls back to the default instead of silently failing.
 
@@ -96,7 +105,9 @@ All served through Puter.js — no OpenAI account or key required on your end.
 
 <a name="usage"></a>
 
-## ⌨️ Using the app
+<img src="docs/readme/banner-usage.svg" alt="Using the app" width="100%">
+
+<br>
 
 | Action | How |
 | --- | --- |
@@ -112,7 +123,9 @@ All served through Puter.js — no OpenAI account or key required on your end.
 
 <a name="quickstart"></a>
 
-## 🚀 Quick start
+<img src="docs/readme/banner-quickstart.svg" alt="Quick start" width="100%">
+
+<br>
 
 ```bash
 git clone https://github.com/tradernonymous/freeopenai.git
@@ -133,7 +146,9 @@ npm run lint  # eslint
 
 <a name="config"></a>
 
-## ⚙️ Configuration
+<img src="docs/readme/banner-config.svg" alt="Configuration" width="100%">
+
+<br>
 
 Nothing to configure to get running — no API key, no `.env` file. The only variable the server reads:
 
@@ -145,7 +160,9 @@ Nothing to configure to get running — no API key, no `.env` file. The only var
 
 <a name="deploy"></a>
 
-## ☁️ Deploy to Railway
+<img src="docs/readme/banner-deploy.svg" alt="Deploy to Railway" width="100%">
+
+<br>
 
 ```bash
 # 1 · push this repo to your own GitHub account (or use it as-is)
@@ -161,7 +178,9 @@ Your app is live at `https://<project>.up.railway.app` a few seconds later.
 
 <a name="architecture"></a>
 
-## 🏗️ Architecture
+<img src="docs/readme/banner-architecture.svg" alt="Architecture" width="100%">
+
+<br>
 
 **Request path.** Browser loads `index.html` → Puter.js authenticates the user and meters usage → the page calls `puter.ai.chat()` directly from the browser → the reply streams back into the chat. `server.js` only ever serves static files — it never sees a message or a model response.
 
@@ -180,7 +199,7 @@ test/           node --test suite for server.js and chatlib.js
 
 <br>
 
----
+<img src="docs/readme/divider.svg" alt="" width="100%">
 
 <a name="disclaimer"></a>
 
