@@ -423,6 +423,23 @@ function isEffortUnsupportedError(error) {
   return isRejection && (mentionsThinking || mentionsEffort);
 }
 
+// A reply from puter.ai.chat carries more than a message: model, id, usage,
+// stop_reason and friends ride along. Echoing that object straight back into
+// the conversation for a tool round-trip makes the provider reject the whole
+// request --
+//
+//   400 messages.1.model: Extra inputs are not permitted
+//
+// -- so only the fields a conversation turn is allowed to have go back.
+function toConversationMessage(message) {
+  if (!message || typeof message !== 'object') return null;
+  const turn = { role: message.role || 'assistant', content: message.content ?? '' };
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    turn.tool_calls = message.tool_calls;
+  }
+  return turn;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -447,6 +464,7 @@ if (typeof module !== 'undefined' && module.exports) {
     extractMessageText,
     extractMessageReasoning,
     extractToolCalls,
+    toConversationMessage,
     EFFORT_LEVELS,
     DEFAULT_EFFORT,
     EFFORT_CAPABLE_MODEL_IDS,

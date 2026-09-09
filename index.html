@@ -1588,7 +1588,9 @@
                 const calls = extractToolCalls(message);
                 if (!calls.length) return { message, response };
 
-                convo.push(message);
+                // Only role/content/tool_calls may go back; the rest of the
+                // reply object is metadata the provider rejects.
+                convo.push(toConversationMessage(message));
                 for (const call of calls) {
                     const fn = (call && call.function) || {};
                     const args = parseToolArgs(fn.arguments);
