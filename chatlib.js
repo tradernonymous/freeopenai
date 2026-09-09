@@ -555,11 +555,41 @@ function normalizeProviderReply(data) {
   return choice && choice.message ? { message: choice.message, raw: data } : null;
 }
 
-// OpenRouter marks a zero-cost variant with a ":free" suffix. Cerebras and
-// NVIDIA don't -- their free tier is an account-level allowance, so every model
-// they list is free within it.
+// OpenRouter publishes real prices, so cost is a fact rather than a guess at
+// the name. Only 21 of its ~430 models are actually free, and the ":free"
+// suffix alone was not a reliable signal. Cerebras and NVIDIA return no
+// pricing: their free tier is an account-level allowance, so everything they
+// list is free within it, which is why a missing price counts as free.
+function isFreeModel(model) {
+  if (!model) return false;
+  const pricing = model.pricing;
+  if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
+    return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
+  }
+  // No published price. Cerebras and NVIDIA are in this position and both meter
+  // an account-level allowance rather than charging per model, so everything
+  // they list is free within it.
+  return true;
+}
+
 function isFreeModelId(id) {
   return /:free$/i.test(String(id || ''));
+}
+
+// The GitHub tools only work on a model that accepts them. Sending tools to
+// one that doesn't is a request that can only fail, so the caller checks first
+// and drops them. A provider that reports nothing is given the benefit of the
+// doubt rather than having the tools withheld.
+function supportsTools(model) {
+  const params = model && model.supportedParameters;
+  return Array.isArray(params) ? params.includes('tools') : true;
+}
+
+// A model that emits audio or images can't hold a conversation, however
+// promising its name. OpenRouter lists several among the free models.
+function emitsText(model) {
+  const out = model && model.outputModalities;
+  return Array.isArray(out) ? out.includes('text') : true;
 }
 
 // Families that are good at code or long-form reasoning. This is a heuristic
@@ -577,17 +607,20 @@ function isCapableModelId(id) {
 // Drop those, then float what the user actually wants to the top: free first,
 // then models suited to research and coding.
 function usableChatModels(models, limit = 60) {
-  const skip = /(embed|rerank|whisper|tts|moderation|guard|vision-only|image|dall-e|stable-diffusion|flux)/i;
+  const skip = /(embed|rerank|whisper|tts|moderation|guard|safety|vision-only|image|dall-e|stable-diffusion|flux|lyria)/i;
   const usable = (models || [])
-    .filter((m) => m && typeof m.id === 'string' && !skip.test(m.id))
+    .filter((m) => m && typeof m.id === 'string' && !skip.test(m.id) && emitsText(m))
     .map((m) => ({
       id: m.id,
       ownedBy: m.ownedBy || m.owned_by,
-      free: isFreeModelId(m.id),
+      contextLength: m.contextLength,
+      supportedParameters: m.supportedParameters,
+      free: isFreeModel(m),
       capable: isCapableModelId(m.id),
+      tools: supportsTools(m),
     }));
 
-  const rank = (m) => (m.free ? 0 : 2) + (m.capable ? 0 : 1);
+  const rank = (m) => (m.free ? 0 : 4) + (m.tools ? 0 : 2) + (m.capable ? 0 : 1);
   return usable
     .map((m, index) => ({ m, index }))
     // Keep the provider's own order within a rank, so "newest first" survives.
@@ -598,11 +631,15 @@ function usableChatModels(models, limit = 60) {
 
 // One line under a model's name in the picker.
 function describeProviderModel(model) {
+  if (!model) return '';
   const parts = [];
-  if (model && model.free) parts.push('free');
-  if (model && model.capable) parts.push('code / research');
-  if (model && model.ownedBy && parts.length < 2) parts.push(model.ownedBy);
-  return parts.join(' · ');
+  if (model.free) parts.push('free');
+  if (model.tools === false) parts.push('no tools');
+  if (model.capable) parts.push('code / research');
+  if (model.contextLength >= 1000000) parts.push('1M ctx');
+  else if (model.contextLength >= 200000) parts.push(Math.round(model.contextLength / 1000) + 'k ctx');
+  if (!parts.length && model.ownedBy) parts.push(model.ownedBy);
+  return parts.slice(0, 3).join(' · ');
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -652,6 +689,9 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeProviderReply,
     usableChatModels,
     isFreeModelId,
+    isFreeModel,
+    supportsTools,
+    emitsText,
     isCapableModelId,
     describeProviderModel,
     newConversation,
