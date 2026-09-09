@@ -215,3 +215,52 @@ test('unrelated failures are left alone, so they are not silently retried', () =
   assert.ok(!isEffortUnsupportedError(null));
   assert.ok(!isEffortUnsupportedError(''));
 });
+
+const { toConversationMessage } = require('../chatlib.js');
+
+test('metadata on a reply never travels back into the conversation', () => {
+  // The exact shape that produced "messages.1.model: Extra inputs are not permitted".
+  const reply = {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'hi' }],
+    model: 'claude-sonnet-5',
+    id: 'msg_123',
+    usage: { input_tokens: 10 },
+    stop_reason: 'end_turn',
+    type: 'message',
+  };
+  const turn = toConversationMessage(reply);
+  assert.deepEqual(Object.keys(turn).sort(), ['content', 'role']);
+  assert.equal(turn.model, undefined);
+  assert.equal(turn.usage, undefined);
+  assert.deepEqual(turn.content, [{ type: 'text', text: 'hi' }]);
+});
+
+test('tool_calls survive the trip back, since the loop depends on them', () => {
+  const turn = toConversationMessage({
+    role: 'assistant',
+    content: null,
+    tool_calls: [{ id: 'c1', function: { name: 'github_read_file', arguments: '{}' } }],
+    model: 'gpt-4o',
+  });
+  assert.equal(turn.tool_calls.length, 1);
+  assert.equal(turn.model, undefined);
+});
+
+test('a Claude tool_use block is preserved so its result can be matched', () => {
+  const turn = toConversationMessage({
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: 'tu1', name: 'github_read_file', input: {} }],
+    model: 'claude-opus-5',
+  });
+  assert.equal(turn.content[0].type, 'tool_use');
+  assert.equal(turn.content[0].id, 'tu1');
+  assert.ok(!('model' in turn));
+});
+
+test('toConversationMessage handles junk without throwing', () => {
+  assert.equal(toConversationMessage(null), null);
+  assert.equal(toConversationMessage('a string'), null);
+  assert.deepEqual(toConversationMessage({}), { role: 'assistant', content: '' });
+  assert.deepEqual(toConversationMessage({ tool_calls: [] }), { role: 'assistant', content: '' });
+});
