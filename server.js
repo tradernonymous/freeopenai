@@ -12,7 +12,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { encryptJson, decryptJson } = require('./github.js');
+const { encryptJson, decryptJson, sessionMatchesUser } = require('./github.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -63,6 +63,14 @@ function isAuthenticated(req) {
   return !!verifySession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
 }
 
+// The signed-in app account, or null when the login gate is off. The GitHub
+// token is sealed against this so it can't cross accounts on a shared browser.
+function currentAppUser(req) {
+  if (getConfiguredAccounts(process.env).length === 0) return null;
+  const cookies = parseCookieHeader(req.headers.cookie);
+  return verifySession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
+}
+
 function setSessionCookie(res, username, req) {
   const value = signSession(sessionSecret, username);
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
@@ -73,7 +81,12 @@ function setSessionCookie(res, username, req) {
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  // Drop the GitHub token alongside the session. Leaving it behind is what
+  // let a logout hand the next user someone else's repo access.
+  res.setHeader('Set-Cookie', [
+    `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+    `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+  ]);
 }
 
 function handleLogin(req, res) {
@@ -127,6 +140,7 @@ function getGithubSession(req) {
   const cookies = parseCookieHeader(req.headers.cookie);
   const session = decryptJson(sessionSecret, cookies[GITHUB_COOKIE]);
   if (!session || typeof session.exp !== 'number' || session.exp <= Date.now()) return null;
+  if (!sessionMatchesUser(session, currentAppUser(req))) return null;
   return session;
 }
 
@@ -203,6 +217,7 @@ async function githubCallback(req, res) {
 
     const { data: user } = await githubApiFetch(tokenData.access_token, 'https://api.github.com/user');
     const sealed = encryptJson(sessionSecret, {
+      appUser: currentAppUser(req),
       token: tokenData.access_token,
       login: user && user.login,
       avatarUrl: user && user.avatar_url,

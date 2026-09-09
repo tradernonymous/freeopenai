@@ -37,4 +37,17 @@ function decryptJson(secret, value) {
   }
 }
 
-module.exports = { encryptJson, decryptJson };
+// A sealed GitHub session belongs to exactly one app account. Without this
+// check the token cookie outlives a logout, so the next person to sign in on
+// the same browser inherits the previous user's GitHub access.
+//
+// appUser is null when the login gate is off (no AUTH_USER_* configured), so
+// null must match null. It deliberately does not match a named user: enabling
+// the gate later invalidates cookies sealed while the app was open.
+function sessionMatchesUser(session, appUser) {
+  if (!session) return false;
+  const sealed = session.appUser === undefined ? null : session.appUser;
+  return sealed === (appUser === undefined ? null : appUser);
+}
+
+module.exports = { encryptJson, decryptJson, sessionMatchesUser };
