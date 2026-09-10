@@ -109,8 +109,8 @@
       Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
     </td>
     <td valign="top">
-      <h3>🔌 Six providers</h3>
-      Puter needs no key at all. Add a key for Cerebras, OpenRouter, NVIDIA, OpenCode Zen, Mistral or SambaNova and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
+      <h3>🔌 Five providers</h3>
+      Puter needs no key at all. Add a key for Cerebras, OpenRouter, NVIDIA, Mistral or SambaNova and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
@@ -221,7 +221,6 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `CEREBRAS_API_KEY` | *(unset)* | Adds Cerebras to the provider picker. |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
-| `OPENCODE_API_KEY` | *(unset)* | Adds [OpenCode Zen](https://opencode.ai/docs/zen/), trimmed to its two free daily-limit models: Big Pickle and the newest Muse Spark. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `SAMBANOVA_API_KEY` | *(unset)* | Adds SambaNova — DeepSeek, Llama 3.3, gpt-oss, MiniMax. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
@@ -232,7 +231,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 >
 > The last three are speech and search services rather than LLMs. They're wired up so a key can settle it, but a chat request to Deepgram or AssemblyAI returns `404` because neither has a chat completions endpoint.
 >
-> Model lists are read from each provider at runtime, and free models are floated to the top. Where a provider publishes prices — OpenRouter, ZenMux — that decides it. Where one publishes none, the id does: Cerebras and NVIDIA meter an account allowance so everything is free within it, while OpenCode Zen mixes free and paid in one unpriced catalogue and marks the free ones by name.
+> Model lists are read from each provider at runtime, and free models are floated to the top. Where a provider publishes prices — OpenRouter — that decides it. Where one publishes none, an account-level allowance is assumed, which is how Cerebras and NVIDIA work.
 
 > GitHub tokens are sealed with AES-256-GCM using `SESSION_SECRET` and stored in an httpOnly cookie — browser JavaScript never sees them. The connector asks for the `public_repo` scope only, every commit needs an explicit confirmation, and each token is bound to the app account that connected it, so a shared browser can't leak repo access between users.
 
