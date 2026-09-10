@@ -12,6 +12,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
+const { selectAllowedModels } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -478,6 +479,9 @@ const LLM_PROVIDERS = {
     // Publishes no prices but mixes free and paid models, marking the free ones
     // in the id. Without this the whole catalogue would read as free.
     pricedByName: true,
+    // 70 models, of which two are worth offering. Muse is picked by version
+    // rather than named, so a future 1.4 replaces 1.3 without a code change.
+    models: { exact: ['big-pickle'], newestOf: ['muse-spark'] },
   },
   mistral: {
     label: 'Mistral',
@@ -644,7 +648,7 @@ async function llmModels(req, res) {
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
       .map((m) => normalizeProviderModel(m, provider));
-    sendJson(res, 200, models);
+    sendJson(res, 200, selectAllowedModels(models, provider.models));
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
