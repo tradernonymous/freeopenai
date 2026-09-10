@@ -382,7 +382,7 @@ async function githubGetFile(req, res) {
   try {
     const { ok, status, data } = await githubApiFetch(
       account.token,
-      `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`
+      `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
     );
     if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not read file' });
     if (Array.isArray(data) || !data.content) return sendJson(res, 400, { error: 'Path is a directory, not a file' });
@@ -404,14 +404,32 @@ function githubPutFile(req, res) {
       return sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
     }
     const account = picked.account;
+
+    // GitHub needs the file's current sha to update it, and refuses without
+    // one. Making the caller carry that between a read and a write was a
+    // mistake: a model that commits without reading first, or reads as one
+    // account and commits as another, loses it and the commit fails on a
+    // detail it should never have been handling. Look it up here instead. A
+    // 404 means the file is new, which is the one case where no sha is right.
+    let resolvedSha = sha;
+    if (!resolvedSha) {
+      const existing = await githubApiFetch(
+        account.token,
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
+      );
+      if (existing.ok && existing.data && existing.data.sha && !Array.isArray(existing.data)) {
+        resolvedSha = existing.data.sha;
+      }
+    }
+
     try {
       const { ok, status, data } = await githubApiFetch(
         account.token,
-        `https://api.github.com/repos/${repo}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}`,
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, content: Buffer.from(content, 'utf8').toString('base64'), sha: sha || undefined }),
+          body: JSON.stringify({ message, content: Buffer.from(content, 'utf8').toString('base64'), sha: resolvedSha || undefined }),
         }
       );
       if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not commit file' });
@@ -634,6 +652,11 @@ function firstPriceValue(entry) {
   if (typeof entry === 'object') return firstPriceValue(entry.value);
   const num = Number(entry);
   return Number.isFinite(num) ? num : undefined;
+}
+
+// A path segment at a time: slashes are structure, everything else is data.
+function encodePath(filePath) {
+  return String(filePath).split('/').map(encodeURIComponent).join('/');
 }
 
 function normalizePricing(model) {
