@@ -142,3 +142,27 @@ test('You.com gets its own header instead of Authorization', async () => {
   assert.equal(seen.apiKeyHeader, 'KEY123');
   assert.equal(seen.authorization, undefined);
 });
+
+test('non-LLM services are labelled by kind, with a reason', async () => {
+  // Deepgram, AssemblyAI and You.com sit in the picker at the user's request.
+  // Each must explain itself, since an empty dropdown reads as a bug.
+  process.env.DEEPGRAM_API_KEY = 'k';
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  const providers = await (await fetch(base + '/api/llm/providers')).json();
+  app.close();
+  delete process.env.DEEPGRAM_API_KEY;
+
+  const byId = Object.fromEntries(providers.map((p) => [p.id, p]));
+  assert.equal(byId.deepgram.kind, 'speech');
+  assert.equal(byId.assemblyai.kind, 'speech');
+  assert.equal(byId.youcom.kind, 'search');
+  assert.equal(byId.cerebras.kind, 'chat');
+  assert.equal(byId.openrouter.kind, 'chat');
+  assert.equal(byId.zenmux.kind, 'chat');
+
+  assert.match(byId.deepgram.note, /transcription models/);
+  assert.match(byId.youcom.note, /search and research/);
+  assert.equal(byId.cerebras.note, undefined, 'a real chat provider needs no excuse');
+});
