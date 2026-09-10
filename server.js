@@ -477,12 +477,16 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://api.deepgram.com/v1',
     envVar: 'DEEPGRAM_API_KEY',
     authScheme: 'Token',
+    kind: 'speech',
+    note: 'Deepgram is a speech service. Its /v1/models returns transcription models — nova, whisper and the like, each with a language list — and its /v1/chat/completions answers 404. There are no chat models to list, whatever key is set.',
   },
   assemblyai: {
     label: 'AssemblyAI',
     baseUrl: 'https://api.assemblyai.com/v1',
     envVar: 'ASSEMBLYAI_API_KEY',
     authScheme: '',
+    kind: 'speech',
+    note: 'AssemblyAI is a speech-to-text service. It has no /v1/models and no chat completions endpoint; transcription lives at /v2/transcript.',
   },
   youcom: {
     label: 'You.com',
@@ -490,6 +494,8 @@ const LLM_PROVIDERS = {
     envVar: 'YOUCOM_API_KEY',
     authHeader: 'X-API-Key',
     authScheme: '',
+    kind: 'search',
+    note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
   },
 };
 
@@ -511,6 +517,10 @@ function llmProviders(req, res) {
     id,
     label: provider.label,
     configured: !!process.env[provider.envVar],
+    // 'speech' and 'search' services have no chat models. Saying so beats an
+    // empty dropdown that looks like a bug.
+    kind: provider.kind || 'chat',
+    note: provider.note,
   })));
 }
 
@@ -525,8 +535,9 @@ function describeProviderError(status, data) {
   if (!message && data && typeof data === 'object') message = JSON.stringify(data).slice(0, 300);
 
   const hint =
-    status === 401 || status === 403 ? ' — check the API key for this provider'
+    status === 401 ? ' — check the API key for this provider'
       : status === 402 ? ' — this model is not free on your plan'
+        : status === 403 ? ' — the key is valid but not permitted here; usually an empty balance or a model your plan does not include'
         : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
           : status === 429 ? ' — rate limited, wait a moment'
             : '';

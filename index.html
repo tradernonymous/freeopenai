@@ -1083,6 +1083,7 @@
         // own server, which holds the key.
         let selectedProvider = PUTER_PROVIDER;
         let providerModels = [];
+        let providerInfo = {};
 
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
@@ -1686,7 +1687,9 @@
         async function loadProviders() {
             const select = document.getElementById('providerSelect');
             try {
-                const available = (await (await fetch('/api/llm/providers')).json()).filter((p) => p.configured);
+                const all = await (await fetch('/api/llm/providers')).json();
+                providerInfo = Object.fromEntries(all.map((p) => [p.id, p]));
+                const available = all.filter((p) => p.configured);
                 if (!available.length) {
                     select.hidden = true;
                     return;
@@ -1732,15 +1735,30 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Could not list models');
                 providerModels = usableChatModels(data);
-                if (!providerModels.length) throw new Error('No chat models returned');
+                if (!providerModels.length) throw new Error(noChatModelsReason());
                 const remembered = localStorage.getItem('provider:' + selectedProvider + ':model');
                 // providerModels is already sorted free-and-capable first, so
                 // the head of the list is the sensible default.
                 selectedModel = providerModels.some((m) => m.id === remembered) ? remembered : providerModels[0].id;
             } catch (err) {
                 providerModels = [];
-                showStatus('error', 'Could not load models: ' + err.message);
+                const reason = providerInfo[selectedProvider] && providerInfo[selectedProvider].kind !== 'chat'
+                    ? noChatModelsReason()
+                    : 'Could not load models: ' + err.message;
+                showStatus('error', reason);
+                // An empty dropdown reads as a bug; the message is the point.
+                addMessage('system', reason, { error: true });
             }
+
+        }
+
+        // Some services in the picker aren't language models at all. When one
+        // returns nothing usable, say what it actually is rather than leaving
+        // a blank list and "No model matches that".
+        function noChatModelsReason() {
+            const info = providerInfo[selectedProvider];
+            if (info && info.note) return info.note;
+            return 'This provider returned no chat models.';
         }
 
         // One call site for "ask a model", so the rest of the app doesn't care
