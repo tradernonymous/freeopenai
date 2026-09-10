@@ -552,7 +552,25 @@ function normalizeProviderReply(data) {
   if (!data || typeof data !== 'object') return null;
   if (data.message) return data;
   const choice = Array.isArray(data.choices) ? data.choices[0] : null;
-  return choice && choice.message ? { message: choice.message, raw: data } : null;
+  if (!choice || !choice.message) return null;
+  // finish_reason explains an empty answer -- a token limit, a filter -- and
+  // is the difference between "the model said nothing" and knowing why.
+  return { message: choice.message, finishReason: choice.finish_reason, raw: data };
+}
+
+// A reply can arrive with nothing in it. Rather than print "(no reply)" and
+// leave the user to guess, work out what happened from what did arrive.
+function explainEmptyReply(message, finishReason) {
+  if (finishReason === 'length') {
+    return 'The model hit its output limit before writing an answer. Ask for something shorter, or split the request.';
+  }
+  if (finishReason === 'content_filter') {
+    return 'The provider filtered this response.';
+  }
+  if (message && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    return 'The model asked for another tool step but sent no answer with it. Ask it to continue.';
+  }
+  return 'The model returned an empty response. This usually clears on a retry; if it repeats, try another model.';
 }
 
 // OpenRouter publishes real prices, so cost is a fact rather than a guess at
@@ -689,6 +707,7 @@ if (typeof module !== 'undefined' && module.exports) {
     SYSTEM_PROMPT,
     PUTER_PROVIDER,
     normalizeProviderReply,
+    explainEmptyReply,
     usableChatModels,
     isFreeModelId,
     isFreeModel,
