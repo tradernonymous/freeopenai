@@ -12,7 +12,6 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { selectAllowedModels } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -470,19 +469,6 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
   },
-  // opencode.ai/zen, not api.opencode.ai -- the latter answers 200 to every
-  // path including nonsense, which is a catch-all rather than an API.
-  opencode: {
-    label: 'OpenCode Zen',
-    baseUrl: 'https://opencode.ai/zen/v1',
-    envVar: 'OPENCODE_API_KEY',
-    // Publishes no prices but mixes free and paid models, marking the free ones
-    // in the id. Without this the whole catalogue would read as free.
-    pricedByName: true,
-    // 70 models, of which two are worth offering. Muse is picked by version
-    // rather than named, so a future 1.4 replaces 1.3 without a code change.
-    models: { exact: ['big-pickle'], newestOf: ['muse-spark'] },
-  },
   mistral: {
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
@@ -647,8 +633,8 @@ async function llmModels(req, res) {
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
-      .map((m) => normalizeProviderModel(m, provider));
-    sendJson(res, 200, selectAllowedModels(models, provider.models));
+      .map(normalizeProviderModel);
+    sendJson(res, 200, models);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
@@ -682,10 +668,9 @@ function normalizePricing(model) {
   return { prompt: prompt === undefined ? 0 : prompt, completion: completion === undefined ? 0 : completion };
 }
 
-function normalizeProviderModel(m, provider) {
+function normalizeProviderModel(m) {
   const architecture = m.architecture || {};
   return {
-    pricedByName: !!(provider && provider.pricedByName),
     id: m.id,
     name: m.name || m.display_name,
     ownedBy: m.owned_by,

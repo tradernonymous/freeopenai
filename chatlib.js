@@ -566,27 +566,16 @@ function isFreeModel(model) {
   if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
     return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
   }
-  // No published price. Two different situations look identical here, so the
-  // id decides between them. Cerebras and NVIDIA meter an account-level
-  // allowance and charge nothing per model, so an unmarked id is free. OpenCode
-  // Zen mixes free and paid in one unpriced catalogue and marks the free ones
-  // by name -- treating its 70 models as uniformly free would rank paid ones
-  // like claude-fable-5 above the free tier the user actually has.
-  return model.pricedByName ? isFreeModelId(model.id) : true;
+  // No published price. Cerebras and NVIDIA are in this position and both meter
+  // an account-level allowance rather than charging per model, so everything
+  // they list is free within it.
+  return true;
 }
 
-// Providers mark a free model in the id itself when they publish no prices.
-// OpenRouter uses a ":free" suffix; OpenCode Zen uses "-free", and leaves its
-// two headline free models unmarked entirely. These are documented provider
-// conventions read off their live catalogues, not inferences from the name.
-const NAMED_FREE_MODEL_IDS = ['big-pickle'];
-const NAMED_FREE_MODEL_PREFIXES = ['muse-spark'];
-
+// Providers mark a free model in the id when they publish no prices. OpenRouter
+// uses a ":free" suffix; others use "-free".
 function isFreeModelId(id) {
-  const name = String(id || '').toLowerCase();
-  if (/[:-]free$/i.test(name)) return true;
-  if (NAMED_FREE_MODEL_IDS.includes(name)) return true;
-  return NAMED_FREE_MODEL_PREFIXES.some((prefix) => name.startsWith(prefix));
+  return /[:-]free$/i.test(String(id || ''));
 }
 
 // The GitHub tools only work on a model that accepts them. Sending tools to
@@ -655,52 +644,6 @@ function describeProviderModel(model) {
   return parts.slice(0, 3).join(' · ');
 }
 
-// Some providers list far more than is worth offering. OpenCode Zen shows 70
-// models, most of them paid, when the useful set is two. A provider can declare
-// exactly which to keep: named ids, and families where only the newest release
-// should appear.
-function versionOf(id) {
-  const match = String(id).match(/(\d+(?:\.\d+)*)/g);
-  if (!match) return [0];
-  return match[match.length - 1].split('.').map(Number);
-}
-
-function compareVersions(a, b) {
-  const left = versionOf(a);
-  const right = versionOf(b);
-  for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const diff = (left[i] || 0) - (right[i] || 0);
-    if (diff) return diff;
-  }
-  // Same version: prefer the plain id over a longer variant, so
-  // "muse-spark-1.3" wins over "muse-spark-1.3-contributor-free".
-  return String(b).length - String(a).length;
-}
-
-function newestInFamily(models, prefix) {
-  const family = (models || []).filter((m) => m && String(m.id).startsWith(prefix));
-  if (!family.length) return null;
-  return family.reduce((best, m) => (compareVersions(m.id, best.id) > 0 ? m : best));
-}
-
-// Returns the declared subset, or everything when nothing is declared. Falling
-// back to the full list matters: a provider that renames a model shouldn't
-// leave the picker empty.
-function selectAllowedModels(models, rules) {
-  if (!rules || (!rules.exact && !rules.newestOf)) return models || [];
-  const chosen = [];
-  const seen = new Set();
-  const take = (model) => {
-    if (model && !seen.has(model.id)) {
-      seen.add(model.id);
-      chosen.push(model);
-    }
-  };
-  (rules.exact || []).forEach((id) => take((models || []).find((m) => m && m.id === id)));
-  (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
-  return chosen.length ? chosen : models || [];
-}
-
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -747,10 +690,7 @@ if (typeof module !== 'undefined' && module.exports) {
     PUTER_PROVIDER,
     normalizeProviderReply,
     usableChatModels,
-    selectAllowedModels,
-    newestInFamily,
     isFreeModelId,
-    NAMED_FREE_MODEL_IDS,
     isFreeModel,
     supportsTools,
     emitsText,

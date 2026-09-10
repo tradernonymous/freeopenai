@@ -160,7 +160,7 @@ test('non-LLM services are labelled by kind, with a reason', async () => {
   assert.equal(byId.youcom.kind, 'search');
   assert.equal(byId.cerebras.kind, 'chat');
   assert.equal(byId.openrouter.kind, 'chat');
-  assert.equal(byId.opencode.kind, 'chat');
+  assert.equal(byId.mistral.kind, 'chat');
 
   assert.match(byId.deepgram.note, /transcription models/);
   assert.match(byId.youcom.note, /search and research/);
@@ -244,28 +244,7 @@ const { isFreeModelId } = require('../chatlib.js');
 // OpenCode Zen publishes no prices and mixes free with paid in one catalogue,
 // marking the free ones in the id. Treating "no price" as free would rank
 // claude-fable-5 alongside the free tier the user actually has.
-test('OpenCode Zen free models are recognised by their id', () => {
-  const zen = (id) => normalizeProviderModel({ id }, { pricedByName: true });
-  for (const id of [
-    'big-pickle',
-    'muse-spark-1.3',
-    'muse-spark-1.3-contributor-free',
-    'mimo-v2.5-free',
-    'ling-3.0-flash-fin-free',
-    'nemotron-3-ultra-free',
-    'nemotron-3.5-lightning-free',
-    'deepseek-v4-flash-free',
-  ]) {
-    assert.ok(isFreeModel(zen(id)), `${id} is a free model on Zen`);
-  }
-});
 
-test("Zen's paid models are not swept up as free", () => {
-  const zen = (id) => normalizeProviderModel({ id }, { pricedByName: true });
-  for (const id of ['claude-fable-5', 'gpt-6-astra', 'gemini-3.8-flash', 'grok-4']) {
-    assert.ok(!isFreeModel(zen(id)), `${id} is paid on Zen`);
-  }
-});
 
 test('an account-allowance provider still treats an unpriced model as free', () => {
   // Cerebras and NVIDIA meter the account, not the model, so nothing in their
@@ -298,7 +277,8 @@ test('the removed providers are gone and the new ones are present', async () => 
   const ids = providers.map((p) => p.id);
   assert.ok(!ids.includes('bluesminds'));
   assert.ok(!ids.includes('zenmux'));
-  for (const id of ['opencode', 'mistral', 'sambanova']) {
+  assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
+  for (const id of ['mistral', 'sambanova']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
   for (const p of providers) {
@@ -306,78 +286,15 @@ test('the removed providers are gone and the new ones are present', async () => 
   }
 });
 
-const { selectAllowedModels, newestInFamily } = require('../chatlib.js');
 
-// Zen's real catalogue, trimmed to the families that matter.
-const ZEN_CATALOGUE = [
-  { id: 'claude-fable-5' }, { id: 'gpt-6-astra' }, { id: 'muse-spark-1.3' },
-  { id: 'muse-spark-1.2' }, { id: 'big-pickle' },
-  { id: 'muse-spark-1.3-contributor-free' }, { id: 'muse-spark-1.2-contributor-free' },
-  { id: 'nemotron-3-ultra-free' },
-];
 
-test('OpenCode Zen is trimmed to Big Pickle and the newest Muse', () => {
-  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
-  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
-});
 
-test('a newer Muse would be picked up without a code change', () => {
-  const withNext = [...ZEN_CATALOGUE, { id: 'muse-spark-1.4' }];
-  const chosen = selectAllowedModels(withNext, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
-  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.4']);
-});
 
-test('version comparison is numeric, not alphabetical', () => {
-  // "1.10" sorts before "1.9" as a string, and after it as a version.
-  const family = [{ id: 'muse-spark-1.9' }, { id: 'muse-spark-1.10' }];
-  assert.equal(newestInFamily(family, 'muse-spark').id, 'muse-spark-1.10');
-});
 
-test('at equal versions the plain id wins over a variant', () => {
-  const family = [{ id: 'muse-spark-1.3-contributor-free' }, { id: 'muse-spark-1.3' }];
-  assert.equal(newestInFamily(family, 'muse-spark').id, 'muse-spark-1.3');
-});
 
-test('a provider with no declared subset keeps its whole catalogue', () => {
-  assert.equal(selectAllowedModels(ZEN_CATALOGUE, undefined).length, ZEN_CATALOGUE.length);
-  assert.equal(selectAllowedModels(ZEN_CATALOGUE, {}).length, ZEN_CATALOGUE.length);
-});
 
-test('a renamed model falls back to the full list rather than an empty picker', () => {
-  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['gone'], newestOf: ['also-gone'] });
-  assert.equal(chosen.length, ZEN_CATALOGUE.length);
-});
 
-test('the trimmed Zen list survives the chat-model filter and both read as free', () => {
-  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] })
-    .map((m) => normalizeProviderModel(m, { pricedByName: true }));
-  const ranked = usableChatModels(chosen);
-  assert.deepEqual(ranked.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
-  assert.ok(ranked.every((m) => m.free), 'both are free models');
-});
 
-test('the models endpoint actually applies the provider subset', async () => {
-  // Computing the subset and then sending the unfiltered list is a mistake a
-  // unit test on the filter alone cannot see, so assert on the response.
-  const upstream = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: ZEN_CATALOGUE }));
-  });
-  await new Promise((r) => upstream.listen(0, r));
-  process.env.OPENCODE_API_KEY = 'k';
-  process.env.OPENCODE_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
-
-  const app = http.createServer(createRequestHandler(__dirname + '/..'));
-  await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=opencode`)).json();
-
-  app.close(); upstream.close();
-  delete process.env.OPENCODE_API_KEY;
-  delete process.env.OPENCODE_BASE_URL;
-
-  assert.deepEqual(body.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
-  assert.ok(!body.some((m) => m.id === 'claude-fable-5'), 'paid models must not reach the picker');
-});
 
 test('a provider with no subset still returns its whole catalogue', async () => {
   const upstream = http.createServer((req, res) => {
