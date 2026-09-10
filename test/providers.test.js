@@ -346,3 +346,31 @@ test('a short message carrying a link counts as self-explanatory', () => {
   assert.match(linked, /Top up at/);
   assert.ok(!linked.includes('not free on your plan'));
 });
+
+const { isAccountLevelFailure } = require('../chatlib.js');
+
+test('a billing refusal is recognised as account-wide', () => {
+  // Both verbatim from the live app.
+  assert.ok(isAccountLevelFailure('402: Payment required to access this resource. Visit your billing tab.', 'gemma-4-31b'));
+  assert.ok(isAccountLevelFailure('402: A payment method is required. Add one at https://cloud.sambanova.ai/plans/billing to continue.', 'Meta-Llama-3.3-70B-Instruct'));
+});
+
+test('a refusal naming the model is about that model, not the account', () => {
+  // Removing every model over this one would be wrong: the others still work.
+  const openrouter = '403: thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding agent listed on https://openrouter.ai/apps';
+  assert.ok(!isAccountLevelFailure(openrouter, 'thinkingmachines/inkling:free'));
+});
+
+test('unrelated failures are not treated as billing problems', () => {
+  assert.ok(!isAccountLevelFailure('429: rate limited', 'x'));
+  assert.ok(!isAccountLevelFailure('500: internal error', 'x'));
+  assert.ok(!isAccountLevelFailure('', 'x'));
+  assert.ok(!isAccountLevelFailure(null, 'x'));
+});
+
+test('the model name check wins even when billing words appear', () => {
+  // A message that names the model is model-specific however it is worded.
+  const mixed = '402: model-x requires a payment method on your plan';
+  assert.ok(!isAccountLevelFailure(mixed, 'model-x'));
+  assert.ok(isAccountLevelFailure(mixed, 'a-different-model'));
+});

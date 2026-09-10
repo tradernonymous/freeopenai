@@ -584,9 +584,13 @@ function isFreeModel(model) {
   if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
     return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
   }
-  // No published price. Cerebras and NVIDIA are in this position and both meter
-  // an account-level allowance rather than charging per model, so everything
-  // they list is free within it.
+  // No published price. This is an assumption, not a fact: a provider that
+  // publishes nothing might meter an account allowance, or might simply
+  // require billing before any call succeeds -- Cerebras answers "Payment
+  // required to access this resource" on a key without one. Treating an
+  // unpriced model as free keeps it visible so the provider can say which,
+  // rather than hiding a catalogue the user may well have access to. The
+  // error, when it comes, is now reported accurately.
   return true;
 }
 
@@ -662,6 +666,28 @@ function describeProviderModel(model) {
   return parts.slice(0, 3).join(' · ');
 }
 
+// A 402 or 403 can mean two very different things, and the difference decides
+// what to do about it.
+//
+//   "thinkingmachines/inkling:free is only available on agentic harnesses"
+//       -- one model is off limits; drop it and pick another.
+//
+//   "A payment method is required. Add one at .../billing"
+//       -- the whole account is off limits; dropping models one at a time just
+//          burns a failed request per model until the list is empty.
+//
+// A message that names the model is about that model. One that talks about
+// payment, billing or the plan without naming a model is about the account.
+function isAccountLevelFailure(message, modelId) {
+  const text = String(message || '');
+  if (!text) return false;
+  if (modelId && text.includes(modelId)) return false;
+  // Matched on the concepts rather than a word order: providers phrase this as
+  // "payment required", "a payment method is required" and "requires a payment
+  // method", and all three mean the same thing.
+  return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -708,6 +734,7 @@ if (typeof module !== 'undefined' && module.exports) {
     PUTER_PROVIDER,
     normalizeProviderReply,
     explainEmptyReply,
+    isAccountLevelFailure,
     usableChatModels,
     isFreeModelId,
     isFreeModel,
