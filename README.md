@@ -114,7 +114,7 @@
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
-      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, and controls that shrink rather than shove each other off the screen.
+      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, a Send key on soft keyboards, no double-tap delay, and controls that shrink rather than shove each other off a 375px screen.
     </td>
   </tr>
 </table>
