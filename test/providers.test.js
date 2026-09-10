@@ -374,3 +374,26 @@ test('the model name check wins even when billing words appear', () => {
   assert.ok(!isAccountLevelFailure(mixed, 'model-x'));
   assert.ok(isAccountLevelFailure(mixed, 'a-different-model'));
 });
+
+test('a 404 hint fits what the provider actually is', () => {
+  // For a chat provider it means this model is out of reach for the key...
+  const chat = describeProviderError(404, null, { label: 'NVIDIA', kind: 'chat' });
+  assert.match(chat, /isn't available to your key/);
+  assert.ok(!chat.includes('speech'), 'the speech wording was written for Deepgram, not NVIDIA');
+
+  // ...and for a speech or search product it means the whole service is wrong.
+  const speech = describeProviderError(404, null, { label: 'Deepgram', kind: 'speech' });
+  assert.match(speech, /no chat API at all/);
+  assert.match(speech, /sells speech/);
+});
+
+test("NVIDIA's per-account 404 passes through untouched", () => {
+  // Long enough to explain itself, so no hint should be appended.
+  const real = describeProviderError(
+    404,
+    { error: { message: "Function '7dfc10a8-3cc4-448e-97c1-2213308dc222': Not found for account 'o5hzlwUiHYzGN7'" } },
+    { label: 'NVIDIA', kind: 'chat' }
+  );
+  assert.match(real, /Not found for account/);
+  assert.ok(!real.includes('speech'));
+});

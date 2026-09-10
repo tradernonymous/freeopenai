@@ -1859,7 +1859,10 @@
                 // A refusal is about this model, not the request, so drop it
                 // from the picker rather than let it be chosen again.
                 const detail = data.error || 'Request failed';
-                if (res.status === 403 || res.status === 402) {
+                // 404 belongs here too: NVIDIA lists models an account may not
+                // have access to and answers "Not found for account" for them,
+                // which is a refusal of that model rather than a broken request.
+                if (res.status === 403 || res.status === 402 || res.status === 404) {
                     // Account-level refusals apply to every model, so removing
                     // them one at a time would spend a failed request per model.
                     if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
@@ -1906,11 +1909,26 @@
         }
 
         async function runChatWithTools(convo, chatModel) {
+            // Only one nudge per message: if asking plainly doesn't produce an
+            // answer, asking again won't either.
+            let nudged = false;
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 const response = await callModel(convo, { tools: GITHUB_TOOLS });
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
-                if (!calls.length) return { message, response, finishReason: response && response.finishReason };
+                if (!calls.length) {
+                    // A model that ran its tools and then said nothing has the
+                    // answer in hand and simply stopped short. One more call,
+                    // tools withheld, usually produces it -- and reporting an
+                    // empty reply instead wastes everything already paid for.
+                    if (!extractMessageText(message) && !extractMessageReasoning(message) && !nudged) {
+                        nudged = true;
+                        convo.push(toConversationMessage(message));
+                        convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
+                        continue;
+                    }
+                    return { message, response, finishReason: response && response.finishReason };
+                }
 
                 // Only role/content/tool_calls may go back; the rest of the
                 // reply object is metadata the provider rejects.

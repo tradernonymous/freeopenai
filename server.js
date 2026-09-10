@@ -545,6 +545,18 @@ function llmProviders(req, res) {
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
+// A 404 means different things depending on what the service is. Speech and
+// search products have no chat endpoint at all, so the whole provider is the
+// wrong shape. A chat provider returning 404 is saying this particular model
+// isn't reachable -- NVIDIA lists models its accounts don't all have access to,
+// and answers "Not found for account" for the rest.
+function notFoundHint(provider) {
+  if (provider && provider.kind && provider.kind !== 'chat') {
+    return ' — this service has no chat API at all; it sells ' + provider.kind;
+  }
+  return " — that model isn't available to your key, even though the provider lists it";
+}
+
 // A message that carries a link, or is long enough to be a real sentence rather
 // than a status echo, is already telling the user what to do.
 function isSelfExplanatory(message) {
@@ -575,7 +587,7 @@ function describeProviderError(status, data, provider) {
     status === 401 ? ' — check the API key for this provider'
       : status === 402 ? ' — this model is not free on your plan'
         : status === 403 ? ' — the key is valid but not permitted here; usually an empty balance or a model your plan does not include'
-        : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
+        : status === 404 ? notFoundHint(provider)
           : status === 429 ? ' — rate limited, wait a moment'
             : status === 504 || status === 502 ? ' — the provider is slow or unreachable; this is on their side, not your key'
               : status >= 500 ? ' — the provider had an internal error; try again or pick another'

@@ -240,6 +240,13 @@ const MAX_TOOL_ROUNDS = 12;
 
 // Asked of the model when the ceiling is reached, so an expensive run ends with
 // an answer about what it found rather than being thrown away.
+// Sent when a model finishes its tool work and then returns nothing. Some
+// models stop after the last tool result without writing the answer; asking
+// plainly recovers it, which beats reporting an empty reply to the user.
+const EMPTY_REPLY_NUDGE =
+  'You did not write an answer. Using what you found above, answer the original ' +
+  'question now in plain text. Do not call any more tools.';
+
 const TOOL_ROUNDS_EXHAUSTED_PROMPT =
   'Stop using tools now and answer directly. Summarise what you found, what you ' +
   'changed if anything, and what is still left to do. Be specific about file ' +
@@ -707,6 +714,7 @@ if (typeof module !== 'undefined' && module.exports) {
     GITHUB_TOOL_NAMES,
     MAX_TOOL_ROUNDS,
     TOOL_ROUNDS_EXHAUSTED_PROMPT,
+    EMPTY_REPLY_NUDGE,
     isGithubTool,
     parseToolArgs,
     describeToolCall,
