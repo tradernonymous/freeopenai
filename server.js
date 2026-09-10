@@ -540,32 +540,60 @@ function describeProviderError(status, data) {
         : status === 403 ? ' — the key is valid but not permitted here; usually an empty balance or a model your plan does not include'
         : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
           : status === 429 ? ' — rate limited, wait a moment'
-            : '';
+            : status === 504 || status === 502 ? ' — the provider is slow or unreachable; this is on their side, not your key'
+              : status >= 500 ? ' — the provider had an internal error; try again or pick another'
+                : '';
   return `${status}: ${message || 'request failed'}${hint}`;
 }
 
+// A provider that hangs shouldn't hang us. Without a deadline the request sits
+// until some intermediary gives up and returns an opaque 504, which tells the
+// user nothing about which side stalled. Listing models should be quick; a
+// chat call legitimately takes longer, especially on a reasoning model.
+const PROVIDER_TIMEOUT_MS = { models: 20000, chat: 120000 };
+
 async function providerFetch(req, provider, path, init = {}) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
+  const budget = path.includes('chat') ? PROVIDER_TIMEOUT_MS.chat : PROVIDER_TIMEOUT_MS.models;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budget);
   // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
   // "Token", AssemblyAI wants the bare key, You.com wants its own header.
   const headerName = provider.authHeader || 'Authorization';
   const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
-  const res = await fetch(provider.baseUrl + path, {
-    ...init,
-    headers: {
-      [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
-      'Content-Type': 'application/json',
-      ...extra,
-      ...(init.headers || {}),
-    },
-  });
-  let data = null;
   try {
-    data = await res.json();
-  } catch {
-    data = null;
+    const res = await fetch(provider.baseUrl + path, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
+        'Content-Type': 'application/json',
+        ...extra,
+        ...(init.headers || {}),
+      },
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    // Report our own deadline as such. A generic network error here would look
+    // identical to the provider refusing us, which sends the user hunting
+    // through their key when nothing is wrong with it.
+    if (err.name === 'AbortError') {
+      return {
+        ok: false,
+        status: 504,
+        data: { error: { message: `${provider.label} did not respond within ${Math.round(budget / 1000)}s` } },
+      };
+    }
+    return { ok: false, status: 502, data: { error: { message: `Could not reach ${provider.label}: ${err.message}` } } };
+  } finally {
+    clearTimeout(timer);
   }
-  return { ok: res.ok, status: res.status, data };
 }
 
 // Model lists are read from the provider at runtime rather than hardcoded, so
