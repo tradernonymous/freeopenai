@@ -194,3 +194,47 @@ test('a provider that never answers fails with our own deadline, not silence', a
   assert.match(body.error, /slow or unreachable|Could not reach/);
   assert.ok(!/^504: request failed$/.test(body.error), 'never the bare message that was reported');
 });
+
+test('a gateway error with no body still names the provider', async () => {
+  // The reported symptom: "504: request failed", with several providers
+  // configured and no way to tell which one stalled.
+  const dead = http.createServer((req, res) => { res.writeHead(504); res.end(); });
+  await new Promise((r) => dead.listen(0, r));
+  process.env.BLUESMINDS_API_KEY = 'k';
+  process.env.BLUESMINDS_BASE_URL = `http://127.0.0.1:${dead.address().port}/v1`;
+
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=bluesminds`);
+  const body = await res.json();
+
+  app.close(); dead.close();
+  delete process.env.BLUESMINDS_API_KEY;
+  delete process.env.BLUESMINDS_BASE_URL;
+
+  assert.match(body.error, /Bluesminds/);
+  assert.ok(!body.error.includes('request failed'), 'the useless phrasing must be gone');
+});
+
+test('an HTML error body does not collapse into nothing', async () => {
+  // A hosting edge returns HTML, which parses to null and used to leave the
+  // message empty.
+  const html = http.createServer((req, res) => {
+    res.writeHead(502, { 'Content-Type': 'text/html' });
+    res.end('<html><body>Bad Gateway</body></html>');
+  });
+  await new Promise((r) => html.listen(0, r));
+  process.env.CEREBRAS_API_KEY = 'k';
+  process.env.CEREBRAS_BASE_URL = `http://127.0.0.1:${html.address().port}/v1`;
+
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=cerebras`)).json();
+
+  app.close(); html.close();
+  delete process.env.CEREBRAS_API_KEY;
+  delete process.env.CEREBRAS_BASE_URL;
+
+  assert.match(body.error, /Cerebras/);
+  assert.match(body.error, /gateway error|slow or unreachable/);
+});

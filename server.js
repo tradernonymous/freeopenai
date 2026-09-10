@@ -527,12 +527,17 @@ function llmProviders(req, res) {
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
-function describeProviderError(status, data) {
+function describeProviderError(status, data, provider) {
+  const who = provider && provider.label ? provider.label : 'The provider';
   const raw = data && (data.error || data.message || data.detail);
   let message = '';
   if (typeof raw === 'string') message = raw;
   else if (raw && typeof raw === 'object') message = raw.message || raw.code || JSON.stringify(raw);
   if (!message && data && typeof data === 'object') message = JSON.stringify(data).slice(0, 300);
+  // A gateway error upstream usually arrives with no body, or an HTML one that
+  // failed to parse. "request failed" told the user nothing, least of all
+  // which of several configured providers had stalled.
+  if (!message && status >= 500) message = `${who} returned a gateway error with no detail`;
 
   const hint =
     status === 401 ? ' — check the API key for this provider'
@@ -543,14 +548,17 @@ function describeProviderError(status, data) {
             : status === 504 || status === 502 ? ' — the provider is slow or unreachable; this is on their side, not your key'
               : status >= 500 ? ' — the provider had an internal error; try again or pick another'
                 : '';
-  return `${status}: ${message || 'request failed'}${hint}`;
+  return `${status}: ${message || `${who} rejected the request`}${hint}`;
 }
 
 // A provider that hangs shouldn't hang us. Without a deadline the request sits
 // until some intermediary gives up and returns an opaque 504, which tells the
 // user nothing about which side stalled. Listing models should be quick; a
 // chat call legitimately takes longer, especially on a reasoning model.
-const PROVIDER_TIMEOUT_MS = { models: 20000, chat: 120000 };
+// Kept under the hosting platform's own request ceiling on purpose. If the
+// edge times out first it returns its own HTML 504, which parses to nothing
+// and produces exactly the bare "504: request failed" this replaced.
+const PROVIDER_TIMEOUT_MS = { models: 20000, chat: 55000 };
 
 async function providerFetch(req, provider, path, init = {}) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
@@ -604,7 +612,7 @@ async function llmModels(req, res) {
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
   try {
     const { ok, status, data } = await providerFetch(req, provider, '/models');
-    if (!ok) return sendJson(res, status, { error: describeProviderError(status, data) });
+    if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
@@ -675,7 +683,7 @@ function llmChat(req, res) {
         // Collapsing every upstream failure into one string made it impossible
         // to tell a missing model from an empty balance from a bad key. Report
         // what the provider actually said.
-        return sendJson(res, status, { error: describeProviderError(status, data) });
+        return sendJson(res, status, { error: describeProviderError(status, data, provider) });
       }
       sendJson(res, 200, data);
     } catch (e) {
