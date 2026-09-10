@@ -41,6 +41,85 @@ if (!sessionSecret) {
   console.warn('SESSION_SECRET not set — using an ephemeral secret; sessions will not survive a restart.');
 }
 
+// A 429 from a provider means the request arrived before the free tier was
+// ready for it, so it is worth waiting and trying again rather than surfacing
+// an error the user has to act on. Retries are bounded and back off, and a
+// short cooldown stops a burst of tool calls from hammering the same provider.
+// The base delay reads at call time so tests can shrink it via env.
+const RATE_LIMIT_MAX_ATTEMPTS = 4;
+const providerCooldownUntil = new Map();
+
+function retryBaseDelayMs() {
+  return Number(process.env.RATE_LIMIT_BASE_DELAY_MS) || 2500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function providerCooldownRemaining(providerId) {
+  const until = providerCooldownUntil.get(providerId) || 0;
+  return Math.max(0, until - Date.now());
+}
+
+function markProviderCooldown(providerId, durationMs) {
+  providerCooldownUntil.set(providerId, Date.now() + durationMs);
+}
+
+// The shared retry shell behind both the JSON and streaming chat paths. It
+// calls `attempt()` (which makes one provider request and returns either a
+// `{ ok, status, data }` packet or a raw `Response`), retrying only on 429.
+async function retryProviderRequest(providerId, attempt) {
+  let result;
+  for (let tryNum = 0; tryNum < RATE_LIMIT_MAX_ATTEMPTS; tryNum += 1) {
+    const wait = providerCooldownRemaining(providerId);
+    if (wait > 0) await sleep(wait);
+    result = await attempt();
+    let status = result && typeof result.status === 'number' ? result.status : 0;
+    if (result && typeof result.status !== 'number') status = result.ok ? 200 : 599;
+    if (status !== 429) return result;
+    const backoff = retryBaseDelayMs() * 2 ** tryNum;
+    markProviderCooldown(providerId, Math.min(backoff * 2, 15000) + retryBaseDelayMs());
+    if (tryNum < RATE_LIMIT_MAX_ATTEMPTS - 1) await sleep(backoff);
+  }
+  return result;
+}
+
+// Retries an idempotent provider call (chat completions) only on 429. Anything
+// else is final and returned as-is, and if the provider keeps refusing the
+// last 429 is returned too, so the caller can describe it normally.
+async function fetchProviderWithRetry(providerId, fetchOnce) {
+  return retryProviderRequest(providerId, fetchOnce);
+}
+
+// The streaming sibling: each attempt resolves to a raw Response so the caller
+// can pipe the upstream body through. The 429 arrives as the initial status,
+// before any body is read, so the same retry/cooldown logic applies. When the
+// client cancels, `onAbort` aborts the in-flight upstream read immediately.
+async function fetchStreamWithRetry(providerId, fetchRaw) {
+  return retryProviderRequest(providerId, async () => {
+    const response = await fetchRaw();
+    if (!response || typeof response.status !== 'number' || response.status !== 429) return response;
+    // Drain 429 bodies so the socket is reusable before we retry.
+    try { await response.body?.cancel(); } catch { /* ignore */ }
+    return response;
+  });
+}
+
+// Model catalogues are read from each provider at runtime so they can't go
+// stale, but re-fetching them on every page load and provider switch multiplies
+// upstream load and can edge a free tier into its rate limit. Cache the last
+// good list per provider for a short window instead.
+const modelCache = new Map();
+
+function modelsCacheTtlMs() {
+  return Number(process.env.MODELS_CACHE_TTL_MS) || 20 * 60 * 1000;
+}
+
+function clearModelCache() {
+  modelCache.clear();
+}
+
 function readJsonBody(req, maxBytes, cb) {
   let size = 0;
   const chunks = [];
@@ -545,6 +624,18 @@ function llmProviders(req, res) {
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
+// A 404 means different things depending on what the service is. Speech and
+// search products have no chat endpoint at all, so the whole provider is the
+// wrong shape. A chat provider returning 404 is saying this particular model
+// isn't reachable -- NVIDIA lists models its accounts don't all have access to,
+// and answers "Not found for account" for the rest.
+function notFoundHint(provider) {
+  if (provider && provider.kind && provider.kind !== 'chat') {
+    return ' — this service has no chat API at all; it sells ' + provider.kind;
+  }
+  return " — that model isn't available to your key, even though the provider lists it";
+}
+
 // A message that carries a link, or is long enough to be a real sentence rather
 // than a status echo, is already telling the user what to do.
 function isSelfExplanatory(message) {
@@ -575,7 +666,7 @@ function describeProviderError(status, data, provider) {
     status === 401 ? ' — check the API key for this provider'
       : status === 402 ? ' — this model is not free on your plan'
         : status === 403 ? ' — the key is valid but not permitted here; usually an empty balance or a model your plan does not include'
-        : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
+        : status === 404 ? notFoundHint(provider)
           : status === 429 ? ' — rate limited, wait a moment'
             : status === 504 || status === 502 ? ' — the provider is slow or unreachable; this is on their side, not your key'
               : status >= 500 ? ' — the provider had an internal error; try again or pick another'
@@ -642,12 +733,19 @@ async function llmModels(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  const ttl = modelsCacheTtlMs();
+  const cached = modelCache.get(id);
+  if (cached && Date.now() - cached.fetchedAt < ttl) {
+    return sendJson(res, 200, cached.models);
+  }
   try {
     const { ok, status, data } = await providerFetch(req, provider, '/models');
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
+    // Only a successful catalogue is worth caching; errors rust nothing.
+    modelCache.set(id, { fetchedAt: Date.now(), models });
     sendJson(res, 200, models);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
@@ -704,18 +802,84 @@ function llmChat(req, res) {
     if (!body || !body.model || !Array.isArray(body.messages)) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
+    const upstreamBody = JSON.stringify({
+      model: body.model,
+      messages: body.messages,
+      ...(body.tools ? { tools: body.tools } : {}),
+      ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+      ...(body.stream ? { stream: true } : {}),
+    });
+    const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
+    const headerName = provider.authHeader || 'Authorization';
+    const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
+    const headers = {
+      [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
+      'Content-Type': 'application/json',
+      ...extra,
+    };
+    if (body.stream) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS.chat);
+      const onClientClose = () => {
+        if (!res.writableEnded) controller.abort();
+      };
+      // Use the socket close event rather than req.on('close'), because
+      // req (IncomingMessage/Readable) emits 'close' when the request body
+      // is fully consumed — which happens before we start streaming.
+      req.socket.on('close', onClientClose);
+      let upstreamConsumed = false;
+      try {
+        const upstream = await fetchStreamWithRetry(id, () =>
+          fetch(provider.baseUrl + '/chat/completions', {
+            method: 'POST',
+            signal: controller.signal,
+            headers,
+            body: upstreamBody,
+          })
+        );
+        res.writeHead(upstream.status, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          // Some reverse proxies (Railway, nginx, Cloudflare) buffer SSE by
+          // default. This header tells them to flush the data through.
+          'X-Accel-Buffering': 'no',
+        });
+        // Non-retryable or non-streamable failures still get a readable body.
+        if (!upstream.ok) {
+          const data = await upstream.json().catch(() => null);
+          res.write(`data: ${JSON.stringify({ error: describeProviderError(upstream.status, data, provider) })}\n\n`);
+        } else {
+          for await (const chunk of upstream.body) {
+            res.write(chunk);
+          }
+          upstreamConsumed = true;
+        }
+      } catch (e) {
+        res.writeHead(e.name === 'AbortError' ? 499 : 502, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ error: e.name === 'AbortError' ? 'Request aborted' : e.message })}\n\n`);
+      } finally {
+        clearTimeout(timer);
+        req.socket.removeListener('close', onClientClose);
+        if (!res.writableEnded) {
+          // Providers already send a [DONE] sentinel at the end of a
+          // successful stream; only add one when the body was consumed
+          // partially or an error was sent instead.
+          if (!upstreamConsumed) res.write('data: [DONE]\n\n');
+          res.end();
+        }
+      }
+      return;
+    }
     try {
-      const { ok, status, data } = await providerFetch(req, provider, '/chat/completions', {
-        method: 'POST',
-        // Passed through rather than rebuilt: these are OpenAI-shaped already,
-        // and rebuilding would quietly drop anything new the caller sends.
-        body: JSON.stringify({
-          model: body.model,
-          messages: body.messages,
-          ...(body.tools ? { tools: body.tools } : {}),
-          ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
-        }),
-      });
+      const { ok, status, data } = await fetchProviderWithRetry(id, () =>
+        providerFetch(req, provider, '/chat/completions', {
+          method: 'POST',
+          // Passed through rather than rebuilt: these are OpenAI-shaped already,
+          // and rebuilding would quietly drop anything new the caller sends.
+          body: upstreamBody,
+        })
+      );
       if (!ok) {
         // Collapsing every upstream failure into one string made it impossible
         // to tell a missing model from an empty balance from a bad key. Report
@@ -843,4 +1007,8 @@ module.exports = {
   normalizeProviderModel,
   normalizePricing,
   describeProviderError,
+  fetchProviderWithRetry,
+  fetchStreamWithRetry,
+  clearModelCache,
+  modelsCacheTtlMs,
 };

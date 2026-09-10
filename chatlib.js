@@ -240,6 +240,13 @@ const MAX_TOOL_ROUNDS = 12;
 
 // Asked of the model when the ceiling is reached, so an expensive run ends with
 // an answer about what it found rather than being thrown away.
+// Sent when a model finishes its tool work and then returns nothing. Some
+// models stop after the last tool result without writing the answer; asking
+// plainly recovers it, which beats reporting an empty reply to the user.
+const EMPTY_REPLY_NUDGE =
+  'You did not write an answer. Using what you found above, answer the original ' +
+  'question now in plain text. Do not call any more tools.';
+
 const TOOL_ROUNDS_EXHAUSTED_PROMPT =
   'Stop using tools now and answer directly. Summarise what you found, what you ' +
   'changed if anything, and what is still left to do. Be specific about file ' +
@@ -450,6 +457,17 @@ function toConversationMessage(message) {
     turn.tool_calls = message.tool_calls;
   }
   return turn;
+}
+
+// A 429 from the provider means the request was too fast, not that something
+// is broken. Both the server and the client use this to retry with a delay
+// instead of showing an error the user has to act on.
+const RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 2000;
+
+function isRateLimitError(error) {
+  const message = String((error && (error.message || error.error || error)) || '');
+  return /\b429\b|too many requests|rate.?limit/i.test(message);
 }
 
 // Puter runs a "User-Pays" model: free for whoever builds the app, billed to
@@ -688,6 +706,27 @@ function isAccountLevelFailure(message, modelId) {
   return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
 }
 
+// Server-Sent Events arrive as newline-delimited `data:` lines. A single
+// provider chunk may contain several events, or a half-finished event that
+// the next chunk completes. This parser does not maintain state (that is the
+// caller's job), so it expects to be fed decoded chunks that each start and
+// end on event boundaries. In practice that holds: the browser's text decoder
+// and the Node stream reader both emit line-aligned chunks for SSE.
+// Returns an array of parsed payloads: a JSON object when the line carried
+// data, the string "[DONE]" for a final sentinel, or null for comments.
+function parseSseChunk(decoded) {
+  if (!decoded) return [];
+  return decoded.split('\n').reduce((out, line) => {
+    if (line.startsWith(':') || line.trim() === '') return out;
+    if (line.startsWith('data: ')) {
+      const payload = line.slice(6).trim();
+      if (payload === '[DONE]') { out.push('[DONE]'); return out; }
+      try { out.push(JSON.parse(payload)); } catch { /* partial/unknown line */ }
+    }
+    return out;
+  }, []);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -707,6 +746,7 @@ if (typeof module !== 'undefined' && module.exports) {
     GITHUB_TOOL_NAMES,
     MAX_TOOL_ROUNDS,
     TOOL_ROUNDS_EXHAUSTED_PROMPT,
+    EMPTY_REPLY_NUDGE,
     isGithubTool,
     parseToolArgs,
     describeToolCall,
@@ -720,6 +760,9 @@ if (typeof module !== 'undefined' && module.exports) {
     supportsEffort,
     isValidEffort,
     isEffortUnsupportedError,
+    isRateLimitError,
+    RATE_LIMIT_RETRIES,
+    RATE_LIMIT_BASE_DELAY_MS,
     isOutOfCreditsError,
     HEAVY_MODEL_IDS,
     isHeavyModel,
@@ -746,5 +789,6 @@ if (typeof module !== 'undefined' && module.exports) {
     sortConversations,
     upsertConversation,
     migrateLegacyMessages,
+    parseSseChunk,
   };
 }

@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-157%20passing-22c55e?style=for-the-badge" alt="157 tests passing">
+  <img src="https://img.shields.io/badge/tests-182%20passing-22c55e?style=for-the-badge" alt="182 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -114,7 +114,21 @@
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
-      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, and controls that shrink rather than shove each other off the screen.
+      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, a Send key on soft keyboards, no double-tap delay, and controls that shrink rather than shove each other off a 375px screen.
+    </td>
+    <td valign="top">
+      <h3>⚡ SSE streaming</h3>
+      Direct-provider replies arrive token-by-token via Server-Sent Events — no waiting for the full answer before text appears.
+    </td>
+    <td valign="top">
+      <h3>🛑 Stop / cancel</h3>
+      Hit the red stop button or press Escape mid-reply to abort a generation instantly. The upstream fetch is cancelled server-side too.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>⏱️ Model-catalog cache</h3>
+      Provider model lists are cached in memory with a configurable TTL, so switching providers or reloading the page doesn't re-fetch the catalogue every time.
     </td>
   </tr>
 </table>
@@ -283,6 +297,8 @@ Puter fronts several providers, and they disagree in ways that surface as raw AP
 | Some Claude models reject the effort setting with a `thinking.type` error | Retries once without it, then hides the picker for that model |
 | A reply object carries `model`, `id`, `usage` | Strips them before echoing the turn back, which the provider rejects otherwise |
 | Codex model ids need an `openai/` prefix | Baked into the model list |
+| A free-tier provider answers `429 Too Many Requests` | The server retries with backoff (up to 4 attempts, ~17s worst case) and the page gives it one more try, so a rate-limited NVIDIA burst rides itself out instead of failing every message. |
+| The user stops a streaming reply | The red stop button (or Escape) aborts the fetch, and the server cancels the upstream request the moment the client disconnects, so a cancelled answer doesn't keep burning tokens. |
 
 <br>
 
@@ -292,7 +308,7 @@ Puter fronts several providers, and they disagree in ways that surface as raw AP
 
 <br>
 
-**Request path.** Browser loads `index.html` → Puter.js authenticates the user and meters usage → the page calls `puter.ai.chat()` directly from the browser → the reply streams back into the chat. `server.js` never sees a message or a model response; it serves static files and, when configured, handles the login gate and proxies the GitHub connector so the OAuth token never reaches the page.
+**Request path.** Browser loads `index.html` → Puter.js authenticates the user and meters usage → the page calls `puter.ai.chat()` directly from the browser → the reply streams back into the chat. When a direct-provider key is configured, the chat goes through `server.js`, which streams the upstream SSE body straight to the client so tokens still appear one at a time without a full-page wait. `server.js` caches the model catalogue in memory to avoid re-fetching on every provider switch.
 
 <details>
 <summary><b>🗂️ Project layout</b> &nbsp;·&nbsp; click to expand</summary>
