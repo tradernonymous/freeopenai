@@ -1770,6 +1770,20 @@
             showStatus('success', 'Provider: ' + id);
         }
 
+        // Providers whose account was refused outright. Kept for the session so
+        // one billing error doesn't become one per model.
+        const providersSuspended = new Set();
+
+        function suspendProvider(detail) {
+            if (providersSuspended.has(selectedProvider)) return;
+            providersSuspended.add(selectedProvider);
+            const label = (providerInfo[selectedProvider] && providerInfo[selectedProvider].label) || selectedProvider;
+            addMessage('system', `${label} refused the whole account, not just this model — every model there will fail until it's resolved. Switching back to Puter.`, { error: true });
+            selectProvider(PUTER_PROVIDER);
+            const select = document.getElementById('providerSelect');
+            if (select) select.value = PUTER_PROVIDER;
+        }
+
         // Takes a refused model out of circulation for the session and moves to
         // one that works, so the next message doesn't repeat the failure.
         function forgetRefusedModel(modelId) {
@@ -1844,8 +1858,14 @@
             if (!res.ok) {
                 // A refusal is about this model, not the request, so drop it
                 // from the picker rather than let it be chosen again.
-                if (res.status === 403 || res.status === 402) forgetRefusedModel(selectedModel);
-                throw new Error(data.error || 'Request failed');
+                const detail = data.error || 'Request failed';
+                if (res.status === 403 || res.status === 402) {
+                    // Account-level refusals apply to every model, so removing
+                    // them one at a time would spend a failed request per model.
+                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
+                    else forgetRefusedModel(selectedModel);
+                }
+                throw new Error(detail);
             }
             return normalizeProviderReply(data);
         }
