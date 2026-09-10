@@ -12,6 +12,7 @@ const {
   DEFAULT_VISION_MODEL,
   isDocumentFile,
   isRateLimitError,
+  parseSseChunk,
 } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
@@ -137,4 +138,32 @@ test('isRateLimitError recognizes the shapes a 429 actually arrives in', () => {
   assert.equal(isRateLimitError(''), false);
   assert.equal(isRateLimitError(null), false);
   assert.equal(isRateLimitError(undefined), false);
+});
+
+test('parseSseChunk extracts JSON payloads from data lines', () => {
+  const chunk = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n';
+  const parts = parseSseChunk(chunk);
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].choices[0].delta.content, 'Hi');
+  assert.equal(parts[1], '[DONE]');
+});
+
+test('parseSseChunk ignores comment lines and empty lines', () => {
+  const chunk = ': heartbeat\ndata: {"id":"1"}\n\n\ndata: {"id":"2"}\n\n';
+  const parts = parseSseChunk(chunk);
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].id, '1');
+  assert.equal(parts[1].id, '2');
+});
+
+test('parseSseChunk returns empty array for null or empty input', () => {
+  assert.deepEqual(parseSseChunk(null), []);
+  assert.deepEqual(parseSseChunk(''), []);
+});
+
+test('parseSseChunk skips unparseable data lines silently', () => {
+  const chunk = 'data: {broken\ndata: {"ok":true}\n\n';
+  const parts = parseSseChunk(chunk);
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].ok, true);
 });

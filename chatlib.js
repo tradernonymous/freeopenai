@@ -706,6 +706,27 @@ function isAccountLevelFailure(message, modelId) {
   return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
 }
 
+// Server-Sent Events arrive as newline-delimited `data:` lines. A single
+// provider chunk may contain several events, or a half-finished event that
+// the next chunk completes. This parser does not maintain state (that is the
+// caller's job), so it expects to be fed decoded chunks that each start and
+// end on event boundaries. In practice that holds: the browser's text decoder
+// and the Node stream reader both emit line-aligned chunks for SSE.
+// Returns an array of parsed payloads: a JSON object when the line carried
+// data, the string "[DONE]" for a final sentinel, or null for comments.
+function parseSseChunk(decoded) {
+  if (!decoded) return [];
+  return decoded.split('\n').reduce((out, line) => {
+    if (line.startsWith(':') || line.trim() === '') return out;
+    if (line.startsWith('data: ')) {
+      const payload = line.slice(6).trim();
+      if (payload === '[DONE]') { out.push('[DONE]'); return out; }
+      try { out.push(JSON.parse(payload)); } catch { /* partial/unknown line */ }
+    }
+    return out;
+  }, []);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -768,5 +789,6 @@ if (typeof module !== 'undefined' && module.exports) {
     sortConversations,
     upsertConversation,
     migrateLegacyMessages,
+    parseSseChunk,
   };
 }

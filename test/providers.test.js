@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing } = require('../server.js');
+const { normalizeProviderModel, normalizePricing, clearModelCache } = require('../server.js');
 const { isFreeModel, emitsText, usableChatModels } = require('../chatlib.js');
 
 // Every provider is OpenAI-compatible for chat and then invents its own
@@ -217,6 +217,7 @@ test('a gateway error with no body still names the provider', async () => {
 });
 
 test('an HTML error body does not collapse into nothing', async () => {
+  clearModelCache();
   // A hosting edge returns HTML, which parses to null and used to leave the
   // message empty.
   const html = http.createServer((req, res) => {
@@ -442,6 +443,156 @@ test('a non-429 failure is returned immediately, no retry', async () => {
     assert.equal(result.status, 401);
     assert.equal(calls, 1, 'only rate limits deserve another try');
   } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('model cache returns cached result within TTL', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'x1', name: 'X1' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const url = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`;
+    const first = await (await fetch(url)).json();
+    assert.equal(first.length, 1);
+    assert.equal(first[0].id, 'x1');
+    const second = await (await fetch(url)).json();
+    assert.equal(second.length, 1);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('clearModelCache forces a fresh upstream fetch', async () => {
+  clearModelCache();
+  let calls = 0;
+  const upstream = http.createServer((req, res) => {
+    calls += 1;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: `m${calls}` }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.SAMBANOVA_API_KEY = 'k';
+  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const url = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`;
+    await fetch(url);
+    assert.equal(calls, 1);
+    clearModelCache();
+    await fetch(url);
+    assert.equal(calls, 2, 'cache cleared, upstream hit again');
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.SAMBANOVA_API_KEY;
+    delete process.env.SAMBANOVA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('llmChat streams SSE when body.stream is true', async () => {
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n');
+    res.write('data: {"choices":[{"delta":{"content":" world"}}]}\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.MISTRAL_API_KEY = 'k';
+  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'mistral-small', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    assert.equal(res.headers.get('content-type'), 'text/event-stream');
+    const text = await res.text();
+    assert.ok(text.includes('Hello'));
+    assert.ok(text.includes('[DONE]'));
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.MISTRAL_API_KEY;
+    delete process.env.MISTRAL_BASE_URL;
+  }
+});
+
+test('llmChat streams SSE error when upstream is unreachable', async () => {
+  clearModelCache();
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = 'http://127.0.0.1:1/v1';
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=nvidia`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'test', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    assert.ok(res.headers.get('content-type').includes('text/event-stream'));
+    const text = await res.text();
+    assert.ok(text.includes('[DONE]'), 'must always send DONE sentinel');
+    assert.ok(text.includes('error'), 'must report the error');
+  } finally {
+    if (app) app.close();
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  process.env.SAMBANOVA_API_KEY = 'k';
+  let calls = 0;
+  const upstream = http.createServer((req, res) => {
+    calls += 1;
+    if (calls <= 2) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'too fast' }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  try {
+    const { fetchStreamWithRetry } = require('../server.js');
+    const res = await fetchStreamWithRetry('sambanova', () =>
+      fetch(`http://127.0.0.1:${upstream.address().port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    );
+    assert.equal(res.status, 200);
+    assert.ok(calls >= 3, 'should have retried 429s');
+  } finally {
+    upstream.close();
+    delete process.env.SAMBANOVA_API_KEY;
+    delete process.env.SAMBANOVA_BASE_URL;
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
   }
 });

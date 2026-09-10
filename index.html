@@ -532,6 +532,8 @@
         }
         .composer-send:hover:not(:disabled) { transform: scale(1.05); }
         .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
+        /* Red stop square while a reply is in flight. */
+        .composer-send.stop { background: var(--danger); font-size: 20px; }
 
         /* Status bar - minimal */
         .status-bar {
@@ -950,7 +952,7 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
                             <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
-                            <button class="composer-send" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
+                            <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                         </div>
                     </div>
 
@@ -1180,6 +1182,7 @@
         let puterReady = false;
         let lastFocusedBeforeModal = null;
         let imageMode = false;
+        let currentAbort = null;
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
 
@@ -1927,6 +1930,49 @@
             return normalizeProviderReply(data);
         }
 
+        // Stream a direct-provider reply as SSE, rendering each chunk into a
+        // bubble as it arrives. Returns { text, reasoning } when complete.
+        async function streamProviderChat(convo, renderer, signal) {
+            const chosen = providerModels.find((m) => m.id === selectedModel);
+            const payload = { model: selectedModel, messages: convo, stream: true };
+            if (payload.tools && chosen && chosen.tools === false) delete payload.tools;
+            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal,
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({ error: 'Request failed' }));
+                const detail = data.error || 'Request failed';
+                if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
+                    else forgetRefusedModel(selectedModel);
+                }
+                throw new Error(detail);
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const part of parseSseChunk(lines.join('\n'))) {
+                    if (part === '[DONE]') break;
+                    if (part && part.error) throw new Error(part.error);
+                    const delta = part?.choices?.[0]?.delta;
+                    if (delta) {
+                        renderer.appendReasoning(delta.reasoning_content || delta.reasoning || delta.thinking || '');
+                        renderer.appendText(delta.content || '');
+                    }
+                }
+            }
+            renderer.flush();
+        }
+
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
@@ -2071,6 +2117,50 @@
             chatInput.placeholder = imageMode ? 'Describe an image to generate...' : 'Ask anything...';
         }
 
+        function setComposerBusy(busy) {
+            isTyping = busy;
+            sendButton.disabled = busy;
+            if (busy) {
+                sendButton.textContent = '■';
+                sendButton.classList.add('stop');
+                sendButton.setAttribute('aria-label', 'Stop generation');
+            } else {
+                sendButton.textContent = '→';
+                sendButton.classList.remove('stop');
+                sendButton.setAttribute('aria-label', 'Send message');
+            }
+        }
+
+        function stopGeneration() {
+            if (!isTyping) return;
+            currentAbort?.abort();
+            removeTypingIndicator();
+            setComposerBusy(false);
+        }
+
+        function createStreamRenderer(bubble) {
+            let full = '';
+            let reasoning = '';
+            let renderTimer = null;
+            function scheduleFlush() {
+                if (renderTimer) return;
+                renderTimer = setTimeout(() => {
+                    renderTimer = null;
+                    setMessageContent(bubble, full);
+                    if (reasoning) setReasoningContent(bubble, reasoning);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }, 40);
+            }
+            return {
+                appendText(chunk) { if (chunk) { full += chunk; scheduleFlush(); } },
+                appendReasoning(chunk) { if (chunk) { reasoning += chunk; scheduleFlush(); } },
+                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningContent(bubble, reasoning); chatMessages.scrollTop = chatMessages.scrollHeight; },
+                abort() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } },
+                get full() { return full; },
+                get reasoning() { return reasoning; },
+            };
+        }
+
         async function sendMessage() {
             const raw = chatInput.value.trim();
             if (!raw || isTyping) return;
@@ -2094,8 +2184,8 @@
             clearAttachment();
             chatInput.value = '';
             chatInput.style.height = '36px';
-            sendButton.disabled = true;
-            isTyping = true;
+            setComposerBusy(true);
+            currentAbort = new AbortController();
             showTypingIndicator();
 
             if (generateImage) {
@@ -2140,37 +2230,53 @@
                     return;
                 }
 
-                // Streaming is Puter-only for now; a direct provider answers in
-                // one piece, which the non-streaming branch below handles.
-                const response = selectedProvider !== PUTER_PROVIDER
-                    ? await callModel(buildConversation(outgoing))
-                    : await chatWithEffortFallback(chatModel, (opts) =>
-                        attachedImageFile
-                            // An image rides as its own argument, which has no
-                            // place in a message array, so that stays single.
-                            ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
-                            : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
-                    );
+                // Direct providers stream via SSE so the user sees text arrive
+                // token-by-token rather than waiting for the full reply.
+                if (selectedProvider !== PUTER_PROVIDER) {
+                    const bubble = createBotBubble();
+                    const renderer = createStreamRenderer(bubble);
+                    try {
+                        await streamProviderChat(buildConversation(outgoing), renderer, currentAbort.signal);
+                        removeTypingIndicator();
+                        finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                        showStatus('success', 'Sent');
+                    } catch (e) {
+                        removeTypingIndicator();
+                        renderer.abort();
+                        // Aborted or failed with no content — discard the empty bubble.
+                        if (!renderer.full && bubble.parentNode) bubble.remove();
+                        if (e.name === 'AbortError') {
+                            showStatus('info', 'Generation stopped');
+                            return;
+                        }
+                        throw e;
+                    }
+                    return;
+                }
+
+                // Puter streaming path.
+                const response = await chatWithEffortFallback(chatModel, (opts) =>
+                    attachedImageFile
+                        // An image rides as its own argument, which has no
+                        // place in a message array, so that stays single.
+                        ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
+                        : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
+                );
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
                     const bubble = createBotBubble();
-                    let full = '';
-                    let reasoning = '';
+                    const renderer = createStreamRenderer(bubble);
                     for await (const part of response) {
+                        if (currentAbort?.signal.aborted) break;
                         const think = extractReasoning(part);
-                        if (think) {
-                            reasoning += think;
-                            setReasoningContent(bubble, reasoning);
-                        }
+                        renderer.appendReasoning(think);
                         const isReasoningPart = part && typeof part !== 'string' && (part.type === 'reasoning' || part.type === 'thinking');
                         const chunk = typeof part === 'string' ? part : (!isReasoningPart && part && part.text) || '';
-                        if (chunk) {
-                            full += chunk;
-                            setMessageContent(bubble, full);
-                        }
+                        renderer.appendText(chunk);
                     }
-                    finalizeMessage(bubble, full, raw, hadAttachment, reasoning);
+                    renderer.flush();
+                    finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
                 } else {
                     const text = typeof response === 'string'
                         ? response
@@ -2197,8 +2303,8 @@
                     addMessage('system', 'Error: ' + error.message, { error: true });
                 }
             } finally {
-                sendButton.disabled = false;
-                isTyping = false;
+                currentAbort = null;
+                setComposerBusy(false);
             }
         }
 
@@ -2255,8 +2361,8 @@
                 showStatus('error', 'Failed: ' + error.message);
                 addMessage('system', 'Error generating image: ' + error.message, { error: true });
             } finally {
-                sendButton.disabled = false;
-                isTyping = false;
+                currentAbort = null;
+                setComposerBusy(false);
             }
         }
 
@@ -2497,6 +2603,7 @@
         }
 
         function handleKeyDown(e) {
+            if (e.key === 'Escape' && isTyping) { stopGeneration(); return; }
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
