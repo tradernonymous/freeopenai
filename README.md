@@ -214,6 +214,18 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
+| `CEREBRAS_API_KEY` | *(unset)* | Adds Cerebras to the provider picker. |
+| `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
+| `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
+| `BLUESMINDS_API_KEY` | *(unset)* | Adds Bluesminds. |
+| `ZENMUX_API_KEY` | *(unset)* | Adds ZenMux — ~188 models, all paid. |
+| `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
+| `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
+| `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
+
+> Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
+>
+> The last three are speech and search services rather than LLMs. They're wired up so a key can settle it, but a chat request to Deepgram or AssemblyAI returns `404` because neither has a chat completions endpoint.
 
 > GitHub tokens are sealed with AES-256-GCM using `SESSION_SECRET` and stored in an httpOnly cookie — browser JavaScript never sees them. The connector asks for the `public_repo` scope only, every commit needs an explicit confirmation, and each token is bound to the app account that connected it, so a shared browser can't leak repo access between users.
 
