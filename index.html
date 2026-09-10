@@ -1890,7 +1890,7 @@
                 const response = await callModel(convo, { tools: GITHUB_TOOLS });
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
-                if (!calls.length) return { message, response };
+                if (!calls.length) return { message, response, finishReason: response && response.finishReason };
 
                 // Only role/content/tool_calls may go back; the rest of the
                 // reply object is metadata the provider rejects.
@@ -1911,7 +1911,12 @@
             // discarding it.
             convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
             const summary = await callModel(convo);
-            return { message: (summary && summary.message) || null, response: summary, exhausted: true };
+            return {
+                message: (summary && summary.message) || null,
+                response: summary,
+                finishReason: summary && summary.finishReason,
+                exhausted: true,
+            };
         }
 
         // No PDF library: every browser already writes one from a print, and on
@@ -2018,7 +2023,7 @@
                 // non-streaming; an image attachment keeps the plain path since
                 // the image argument has no place in a message array.
                 if (githubConnected && !attachedImageFile) {
-                    const { message, exhausted } = await runChatWithTools(
+                    const { message, exhausted, finishReason } = await runChatWithTools(
                         buildConversation(outgoing),
                         chatModel
                     );
@@ -2026,11 +2031,18 @@
                     if (exhausted) {
                         addMessage('system', `Reached ${MAX_TOOL_ROUNDS} GitHub steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
                     }
-                    const text = extractMessageText(message) || '(no reply)';
+                    const reasoning = extractMessageReasoning(message);
+                    let text = extractMessageText(message);
+                    if (!text) {
+                        // Some reasoning models put everything in the thinking
+                        // field and leave content empty. That is an answer, so
+                        // show it rather than reporting nothing.
+                        text = reasoning || explainEmptyReply(message, finishReason);
+                    }
                     addMessage('bot', text, {
                         retryText: raw,
                         attachmentLost: hadAttachment,
-                        reasoning: extractMessageReasoning(message),
+                        reasoning: text === reasoning ? '' : reasoning,
                     });
                     showStatus('success', 'Sent');
                     return;
@@ -2070,7 +2082,10 @@
                 } else {
                     const text = typeof response === 'string'
                         ? response
-                        : extractMessageText(response.message) || response.text || JSON.stringify(response);
+                        : extractMessageText(response.message)
+                          || response.text
+                          || extractMessageReasoning(response.message)
+                          || explainEmptyReply(response.message, response.finishReason);
                     const reasoning = extractMessageReasoning(response && response.message);
                     addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
                 }
@@ -2079,7 +2094,10 @@
             } catch (error) {
                 removeTypingIndicator();
                 console.error('Chat request failed:', error);
-                if (isOutOfCreditsError(error)) {
+                // The credit advice is about Puter's allowance specifically. Shown
+                // for a Cerebras or OpenRouter failure it sends the user to the
+                // wrong dashboard entirely, which is what it did.
+                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
                     showStatus('error', 'Out of Puter credits');
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else {

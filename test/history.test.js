@@ -239,3 +239,30 @@ test('a model without tool support is labelled so, not silently broken', () => {
   assert.equal(model.tools, false);
   assert.match(describeProviderModel(model), /no tools/);
 });
+
+const { explainEmptyReply } = require('../chatlib.js');
+
+test('finish_reason turns an empty answer into an explanation', () => {
+  // Reported as a bare "(no reply)", which told the user nothing about why.
+  assert.match(explainEmptyReply({}, 'length'), /output limit/);
+  assert.match(explainEmptyReply({}, 'content_filter'), /filtered/);
+});
+
+test('an empty answer alongside tool calls says so', () => {
+  const message = { content: '', tool_calls: [{ id: 'c1', function: { name: 'github_read_file' } }] };
+  assert.match(explainEmptyReply(message, 'tool_calls'), /another tool step/);
+});
+
+test('an unexplained empty answer suggests what to do', () => {
+  const advice = explainEmptyReply({ content: '' }, 'stop');
+  assert.match(advice, /empty response/);
+  assert.match(advice, /retry|another model/);
+});
+
+test('finish_reason is carried out of an OpenAI-shaped reply', () => {
+  const normalized = normalizeProviderReply({
+    choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+  });
+  assert.equal(normalized.finishReason, 'length');
+  assert.match(explainEmptyReply(normalized.message, normalized.finishReason), /output limit/);
+});
