@@ -456,6 +456,41 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://api.bluesminds.com/v1',
     envVar: 'BLUESMINDS_API_KEY',
   },
+  zenmux: {
+    label: 'ZenMux',
+    baseUrl: 'https://zenmux.ai/api/v1',
+    envVar: 'ZENMUX_API_KEY',
+  },
+  // The three below are speech and search services. Probing them directly:
+  //
+  //   api.deepgram.com/v1/chat/completions   -> 404
+  //   api.assemblyai.com/v1/chat/completions -> 404
+  //   api.you.com/*                          -> 401 on every path, including
+  //                                             ones that don't exist
+  //
+  // So the first two have no chat endpoint to reach and you.com's is unproven.
+  // They're wired up anyway at the user's request so a key can settle it, and
+  // each stays hidden until its key is set. They use their own auth schemes --
+  // sending Bearer would make a test fail for the wrong reason.
+  deepgram: {
+    label: 'Deepgram',
+    baseUrl: 'https://api.deepgram.com/v1',
+    envVar: 'DEEPGRAM_API_KEY',
+    authScheme: 'Token',
+  },
+  assemblyai: {
+    label: 'AssemblyAI',
+    baseUrl: 'https://api.assemblyai.com/v1',
+    envVar: 'ASSEMBLYAI_API_KEY',
+    authScheme: '',
+  },
+  youcom: {
+    label: 'You.com',
+    baseUrl: 'https://api.you.com/v1',
+    envVar: 'YOUCOM_API_KEY',
+    authHeader: 'X-API-Key',
+    authScheme: '',
+  },
 };
 
 function providerConfig(id) {
@@ -492,7 +527,7 @@ function describeProviderError(status, data) {
   const hint =
     status === 401 || status === 403 ? ' — check the API key for this provider'
       : status === 402 ? ' — this model is not free on your plan'
-        : status === 404 ? ' — that model id is not available to your key'
+        : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
           : status === 429 ? ' — rate limited, wait a moment'
             : '';
   return `${status}: ${message || 'request failed'}${hint}`;
@@ -500,10 +535,14 @@ function describeProviderError(status, data) {
 
 async function providerFetch(req, provider, path, init = {}) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
+  // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
+  // "Token", AssemblyAI wants the bare key, You.com wants its own header.
+  const headerName = provider.authHeader || 'Authorization';
+  const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
   const res = await fetch(provider.baseUrl + path, {
     ...init,
     headers: {
-      Authorization: `Bearer ${provider.key}`,
+      [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
       'Content-Type': 'application/json',
       ...extra,
       ...(init.headers || {}),
@@ -527,25 +566,49 @@ async function llmModels(req, res) {
   try {
     const { ok, status, data } = await providerFetch(req, provider, '/models');
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data) });
-    // OpenRouter publishes pricing and capability metadata alongside each
-    // model; Cerebras and NVIDIA return the bare OpenAI shape. Pass through
-    // whatever is there so the client can rank on facts instead of guessing
-    // from the model's name.
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
-      .map((m) => ({
-        id: m.id,
-        name: m.name,
-        ownedBy: m.owned_by,
-        pricing: m.pricing,
-        contextLength: m.context_length,
-        supportedParameters: m.supported_parameters,
-        outputModalities: m.architecture && m.architecture.output_modalities,
-      }));
+      .map(normalizeProviderModel);
     sendJson(res, 200, models);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
+}
+
+// Every provider is OpenAI-compatible for chat, but each invents its own
+// metadata around it. OpenRouter nests modalities under architecture and
+// prices per token as strings; ZenMux puts modalities at the top level and
+// prices per million tokens as arrays of objects; Cerebras and NVIDIA send
+// neither. Flatten all of it into one shape so the client has a single set of
+// rules to rank by.
+function firstPriceValue(entry) {
+  if (entry === undefined || entry === null) return undefined;
+  if (Array.isArray(entry)) return entry.length ? firstPriceValue(entry[0]) : undefined;
+  if (typeof entry === 'object') return firstPriceValue(entry.value);
+  const num = Number(entry);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function normalizePricing(model) {
+  const source = model.pricing || model.pricings;
+  if (!source || typeof source !== 'object') return undefined;
+  const prompt = firstPriceValue(source.prompt !== undefined ? source.prompt : source.input);
+  const completion = firstPriceValue(source.completion !== undefined ? source.completion : source.output);
+  if (prompt === undefined && completion === undefined) return undefined;
+  return { prompt: prompt === undefined ? 0 : prompt, completion: completion === undefined ? 0 : completion };
+}
+
+function normalizeProviderModel(m) {
+  const architecture = m.architecture || {};
+  return {
+    id: m.id,
+    name: m.name || m.display_name,
+    ownedBy: m.owned_by,
+    pricing: normalizePricing(m),
+    contextLength: m.context_length,
+    supportedParameters: m.supported_parameters,
+    outputModalities: m.output_modalities || architecture.output_modalities,
+  };
 }
 
 function llmChat(req, res) {
@@ -689,4 +752,4 @@ if (require.main === module) {
   http.createServer(createRequestHandler(rootDir)).listen(port, () => console.log(`Serving on port ${port}`));
 }
 
-module.exports = { resolveSafePath, isAssetPath, createRequestHandler };
+module.exports = { resolveSafePath, isAssetPath, createRequestHandler, normalizeProviderModel, normalizePricing };
