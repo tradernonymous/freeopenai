@@ -1675,10 +1675,12 @@
             return args.account ? '&account=' + encodeURIComponent(args.account) : '';
         }
 
-        // Two accounts can see the same path in different repos, and the same
-        // repo through different tokens, so the blob sha is cached per account.
+        // A file's sha depends on the repo and path, not on which account read
+        // it. Keying by account meant reading as one and committing as another
+        // silently lost the sha -- and the server now resolves it anyway, so
+        // this is only a way to save a lookup.
         function shaKey(args) {
-            return `${args.account || ''}:${args.repo}:${args.path}`;
+            return `${args.repo}:${args.path}`;
         }
 
         // Runs the model until it stops asking for tools, then hands back its
