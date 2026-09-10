@@ -221,7 +221,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `CEREBRAS_API_KEY` | *(unset)* | Adds Cerebras to the provider picker. |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
-| `OPENCODE_API_KEY` | *(unset)* | Adds [OpenCode Zen](https://opencode.ai/docs/zen/), trimmed to its two free daily-limit models: Big Pickle and the newest Muse Spark. |
+| `OPENCODE_API_KEY` | *(unset)* | Adds [OpenCode Zen](https://opencode.ai/docs/zen/), filtered to its free daily-limit models — Big Pickle, DeepSeek Flash, MiMo, Ling, both Nemotrons and the newest Muse Spark. Its paid models are excluded, so nothing in the picker can return a permission error. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `SAMBANOVA_API_KEY` | *(unset)* | Adds SambaNova — DeepSeek, Llama 3.3, gpt-oss, MiniMax. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |

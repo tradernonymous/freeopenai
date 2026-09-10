@@ -479,9 +479,11 @@ const LLM_PROVIDERS = {
     // Publishes no prices but mixes free and paid models, marking the free ones
     // in the id. Without this the whole catalogue would read as free.
     pricedByName: true,
-    // 70 models, of which two are worth offering. Muse is picked by version
-    // rather than named, so a future 1.4 replaces 1.3 without a code change.
-    models: { exact: ['big-pickle'], newestOf: ['muse-spark'] },
+    // 70 models, most of them paid. Keep every free one and nothing else, so
+    // no entry in the picker can come back with a permission error. Muse
+    // collapses to its newest release rather than listing four near-identical
+    // variants, and picks up a future 1.4 without a code change.
+    models: { freeOnly: true, newestOf: ['muse-spark'] },
   },
   mistral: {
     label: 'Mistral',

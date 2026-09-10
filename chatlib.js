@@ -687,7 +687,7 @@ function newestInFamily(models, prefix) {
 // back to the full list matters: a provider that renames a model shouldn't
 // leave the picker empty.
 function selectAllowedModels(models, rules) {
-  if (!rules || (!rules.exact && !rules.newestOf)) return models || [];
+  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly)) return models || [];
   const chosen = [];
   const seen = new Set();
   const take = (model) => {
@@ -696,8 +696,26 @@ function selectAllowedModels(models, rules) {
       chosen.push(model);
     }
   };
+
+  // freeOnly leans on isFreeModelId rather than repeating the naming rules, so
+  // "free" has one definition across the app. Families named in newestOf still
+  // collapse to their newest member, which is what keeps muse-spark from
+  // contributing four near-identical entries.
+  if (rules.freeOnly) {
+    const families = rules.newestOf || [];
+    (models || [])
+      .filter((m) => m && isFreeModelId(m.id))
+      .filter((m) => !families.some((prefix) => String(m.id).startsWith(prefix)))
+      .forEach(take);
+    families.forEach((prefix) => {
+      const family = (models || []).filter((m) => m && isFreeModelId(m.id) && String(m.id).startsWith(prefix));
+      take(newestInFamily(family, prefix));
+    });
+  } else {
+    (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
+  }
+
   (rules.exact || []).forEach((id) => take((models || []).find((m) => m && m.id === id)));
-  (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
   return chosen.length ? chosen : models || [];
 }
 

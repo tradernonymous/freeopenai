@@ -316,15 +316,30 @@ const ZEN_CATALOGUE = [
   { id: 'nemotron-3-ultra-free' },
 ];
 
-test('OpenCode Zen is trimmed to Big Pickle and the newest Muse', () => {
-  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
-  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
+test('OpenCode Zen keeps every free model and no paid one', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { freeOnly: true, newestOf: ['muse-spark'] }).map((m) => m.id);
+  // Free, with the muse family collapsed to its newest release.
+  assert.ok(chosen.includes('big-pickle'));
+  assert.ok(chosen.includes('nemotron-3-ultra-free'));
+  assert.ok(chosen.includes('muse-spark-1.3'));
+  // Paid models must never reach the picker: the key returns 403 on them.
+  assert.ok(!chosen.includes('claude-fable-5'));
+  assert.ok(!chosen.includes('gpt-6-astra'));
+  // And the older muse variants are gone, not duplicated.
+  assert.ok(!chosen.includes('muse-spark-1.2'));
+  assert.ok(!chosen.includes('muse-spark-1.3-contributor-free'));
 });
 
 test('a newer Muse would be picked up without a code change', () => {
   const withNext = [...ZEN_CATALOGUE, { id: 'muse-spark-1.4' }];
-  const chosen = selectAllowedModels(withNext, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
-  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.4']);
+  const chosen = selectAllowedModels(withNext, { freeOnly: true, newestOf: ['muse-spark'] }).map((m) => m.id);
+  assert.ok(chosen.includes('muse-spark-1.4'));
+  assert.ok(!chosen.includes('muse-spark-1.3'));
+});
+
+test('exact and newestOf still work for a provider not using freeOnly', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
+  assert.deepEqual(chosen.map((m) => m.id).sort(), ['big-pickle', 'muse-spark-1.3']);
 });
 
 test('version comparison is numeric, not alphabetical', () => {
@@ -348,12 +363,12 @@ test('a renamed model falls back to the full list rather than an empty picker', 
   assert.equal(chosen.length, ZEN_CATALOGUE.length);
 });
 
-test('the trimmed Zen list survives the chat-model filter and both read as free', () => {
-  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] })
+test('every model the Zen list yields survives the chat filter and reads as free', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { freeOnly: true, newestOf: ['muse-spark'] })
     .map((m) => normalizeProviderModel(m, { pricedByName: true }));
   const ranked = usableChatModels(chosen);
-  assert.deepEqual(ranked.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
-  assert.ok(ranked.every((m) => m.free), 'both are free models');
+  assert.ok(ranked.length >= 3, 'the free set is more than a couple of models');
+  assert.ok(ranked.every((m) => m.free), 'nothing paid slipped through');
 });
 
 test('the models endpoint actually applies the provider subset', async () => {
@@ -375,8 +390,11 @@ test('the models endpoint actually applies the provider subset', async () => {
   delete process.env.OPENCODE_API_KEY;
   delete process.env.OPENCODE_BASE_URL;
 
-  assert.deepEqual(body.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
-  assert.ok(!body.some((m) => m.id === 'claude-fable-5'), 'paid models must not reach the picker');
+  const ids = body.map((m) => m.id);
+  assert.ok(ids.includes('big-pickle') && ids.includes('nemotron-3-ultra-free'));
+  assert.ok(ids.includes('muse-spark-1.3') && !ids.includes('muse-spark-1.2'));
+  assert.ok(!ids.includes('claude-fable-5'), 'paid models must not reach the picker');
+  assert.ok(!ids.includes('gpt-6-astra'), 'paid models must not reach the picker');
 });
 
 test('a provider with no subset still returns its whole catalogue', async () => {
@@ -397,4 +415,26 @@ test('a provider with no subset still returns its whole catalogue', async () => 
   delete process.env.SAMBANOVA_BASE_URL;
 
   assert.equal(body.length, 3);
+});
+
+test('freeOnly recognises every free id Zen actually publishes', () => {
+  // Straight from the live catalogue, so a change in Zen's naming shows up here.
+  const live = [
+    'big-pickle', 'muse-spark-1.3', 'muse-spark-1.2',
+    'muse-spark-1.3-contributor-free', 'muse-spark-1.2-contributor-free',
+    'mimo-v2.5-free', 'ling-3.0-flash-fin-free',
+    'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free', 'deepseek-v4-flash-free',
+  ].map((id) => ({ id }));
+  const paid = ['claude-opus-5', 'gpt-5.3-codex-spark', 'gemini-3.8-flash'].map((id) => ({ id }));
+
+  const chosen = selectAllowedModels([...live, ...paid], { freeOnly: true }).map((m) => m.id);
+  assert.equal(chosen.length, live.length, 'all ten free models, and only those');
+  for (const { id } of paid) assert.ok(!chosen.includes(id), `${id} is paid`);
+});
+
+test('freeOnly falling through to the full list is still impossible to trigger silently', () => {
+  // A catalogue with nothing free returns everything rather than an empty
+  // picker — the same guarantee the other rules give.
+  const allPaid = [{ id: 'claude-opus-5' }, { id: 'gpt-6-astra' }];
+  assert.equal(selectAllowedModels(allPaid, { freeOnly: true }).length, 2);
 });
