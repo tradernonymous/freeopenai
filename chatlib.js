@@ -655,6 +655,52 @@ function describeProviderModel(model) {
   return parts.slice(0, 3).join(' · ');
 }
 
+// Some providers list far more than is worth offering. OpenCode Zen shows 70
+// models, most of them paid, when the useful set is two. A provider can declare
+// exactly which to keep: named ids, and families where only the newest release
+// should appear.
+function versionOf(id) {
+  const match = String(id).match(/(\d+(?:\.\d+)*)/g);
+  if (!match) return [0];
+  return match[match.length - 1].split('.').map(Number);
+}
+
+function compareVersions(a, b) {
+  const left = versionOf(a);
+  const right = versionOf(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff) return diff;
+  }
+  // Same version: prefer the plain id over a longer variant, so
+  // "muse-spark-1.3" wins over "muse-spark-1.3-contributor-free".
+  return String(b).length - String(a).length;
+}
+
+function newestInFamily(models, prefix) {
+  const family = (models || []).filter((m) => m && String(m.id).startsWith(prefix));
+  if (!family.length) return null;
+  return family.reduce((best, m) => (compareVersions(m.id, best.id) > 0 ? m : best));
+}
+
+// Returns the declared subset, or everything when nothing is declared. Falling
+// back to the full list matters: a provider that renames a model shouldn't
+// leave the picker empty.
+function selectAllowedModels(models, rules) {
+  if (!rules || (!rules.exact && !rules.newestOf)) return models || [];
+  const chosen = [];
+  const seen = new Set();
+  const take = (model) => {
+    if (model && !seen.has(model.id)) {
+      seen.add(model.id);
+      chosen.push(model);
+    }
+  };
+  (rules.exact || []).forEach((id) => take((models || []).find((m) => m && m.id === id)));
+  (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
+  return chosen.length ? chosen : models || [];
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODELS,
@@ -701,6 +747,8 @@ if (typeof module !== 'undefined' && module.exports) {
     PUTER_PROVIDER,
     normalizeProviderReply,
     usableChatModels,
+    selectAllowedModels,
+    newestInFamily,
     isFreeModelId,
     NAMED_FREE_MODEL_IDS,
     isFreeModel,

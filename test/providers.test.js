@@ -305,3 +305,96 @@ test('the removed providers are gone and the new ones are present', async () => 
     assert.ok(p.baseUrl === undefined, 'a base URL must never reach the client');
   }
 });
+
+const { selectAllowedModels, newestInFamily } = require('../chatlib.js');
+
+// Zen's real catalogue, trimmed to the families that matter.
+const ZEN_CATALOGUE = [
+  { id: 'claude-fable-5' }, { id: 'gpt-6-astra' }, { id: 'muse-spark-1.3' },
+  { id: 'muse-spark-1.2' }, { id: 'big-pickle' },
+  { id: 'muse-spark-1.3-contributor-free' }, { id: 'muse-spark-1.2-contributor-free' },
+  { id: 'nemotron-3-ultra-free' },
+];
+
+test('OpenCode Zen is trimmed to Big Pickle and the newest Muse', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
+  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
+});
+
+test('a newer Muse would be picked up without a code change', () => {
+  const withNext = [...ZEN_CATALOGUE, { id: 'muse-spark-1.4' }];
+  const chosen = selectAllowedModels(withNext, { exact: ['big-pickle'], newestOf: ['muse-spark'] });
+  assert.deepEqual(chosen.map((m) => m.id), ['big-pickle', 'muse-spark-1.4']);
+});
+
+test('version comparison is numeric, not alphabetical', () => {
+  // "1.10" sorts before "1.9" as a string, and after it as a version.
+  const family = [{ id: 'muse-spark-1.9' }, { id: 'muse-spark-1.10' }];
+  assert.equal(newestInFamily(family, 'muse-spark').id, 'muse-spark-1.10');
+});
+
+test('at equal versions the plain id wins over a variant', () => {
+  const family = [{ id: 'muse-spark-1.3-contributor-free' }, { id: 'muse-spark-1.3' }];
+  assert.equal(newestInFamily(family, 'muse-spark').id, 'muse-spark-1.3');
+});
+
+test('a provider with no declared subset keeps its whole catalogue', () => {
+  assert.equal(selectAllowedModels(ZEN_CATALOGUE, undefined).length, ZEN_CATALOGUE.length);
+  assert.equal(selectAllowedModels(ZEN_CATALOGUE, {}).length, ZEN_CATALOGUE.length);
+});
+
+test('a renamed model falls back to the full list rather than an empty picker', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['gone'], newestOf: ['also-gone'] });
+  assert.equal(chosen.length, ZEN_CATALOGUE.length);
+});
+
+test('the trimmed Zen list survives the chat-model filter and both read as free', () => {
+  const chosen = selectAllowedModels(ZEN_CATALOGUE, { exact: ['big-pickle'], newestOf: ['muse-spark'] })
+    .map((m) => normalizeProviderModel(m, { pricedByName: true }));
+  const ranked = usableChatModels(chosen);
+  assert.deepEqual(ranked.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
+  assert.ok(ranked.every((m) => m.free), 'both are free models');
+});
+
+test('the models endpoint actually applies the provider subset', async () => {
+  // Computing the subset and then sending the unfiltered list is a mistake a
+  // unit test on the filter alone cannot see, so assert on the response.
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: ZEN_CATALOGUE }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.OPENCODE_API_KEY = 'k';
+  process.env.OPENCODE_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=opencode`)).json();
+
+  app.close(); upstream.close();
+  delete process.env.OPENCODE_API_KEY;
+  delete process.env.OPENCODE_BASE_URL;
+
+  assert.deepEqual(body.map((m) => m.id), ['big-pickle', 'muse-spark-1.3']);
+  assert.ok(!body.some((m) => m.id === 'claude-fable-5'), 'paid models must not reach the picker');
+});
+
+test('a provider with no subset still returns its whole catalogue', async () => {
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.SAMBANOVA_API_KEY = 'k';
+  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`)).json();
+
+  app.close(); upstream.close();
+  delete process.env.SAMBANOVA_API_KEY;
+  delete process.env.SAMBANOVA_BASE_URL;
+
+  assert.equal(body.length, 3);
+});
