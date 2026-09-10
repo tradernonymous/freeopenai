@@ -545,6 +545,14 @@ function llmProviders(req, res) {
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
+// A message that carries a link, or is long enough to be a real sentence rather
+// than a status echo, is already telling the user what to do.
+function isSelfExplanatory(message) {
+  if (!message) return false;
+  if (/https?:\/\//.test(message)) return true;
+  return message.length >= 60;
+}
+
 function describeProviderError(status, data, provider) {
   const who = provider && provider.label ? provider.label : 'The provider';
   const raw = data && (data.error || data.message || data.detail);
@@ -556,6 +564,12 @@ function describeProviderError(status, data, provider) {
   // failed to parse. "request failed" told the user nothing, least of all
   // which of several configured providers had stalled.
   if (!message && status >= 500) message = `${who} returned a gateway error with no detail`;
+
+  // A hint is for a bare status with nothing behind it. When the provider has
+  // already explained itself -- "only available on agentic harnesses", with a
+  // link -- appending "usually an empty balance" actively contradicts it and
+  // sends the user to check the wrong thing.
+  if (isSelfExplanatory(message)) return `${status}: ${message}`;
 
   const hint =
     status === 401 ? ' — check the API key for this provider'
@@ -822,4 +836,11 @@ if (require.main === module) {
   http.createServer(createRequestHandler(rootDir)).listen(port, () => console.log(`Serving on port ${port}`));
 }
 
-module.exports = { resolveSafePath, isAssetPath, createRequestHandler, normalizeProviderModel, normalizePricing };
+module.exports = {
+  resolveSafePath,
+  isAssetPath,
+  createRequestHandler,
+  normalizeProviderModel,
+  normalizePricing,
+  describeProviderError,
+};

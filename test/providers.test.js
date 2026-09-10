@@ -315,3 +315,34 @@ test('a provider with no subset still returns its whole catalogue', async () => 
 
   assert.equal(body.length, 3);
 });
+
+const { describeProviderError } = require('../server.js');
+
+test('a provider that explains itself is not second-guessed', () => {
+  // The reported case: OpenRouter says exactly what is wrong and links to the
+  // fix, and the old hint appended "usually an empty balance", which is not
+  // what happened and sends the user to check the wrong thing.
+  const real = describeProviderError(
+    403,
+    { error: { message: 'thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps' } },
+    { label: 'OpenRouter' }
+  );
+  assert.match(real, /only available on agentic harnesses/);
+  assert.ok(!real.includes('empty balance'), 'must not contradict the provider');
+  assert.ok(!real.includes('—'), 'no hint appended to a full explanation');
+});
+
+test('a bare status still gets its hint', () => {
+  const terse = describeProviderError(401, { error: { message: 'Invalid key' } }, { label: 'Mistral' });
+  assert.match(terse, /check the API key/);
+
+  const empty = describeProviderError(504, null, { label: 'SambaNova' });
+  assert.match(empty, /SambaNova/);
+  assert.match(empty, /slow or unreachable/);
+});
+
+test('a short message carrying a link counts as self-explanatory', () => {
+  const linked = describeProviderError(402, { error: { message: 'Top up at https://example.com/billing' } }, { label: 'X' });
+  assert.match(linked, /Top up at/);
+  assert.ok(!linked.includes('not free on your plan'));
+});
