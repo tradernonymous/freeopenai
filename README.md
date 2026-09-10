@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-97%20passing-22c55e?style=for-the-badge" alt="97 tests passing">
+  <img src="https://img.shields.io/badge/tests-157%20passing-22c55e?style=for-the-badge" alt="157 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -109,6 +109,10 @@
       Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
     </td>
     <td valign="top">
+      <h3>🔌 Six providers</h3>
+      Puter needs no key at all. Add a key for Cerebras, OpenRouter, NVIDIA, OpenCode Zen, Mistral or SambaNova and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
+    </td>
+    <td valign="top">
       <h3>📱 Built for a phone</h3>
       A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, and controls that shrink rather than shove each other off the screen.
     </td>
@@ -123,7 +127,7 @@
 
 <br>
 
-All served through Puter.js — no OpenAI account or key required on your end.
+This is the curated Puter.js list — no OpenAI account or key required on your end. Add a provider key and its own catalogue is fetched live instead, ranked free-first.
 
 | Model | Description | Id |
 | --- | --- | :---: |
@@ -217,8 +221,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `CEREBRAS_API_KEY` | *(unset)* | Adds Cerebras to the provider picker. |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
-| `BLUESMINDS_API_KEY` | *(unset)* | Adds Bluesminds. |
-| `ZENMUX_API_KEY` | *(unset)* | Adds ZenMux — ~188 models, all paid. |
+| `OPENCODE_API_KEY` | *(unset)* | Adds [OpenCode Zen](https://opencode.ai/docs/zen/) — 70 models, 10 of them free with daily limits. |
+| `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
+| `SAMBANOVA_API_KEY` | *(unset)* | Adds SambaNova — DeepSeek, Llama 3.3, gpt-oss, MiniMax. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
@@ -226,6 +231,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 > Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
 >
 > The last three are speech and search services rather than LLMs. They're wired up so a key can settle it, but a chat request to Deepgram or AssemblyAI returns `404` because neither has a chat completions endpoint.
+>
+> Model lists are read from each provider at runtime, and free models are floated to the top. Where a provider publishes prices — OpenRouter, ZenMux — that decides it. Where one publishes none, the id does: Cerebras and NVIDIA meter an account allowance so everything is free within it, while OpenCode Zen mixes free and paid in one unpriced catalogue and marks the free ones by name.
 
 > GitHub tokens are sealed with AES-256-GCM using `SESSION_SECRET` and stored in an httpOnly cookie — browser JavaScript never sees them. The connector asks for the `public_repo` scope only, every commit needs an explicit confirmation, and each token is bound to the app account that connected it, so a shared browser can't leak repo access between users.
 

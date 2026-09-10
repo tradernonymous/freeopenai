@@ -566,14 +566,27 @@ function isFreeModel(model) {
   if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
     return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
   }
-  // No published price. Cerebras and NVIDIA are in this position and both meter
-  // an account-level allowance rather than charging per model, so everything
-  // they list is free within it.
-  return true;
+  // No published price. Two different situations look identical here, so the
+  // id decides between them. Cerebras and NVIDIA meter an account-level
+  // allowance and charge nothing per model, so an unmarked id is free. OpenCode
+  // Zen mixes free and paid in one unpriced catalogue and marks the free ones
+  // by name -- treating its 70 models as uniformly free would rank paid ones
+  // like claude-fable-5 above the free tier the user actually has.
+  return model.pricedByName ? isFreeModelId(model.id) : true;
 }
 
+// Providers mark a free model in the id itself when they publish no prices.
+// OpenRouter uses a ":free" suffix; OpenCode Zen uses "-free", and leaves its
+// two headline free models unmarked entirely. These are documented provider
+// conventions read off their live catalogues, not inferences from the name.
+const NAMED_FREE_MODEL_IDS = ['big-pickle'];
+const NAMED_FREE_MODEL_PREFIXES = ['muse-spark'];
+
 function isFreeModelId(id) {
-  return /:free$/i.test(String(id || ''));
+  const name = String(id || '').toLowerCase();
+  if (/[:-]free$/i.test(name)) return true;
+  if (NAMED_FREE_MODEL_IDS.includes(name)) return true;
+  return NAMED_FREE_MODEL_PREFIXES.some((prefix) => name.startsWith(prefix));
 }
 
 // The GitHub tools only work on a model that accepts them. Sending tools to
@@ -689,6 +702,7 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeProviderReply,
     usableChatModels,
     isFreeModelId,
+    NAMED_FREE_MODEL_IDS,
     isFreeModel,
     supportsTools,
     emitsText,

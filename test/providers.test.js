@@ -160,7 +160,7 @@ test('non-LLM services are labelled by kind, with a reason', async () => {
   assert.equal(byId.youcom.kind, 'search');
   assert.equal(byId.cerebras.kind, 'chat');
   assert.equal(byId.openrouter.kind, 'chat');
-  assert.equal(byId.zenmux.kind, 'chat');
+  assert.equal(byId.opencode.kind, 'chat');
 
   assert.match(byId.deepgram.note, /transcription models/);
   assert.match(byId.youcom.note, /search and research/);
@@ -172,8 +172,8 @@ test('a provider that never answers fails with our own deadline, not silence', a
   // of which side stalled.
   const hung = http.createServer(() => { /* deliberately never respond */ });
   await new Promise((r) => hung.listen(0, r));
-  process.env.BLUESMINDS_API_KEY = 'k';
-  process.env.BLUESMINDS_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
+  process.env.SAMBANOVA_API_KEY = 'k';
+  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
@@ -183,14 +183,14 @@ test('a provider that never answers fails with our own deadline, not silence', a
   // instead: an unreachable port takes the same path and must name the
   // provider rather than leaking a raw socket error.
   hung.close();
-  const res = await fetch(base + '/api/llm/models?provider=bluesminds');
+  const res = await fetch(base + '/api/llm/models?provider=sambanova');
   const body = await res.json();
 
   app.close();
-  delete process.env.BLUESMINDS_API_KEY;
-  delete process.env.BLUESMINDS_BASE_URL;
+  delete process.env.SAMBANOVA_API_KEY;
+  delete process.env.SAMBANOVA_BASE_URL;
 
-  assert.match(body.error, /Bluesminds/, 'the message must name the provider');
+  assert.match(body.error, /SambaNova/, 'the message must name the provider');
   assert.match(body.error, /slow or unreachable|Could not reach/);
   assert.ok(!/^504: request failed$/.test(body.error), 'never the bare message that was reported');
 });
@@ -200,19 +200,19 @@ test('a gateway error with no body still names the provider', async () => {
   // configured and no way to tell which one stalled.
   const dead = http.createServer((req, res) => { res.writeHead(504); res.end(); });
   await new Promise((r) => dead.listen(0, r));
-  process.env.BLUESMINDS_API_KEY = 'k';
-  process.env.BLUESMINDS_BASE_URL = `http://127.0.0.1:${dead.address().port}/v1`;
+  process.env.SAMBANOVA_API_KEY = 'k';
+  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${dead.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=bluesminds`);
+  const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`);
   const body = await res.json();
 
   app.close(); dead.close();
-  delete process.env.BLUESMINDS_API_KEY;
-  delete process.env.BLUESMINDS_BASE_URL;
+  delete process.env.SAMBANOVA_API_KEY;
+  delete process.env.SAMBANOVA_BASE_URL;
 
-  assert.match(body.error, /Bluesminds/);
+  assert.match(body.error, /SambaNova/);
   assert.ok(!body.error.includes('request failed'), 'the useless phrasing must be gone');
 });
 
@@ -237,4 +237,71 @@ test('an HTML error body does not collapse into nothing', async () => {
 
   assert.match(body.error, /Cerebras/);
   assert.match(body.error, /gateway error|slow or unreachable/);
+});
+
+const { isFreeModelId } = require('../chatlib.js');
+
+// OpenCode Zen publishes no prices and mixes free with paid in one catalogue,
+// marking the free ones in the id. Treating "no price" as free would rank
+// claude-fable-5 alongside the free tier the user actually has.
+test('OpenCode Zen free models are recognised by their id', () => {
+  const zen = (id) => normalizeProviderModel({ id }, { pricedByName: true });
+  for (const id of [
+    'big-pickle',
+    'muse-spark-1.3',
+    'muse-spark-1.3-contributor-free',
+    'mimo-v2.5-free',
+    'ling-3.0-flash-fin-free',
+    'nemotron-3-ultra-free',
+    'nemotron-3.5-lightning-free',
+    'deepseek-v4-flash-free',
+  ]) {
+    assert.ok(isFreeModel(zen(id)), `${id} is a free model on Zen`);
+  }
+});
+
+test("Zen's paid models are not swept up as free", () => {
+  const zen = (id) => normalizeProviderModel({ id }, { pricedByName: true });
+  for (const id of ['claude-fable-5', 'gpt-6-astra', 'gemini-3.8-flash', 'grok-4']) {
+    assert.ok(!isFreeModel(zen(id)), `${id} is paid on Zen`);
+  }
+});
+
+test('an account-allowance provider still treats an unpriced model as free', () => {
+  // Cerebras and NVIDIA meter the account, not the model, so nothing in their
+  // catalogue is individually paid.
+  assert.ok(isFreeModel(normalizeProviderModel({ id: 'llama-3.3-70b' }, { label: 'Cerebras' })));
+  assert.ok(isFreeModel(normalizeProviderModel({ id: 'claude-fable-5' }, undefined)));
+});
+
+test('both free-marking conventions are accepted', () => {
+  assert.ok(isFreeModelId('qwen/qwen3-coder:free'), "OpenRouter's colon");
+  assert.ok(isFreeModelId('mimo-v2.5-free'), "Zen's hyphen");
+  assert.ok(!isFreeModelId('freeform-model'), 'free must be a suffix, not a prefix');
+  assert.ok(!isFreeModelId('gpt-4o'));
+});
+
+test('published pricing still wins over any name convention', () => {
+  // A model called "-free" that publishes a real price is not free.
+  const model = normalizeProviderModel(
+    { id: 'someone/thing-free', pricing: { prompt: '0.000003', completion: '0.000009' } },
+    { pricedByName: true }
+  );
+  assert.ok(!isFreeModel(model));
+});
+
+test('the removed providers are gone and the new ones are present', async () => {
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const providers = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
+  app.close();
+  const ids = providers.map((p) => p.id);
+  assert.ok(!ids.includes('bluesminds'));
+  assert.ok(!ids.includes('zenmux'));
+  for (const id of ['opencode', 'mistral', 'sambanova']) {
+    assert.ok(ids.includes(id), `${id} should be offered`);
+  }
+  for (const p of providers) {
+    assert.ok(p.baseUrl === undefined, 'a base URL must never reach the client');
+  }
 });
