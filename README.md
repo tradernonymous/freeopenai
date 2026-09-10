@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-157%20passing-22c55e?style=for-the-badge" alt="157 tests passing">
+  <img src="https://img.shields.io/badge/tests-173%20passing-22c55e?style=for-the-badge" alt="173 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -283,6 +283,7 @@ Puter fronts several providers, and they disagree in ways that surface as raw AP
 | Some Claude models reject the effort setting with a `thinking.type` error | Retries once without it, then hides the picker for that model |
 | A reply object carries `model`, `id`, `usage` | Strips them before echoing the turn back, which the provider rejects otherwise |
 | Codex model ids need an `openai/` prefix | Baked into the model list |
+| A free-tier provider answers `429 Too Many Requests` | The server retries with backoff (up to 4 attempts, ~17s worst case) and the page gives it one more try, so a rate-limited NVIDIA burst rides itself out instead of failing every message. |
 
 <br>
 

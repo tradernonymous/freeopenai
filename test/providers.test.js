@@ -397,3 +397,51 @@ test("NVIDIA's per-account 404 passes through untouched", () => {
   assert.match(real, /Not found for account/);
   assert.ok(!real.includes('speech'));
 });
+
+const { fetchProviderWithRetry } = require('../server.js');
+
+test('a provider that 429s twice then answers is retried into success', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('nvidia', async () => {
+      calls += 1;
+      if (calls < 3) return { ok: false, status: 429, data: { error: 'front - limit exceeded' } };
+      return { ok: true, status: 200, data: { choices: [] } };
+    });
+    assert.equal(result.ok, true);
+    assert.equal(calls, 3, 'kept retrying until the provider stopped refusing');
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('a provider that never stops 429ing returns the last refusal, capped', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('nvidia', async () => {
+      calls += 1;
+      return { ok: false, status: 429, data: { error: 'still slow' } };
+    });
+    assert.equal(result.status, 429, 'the caller still gets to describe a 429');
+    assert.equal(calls, 4, 'retries are bounded, so a dead provider cannot hang');
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('a non-429 failure is returned immediately, no retry', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('nvidia', async () => {
+      calls += 1;
+      return { ok: false, status: 401, data: { error: 'bad key' } };
+    });
+    assert.equal(result.status, 401);
+    assert.equal(calls, 1, 'only rate limits deserve another try');
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});

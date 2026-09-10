@@ -459,6 +459,17 @@ function toConversationMessage(message) {
   return turn;
 }
 
+// A 429 from the provider means the request was too fast, not that something
+// is broken. Both the server and the client use this to retry with a delay
+// instead of showing an error the user has to act on.
+const RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 2000;
+
+function isRateLimitError(error) {
+  const message = String((error && (error.message || error.error || error)) || '');
+  return /\b429\b|too many requests|rate.?limit/i.test(message);
+}
+
 // Puter runs a "User-Pays" model: free for whoever builds the app, billed to
 // whoever is signed in. On the free plan that's a fixed credit allowance, and
 // running out surfaces as a bare "No usage left for request", which reads like
@@ -728,6 +739,9 @@ if (typeof module !== 'undefined' && module.exports) {
     supportsEffort,
     isValidEffort,
     isEffortUnsupportedError,
+    isRateLimitError,
+    RATE_LIMIT_RETRIES,
+    RATE_LIMIT_BASE_DELAY_MS,
     isOutOfCreditsError,
     HEAVY_MODEL_IDS,
     isHeavyModel,

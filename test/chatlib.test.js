@@ -11,6 +11,7 @@ const {
   isVisionCapable,
   DEFAULT_VISION_MODEL,
   isDocumentFile,
+  isRateLimitError,
 } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
@@ -124,4 +125,16 @@ test('isDocumentFile recognizes pdf and docx only', () => {
   assert.equal(isDocumentFile('resume.DOCX'), true);
   assert.equal(isDocumentFile('notes.txt'), false);
   assert.equal(isDocumentFile('photo.png'), false);
+});
+
+test('isRateLimitError recognizes the shapes a 429 actually arrives in', () => {
+  assert.equal(isRateLimitError('429: {"status":429,"title":"Too Many Requests"} — rate limited, wait a moment'), true);
+  assert.equal(isRateLimitError('too many requests'), true);
+  assert.equal(isRateLimitError('Rate limit exceeded'), true);
+  assert.equal(isRateLimitError({ message: 'You are being rate limited.' }), true);
+  assert.equal(isRateLimitError('500: internal error'), false);
+  assert.equal(isRateLimitError('402: Payment required'), false);
+  assert.equal(isRateLimitError(''), false);
+  assert.equal(isRateLimitError(null), false);
+  assert.equal(isRateLimitError(undefined), false);
 });

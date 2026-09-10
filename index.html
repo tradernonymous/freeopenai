@@ -1849,12 +1849,23 @@
                 delete payload.tools;
                 showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
             }
-            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+            // A 429 means the provider's free tier wants a moment before the
+            // next call. The server already retried with backoff, so we only
+            // give it one more gentle try here before showing the rate-limit
+            // message instead of a raw error the user has to decode.
+            const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            const data = await res.json();
+            let res = await send();
+            let data = await res.json();
+            if (res.status === 429 && isRateLimitError(data.error)) {
+                showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
+                await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2));
+                res = await send();
+                data = await res.json();
+            }
             if (!res.ok) {
                 // A refusal is about this model, not the request, so drop it
                 // from the picker rather than let it be chosen again.

@@ -41,6 +41,48 @@ if (!sessionSecret) {
   console.warn('SESSION_SECRET not set — using an ephemeral secret; sessions will not survive a restart.');
 }
 
+// A 429 from a provider means the request arrived before the free tier was
+// ready for it, so it is worth waiting and trying again rather than surfacing
+// an error the user has to act on. Retries are bounded and back off, and a
+// short cooldown stops a burst of tool calls from hammering the same provider.
+// The base delay reads at call time so tests can shrink it via env.
+const RATE_LIMIT_MAX_ATTEMPTS = 4;
+const providerCooldownUntil = new Map();
+
+function retryBaseDelayMs() {
+  return Number(process.env.RATE_LIMIT_BASE_DELAY_MS) || 2500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function providerCooldownRemaining(providerId) {
+  const until = providerCooldownUntil.get(providerId) || 0;
+  return Math.max(0, until - Date.now());
+}
+
+function markProviderCooldown(providerId, durationMs) {
+  providerCooldownUntil.set(providerId, Date.now() + durationMs);
+}
+
+// Retries an idempotent provider call (chat completions) only on 429. Anything
+// else is final and returned as-is, and if the provider keeps refusing the
+// last 429 is returned too, so the caller can describe it normally.
+async function fetchProviderWithRetry(providerId, fetchOnce) {
+  let result;
+  for (let attempt = 0; attempt < RATE_LIMIT_MAX_ATTEMPTS; attempt += 1) {
+    const wait = providerCooldownRemaining(providerId);
+    if (wait > 0) await sleep(wait);
+    result = await fetchOnce();
+    if (!(result && result.status === 429)) return result;
+    const backoff = retryBaseDelayMs() * 2 ** attempt;
+    markProviderCooldown(providerId, Math.min(backoff * 2, 15000) + retryBaseDelayMs());
+    if (attempt < RATE_LIMIT_MAX_ATTEMPTS - 1) await sleep(backoff);
+  }
+  return result;
+}
+
 function readJsonBody(req, maxBytes, cb) {
   let size = 0;
   const chunks = [];
@@ -717,17 +759,19 @@ function llmChat(req, res) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
     try {
-      const { ok, status, data } = await providerFetch(req, provider, '/chat/completions', {
-        method: 'POST',
-        // Passed through rather than rebuilt: these are OpenAI-shaped already,
-        // and rebuilding would quietly drop anything new the caller sends.
-        body: JSON.stringify({
-          model: body.model,
-          messages: body.messages,
-          ...(body.tools ? { tools: body.tools } : {}),
-          ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
-        }),
-      });
+      const { ok, status, data } = await fetchProviderWithRetry(id, () =>
+        providerFetch(req, provider, '/chat/completions', {
+          method: 'POST',
+          // Passed through rather than rebuilt: these are OpenAI-shaped already,
+          // and rebuilding would quietly drop anything new the caller sends.
+          body: JSON.stringify({
+            model: body.model,
+            messages: body.messages,
+            ...(body.tools ? { tools: body.tools } : {}),
+            ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+          }),
+        })
+      );
       if (!ok) {
         // Collapsing every upstream failure into one string made it impossible
         // to tell a missing model from an empty balance from a bad key. Report
@@ -855,4 +899,5 @@ module.exports = {
   normalizeProviderModel,
   normalizePricing,
   describeProviderError,
+  fetchProviderWithRetry,
 };
