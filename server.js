@@ -451,6 +451,11 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
   },
+  bluesminds: {
+    label: 'Bluesminds',
+    baseUrl: 'https://api.bluesminds.com/v1',
+    envVar: 'BLUESMINDS_API_KEY',
+  },
 };
 
 function providerConfig(id) {
