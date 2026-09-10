@@ -709,6 +709,9 @@
             /* A phone header can't hold "Effort: extra high" and still leave room
                for the menu button, so the picker shows the level alone. */
             .effort-select { max-width: 92px; padding: 6px 4px; }
+            /* Pseudo elements don't render inside a select, so these are sized
+               for real rather than padded out like the buttons. */
+            .effort-select, #providerSelect { min-height: 44px; }
             .effort-select option { font-size: 14px; }
             .model-trigger { padding: 6px 8px; }
             .history-sidebar {
@@ -729,6 +732,37 @@
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
+            /* Touch targets. Both Apple and Google ask for ~44px, and the icon
+               buttons here are 24-32px. Growing them for real would push the
+               header past 375px, so the hit area is extended with a pseudo
+               element instead: the button looks the same, the finger gets the
+               space. Nothing moves. */
+            /* .code-copy-btn is left out on purpose: it is already positioned
+               absolutely inside the code block, and forcing relative here
+               dropped it into the flow, on top of the first line of code. An
+               absolutely positioned element hosts ::after perfectly well. */
+            .msg-action-btn, .history-delete,
+            .icon-btn, .menu-trigger-btn, .model-trigger { position: relative; }
+            .msg-action-btn::after, .history-delete::after, .code-copy-btn::after,
+            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after {
+                content: ''; position: absolute;
+                top: 50%; left: 50%; transform: translate(-50%, -50%);
+                width: max(100%, 44px); height: max(100%, 44px);
+            }
+            /* The row already spans the sidebar, so only its height needs help. */
+            .history-item { padding: 13px 10px; }
+            /* Message actions sit close together; spread them so a thumb can
+               pick one without hitting its neighbour. */
+            .message-actions { gap: 10px; margin-top: 12px; }
+            .code-copy-btn { padding: 6px 12px; }
+            /* The block reserves 30px for that button; the taller version needs
+               a little more so it doesn't crowd the first line. */
+            .message-text pre { padding-top: 38px; }
+            /* A dropdown row is a primary action and should feel like one. */
+            .model-option { padding: 12px; }
+            .attach-menu-item { padding: 14px 12px; }
+            .drawer-nav-btn { padding: 14px; }
+
             /* Stacked so the file path and its button aren't fighting for 375px. */
             .github-browser-row { flex-direction: column; }
             .github-browser-row button { width: 100%; }
@@ -740,8 +774,10 @@
             .settings-row-column .settings-hint { width: 100%; }
             /* 7px is deliberate, but it must still scroll rather than run off. */
             .reasoning-text { max-height: 160px; }
-            .composer-input { min-height: 40px; }
-            .composer-attach, .composer-send { width: 40px; height: 40px; }
+            /* The summary is what you tap to open it, so give it real height. */
+            .message-reasoning > summary { padding: 15px 10px; }
+            .composer-input { min-height: 44px; }
+            .composer-attach, .composer-send { width: 44px; height: 44px; }
             .settings-body { padding: 14px; }
             .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
             .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
@@ -2658,13 +2694,13 @@
             messages = convo.messages;
             renderActiveConversation();
             writeConversations();
-            if (isNarrowScreen()) toggleHistory(false);
+            if (isNarrowScreen()) toggleHistory(false, false);
         }
 
         function startNewConversation() {
             // An untouched empty chat is already a new chat; don't stack them up.
             if (!messages.length && activeConversationId) {
-                if (isNarrowScreen()) toggleHistory(false);
+                if (isNarrowScreen()) toggleHistory(false, false);
                 showStatus('info', 'Already on a new chat');
                 return;
             }
@@ -2674,7 +2710,7 @@
             updateUsageDisplay();
             renderActiveConversation();
             writeConversations();
-            if (isNarrowScreen()) toggleHistory(false);
+            if (isNarrowScreen()) toggleHistory(false, false);
             showStatus('success', 'New chat started');
         }
 
@@ -2702,13 +2738,17 @@
             return window.matchMedia('(max-width: 640px)').matches;
         }
 
-        // force true shows, false hides, undefined toggles.
-        function toggleHistory(force) {
+        // force true shows, false hides, undefined toggles. persist false is for
+        // the automatic close after picking a chat on a phone: that is the app
+        // getting out of the way, not the user choosing to keep it shut, and
+        // recording it would overwrite what they actually chose.
+        function toggleHistory(force, persist = true) {
             const shell = document.querySelector('#viewChat .chat-shell');
             if (!shell) return;
             const hidden = force === undefined ? !shell.classList.contains('history-hidden') : !force;
             shell.classList.toggle('history-hidden', hidden);
             document.getElementById('historyToggle').setAttribute('aria-expanded', String(!hidden));
+            if (!persist) return;
             try {
                 localStorage.setItem(HISTORY_HIDDEN_KEY, hidden ? '1' : '');
             } catch {
@@ -2717,15 +2757,20 @@
         }
 
         function restoreHistoryVisibility() {
-            let hidden = false;
+            let stored = null;
             try {
-                hidden = localStorage.getItem(HISTORY_HIDDEN_KEY) === '1';
+                stored = localStorage.getItem(HISTORY_HIDDEN_KEY);
             } catch {
-                hidden = false;
+                stored = null;
             }
-            // A phone starts closed regardless: there the sidebar covers the chat.
-            if (isNarrowScreen()) hidden = true;
-            toggleHistory(!hidden);
+            // A phone defaults to closed, since the sidebar covers the chat
+            // there -- but only as a default. Once the user has chosen, that
+            // choice is honoured on every screen size; overriding it was why
+            // the setting never appeared to stick on mobile.
+            const hidden = stored === null || stored === undefined
+                ? isNarrowScreen()
+                : stored === '1';
+            toggleHistory(!hidden, false);
         }
 
         function renderSavedMessages() {
