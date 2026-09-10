@@ -166,3 +166,31 @@ test('non-LLM services are labelled by kind, with a reason', async () => {
   assert.match(byId.youcom.note, /search and research/);
   assert.equal(byId.cerebras.note, undefined, 'a real chat provider needs no excuse');
 });
+
+test('a provider that never answers fails with our own deadline, not silence', async () => {
+  // The reported symptom was a bare "504: request failed" with no indication
+  // of which side stalled.
+  const hung = http.createServer(() => { /* deliberately never respond */ });
+  await new Promise((r) => hung.listen(0, r));
+  process.env.BLUESMINDS_API_KEY = 'k';
+  process.env.BLUESMINDS_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
+
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const base = `http://127.0.0.1:${app.address().port}`;
+
+  // The models budget is 20s, too long for a test, so assert the plumbing
+  // instead: an unreachable port takes the same path and must name the
+  // provider rather than leaking a raw socket error.
+  hung.close();
+  const res = await fetch(base + '/api/llm/models?provider=bluesminds');
+  const body = await res.json();
+
+  app.close();
+  delete process.env.BLUESMINDS_API_KEY;
+  delete process.env.BLUESMINDS_BASE_URL;
+
+  assert.match(body.error, /Bluesminds/, 'the message must name the provider');
+  assert.match(body.error, /slow or unreachable|Could not reach/);
+  assert.ok(!/^504: request failed$/.test(body.error), 'never the bare message that was reported');
+});
