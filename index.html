@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -384,6 +384,9 @@
             font-size: 0.9em;
             font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
+        /* A bare URL or token in prose is one long word; without this it
+           shoves its bubble past the screen edge. Code blocks already scroll. */
+        .message-text { overflow-wrap: anywhere; }
         .message-text pre {
             position: relative;
             box-shadow: inset 0 1px 3px rgba(0,0,0,.6);
@@ -807,6 +810,14 @@
             .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
             .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
             .empty-state p { font-size: 14px; }
+            /* 13px is fine with a mouse, but iOS zooms any focused input
+               under 16px -- and a zoomed dropdown is a broken dropdown. */
+            .model-dropdown-search { font-size: 16px; }
+            /* Phone reading distance wants a touch more size and air. */
+            .message-text { font-size: 15px; line-height: 1.65; }
+            /* A generated image must not swallow the whole transcript. Both
+               constraints hold at once, so the aspect ratio survives. */
+            .message-image { max-height: 52vh; margin-inline: auto; }
         }
 
         @media (max-width: 380px) {
@@ -1188,6 +1199,17 @@
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
+        // Some on-screen keyboards shrink the visual viewport without moving
+        // the layout viewport, which can strand the newest message under the
+        // keyboard. If the reader was pinned to the bottom, stay pinned.
+        // Guarded: the boot-test stub DOM has no visualViewport, so this is
+        // a no-op there.
+        if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+            window.visualViewport.addEventListener('resize', () => {
+                const nearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 120;
+                if (nearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
+        }
         const chatInput = document.getElementById('chatInput');
         const sendButton = document.getElementById('sendButton');
         const modelTrigger = document.getElementById('modelTrigger');
