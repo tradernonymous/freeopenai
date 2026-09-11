@@ -428,7 +428,7 @@ test("NVIDIA's per-account 404 passes through untouched", () => {
   assert.ok(!real.includes('speech'));
 });
 
-const { fetchProviderWithRetry } = require('../server.js');
+const { fetchProviderWithRetry, providerTimeoutMs, rateLimitMaxAttempts } = require('../server.js');
 
 test('a provider that 429s twice then answers is retried into success', async () => {
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
@@ -623,5 +623,111 @@ test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
     delete process.env.NARA_API_KEY;
     delete process.env.NARA_BASE_URL;
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('timeout knobs default sanely and read env at call time', () => {
+  delete process.env.PROVIDER_TIMEOUT_CHAT_MS;
+  delete process.env.PROVIDER_STALL_MS;
+  assert.deepEqual(providerTimeoutMs(), { models: 20000, chat: 55000, headers: 25000, stall: 60000 });
+  process.env.PROVIDER_TIMEOUT_CHAT_MS = '10000';
+  process.env.PROVIDER_STALL_MS = 'junk';
+  try {
+    const t = providerTimeoutMs();
+    assert.equal(t.chat, 10000);
+    assert.equal(t.stall, 60000, 'garbage falls back to the default');
+  } finally {
+    delete process.env.PROVIDER_TIMEOUT_CHAT_MS;
+    delete process.env.PROVIDER_STALL_MS;
+  }
+});
+
+test('retry attempts are capped by env', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  process.env.RATE_LIMIT_MAX_ATTEMPTS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('nvidia', async () => {
+      calls += 1;
+      return { ok: false, status: 429, data: { error: 'slow down' } };
+    });
+    assert.equal(calls, 1, 'one attempt means no retry');
+    assert.equal(result.status, 429);
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+    delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
+  }
+  assert.equal(rateLimitMaxAttempts(), 4, 'unset means the default');
+});
+
+test('/api/llm/limits reports the effective knobs', async () => {
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/limits`)).json();
+  app.close();
+  assert.deepEqual(Object.keys(body).sort(), ['retries', 'timeouts']);
+  assert.equal(body.timeouts.chat, 55000);
+  assert.equal(body.retries.maxAttempts, 4);
+});
+
+test('a stream that goes quiet aborts with a stall message, not silence', async () => {
+  process.env.PROVIDER_STALL_MS = '80';
+  const hung = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    // writeHead alone buffers: flush so the client sees headers now, then
+    // hold the body open forever. The stall timer must fire.
+    res.flushHeaders();
+  });
+  await new Promise((r) => hung.listen(0, r));
+  process.env.MISTRAL_API_KEY = 'k';
+  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    const text = await res.text();
+    // Headers already went out as 200 before the stall, so the failure
+    // arrives as an SSE error event on the open stream, not a new status.
+    assert.equal(res.status, 200);
+    assert.ok(text.includes('stalled mid-reply'), 'names the expired wait, got: ' + text.slice(0, 120));
+    assert.ok(text.includes('[DONE]'));
+  } finally {
+    if (app) app.close();
+    hung.close();
+    delete process.env.MISTRAL_API_KEY;
+    delete process.env.MISTRAL_BASE_URL;
+    delete process.env.PROVIDER_STALL_MS;
+  }
+});
+
+test('a stream with no headers fails fast with a headers message', async () => {
+  process.env.PROVIDER_TIMEOUT_HEADERS_MS = '120';
+  const silent = http.createServer(() => { /* accept, never respond */ });
+  await new Promise((r) => silent.listen(0, r));
+  process.env.MISTRAL_API_KEY = 'k';
+  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${silent.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    const text = await res.text();
+    assert.equal(res.status, 504);
+    assert.ok(text.includes('no response headers'), 'names the expired wait, got: ' + text.slice(0, 120));
+  } finally {
+    if (app) app.close();
+    silent.close();
+    delete process.env.MISTRAL_API_KEY;
+    delete process.env.MISTRAL_BASE_URL;
+    delete process.env.PROVIDER_TIMEOUT_HEADERS_MS;
   }
 });

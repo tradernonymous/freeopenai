@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-183%20passing-22c55e?style=for-the-badge" alt="183 tests passing">
+  <img src="https://img.shields.io/badge/tests-188%20passing-22c55e?style=for-the-badge" alt="188 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Starts on a prompt hero with suggestion cards, copy or retry any response, and a light/dark theme toggle lives in the header.
+      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and light/dark plus tokyonight/gruvbox themes in the header.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -226,6 +226,11 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the static server listens on |
+| `PROVIDER_TIMEOUT_CHAT_MS` | `55000` | Total budget per chat request, streaming or not. |
+| `PROVIDER_TIMEOUT_HEADERS_MS` | `25000` | Per-attempt deadline for upstream response headers on streams. |
+| `PROVIDER_STALL_MS` | `60000` | Aborts a stream quiet longer than this, with a stall message instead of silence. |
+| `PROVIDER_TIMEOUT_MODELS_MS` | `20000` | Budget for model-catalogue fetches. |
+| `RATE_LIMIT_MAX_ATTEMPTS` | `4` | 429 retries per call, 1–10. Backoff grows per attempt. |
 | `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. |
 | `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
 | `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
