@@ -283,7 +283,7 @@ test('the removed providers are gone and the new ones are present', async () => 
   assert.ok(!ids.includes('cerebras'), 'Cerebras was removed');
   assert.ok(!ids.includes('sambanova'), 'SambaNova was removed');
   assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
-  for (const id of ['mistral', 'nara']) {
+  for (const id of ['mistral', 'nara', 'aigateway', 'ollama', 'nvidia']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
   for (const p of providers) {
@@ -729,5 +729,82 @@ test('a stream with no headers fails fast with a headers message', async () => {
     delete process.env.MISTRAL_API_KEY;
     delete process.env.MISTRAL_BASE_URL;
     delete process.env.PROVIDER_TIMEOUT_HEADERS_MS;
+  }
+});
+
+test('AI Gateway uses standard Bearer auth', async () => {
+  const seen = await withStubProvider('AI_GATEWAY_API_KEY', 'AI_GATEWAY_BASE_URL', 'Bearer', async (base) => {
+    await fetch(base + '/api/llm/models?provider=aigateway');
+  });
+  assert.equal(seen.authorization, 'Bearer KEY123');
+});
+
+test('Ollama stays hidden with neither key nor base URL', async () => {
+  delete process.env.OLLAMA_API_KEY;
+  delete process.env.OLLAMA_BASE_URL;
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const providers = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
+  app.close();
+  assert.equal(providers.find((p) => p.id === 'ollama').configured, false);
+});
+
+test('Ollama appears on a base URL alone and sends no auth header', async () => {
+  clearModelCache();
+  const seen = {};
+  const upstream = http.createServer((req, res) => {
+    seen.authorization = req.headers.authorization;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'llama3.1' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  delete process.env.OLLAMA_API_KEY;
+  process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const base = `http://127.0.0.1:${app.address().port}`;
+    const providers = await (await fetch(base + '/api/llm/providers')).json();
+    assert.equal(providers.find((p) => p.id === 'ollama').configured, true);
+    const body = await (await fetch(base + '/api/llm/models?provider=ollama')).json();
+    assert.equal(body.length, 1);
+    assert.equal(seen.authorization, undefined, 'no key means no auth header, not a bare Bearer');
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.OLLAMA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('Ollama sends Bearer when a key is set', async () => {
+  const seen = await withStubProvider('OLLAMA_API_KEY', 'OLLAMA_BASE_URL', 'Bearer', async (base) => {
+    await fetch(base + '/api/llm/models?provider=ollama');
+  });
+  assert.equal(seen.authorization, 'Bearer KEY123');
+});
+
+test('NVIDIA returns its whole live catalogue', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`)).json();
+    assert.equal(body.length, 2);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
+    clearModelCache();
   }
 });
