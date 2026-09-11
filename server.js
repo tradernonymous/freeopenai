@@ -535,11 +535,33 @@ const LLM_PROVIDERS = {
     label: 'Nara',
     baseUrl: 'https://router.bynara.id/v1',
     envVar: 'NARA_API_KEY',
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'agnes-2.5-flash',
+      'laguna-s-2.1',
+      'ling-3.0-flash-fin-free',
+      'nemotron-3.5-lightning-free',
+      'stepfun-3.7-flash',
+    ],
   },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     envVar: 'OPENROUTER_API_KEY',
+    // The catalogue runs to hundreds; the picker shows only these ten.
+    models: [
+      'qwen/qwen3-coder',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'poolside/laguna-s-2.1',
+      'openai/gpt-oss-120b',
+      'cohere/north-mini-code:free',
+      'poolside/laguna-xs-2.1',
+      'google/gemma-4-31b-it',
+      'z-ai/glm-5.2',
+      'minimax/minimax-m3',
+      'nvidia/nemotron-3.5-lightning',
+    ],
     // Optional attribution headers OpenRouter documents for its leaderboards.
     headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeOpenAI' }),
   },
@@ -739,9 +761,14 @@ async function llmModels(req, res) {
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
+    // A curated allowlist pins the picker to exactly those ids, in that
+    // order. Without one the whole catalogue goes through untouched.
+    const listed = Array.isArray(provider.models)
+      ? provider.models.map((wanted) => models.find((m) => m.id === wanted)).filter(Boolean)
+      : models;
     // Only a successful catalogue is worth caching; errors rust nothing.
-    modelCache.set(id, { fetchedAt: Date.now(), models });
-    sendJson(res, 200, models);
+    modelCache.set(id, { fetchedAt: Date.now(), models: listed });
+    sendJson(res, 200, listed);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
