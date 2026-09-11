@@ -315,6 +315,32 @@ async function safeJson(res) {
   }
 }
 
+// Allowlist matching for provider pickers. An entry is either a plain string
+// (exact model id, e.g. "nvidia/nemotron-3.5-lightning") or { label } for
+// human names ("Nemotron 3.5 Lightning"), matched token-wise against both the
+// model id and its display name. Provider catalogues rename models often
+// enough that exact strings alone go stale; token matching survives the
+// renames without letting lookalikes in.
+const LIST_NOISE = new Set(['free', 'new', 'latest', 'preview', 'instruct', 'the']);
+
+function modelTokens(s) {
+  return String(s || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[^a-z0-9.]+/i)
+    .map((t) => t.toLowerCase())
+    .filter((t) => t && !LIST_NOISE.has(t));
+}
+
+function matchListEntry(model, entry) {
+  if (!model || !model.id) return false;
+  if (typeof entry === 'string') return model.id === entry;
+  if (!entry || typeof entry.label !== 'string') return false;
+  const wanted = modelTokens(entry.label);
+  if (!wanted.length) return false;
+  const have = new Set([...modelTokens(model.id), ...modelTokens(model.name)]);
+  return wanted.every((t) => have.has(t));
+}
+
 // Decides whether a failed tools call deserves one plain retry. Parse
 // failures and shape rejections (400/422, tool-worded messages) mean the
 // endpoint can't do tools; anything else (auth, billing, missing model,
