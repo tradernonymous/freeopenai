@@ -1842,7 +1842,7 @@
         async function refreshGithubStatus() {
             try {
                 const res = await fetch('/api/github/status');
-                const data = await res.json();
+                const data = await safeJson(res);
                 githubConnected = !!data.connected;
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
@@ -1899,7 +1899,7 @@
             const select = document.getElementById('githubRepoSelect');
             try {
                 const res = await fetch('/api/github/repos');
-                const repos = await res.json();
+                const repos = await safeJson(res);
                 select.innerHTML = '';
                 const list = Array.isArray(repos) ? repos : [];
                 const multiAccount = new Set(list.map((r) => r.account)).size > 1;
@@ -1939,7 +1939,7 @@
             try {
                 const account = selectedRepoAccount();
                 const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}` + (account ? '&account=' + encodeURIComponent(account) : ''));
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) { statusEl.textContent = data.error || 'Could not load file'; return; }
                 contentEl.value = data.content;
                 contentEl.dataset.sha = data.sha;
@@ -1967,7 +1967,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha, account: selectedRepoAccount() }),
                 });
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) { statusEl.textContent = data.error || 'Commit failed'; return; }
                 content.dataset.sha = data.sha;
                 statusEl.textContent = 'Committed ' + path;
@@ -1984,7 +1984,7 @@
             try {
                 if (name === 'github_list_repos') {
                     const res = await fetch('/api/github/repos');
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list repos');
                     return JSON.stringify(data);
                 }
@@ -1993,7 +1993,7 @@
                     if (!args.repo) return 'Error: repo is required.';
                     const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}${accountParam(args)}`;
                     const res = await fetch(url);
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
                     return JSON.stringify(data);
                 }
@@ -2002,7 +2002,7 @@
                     if (!args.repo || !args.path) return 'Error: repo and path are required.';
                     const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}${accountParam(args)}`;
                     const res = await fetch(url);
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
                     // Remember the blob sha so a later commit to the same path
                     // updates that exact version instead of being rejected.
@@ -2028,7 +2028,7 @@
                             account: args.account,
                         }),
                     });
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
                     githubShaCache[shaKey(args)] = data.sha;
                     return `Committed as ${data.account}. ${data.commitUrl}`;
@@ -2082,7 +2082,7 @@
         async function loadProviders() {
             const select = document.getElementById('providerSelect');
             try {
-                const all = await (await fetch('/api/llm/providers')).json();
+                const all = await safeJson(await fetch('/api/llm/providers'));
                 providerInfo = Object.fromEntries(all.map((p) => [p.id, p]));
                 const available = all.filter((p) => p.configured);
                 if (!available.length) {
@@ -2156,7 +2156,7 @@
         async function loadProviderModels() {
             try {
                 const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(selectedProvider));
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) throw new Error(data.error || 'Could not list models');
                 providerModels = usableChatModels(data)
                     .filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
@@ -2212,12 +2212,18 @@
                 body: JSON.stringify(payload),
             });
             let res = await send();
-            let data = await res.json();
+            let data = await safeJson(res);
+            if (data.parseFailed) {
+                const err = new Error(data.error);
+                err.parseFailed = true;
+                err.statusCode = res.status;
+                throw err;
+            }
             if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
                 showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
                 await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2));
                 res = await send();
-                data = await res.json();
+                data = await safeJson(res);
             }
             if (!res.ok) {
                 // A refusal is about this model, not the request, so drop it
@@ -2232,7 +2238,9 @@
                     if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
                     else forgetRefusedModel(selectedModel);
                 }
-                throw new Error(detail);
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                throw err;
             }
             return normalizeProviderReply(data);
         }
@@ -2256,7 +2264,9 @@
                     if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
                     else forgetRefusedModel(selectedModel);
                 }
-                throw new Error(detail);
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                throw err;
             }
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
@@ -2326,9 +2336,10 @@
                 try {
                     response = await callModel(convo, { tools });
                 } catch (err) {
-                    // Some endpoints reject the tools shape outright. A plain
-                    // call still answers; tools were a bonus, not the request.
-                    if (round === 0 && tools.length && /tool|function|unknown field/i.test(err.message || '')) {
+                    // Some endpoints reject the tools shape outright or answer
+                    // non-JSON. A plain call still answers; tools were a bonus,
+                    // not the request.
+                    if (round === 0 && tools.length && isToolsRejection(err)) {
                         showStatus('info', 'This model takes no tools — answering directly');
                         tools = [];
                         response = await callModel(convo);
@@ -2630,8 +2641,10 @@
                     showStatus('error', 'Out of Puter credits');
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else {
+                    // Name the provider and model: a bare message is
+                    // undebuggable once several providers are configured.
                     showStatus('error', 'Failed: ' + error.message);
-                    addMessage('system', 'Error: ' + error.message, { error: true });
+                    addMessage('system', `Error (${selectedProvider}/${selectedModel}): ` + error.message, { error: true });
                 }
             } finally {
                 currentAbort = null;
