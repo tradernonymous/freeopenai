@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and light/dark plus tokyonight/gruvbox themes in the header.
+      Ask anything and get a streamed, markdown-rendered reply in a centered 768px column at compact density. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -78,7 +78,7 @@
   <tr>
     <td valign="top">
       <h3>🖼️ Image generation</h3>
-      Toggle the image icon next to the input to generate a picture instead of chatting. A shimmer placeholder holds the spot while it renders. Click any result to zoom in, download, copy, edit with a brush mask, or make variations — every image lands in the Gallery view, newest first.
+      Toggle the image icon next to the input to generate a picture instead of chatting. A labelled shimmer placeholder holds the spot while it renders (instant failures say so instead of flashing past). Click any result to zoom in, download, copy, edit with a brush mask, or make variations — every image lands in the Gallery view, newest first.
     </td>
     <td valign="top">
       <h3>🧠 Reasoning summaries</h3>
