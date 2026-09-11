@@ -36,6 +36,33 @@
             --glass: rgba(10,10,10,.72);
             --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
+        /* Light theme: same tokens, inverted monochrome. Code blocks stay
+           dark on purpose -- a dark well reads as code in either theme. */
+        html[data-theme="light"] {
+            --bg: #ffffff;
+            --bg-elevated: #f7f7f7;
+            --surface: #f4f4f4;
+            --surface-2: #e9e9e9;
+            --border: #d6d6d6;
+            --border-strong: #a8a8a8;
+            --text: #111111;
+            --text-dim: #444444;
+            --text-muted: #6e6e6e;
+            --accent: #000000;
+            --accent-bg: rgba(0,0,0,.07);
+            --danger: #d92d20;
+            --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(0,0,0,.08);
+            --lift-lg: inset 0 1px 0 rgba(255,255,255,.9), 0 8px 28px rgba(0,0,0,.12);
+            --glow: 0 0 0 3px rgba(0,0,0,.08);
+            --glass: rgba(255,255,255,.78);
+        }
+        html[data-theme="light"] .message-text pre { background: #111111; border-color: #333333; }
+        html[data-theme="light"] .message-text pre code { color: #eeeeee; }
+        html[data-theme="light"] .load-error-banner { background: #fdecec; color: #7a1f1f; }
+        html[data-theme="light"] .load-error-banner button { color: #ffffff; }
+        html[data-theme="light"] .icon-moon { display: none; }
+        html[data-theme="light"] .icon-sun { display: block; }
+        .icon-sun { display: none; }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
@@ -166,6 +193,8 @@
         }
         .history-item:hover .history-delete, .history-item.active .history-delete { opacity: 1; }
         .history-item .history-delete:hover { color: var(--danger); }
+        .history-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex-shrink: 0; }
+        .history-item.active .history-dot { background: var(--accent); }
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
         .history-scrim { display: none; }
 
@@ -449,6 +478,15 @@
         .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.3; }
         .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
         .empty-state p { font-size: 13px; max-width: 280px; line-height: 1.5; }
+        /* Prompt hero: headline plus suggestion cards, task-form style. The
+           grid collapses to one column on its own, no breakpoint needed. */
+        .hero-greet { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); margin-bottom: 6px; }
+        .empty-state .hero-sub { max-width: 340px; margin-bottom: 20px; }
+        .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; width: 100%; max-width: 560px; }
+        .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
+        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift); }
+        .hero-card strong { font-size: 13px; color: var(--text); }
+        .hero-card span { font-size: 12px; color: var(--text-muted); }
 
         /* Input area - unified pill composer */
         .chat-input-area {
@@ -905,6 +943,10 @@
                             <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             </button>
+                            <button class="icon-btn" id="themeToggle" title="Toggle light and dark theme" aria-label="Toggle light and dark theme" onclick="toggleTheme()">
+                                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                            </button>
                             <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                                 <span class="signed-in-dot"></span>
@@ -914,9 +956,14 @@
 
                     <div class="chat-messages" id="chatMessages" aria-live="polite" aria-relevant="additions">
                         <div class="empty-state" id="emptyState">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 14v1c0 1.1.9 2 2 2v2.93zm6.9-2.54L7.77 6.87A7.93 7.93 0 0 1 12 5c4.97 0 9 4.03 9 9 0 2.29-.77 4.4-2.1 6.39z"/></svg>
-                            <h3>Start a conversation</h3>
-                            <p>Sign in, pick a model, and send a message to begin. Ask to "generate an image of..." and I'll draw one instead of chatting.</p>
+                            <h2 class="hero-greet">What should we build?</h2>
+                            <p class="hero-sub">Pick a model, then describe the task — or start from a card.</p>
+                            <div class="hero-cards">
+                                <button type="button" class="hero-card" onclick="sendPrompt('Write unit tests for an untested function')"><strong>Write tests</strong><span>Cover an untested function</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Explain this error message and how to fix it: ')"><strong>Debug an error</strong><span>Paste it after the colon</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Draft documentation for this API: ')"><strong>Draft docs</strong><span>Name the API after the colon</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Review this code for bugs and suggest fixes: ')"><strong>Review code</strong><span>Paste it after the colon</span></button>
+                            </div>
                         </div>
                     </div>
 
@@ -2813,8 +2860,32 @@
             selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
             const savedEffort = localStorage.getItem('puterChatEffort');
             selectedEffort = isValidEffort(savedEffort) ? savedEffort : DEFAULT_EFFORT;
+            applyTheme(localStorage.getItem('puterChatTheme') || 'dark');
             updateModelLabel();
             updateEffortPicker();
+        }
+
+        // Light/dark theme. Guarded throughout: the boot-test stub DOM has no
+        // visual theme machinery, so every DOM touch checks first.
+        function applyTheme(theme) {
+            const light = theme === 'light';
+            try {
+                if (document && document.documentElement && typeof document.documentElement.setAttribute === 'function') {
+                    document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+                }
+                const meta = document && typeof document.querySelector === 'function' && document.querySelector('meta[name="theme-color"]');
+                if (meta && typeof meta.setAttribute === 'function') meta.setAttribute('content', light ? '#ffffff' : '#000000');
+            } catch { /* stub DOM in tests */ }
+            try {
+                if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+                    localStorage.setItem('puterChatTheme', light ? 'light' : 'dark');
+                }
+            } catch { /* private mode */ }
+        }
+
+        function toggleTheme() {
+            const current = (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('puterChatTheme')) || 'dark';
+            applyTheme(current === 'light' ? 'dark' : 'light');
         }
 
         function saveUserPreferences() {
@@ -2915,6 +2986,11 @@
                 row.className = 'history-item' + (convo.id === activeConversationId ? ' active' : '');
                 row.tabIndex = 0;
                 row.setAttribute('role', 'button');
+
+                const dot = document.createElement('span');
+                dot.className = 'history-dot';
+                dot.setAttribute('aria-hidden', 'true');
+                row.appendChild(dot);
 
                 const title = document.createElement('span');
                 title.className = 'history-title';
