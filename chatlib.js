@@ -258,6 +258,47 @@ function isGithubTool(name) {
   return GITHUB_TOOL_NAMES.includes(name);
 }
 
+// Web research, available in every chat with no account needed. The model
+// otherwise answers from training data or, with GitHub connected, only what
+// the repos contain -- so a question about the outside world gets searched,
+// not guessed.
+const WEB_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web for current or external facts: docs, releases, prices, news, anything past training. Returns titles, URLs and snippets. Use it instead of guessing, then cite the sources as [title](url) in the answer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query, specific rather than conversational.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Read one page as plain text: a search result, docs URL, or any link the user pasted. Returns the title and up to ~8000 characters. Prefer it over quoting a URL blind.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full http(s) URL to read.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+];
+
+const WEB_TOOL_NAMES = WEB_TOOLS.map((t) => t.function.name);
+
+function isWebTool(name) {
+  return WEB_TOOL_NAMES.includes(name);
+}
+
 // Tool arguments arrive as a JSON string from the model, and a model can emit
 // malformed JSON. Never throw on it — an empty object lets the tool itself
 // report the missing argument back to the model, which can then retry.
@@ -290,6 +331,10 @@ function describeToolCall(name, args = {}) {
       const owner = args.account || String(args.repo || '').split('/')[0];
       return `Committing "${args.path || '?'}" to ${repo}${owner ? ` as ${owner}` : ''}`;
     }
+    case 'web_search':
+      return `Searching the web for "${args.query || '?'}"`;
+    case 'web_fetch':
+      return `Reading ${args.url || 'a page'}`;
     default:
       return `Running ${name}`;
   }
@@ -555,6 +600,11 @@ const SYSTEM_PROMPT = [
   '- Committing is the only step that needs approval, and the app already asks the user itself.',
   '- Read a file before rewriting it, and send the complete new contents.',
   '',
+  'When web tools are available:',
+  '- If the question needs facts outside training or the repos -- current events, releases, prices, docs -- search first, never guess.',
+  '- Read the most promising results before answering, and cite every factual claim as [title](url).',
+  '- Fetching and searching are safe and cheap. Just do them.',
+  '',
   'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
 ].join('\n');
 
@@ -744,10 +794,13 @@ if (typeof module !== 'undefined' && module.exports) {
     isDocumentFile,
     GITHUB_TOOLS,
     GITHUB_TOOL_NAMES,
+    WEB_TOOLS,
+    WEB_TOOL_NAMES,
     MAX_TOOL_ROUNDS,
     TOOL_ROUNDS_EXHAUSTED_PROMPT,
     EMPTY_REPLY_NUDGE,
     isGithubTool,
+    isWebTool,
     parseToolArgs,
     describeToolCall,
     extractMessageText,

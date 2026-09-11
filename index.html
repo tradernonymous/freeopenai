@@ -2040,6 +2040,28 @@
             }
         }
 
+        async function runWebTool(name, args) {
+            try {
+                if (name === 'web_search') {
+                    if (!args.query || !String(args.query).trim()) return 'Error: query is required.';
+                    const res = await fetch('/api/llm/websearch?q=' + encodeURIComponent(String(args.query).trim().slice(0, 300)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'search failed');
+                    return JSON.stringify(data);
+                }
+                if (name === 'web_fetch') {
+                    if (!args.url) return 'Error: url is required.';
+                    const res = await fetch('/api/llm/fetch?url=' + encodeURIComponent(String(args.url)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'fetch failed');
+                    return `Title: ${data.title || '(untitled)'}\nURL: ${data.url}\n\n${data.text}`;
+                }
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
         const githubShaCache = {};
 
         function accountParam(args) {
@@ -2295,12 +2317,23 @@
             }
         }
 
-        async function runChatWithTools(convo, chatModel) {
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                const response = await callModel(convo, { tools: GITHUB_TOOLS });
+                let response;
+                try {
+                    response = await callModel(convo, { tools });
+                } catch (err) {
+                    // Some endpoints reject the tools shape outright. A plain
+                    // call still answers; tools were a bonus, not the request.
+                    if (round === 0 && tools.length && /tool|function|unknown field/i.test(err.message || '')) {
+                        showStatus('info', 'This model takes no tools — answering directly');
+                        tools = [];
+                        response = await callModel(convo);
+                    } else throw err;
+                }
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
                 if (!calls.length) {
@@ -2326,7 +2359,9 @@
                     addMessage('system', describeToolCall(fn.name, args));
                     const result = isGithubTool(fn.name)
                         ? await runGithubTool(fn.name, args)
-                        : 'Error: unknown tool ' + fn.name;
+                        : isWebTool(fn.name)
+                          ? await runWebTool(fn.name, args)
+                          : 'Error: unknown tool ' + fn.name;
                     convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
                 }
             }
@@ -2488,18 +2523,22 @@
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
 
-                // With GitHub connected the model gets repo tools, which needs a
-                // message array to carry tool results back. That path is
-                // non-streaming; an image attachment keeps the plain path since
-                // the image argument has no place in a message array.
-                if (githubConnected && !attachedImageFile) {
+                // Tool calls need a message array to carry results back, so any
+                // turn with tools goes through the loop (non-streaming). Web
+                // research rides every turn with no account; repo tools join
+                // when GitHub is connected. An image attachment keeps the plain
+                // path since the image argument has no place in a message array.
+                if (!attachedImageFile) {
+                    const tools = [...WEB_TOOLS];
+                    if (githubConnected) tools.push(...GITHUB_TOOLS);
                     const { message, exhausted, finishReason } = await runChatWithTools(
                         buildConversation(outgoing),
-                        chatModel
+                        chatModel,
+                        tools
                     );
                     removeTypingIndicator();
                     if (exhausted) {
-                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} GitHub steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
+                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
                     }
                     const reasoning = extractMessageReasoning(message);
                     let text = extractMessageText(message);

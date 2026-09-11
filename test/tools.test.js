@@ -3,9 +3,12 @@ const assert = require('node:assert/strict');
 const {
   GITHUB_TOOLS,
   GITHUB_TOOL_NAMES,
+  WEB_TOOLS,
+  WEB_TOOL_NAMES,
   MAX_TOOL_ROUNDS,
   TOOL_ROUNDS_EXHAUSTED_PROMPT,
   isGithubTool,
+  isWebTool,
   parseToolArgs,
   describeToolCall,
 } = require('../chatlib.js');
@@ -31,6 +34,29 @@ test('tool names are unique and recognised by isGithubTool', () => {
   assert.ok(isGithubTool('github_read_file'));
   assert.ok(!isGithubTool('rm_rf_everything'));
   assert.ok(!isGithubTool(undefined));
+});
+
+test('web research tools are well-formed, unique, and recognised', () => {
+  assert.deepEqual(WEB_TOOL_NAMES, ['web_search', 'web_fetch']);
+  for (const tool of WEB_TOOLS) {
+    assert.equal(tool.type, 'function');
+    assert.ok(tool.function.description.length > 20, `${tool.function.name} needs a real description`);
+    for (const required of tool.function.parameters.required) {
+      assert.ok(required in tool.function.parameters.properties);
+    }
+  }
+  assert.ok(isWebTool('web_search'));
+  assert.ok(isWebTool('web_fetch'));
+  assert.ok(!isWebTool('github_read_file'));
+  assert.ok(!isWebTool(undefined));
+  const all = [...GITHUB_TOOL_NAMES, ...WEB_TOOL_NAMES];
+  assert.equal(new Set(all).size, all.length, 'no name may exist on both lists');
+});
+
+test('describeToolCall narrates web calls for the transcript', () => {
+  assert.match(describeToolCall('web_search', { query: 'deno 2' }), /deno 2/);
+  assert.match(describeToolCall('web_fetch', { url: 'https://example.com/x' }), /example\.com\/x/);
+  assert.match(describeToolCall('web_search', {}), /\?/);
 });
 
 test('the tool loop is bounded, with room for real multi-file work', () => {

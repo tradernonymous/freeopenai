@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
 const {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
@@ -674,6 +675,180 @@ function llmLimits(req, res) {
   });
 }
 
+// Web research for the chat: search without a key (DuckDuckGo instant
+// answers plus Wikipedia), and read pages as plain text. Both are
+// curiosity-driven GETs sharing one small fetch helper with a hard timeout;
+// nothing here posts data anywhere.
+const WEB_FETCH_TIMEOUT_MS = 15000;
+const WEB_FETCH_MAX_BYTES = 600 * 1024;
+
+async function fetchText(url, acceptHtml = true) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'FreeOpenAI/1.0 (+https://github.com/tradernonymous/freeopenai)',
+        Accept: acceptHtml ? 'text/html,*/*' : 'application/json',
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// SSRF guard: the fetch endpoint reads user-supplied URLs, so loopback,
+// private ranges and link-local never resolve. Hostnames resolve first
+// because a name can point at a private address behind our back.
+function isPrivateIp(addr) {
+  if (!addr) return true;
+  if (addr === '::1' || addr === '::ffff:127.0.0.1') return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+  if (!v4) return false;
+  const a = Number(v4[1]);
+  const b = Number(v4[2]);
+  return a === 10 || a === 127 || a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254);
+}
+
+function lookupHost(hostname) {
+  return new Promise((resolve, reject) => {
+    dns.lookup(hostname, (err, address) => (err ? reject(err) : resolve(address)));
+  });
+}
+
+// Strip a page to readable text: drop scripts, styles, nav and comments,
+// decode the common entities, collapse whitespace. Crude next to
+// Readability, but dependency-free and honest about what it is.
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;/gi, "'");
+}
+
+function extractPageText(html) {
+  if (!html) return { title: '', text: '' };
+  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(String(html));
+  const text = String(html)
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  return {
+    title: decodeEntities(titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : ''),
+    text: decodeEntities(text).replace(/\s+/g, ' ').trim(),
+  };
+}
+
+function normalizeDdG(data) {
+  const out = [];
+  const push = (title, url, snippet) => {
+    if (title && url && /^https?:/i.test(url)) out.push({ title: String(title), url: String(url), snippet: String(snippet || '') });
+  };
+  if (!data || typeof data !== 'object') return out;
+  if (data.AbstractText && data.AbstractURL) {
+    push(data.AbstractText.slice(0, 200), data.AbstractURL, data.AbstractSource ? `Source: ${data.AbstractSource}` : '');
+  }
+  for (const t of [...(data.RelatedTopics || []), ...(data.Results || [])]) {
+    if (!t || typeof t !== 'object') continue;
+    if (Array.isArray(t.Topics)) {
+      t.Topics.forEach((s) => push(s.Text && s.Text.slice(0, 200), s.FirstURL, ''));
+    } else {
+      push(t.Text && t.Text.slice(0, 200), t.FirstURL, '');
+    }
+    if (out.length >= 8) break;
+  }
+  return out.slice(0, 8);
+}
+
+function normalizeWiki(data) {
+  // Opensearch shape: [query, [titles], [descs], [urls]].
+  if (!Array.isArray(data) || !Array.isArray(data[1])) return [];
+  return data[1].slice(0, 5).map((title, i) => ({
+    title: String(title),
+    url: String(((data[3] || [])[i]) || ''),
+    snippet: String(((data[2] || [])[i]) || ''),
+  })).filter((r) => r.url);
+}
+
+function normalizeWikiFull(data) {
+  // Full-text search: almost any query returns titled hits with snippets.
+  const list = data && data.query && Array.isArray(data.query.search) ? data.query.search : [];
+  return list.slice(0, 5).map((s) => ({
+    title: String((s && s.title) || ''),
+    url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String((s && s.title) || '').replace(/ /g, '_')),
+    snippet: String((s && s.snippet) || '').replace(/<[^>]+>/g, ''),
+  })).filter((r) => r.title);
+}
+
+async function llmWebsearch(req, res) {
+  const q = new URL(req.url, 'http://x').searchParams.get('q');
+  if (!q || !q.trim()) return sendJson(res, 400, { error: 'q is required' });
+  const query = q.trim().slice(0, 300);
+  const [ddg, wiki, full] = await Promise.all([
+    fetchText(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, false)
+      .then((t) => { try { return normalizeDdG(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+    fetchText(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=5&format=json`, false)
+      .then((t) => { try { return normalizeWiki(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+    fetchText(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=5&format=json`, false)
+      .then((t) => { try { return normalizeWikiFull(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+  ]);
+  const seen = new Set();
+  const results = [...ddg, ...wiki, ...full].filter((r) => {
+    if (!r.url || seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  }).slice(0, 10);
+  if (!results.length) return sendJson(res, 502, { error: 'Search is unreachable right now — try again, or paste a link to read directly.' });
+  sendJson(res, 200, { query, results });
+}
+
+async function llmFetch(req, res) {
+  const raw = new URL(req.url, 'http://x').searchParams.get('url');
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch {
+    return sendJson(res, 400, { error: 'A valid http(s) url is required' });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return sendJson(res, 400, { error: 'Only http(s) pages can be read' });
+  }
+  let address;
+  try {
+    address = await lookupHost(parsed.hostname);
+  } catch {
+    return sendJson(res, 502, { error: 'Could not resolve that host' });
+  }
+  if (isPrivateIp(address)) return sendJson(res, 403, { error: 'That address is not readable from here' });
+  let html;
+  try {
+    html = await fetchText(parsed.href);
+  } catch (e) {
+    return sendJson(res, 502, { error: e.name === 'AbortError' ? 'The page took too long to answer' : 'Could not read that page: ' + e.message });
+  }
+  if (html.length > WEB_FETCH_MAX_BYTES) {
+    return sendJson(res, 400, { error: 'That page is too large to read here' });
+  }
+  const { title, text } = extractPageText(html);
+  if (!text) return sendJson(res, 502, { error: 'Nothing readable on that page' });
+  sendJson(res, 200, { url: parsed.href, title, text: text.slice(0, 8000) });
+}
+
 // Image generation and edits live on Nara's separate images host. Keys stay
 // server-side: the browser sends prompt + image data, never credentials.
 // Generations take a plain JSON body; edits need multipart with the source
@@ -1137,6 +1312,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
     if (urlPath === '/api/llm/images/generations' && req.method === 'POST') return llmImage(req, res, 'generations');
     if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
+    if (urlPath === '/api/llm/websearch' && req.method === 'GET') return llmWebsearch(req, res);
+    if (urlPath === '/api/llm/fetch' && req.method === 'GET') return llmFetch(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
@@ -1199,4 +1376,9 @@ module.exports = {
   providerTimeoutMs,
   rateLimitMaxAttempts,
   retryBaseDelayMs,
+  extractPageText,
+  normalizeDdG,
+  normalizeWiki,
+  normalizeWikiFull,
+  isPrivateIp,
 };
