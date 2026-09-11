@@ -1,7 +1,91 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing, clearModelCache } = require('../server.js');
-const { isFreeModel, emitsText, usableChatModels } = require('../chatlib.js');
+const { normalizeProviderModel, normalizePricing, clearModelCache, LLM_PROVIDERS } = require('../server.js');
+const { isFreeModel, isFreeModelId, emitsText, usableChatModels } = require('../chatlib.js');
+
+// The OpenRouter allowlist is a free-tier commitment: paid ids only ever
+// produced 402/403 errors on a free key, so every pinned id must carry the
+// ":free" suffix — and the ids must be real ones from the live catalogue.
+test('the OpenRouter allowlist is free-only and structurally valid', () => {
+  const ids = LLM_PROVIDERS.openrouter.models;
+  assert.ok(Array.isArray(ids) && ids.length >= 10, 'allowlist should stay generously populated');
+  for (const id of ids) {
+    assert.match(id, /:free$/, `${id} must end in :free`);
+    assert.equal(id.split('/').length, 2, `${id} must be vendor/model shaped`);
+    assert.ok(!ids.includes(id + ':free'), 'no accidental duplicates');
+  }
+  assert.ok(LLM_PROVIDERS.openrouter.freeOnly, 'freeOnly gate must default on');
+  // Every free id is a chat-capable text model by the same rules the client
+  // picker uses — a moderation/embed model would be filtered out at render.
+  for (const id of ids) {
+    const kept = usableChatModels([{ id }]).some((m) => m.id === id);
+    if (!kept) {
+      // Allowed only for the safety classifier, which the chat filter
+      // deliberately hides but which stays listed for future moderation use.
+      assert.match(id, /content-safety/, `${id} filtered out of chat pickers`);
+    }
+  }
+});
+
+test('isFreeModelId recognises the provider free markers only at the end', () => {
+  assert.ok(isFreeModelId('vendor/model:free'));
+  assert.ok(isFreeModelId('vendor/model-free'));
+  assert.ok(!isFreeModelId('vendor/free-model'));
+  assert.ok(!isFreeModelId('vendor/model:freedom'));
+  assert.ok(!isFreeModelId(''));
+  assert.ok(!isFreeModelId(null));
+});
+
+test('the free-only gate drops paid models from a mixed catalogue', () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [
+      { id: 'cohere/north-mini-code:free' },
+      { id: 'openai/gpt-oss-120b' },
+      { id: 'nvidia/nemotron-3.5-lightning:free' },
+    ] }));
+  });
+  return withOpenRouterUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=openrouter`)).json();
+    app.close();
+    // Allowlist order is preserved; the paid id is dropped.
+    assert.deepEqual(body.map((m) => m.id), ['nvidia/nemotron-3.5-lightning:free', 'cohere/north-mini-code:free']);
+  });
+});
+
+test('a fully retired allowlist degrades to the live catalogue, not an empty picker', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'some-vendor/brand-new-model:free' }] }));
+  });
+  await withOpenRouterUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=openrouter`)).json();
+    app.close();
+    assert.deepEqual(body.map((m) => m.id), ['some-vendor/brand-new-model:free']);
+  });
+});
+
+async function withOpenRouterUpstream(upstream, run) {
+  await new Promise((r) => upstream.listen(0, r));
+  const savedKey = process.env.OPENROUTER_API_KEY;
+  const savedBase = process.env.OPENROUTER_BASE_URL;
+  process.env.OPENROUTER_API_KEY = 'k';
+  process.env.OPENROUTER_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  try {
+    await run();
+  } finally {
+    upstream.close();
+    if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey;
+    if (savedBase === undefined) delete process.env.OPENROUTER_BASE_URL; else process.env.OPENROUTER_BASE_URL = savedBase;
+    clearModelCache();
+  }
+}
 
 // Every provider is OpenAI-compatible for chat and then invents its own
 // metadata around it. These are real response shapes taken from each service.
@@ -241,8 +325,6 @@ test('an HTML error body does not collapse into nothing', async () => {
   assert.match(body.error, /Nara/);
   assert.match(body.error, /gateway error|slow or unreachable/);
 });
-
-const { isFreeModelId } = require('../chatlib.js');
 
 // OpenCode Zen publishes no prices and mixes free with paid in one catalogue,
 // marking the free ones in the id. Treating "no price" as free would rank

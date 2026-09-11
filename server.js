@@ -13,7 +13,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -570,19 +570,42 @@ const LLM_PROVIDERS = {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     envVar: 'OPENROUTER_API_KEY',
-    // The catalogue runs to hundreds; the picker shows only these ten.
+    // Free-tier only. Every id below carries the ":free" suffix and was
+    // verified against the live catalogue (https://openrouter.ai/api/v1/models)
+    // on 2026-09-12: 443 models total, 19 of them free. Paid ids were pulled —
+    // they only ever produced 402/403 errors on a free key. The allowlist is
+    // intersected with the live catalogue, so when one of these is retired the
+    // picker silently drops it instead of failing at send time.
     models: [
-      'qwen/qwen3-coder',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-      'poolside/laguna-s-2.1',
-      'openai/gpt-oss-120b',
+      // Long-context reasoning: the 1M-context trio.
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'thinkingmachines/inkling:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'thinkingmachines/inkling-small:free',
+      // General chat.
+      'google/gemma-4-31b-it:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'inclusionai/ling-3.0-flash-vl:free',
+      'nex-agi/nex-n2.5-pro:free',
+      'nex-agi/nex-n2.5-mini:free',
+      'poolside/laguna-s-2.1:free',
+      'poolside/laguna-xs-2.1:free',
+      // Code.
       'cohere/north-mini-code:free',
-      'poolside/laguna-xs-2.1',
-      'google/gemma-4-31b-it',
-      'z-ai/glm-5.2',
-      'minimax/minimax-m3',
-      'nvidia/nemotron-3.5-lightning',
+      // Long-form / niche variants.
+      'dots-studio/dots-3-note-preview:free',
+      'liquid/lfm-2.5-2.6b:free',
+      'inclusionai/ling-3.0-flash-sante:free',
+      'inclusionai/ling-3.0-flash-fin:free',
+      // Omni (text+audio) — still emits text.
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      // Content-safety classifier; excluded from the picker by the chat filter.
+      'nvidia/nemotron-3.5-content-safety:free',
     ],
+    // Keep the picker on the free tier even when the allowlist above is
+    // edited or a paid id sneaks back in. Set OPENROUTER_FREE_ONLY=0 to let
+    // paid models through.
+    freeOnly: process.env.OPENROUTER_FREE_ONLY !== '0',
     // Optional attribution headers OpenRouter documents for its leaderboards.
     headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeOpenAI' }),
   },
@@ -1118,9 +1141,22 @@ async function llmModels(req, res) {
       .map(normalizeProviderModel);
     // A curated allowlist pins the picker to exactly those ids, in that
     // order. Without one the whole catalogue goes through untouched.
-    const listed = Array.isArray(provider.models)
+    let listed = Array.isArray(provider.models)
       ? provider.models.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
       : models;
+    if (provider.freeOnly) listed = listed.filter((m) => isFreeModelId(m.id));
+    // An allowlist that intersects the live catalogue at zero rows means every
+    // pinned id was retired upstream — the empty picker that follows reads as
+    // a bug ("no model" + a fetch error on the user's side). Serve the live
+    // catalogue instead and let the client's free-first ranking sort it out;
+    // that degrades to "wrong order", never to "nothing to pick".
+    if (Array.isArray(provider.models) && listed.length === 0) {
+      if (provider.freeOnly) {
+        const free = models.filter((m) => isFreeModelId(m.id));
+        if (free.length) listed = free;
+      }
+      if (!listed.length) listed = models;
+    }
     // Only a successful catalogue is worth caching; errors rust nothing.
     modelCache.set(id, { fetchedAt: Date.now(), models: listed });
     sendJson(res, 200, listed);
@@ -1422,6 +1458,7 @@ if (require.main === module) {
 module.exports = {
   resolveSafePath,
   isAssetPath,
+  LLM_PROVIDERS,
   createRequestHandler,
   normalizeProviderModel,
   normalizePricing,
