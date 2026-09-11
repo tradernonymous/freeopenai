@@ -12,6 +12,8 @@ const {
   DEFAULT_VISION_MODEL,
   isDocumentFile,
   isRateLimitError,
+  safeJson,
+  isToolsRejection,
   parseSseChunk,
 } = require('../chatlib.js');
 
@@ -166,4 +168,32 @@ test('parseSseChunk skips unparseable data lines silently', () => {
   const parts = parseSseChunk(chunk);
   assert.equal(parts.length, 1);
   assert.equal(parts[0].ok, true);
+});
+
+test('safeJson passes a real body through untouched', async () => {
+  const payload = { ok: true, choices: [] };
+  const res = { json: async () => payload };
+  const out = await safeJson(res);
+  assert.deepEqual(out, payload);
+  assert.ok(!out.parseFailed);
+});
+
+test('safeJson degrades an unreadable body into a retryable error, not a crash', async () => {
+  const res = { json: async () => { throw new SyntaxError("Unexpected token 'u'"); } };
+  const out = await safeJson(res);
+  assert.equal(out.parseFailed, true);
+  assert.match(out.error, /retry/i);
+  assert.match(out.error, /unreadable/);
+});
+
+test('isToolsRejection flags shape failures only', () => {
+  assert.equal(isToolsRejection(new Error("Unknown field 'tools'")), true);
+  assert.equal(isToolsRejection(Object.assign(new Error('x'), { parseFailed: true })), true);
+  assert.equal(isToolsRejection(Object.assign(new Error('bad'), { statusCode: 400 })), true);
+  assert.equal(isToolsRejection(Object.assign(new Error('bad'), { statusCode: 422 })), true);
+  assert.equal(isToolsRejection(Object.assign(new Error('forbidden'), { statusCode: 403 })), false);
+  assert.equal(isToolsRejection(Object.assign(new Error('slow'), { statusCode: 429 })), false);
+  assert.equal(isToolsRejection({ name: 'AbortError' }), false);
+  assert.equal(isToolsRejection(null), false);
+  assert.equal(isToolsRejection(undefined), false);
 });

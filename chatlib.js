@@ -299,6 +299,33 @@ function isWebTool(name) {
   return WEB_TOOL_NAMES.includes(name);
 }
 
+// Response bodies are JSON until a proxy, edge, or gateway hands back an
+// HTML/text error page instead (mid-restart deploys do this routinely).
+// Parsing that raw throws SyntaxError, which reads as gibberish to the user,
+// so normalize it here into a retryable message at every call site. A parse
+// failure is marked so callers can tell it apart from a real error body.
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return {
+      error: 'The server answered with something unreadable (often a proxy page while redeploying) — wait a moment and retry.',
+      parseFailed: true,
+    };
+  }
+}
+
+// Decides whether a failed tools call deserves one plain retry. Parse
+// failures and shape rejections (400/422, tool-worded messages) mean the
+// endpoint can't do tools; anything else (auth, billing, missing model,
+// rate limits, aborts) must keep its original handling.
+function isToolsRejection(err) {
+  if (!err || err.name === 'AbortError') return false;
+  if (err.parseFailed) return true;
+  if (typeof err.statusCode === 'number') return err.statusCode === 400 || err.statusCode === 422;
+  return /tool|function|unknown field/i.test(err.message || '');
+}
+
 // Tool arguments arrive as a JSON string from the model, and a model can emit
 // malformed JSON. Never throw on it — an empty object lets the tool itself
 // report the missing argument back to the model, which can then retry.
@@ -801,6 +828,8 @@ if (typeof module !== 'undefined' && module.exports) {
     EMPTY_REPLY_NUDGE,
     isGithubTool,
     isWebTool,
+    safeJson,
+    isToolsRejection,
     parseToolArgs,
     describeToolCall,
     extractMessageText,
