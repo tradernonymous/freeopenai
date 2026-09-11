@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-196%20passing-22c55e?style=for-the-badge" alt="196 tests passing">
+  <img src="https://img.shields.io/badge/tests-201%20passing-22c55e?style=for-the-badge" alt="201 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -109,8 +109,8 @@
       Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
     </td>
     <td valign="top">
-      <h3>🔌 Four providers</h3>
-      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA or Mistral and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
+      <h3>🔌 Six providers</h3>
+      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA, Mistral or AI Gateway and they appear in a picker — so one running dry never stops the work. A local Ollama joins with just a base URL and needs no key. Keys stay on the server.
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
@@ -241,8 +241,10 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for the Edit flow (`/api/llm/images/edits`). Required — edits refuse clearly without it. |
 | `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — pinned to ten allowed models: Qwen 3 Coder, Nemotron 3 Ultra, Laguna S/XS 2.1, gpt-oss-120b, North Mini Code, Gemma 4 31B, GLM 5.2, MiniMax M3, Nemotron 3.5 Lightning. |
-| `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
+| `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
+| `AI_GATEWAY_API_KEY` | *(unset)* | Adds Vercel AI Gateway — one Bearer key across providers (Laguna S 2.1, Ling 3.0 Flash Sante/Fin, Fish Audio S2.1 Pro among them). |
+| `OLLAMA_API_KEY` | *(unset)* | Optional key for Ollama. Set it or `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |

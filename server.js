@@ -537,6 +537,11 @@ function githubPutFile(req, res) {
 // Keys live here, never in the browser. The whole API surface already sits
 // behind the login gate, so a key can't be read by anyone who isn't signed in.
 const LLM_PROVIDERS = {
+  aigateway: {
+    label: 'AI Gateway',
+    baseUrl: 'https://ai-gateway.vercel.sh/v1',
+    envVar: 'AI_GATEWAY_API_KEY',
+  },
   nara: {
     label: 'Nara',
     baseUrl: 'https://router.bynara.id/v1',
@@ -581,6 +586,15 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://api.mistral.ai/v1',
     envVar: 'MISTRAL_API_KEY',
   },
+  ollama: {
+    label: 'Ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    envVar: 'OLLAMA_API_KEY',
+    // Local servers usually take no key. Appearing is opt-in: a key or an
+    // explicit base URL puts it in the picker, and an empty key sends no
+    // auth header at all rather than a bare "Bearer ".
+    needsKey: false,
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -619,11 +633,17 @@ const LLM_PROVIDERS = {
   },
 };
 
+function providerIsConfigured(provider) {
+  if (process.env[provider.envVar]) return true;
+  // Key-optional providers (local servers) opt in with an explicit base URL.
+  return provider.needsKey === false && !!process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
+}
+
 function providerConfig(id) {
   const provider = LLM_PROVIDERS[id];
   if (!provider) return null;
-  const key = process.env[provider.envVar];
-  if (!key) return null;
+  if (!providerIsConfigured(provider)) return null;
+  const key = process.env[provider.envVar] || '';
   // A base URL override lets the same adapter reach a self-hosted NIM or a
   // proxy, and lets the tests point at a local stand-in.
   const baseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
@@ -636,7 +656,7 @@ function llmProviders(req, res) {
   sendJson(res, 200, Object.entries(LLM_PROVIDERS).map(([id, provider]) => ({
     id,
     label: provider.label,
-    configured: !!process.env[provider.envVar],
+    configured: providerIsConfigured(provider),
     // 'speech' and 'search' services have no chat models. Saying so beats an
     // empty dropdown that looks like a bug.
     kind: provider.kind || 'chat',
@@ -798,23 +818,28 @@ function providerTimeoutMs() {
   };
 }
 
-async function providerFetch(req, provider, path, init = {}) {
+// Most use "Authorization: Bearer <key>", but not all: Deepgram wants
+// "Token", AssemblyAI wants the bare key, You.com wants its own header,
+// and keyless local servers (Ollama) send no auth header at all rather
+// than a bare "Bearer ".
+function providerAuthHeaders(provider, req) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
+  const headerName = provider.authHeader || 'Authorization';
+  const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
+  const auth = provider.key ? { [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key } : {};
+  return { ...auth, 'Content-Type': 'application/json', ...extra };
+}
+
+async function providerFetch(req, provider, path, init = {}) {
   const budget = path.includes('chat') ? providerTimeoutMs().chat : providerTimeoutMs().models;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
-  // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
-  // "Token", AssemblyAI wants the bare key, You.com wants its own header.
-  const headerName = provider.authHeader || 'Authorization';
-  const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
   try {
     const res = await fetch(provider.baseUrl + path, {
       ...init,
       signal: controller.signal,
       headers: {
-        [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
-        'Content-Type': 'application/json',
-        ...extra,
+        ...providerAuthHeaders(provider, req),
         ...(init.headers || {}),
       },
     });
@@ -929,14 +954,7 @@ function llmChat(req, res) {
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       ...(body.stream ? { stream: true } : {}),
     });
-    const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
-    const headerName = provider.authHeader || 'Authorization';
-    const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
-    const headers = {
-      [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
-      'Content-Type': 'application/json',
-      ...extra,
-    };
+    const headers = providerAuthHeaders(provider, req);
     if (body.stream) {
       const t = providerTimeoutMs();
       const controller = new AbortController();
