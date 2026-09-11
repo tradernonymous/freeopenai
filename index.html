@@ -495,6 +495,33 @@
 
         /* Generated images */
         .message-image-wrap { margin-top: 6px; }
+        /* ChatGPT-style shimmer while an image generates: a wavy gradient
+           sweep. The global reduced-motion rule stills it for those users. */
+        .img-shimmer { aspect-ratio: 1 / 1; width: 100%; border-radius: var(--r); border: 1px solid var(--border); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 45%, var(--surface) 60%); background-size: 200% 100%; animation: shimmer-wave 1.6s linear infinite; }
+        @keyframes shimmer-wave { from { background-position: 180% 0; } to { background-position: -80% 0; } }
+        .image-caption { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+        .image-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+        .caption-copy { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-dim); font-size: 11px; padding: 3px 8px; cursor: pointer; flex-shrink: 0; }
+        .caption-copy:hover { background: var(--surface-2); color: var(--text); }
+        /* Showcase gallery: uniform tiles, prompt on hover. */
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+        .gallery-tile { position: relative; aspect-ratio: 1 / 1; border-radius: var(--r); overflow: hidden; border: 1px solid var(--border); background: var(--surface); cursor: zoom-in; padding: 0; }
+        .gallery-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gallery-tile figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 8px; font-size: 11px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.75)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gallery-expired { aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px; font-size: 12px; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: var(--r); }
+        /* Tab strip for pinned + active chats, desktop-session style. */
+        .chat-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px 0; flex-shrink: 0; }
+        .chat-tabs[hidden] { display: none; }
+        .chat-tab { flex-shrink: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface); border: 1px solid var(--border); border-bottom: none; border-radius: var(--r-sm) var(--r-sm) 0 0; color: var(--text-dim); font-size: 12px; padding: 6px 10px; cursor: pointer; }
+        .chat-tab.active { background: var(--surface-2); color: var(--text); }
+        .history-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 4px; flex-shrink: 0; }
+        .history-pin.on { color: var(--accent); }
+        /* Mask editor for image edits. touch-action none so a finger paints
+           instead of scrolling. */
+        .modal-wide { max-width: 560px; }
+        .mask-canvas { width: 100%; border-radius: var(--r-sm); border: 1px solid var(--border); background: #000; touch-action: none; cursor: crosshair; display: block; }
+        .mask-prompt { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font: inherit; font-size: 13px; outline: none; margin-top: 10px; }
+        .effort-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
         .message-image {
             display: block;
             max-width: 100%;
@@ -959,6 +986,7 @@
                     </aside>
                     <div class="history-scrim" id="historyScrim" onclick="toggleHistory(false)"></div>
                 <div class="chat-card">
+                    <div class="chat-tabs" id="chatTabs" hidden></div>
                     <div class="chat-bar">
                         <div class="chat-bar-title">
                             <button class="menu-trigger-btn" type="button" id="historyToggle" onclick="toggleHistory()" aria-label="Toggle chat history" aria-expanded="true" title="Chat history">
@@ -979,6 +1007,7 @@
                                     <div class="model-dropdown-list" id="modelDropdownList" role="listbox" aria-label="Available models"></div>
                                 </div>
                             </div>
+                            <button class="effort-chip" id="effortChip" hidden title="Reasoning effort" aria-label="Reasoning effort" onclick="focusEffort()">auto</button>
                             <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
                             <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
                             <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
@@ -1170,6 +1199,21 @@
                     </div>
                 </div>
             </div>
+            <div class="view" id="viewGallery">
+                <div class="chat-bar">
+                    <div class="chat-bar-title"><span>Gallery</span></div>
+                    <div class="chat-bar-actions">
+                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span class="signed-in-dot"></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-body">
+                    <p class="settings-hint" id="galleryEmpty">Images you generate appear here, newest first.</p>
+                    <div class="gallery-grid" id="galleryGrid"></div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -1207,6 +1251,8 @@
                     <li><strong>Free tier</strong> — Generous free usage limits</li>
                     <li><strong>Palette</strong> — Ctrl+P jumps to any model or action; Enter runs, Esc closes</li>
                     <li><strong>Interrupt</strong> — Esc stops a running reply; Enter sends</li>
+                    <li><strong>Editing</strong> — Ctrl+A/E move, Ctrl+K/U/W delete, Alt+letter words, Ctrl+G stops</li>
+                    <li><strong>Gallery</strong> — Every generated image lands in the Gallery view, newest first</li>
                 </ul>
             </div>
         </div>
@@ -1215,9 +1261,51 @@
     <div class="modal-overlay" id="imageLightbox" onclick="closeImageLightbox();">
         <div class="lightbox-content" role="dialog" aria-modal="true" aria-label="Generated image" onclick="event.stopPropagation();">
             <img id="lightboxImg" src="" alt="">
-            <div class="lightbox-actions">
-                <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
-                <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
+                            <div class="lightbox-actions">
+                                <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
+                                <button class="icon-btn-text" type="button" onclick="copyLightboxImage()">Copy</button>
+                                <button class="icon-btn-text" type="button" onclick="openImageEdit(lightboxImg.src, lightboxImg.alt)">Edit</button>
+                                <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
+                            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="imageConfirmOverlay" onclick="closeImageConfirm(false);">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="imageConfirmTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="imageConfirmTitle">Generate variations?</h3>
+            </div>
+            <div class="modal-body">
+                <p id="imageConfirmText"></p>
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" type="button" onclick="closeImageConfirm(true)">Continue</button>
+                <button class="icon-btn-text danger" type="button" onclick="closeImageConfirm(false)">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="imageEditOverlay" onclick="closeImageEdit();">
+        <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="imageEditTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="imageEditTitle">Edit image</h3>
+                <button class="modal-close" onclick="closeImageEdit();" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="settings-hint">Paint over the area to change, describe the edit, then submit. Unpainted areas stay as they are.</p>
+                <canvas id="maskCanvas" class="mask-canvas"></canvas>
+                <div class="github-browser-row" style="margin-top: 10px;">
+                    <button class="icon-btn-text" type="button" onclick="setMaskBrush(12)">Small brush</button>
+                    <button class="icon-btn-text" type="button" onclick="setMaskBrush(32)">Large brush</button>
+                    <button class="icon-btn-text danger" type="button" onclick="clearMask()">Clear mask</button>
+                </div>
+                <input type="text" id="imageEditPrompt" class="mask-prompt" placeholder="Describe the edit…" aria-label="Edit prompt">
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" type="button" onclick="submitImageEdit()">Apply edit</button>
+                <button class="icon-btn-text danger" type="button" onclick="closeImageEdit()">Cancel</button>
             </div>
         </div>
     </div>
@@ -1247,8 +1335,12 @@
                     Models
                 </button>
                 <button class="drawer-nav-btn" type="button" data-view="settings" onclick="switchViewFromDrawer('settings')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     Settings
+                </button>
+                <button class="drawer-nav-btn" type="button" data-view="gallery" onclick="switchViewFromDrawer('gallery')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    Gallery
                 </button>
                 <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -1321,7 +1413,7 @@
         // that use them: applyTheme() runs during initializeApp(), so these
         // must be initialized before that call or the whole init throws and
         // setupEventListeners() never runs (dead picker, dead composer keys).
-        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox'];
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'auto'];
         const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
@@ -1375,6 +1467,7 @@
             chat: document.getElementById('viewChat'),
             models: document.getElementById('viewModels'),
             settings: document.getElementById('viewSettings'),
+            gallery: document.getElementById('viewGallery'),
         };
 
         // Initialize
@@ -1528,6 +1621,7 @@
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
             document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
             if (name === 'settings') refreshGithubStatus();
+            if (name === 'gallery') renderGallery();
         }
 
         function switchViewFromDrawer(name) {
@@ -1644,6 +1738,18 @@
                 });
             }
             select.value = selectedEffort;
+            const chip = document.getElementById('effortChip');
+            if (chip) {
+                chip.hidden = !capable;
+                const level = EFFORT_LEVELS.find((l) => l.id === selectedEffort);
+                chip.textContent = selectedEffort && level ? level.name : 'auto';
+            }
+        }
+
+        function focusEffort() {
+            const select = document.getElementById('effortSelect');
+            if (select && !select.hidden && typeof select.focus === 'function') select.focus();
+            else showStatus('info', 'Effort applies to reasoning-capable Puter models');
         }
 
         function updateModelLabel() {
@@ -2120,6 +2226,8 @@
                         renderer.appendReasoning(delta.reasoning_content || delta.reasoning || delta.thinking || '');
                         renderer.appendText(delta.content || '');
                     }
+                    const usage = part && part.usage;
+                    if (usage) renderer.usage = (renderer.usage || 0) + (usage.completion_tokens || usage.total_tokens || 0);
                 }
             }
             renderer.flush();
@@ -2393,7 +2501,7 @@
                         await streamProviderChat(buildConversation(outgoing), renderer, currentAbort.signal);
                         removeTypingIndicator();
                         finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
-                    noteTurnStats(renderer.full.length);
+                        noteTurnStats(renderer.full.length, renderer.usage || 0);
                         showStatus('success', 'Sent');
                     } catch (e) {
                         removeTypingIndicator();
@@ -2493,10 +2601,13 @@
         const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
 
         async function sendImageGeneration(promptText) {
+            let bubble = null;
+            let filled = false;
             try {
                 usageCount++;
                 updateUsageDisplay();
 
+                bubble = createImageBubble();
                 let imgEl;
                 let lastError;
                 for (const model of IMAGE_MODELS) {
@@ -2510,44 +2621,370 @@
                 if (!imgEl) throw lastError;
 
                 removeTypingIndicator();
-                addImageMessage(promptText, imgEl);
+                fillImageBubble(bubble, promptText, imgEl.src);
+                filled = true;
                 showStatus('success', 'Image ready');
             } catch (error) {
                 removeTypingIndicator();
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
                 console.error('Image generation failed:', error);
-                showStatus('error', 'Failed: ' + error.message);
-                addMessage('system', 'Error generating image: ' + error.message, { error: true });
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                    addMessage('system', outOfCreditsAdvice(), { error: true });
+                } else if (isAccountLevelFailure(msg, '')) {
+                    addMessage('system', 'Image billing refused the account: ' + msg, { error: true });
+                } else {
+                    showStatus('error', 'Failed: ' + msg);
+                    addMessage('system', 'Error generating image: ' + msg, { error: true });
+                }
             } finally {
                 currentAbort = null;
                 setComposerBusy(false);
             }
         }
 
-        function addImageMessage(promptText, imgEl) {
+        // A bot bubble that starts as a shimmer and is filled when the image
+        // arrives, ChatGPT style. Nothing persists until the fill lands.
+        function createImageBubble() {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
-
             const el = document.createElement('div');
             el.className = 'message bot';
-            el.dataset.rawContent = `[Generated image: ${promptText}]`;
-
-            const wrap = document.createElement('div');
-            wrap.className = 'message-image-wrap';
-            imgEl.className = 'message-image';
-            imgEl.alt = promptText;
-            imgEl.loading = 'lazy';
-            imgEl.addEventListener('click', () => openImageLightbox(imgEl.src, promptText));
-            imgEl.addEventListener('load', () => { chatMessages.scrollTop = chatMessages.scrollHeight; });
-            wrap.appendChild(imgEl);
-            el.appendChild(wrap);
-            el.appendChild(buildMessageActions(promptText, true));
-
+            const shimmer = document.createElement('div');
+            shimmer.className = 'img-shimmer';
+            shimmer.setAttribute('role', 'status');
+            shimmer.setAttribute('aria-label', 'Generating image…');
+            el.appendChild(shimmer);
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            messages.push({ type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() });
-            persistMessages();
-
             return el;
+        }
+
+        function buildImageWrap(src, promptText) {
+            const wrap = document.createElement('div');
+            wrap.className = 'message-image-wrap';
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'message-image';
+            img.alt = promptText;
+            img.loading = 'lazy';
+            img.addEventListener('click', () => openImageLightbox(src, promptText));
+            img.addEventListener('load', () => { chatMessages.scrollTop = chatMessages.scrollHeight; });
+            wrap.appendChild(img);
+            return wrap;
+        }
+
+        function persistableImageUrl(url) {
+            // Blob URLs die with the page; only remote URLs survive a reload,
+            // so only those enter history and the gallery.
+            return typeof url === 'string' && /^https?:/i.test(url) ? url : '';
+        }
+
+        function finishImageContent(el, promptText, urls) {
+            el.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+            el.dataset.rawContent = `[Generated image: ${promptText}]`;
+            const good = urls.filter((u) => typeof u === 'string' && u);
+            good.forEach((u) => el.appendChild(buildImageWrap(u, promptText)));
+            const caption = document.createElement('div');
+            caption.className = 'image-caption';
+            const label = document.createElement('span');
+            label.textContent = promptText;
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.className = 'caption-copy';
+            cp.textContent = 'Copy prompt';
+            cp.setAttribute('aria-label', 'Copy image prompt');
+            cp.addEventListener('click', () => copyText(promptText, null));
+            caption.appendChild(label);
+            caption.appendChild(cp);
+            el.appendChild(caption);
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, good[0] || '', promptText);
+            const stored = good.filter((u) => persistableImageUrl(u)).map((url) => ({ url, prompt: promptText }));
+            const entry = { type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() };
+            if (stored.length) entry.images = stored;
+            messages.push(entry);
+            persistMessages();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function fillImageBubble(el, promptText, src) {
+            finishImageContent(el, promptText, [src]);
+        }
+
+        function appendImageTools(el, src, promptText) {
+            const bar = document.createElement('div');
+            bar.className = 'message-actions';
+            const vary = document.createElement('button');
+            vary.type = 'button';
+            vary.className = 'icon-btn-text';
+            vary.textContent = 'Vary';
+            vary.setAttribute('aria-label', 'Generate 2 variations');
+            vary.addEventListener('click', () => sendImageVariations(promptText));
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'icon-btn-text';
+            edit.textContent = 'Edit';
+            edit.setAttribute('aria-label', 'Edit this image');
+            edit.addEventListener('click', () => openImageEdit(src, promptText));
+            bar.appendChild(vary);
+            bar.appendChild(edit);
+            el.appendChild(bar);
+        }
+
+        let imageConfirmResolver = null;
+        function askImageConfirm(title, text) {
+            document.getElementById('imageConfirmTitle').textContent = title;
+            document.getElementById('imageConfirmText').textContent = text;
+            document.getElementById('imageConfirmOverlay').classList.add('open');
+            return new Promise((resolve) => { imageConfirmResolver = resolve; });
+        }
+        function closeImageConfirm(choice) {
+            document.getElementById('imageConfirmOverlay').classList.remove('open');
+            if (imageConfirmResolver) imageConfirmResolver(choice === true);
+            imageConfirmResolver = null;
+        }
+
+        async function sendImageVariations(promptText) {
+            const ok = await askImageConfirm('Generate 2 variations?', `"${promptText}" — two extra image generations will run.`);
+            if (!ok) return;
+            setComposerBusy(true);
+            currentAbort = new AbortController();
+            showTypingIndicator();
+            let bubble = null;
+            const made = [];
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const second = document.createElement('div');
+                second.className = 'img-shimmer';
+                second.setAttribute('role', 'status');
+                second.setAttribute('aria-label', 'Generating variation…');
+                bubble.appendChild(second);
+                for (let i = 0; i < 2; i++) {
+                    let imgEl = null;
+                    let lastError = null;
+                    for (const model of IMAGE_MODELS) {
+                        try {
+                            imgEl = await puter.ai.txt2img(promptText, { model });
+                            break;
+                        } catch (error) {
+                            lastError = error;
+                        }
+                    }
+                    if (!imgEl) throw lastError;
+                    made.push(imgEl.src);
+                    const shimmers = bubble.querySelectorAll('.img-shimmer');
+                    const wrap = buildImageWrap(imgEl.src, promptText);
+                    if (shimmers[i]) shimmers[i].replaceWith(wrap);
+                    else bubble.appendChild(wrap);
+                }
+                removeTypingIndicator();
+                finishImageContent(bubble, promptText + ' (variations)', made);
+                bubble.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+                showStatus('success', 'Variations ready');
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble) {
+                    if (made.length) {
+                        finishImageContent(bubble, promptText + ' (variations)', made);
+                        bubble.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+                    } else if (bubble.parentNode) bubble.remove();
+                }
+                console.error('Image variations failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error generating variations: ' + msg, { error: true });
+            } finally {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
+        }
+
+        function imageUrlFrom(data) {
+            const first = data && Array.isArray(data.data) && data.data[0];
+            if (!first) return '';
+            if (first.url) return first.url;
+            if (first.b64_json) return 'data:image/png;base64,' + first.b64_json;
+            return '';
+        }
+
+        async function copyLightboxImage() {
+            const src = lightboxImg.src;
+            try {
+                const res = await fetch(src);
+                const blob = await res.blob();
+                await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+                showStatus('success', 'Image copied');
+            } catch {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(src)
+                        .then(() => showStatus('success', 'Image URL copied'))
+                        .catch(() => showStatus('error', 'Copy failed'));
+                } else {
+                    showStatus('error', 'Copy failed');
+                }
+            }
+        }
+
+        // Mask editor state. editState.mask is black with the painted region
+        // in white; editState.img keeps the source element for clearing.
+        let editState = null;
+        let maskBrush = 24;
+
+        function openImageEdit(src, promptText) {
+            closeImageLightbox();
+            editState = null;
+            const canvas = document.getElementById('maskCanvas');
+            const promptInput = document.getElementById('imageEditPrompt');
+            promptInput.value = '';
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                try {
+                    const scale = Math.min(1, 640 / img.naturalWidth);
+                    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    const mask = document.createElement('canvas');
+                    mask.width = w;
+                    mask.height = h;
+                    const mctx = mask.getContext('2d');
+                    mctx.fillStyle = '#000';
+                    mctx.fillRect(0, 0, w, h);
+                    editState = { img, mask, painted: false, prompt: promptText || '' };
+                    attachMaskPainting(canvas);
+                    document.getElementById('imageEditOverlay').classList.add('open');
+                    promptInput.focus();
+                } catch (e) {
+                    showStatus('error', 'Cannot prepare that image for editing: ' + e.message);
+                }
+            };
+            img.onerror = () => showStatus('error', 'Cannot load that image for editing (external hosts may block it).');
+            img.src = src;
+        }
+
+        function attachMaskPainting(canvas) {
+            if (canvas.dataset.paintWired) return;
+            canvas.dataset.paintWired = '1';
+            const pos = (e) => {
+                const r = canvas.getBoundingClientRect();
+                const p = (e.touches && e.touches[0]) || e;
+                return [(p.clientX - r.left) * (canvas.width / r.width), (p.clientY - r.top) * (canvas.height / r.height)];
+            };
+            const paint = (e) => {
+                if (!editState) return;
+                e.preventDefault();
+                const [x, y] = pos(e);
+                const dctx = canvas.getContext('2d');
+                dctx.fillStyle = 'rgba(244,63,94,.55)';
+                dctx.beginPath();
+                dctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                dctx.fill();
+                const mctx = editState.mask.getContext('2d');
+                mctx.fillStyle = '#fff';
+                mctx.beginPath();
+                mctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                mctx.fill();
+                editState.painted = true;
+            };
+            let down = false;
+            canvas.addEventListener('pointerdown', (e) => { down = true; paint(e); });
+            canvas.addEventListener('pointermove', (e) => { if (down) paint(e); });
+            canvas.addEventListener('pointerup', () => { down = false; });
+            canvas.addEventListener('pointerleave', () => { down = false; });
+        }
+
+        function setMaskBrush(px) {
+            maskBrush = px;
+            showStatus('info', 'Brush: ' + px + 'px');
+        }
+
+        function clearMask() {
+            const canvas = document.getElementById('maskCanvas');
+            if (!canvas || !editState) return;
+            canvas.getContext('2d').drawImage(editState.img, 0, 0, canvas.width, canvas.height);
+            const mctx = editState.mask.getContext('2d');
+            mctx.fillStyle = '#000';
+            mctx.fillRect(0, 0, canvas.width, canvas.height);
+            editState.painted = false;
+        }
+
+        function closeImageEdit() {
+            document.getElementById('imageEditOverlay').classList.remove('open');
+            editState = null;
+        }
+
+        function editImageDataUrl() {
+            if (!editState) return '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = editState.img.naturalWidth;
+                c.height = editState.img.naturalHeight;
+                c.getContext('2d').drawImage(editState.img, 0, 0);
+                return c.toDataURL('image/png');
+            } catch {
+                return '';
+            }
+        }
+
+        async function submitImageEdit() {
+            const prompt = document.getElementById('imageEditPrompt').value.trim();
+            if (!prompt) { showStatus('error', 'Describe the edit first'); return; }
+            if (!editState) { showStatus('error', 'Image is not ready yet'); return; }
+            const srcData = editImageDataUrl();
+            if (!srcData) { showStatus('error', 'That image host blocks editing (canvas is locked).'); return; }
+            let maskData = '';
+            try {
+                if (editState.painted) maskData = editState.mask.toDataURL('image/png');
+            } catch {
+                maskData = '';
+            }
+            closeImageEdit();
+            setComposerBusy(true);
+            currentAbort = new AbortController();
+            showTypingIndicator();
+            let bubble = null;
+            let filled = false;
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const res = await fetch('/api/llm/images/edits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt,
+                        image: srcData,
+                        ...(maskData ? { mask: maskData } : {}),
+                    }),
+                    signal: currentAbort.signal,
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || 'Edit failed');
+                const url = imageUrlFrom(data);
+                if (!url) throw new Error('Edit returned no image');
+                removeTypingIndicator();
+                fillImageBubble(bubble, prompt + ' (edit)', url);
+                filled = true;
+                showStatus('success', 'Edit ready');
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && error.name === 'AbortError') {
+                    showStatus('info', 'Edit stopped');
+                    return;
+                }
+                console.error('Image edit failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error editing image: ' + msg, { error: true });
+            } finally {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
         }
 
         function openImageLightbox(src, altText) {
@@ -2761,6 +3198,60 @@
 
         function handleKeyDown(e) {
             if (e.key === 'Escape' && isTyping) { stopGeneration(); return; }
+            if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'g') {
+                e.preventDefault();
+                if (isTyping) stopGeneration();
+                return;
+            }
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                // Readline editing, desktop-prompt style.
+                const ta = e.target;
+                const k = String(e.key || '').toLowerCase();
+                const pos = (p) => { try { ta.setSelectionRange(p, p); } catch { /* ignore */ } };
+                if (k === 'a') { e.preventDefault(); pos(0); return; }
+                if (k === 'e') { e.preventDefault(); pos(ta.value.length); return; }
+                if (k === 'k') { e.preventDefault(); ta.value = ta.value.slice(0, ta.selectionStart); autoResize(ta); return; }
+                if (k === 'u') { e.preventDefault(); ta.value = ta.value.slice(ta.selectionEnd); autoResize(ta); pos(0); return; }
+                if (k === 'w') {
+                    e.preventDefault();
+                    const s = ta.selectionStart;
+                    const cut = ta.value.slice(0, s).replace(/\S+\s*$/, '');
+                    ta.value = cut + ta.value.slice(s);
+                    autoResize(ta);
+                    pos(cut.length);
+                    return;
+                }
+            }
+            if (e.altKey && !e.ctrlKey && !e.metaKey) {
+                const ta = e.target;
+                const k = String(e.key || '').toLowerCase();
+                const word = (dir) => {
+                    const v = ta.value;
+                    let p = ta.selectionStart;
+                    if (dir < 0) {
+                        while (p > 0 && /\s/.test(v[p - 1])) p--;
+                        while (p > 0 && !/\s/.test(v[p - 1])) p--;
+                    } else {
+                        while (p < v.length && /\s/.test(v[p])) p++;
+                        while (p < v.length && !/\s/.test(v[p])) p++;
+                    }
+                    try { ta.setSelectionRange(p, p); } catch { /* ignore */ }
+                };
+                if (k === 'b') { e.preventDefault(); word(-1); return; }
+                if (k === 'f') { e.preventDefault(); word(1); return; }
+                if (k === 'd') {
+                    e.preventDefault();
+                    const s = ta.selectionStart;
+                    const v = ta.value;
+                    let p = s;
+                    while (p < v.length && /\s/.test(v[p])) p++;
+                    while (p < v.length && !/\s/.test(v[p])) p++;
+                    ta.value = v.slice(0, s) + v.slice(p);
+                    autoResize(ta);
+                    try { ta.setSelectionRange(s, s); } catch { /* ignore */ }
+                    return;
+                }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
@@ -2992,8 +3483,22 @@
         // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
         // throughout: the boot-test stub DOM has no theme machinery, so every
         // DOM touch checks first. (THEMES/THEME_META live up with the state.)
+        // 'auto' follows the OS; anything unknown falls back to dark.
+        function resolveTheme(stored) {
+            if (stored === 'auto') {
+                try {
+                    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                    }
+                } catch { /* ignore */ }
+                return 'dark';
+            }
+            return THEMES.includes(stored) ? stored : 'dark';
+        }
+
         function applyTheme(theme) {
-            const name = THEMES.includes(theme) ? theme : 'dark';
+            const stored = theme === 'auto' || THEMES.includes(theme) ? theme : 'dark';
+            const name = resolveTheme(stored);
             try {
                 if (document && document.documentElement && typeof document.documentElement.setAttribute === 'function') {
                     document.documentElement.setAttribute('data-theme', name);
@@ -3003,7 +3508,7 @@
             } catch { /* stub DOM in tests */ }
             try {
                 if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
-                    localStorage.setItem('puterChatTheme', name);
+                    localStorage.setItem('puterChatTheme', stored);
                 }
             } catch { /* private mode */ }
         }
@@ -3014,6 +3519,21 @@
             applyTheme(next);
             showStatus('success', 'Theme: ' + next);
         }
+
+        // Follow the OS while 'auto' is stored. Attached once, guarded for
+        // the stub DOM, which answers matchMedia with a no-op object.
+        try {
+            if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                const mq = window.matchMedia('(prefers-color-scheme: light)');
+                const follow = () => {
+                    try {
+                        if (typeof localStorage !== 'undefined' && localStorage.getItem('puterChatTheme') === 'auto') applyTheme('auto');
+                    } catch { /* ignore */ }
+                };
+                if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', follow);
+                else if (mq && typeof mq.addListener === 'function') mq.addListener(follow);
+            }
+        } catch { /* stub DOM */ }
 
         // Command palette (Ctrl+P): models plus actions, filtered as you type.
         // OpenCode's command_list parity. Lookups happen on open, so the
@@ -3120,13 +3640,15 @@
         }
 
         // TUI status parity: after each reply the status bar shows what
-        // answered, how long it took, and how much text came back.
-        function noteTurnStats(chars) {
+        // answered, how long it took, how much text came back, and token
+        // usage when the provider reports it.
+        function noteTurnStats(chars, tokens = 0) {
             if (!turnStartedAt) return;
             const secs = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
             const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+            const tok = tokens > 0 ? ` · ${(tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : tokens)} tok` : '';
             if (usageText) {
-                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars`;
+                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars${tok}`;
                 usageText.style.display = 'inline';
             }
             turnStartedAt = 0;
@@ -3231,6 +3753,18 @@
                 title.title = convo.title || 'New chat';
                 row.appendChild(title);
 
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'history-pin' + (convo.pinned ? ' on' : '');
+                pin.textContent = convo.pinned ? '★' : '☆';
+                pin.title = convo.pinned ? 'Unpin this chat' : 'Pin this chat';
+                pin.setAttribute('aria-label', (convo.pinned ? 'Unpin chat: ' : 'Pin chat: ') + (convo.title || 'New chat'));
+                pin.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePin(convo.id);
+                });
+                row.appendChild(pin);
+
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'history-delete';
@@ -3249,6 +3783,39 @@
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
                 });
                 list.appendChild(row);
+            });
+            renderTabs();
+        }
+
+        function togglePin(id) {
+            const convo = conversations.find((c) => c.id === id);
+            if (!convo) return;
+            convo.pinned = !convo.pinned;
+            writeConversations();
+            renderHistoryList();
+        }
+
+        // Tab strip: the active chat first, then pinned ones. Hidden when
+        // there is nothing worth switching between.
+        function renderTabs() {
+            const strip = document.getElementById('chatTabs');
+            if (!strip) return;
+            strip.innerHTML = '';
+            const active = conversations.find((c) => c.id === activeConversationId);
+            const list = [];
+            if (active) list.push(active);
+            conversations.filter((c) => c.pinned && (!active || c.id !== active.id)).forEach((c) => list.push(c));
+            strip.hidden = list.length < 2 && !list.some((c) => c.pinned);
+            if (strip.hidden) return;
+            list.forEach((c) => {
+                const tab = document.createElement('button');
+                tab.type = 'button';
+                tab.className = 'chat-tab' + (c.id === activeConversationId ? ' active' : '');
+                tab.textContent = (c.pinned ? '★ ' : '') + (c.title || 'New chat');
+                tab.title = c.title || 'New chat';
+                tab.setAttribute('aria-label', 'Open chat: ' + (c.title || 'New chat'));
+                tab.addEventListener('click', () => openConversation(c.id));
+                strip.appendChild(tab);
             });
         }
 
@@ -3351,10 +3918,95 @@
             messages = [];
             if (saved.length) emptyState.style.display = 'none';
             saved.forEach((msg, i) => {
+                if (msg.type === 'bot' && Array.isArray(msg.images) && msg.images.length) {
+                    renderSavedImageMessage(msg);
+                    return;
+                }
+                if (msg.type === 'bot' && typeof msg.content === 'string' && msg.content.startsWith('[Generated image:')) {
+                    renderExpiredImageMessage(msg.content);
+                    return;
+                }
                 const retryText = (msg.type === 'bot' && saved[i - 1] && saved[i - 1].type === 'user')
                     ? saved[i - 1].content
                     : undefined;
                 addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
+            });
+        }
+
+        function renderSavedImageMessage(msg) {
+            const promptText = (msg.images[0] && msg.images[0].prompt) || '';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            el.dataset.rawContent = msg.content || `[Generated image: ${promptText}]`;
+            msg.images.forEach((im) => {
+                if (im && im.url) el.appendChild(buildImageWrap(im.url, im.prompt || promptText));
+            });
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, (msg.images[0] && msg.images[0].url) || '', promptText);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content: el.dataset.rawContent, images: msg.images, timestamp: msg.timestamp || Date.now() });
+        }
+
+        function renderExpiredImageMessage(content) {
+            const m = /^\[Generated image: ([\s\S]*)\]$/.exec(content || '');
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            const card = document.createElement('div');
+            card.className = 'gallery-expired';
+            card.textContent = 'Image unavailable — only "' + (m ? m[1] : 'an earlier image') + '" was kept, not the file. Generate it again to see it here.';
+            el.appendChild(card);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content, timestamp: Date.now() });
+        }
+
+        function collectGalleryImages() {
+            const out = [];
+            const seen = new Set();
+            const all = [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            all.forEach((c) => {
+                (c.messages || []).forEach((m) => {
+                    (m.images || []).forEach((im) => {
+                        if (im && im.url && !seen.has(im.url)) {
+                            seen.add(im.url);
+                            out.push({ url: im.url, prompt: im.prompt || '', convo: c.title || 'Chat' });
+                        }
+                    });
+                    if (m.type === 'bot' && typeof m.content === 'string') {
+                        const mm = /^\[Generated image: ([\s\S]*)\]$/.exec(m.content);
+                        if (mm && !(m.images && m.images.length)) out.push({ url: '', prompt: mm[1], convo: c.title || 'Chat' });
+                    }
+                });
+            });
+            return out;
+        }
+
+        function renderGallery() {
+            const grid = document.getElementById('galleryGrid');
+            const empty = document.getElementById('galleryEmpty');
+            if (!grid) return;
+            grid.innerHTML = '';
+            const items = collectGalleryImages();
+            if (empty) empty.hidden = items.length > 0;
+            items.forEach((it) => {
+                if (!it.url) {
+                    const card = document.createElement('div');
+                    card.className = 'gallery-expired';
+                    card.textContent = '"' + it.prompt + '" — image no longer stored.';
+                    grid.appendChild(card);
+                    return;
+                }
+                const fig = document.createElement('figure');
+                fig.className = 'gallery-tile';
+                const img = document.createElement('img');
+                img.src = it.url;
+                img.alt = it.prompt;
+                img.loading = 'lazy';
+                img.addEventListener('click', () => openImageLightbox(it.url, it.prompt));
+                const cap = document.createElement('figcaption');
+                cap.textContent = it.prompt;
+                fig.appendChild(img);
+                fig.appendChild(cap);
+                grid.appendChild(fig);
             });
         }
 
@@ -3394,6 +4046,8 @@
             if (overlay === helpOverlay) return closeHelp;
             if (overlay === drawerOverlay) return closeDrawer;
             if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
+            if (overlay && overlay.id === 'imageConfirmOverlay') return () => closeImageConfirm(false);
+            if (overlay && overlay.id === 'imageEditOverlay') return closeImageEdit;
             return closeImageLightbox;
         }
 

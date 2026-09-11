@@ -654,6 +654,73 @@ function llmLimits(req, res) {
   });
 }
 
+// Image generation and edits live on Nara's separate images host. Keys stay
+// server-side: the browser sends prompt + image data, never credentials.
+// Generations take a plain JSON body; edits need multipart with the source
+// image (and optional mask) as data URLs, rebuilt here into file parts.
+function naraImagesBase() {
+  return process.env.NARA_IMAGES_BASE_URL || 'https://api-images.bynara.id';
+}
+
+async function llmImage(req, res, kind) {
+  const key = process.env.NARA_API_KEY;
+  if (!key) return sendJson(res, 400, { error: 'Image editing needs a Nara key (NARA_API_KEY).' });
+  readJsonBody(req, 12 * 1024 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    try {
+      const headers = { Authorization: `Bearer ${key}` };
+      let upstream;
+      if (kind === 'edits') {
+        const model = body.model || process.env.NARA_IMAGE_MODEL;
+        if (!model) {
+          return sendJson(res, 400, { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' });
+        }
+        if (!body.image) return sendJson(res, 400, { error: 'image is required' });
+        const boundary = '----freeopenai' + Date.now().toString(36);
+        const parts = [];
+        const filePart = (name, filename, dataUrl) => {
+          const m = /^data:(.+?);base64,([\s\S]+)$/.exec(String(dataUrl || ''));
+          if (!m) throw new Error(`Invalid image data for "${name}" — expected a data URL.`);
+          parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${m[1]}\r\n\r\n`));
+          parts.push(Buffer.from(m[2], 'base64'));
+          parts.push(Buffer.from('\r\n'));
+        };
+        const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+        filePart('image', 'image.png', body.image);
+        if (body.mask) filePart('mask', 'mask.png', body.mask);
+        field('prompt', prompt);
+        field('model', model);
+        if (body.size) field('size', body.size);
+        parts.push(Buffer.from(`--${boundary}--\r\n`));
+        upstream = await fetch(naraImagesBase() + '/v1/images/edits', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+          body: Buffer.concat(parts),
+        });
+      } else {
+        upstream = await fetch(naraImagesBase() + '/v1/images/generations', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            ...(body.model ? { model: body.model } : {}),
+            ...(body.size ? { size: body.size } : {}),
+          }),
+        });
+      }
+      const data = await upstream.json().catch(() => null);
+      if (!upstream.ok || !data) {
+        return sendJson(res, upstream.status || 502, { error: describeProviderError(upstream.status || 502, data, { label: 'Nara' }) });
+      }
+      sendJson(res, 200, data);
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
@@ -1050,6 +1117,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
     if (urlPath === '/api/llm/limits' && req.method === 'GET') return llmLimits(req, res);
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
+    if (urlPath === '/api/llm/images/generations' && req.method === 'POST') return llmImage(req, res, 'generations');
+    if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);

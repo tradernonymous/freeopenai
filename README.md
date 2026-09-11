@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-189%20passing-22c55e?style=for-the-badge" alt="189 tests passing">
+  <img src="https://img.shields.io/badge/tests-196%20passing-22c55e?style=for-the-badge" alt="196 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -78,7 +78,7 @@
   <tr>
     <td valign="top">
       <h3>🖼️ Image generation</h3>
-      Toggle the image icon next to the input to generate a picture instead of chatting. Click any result to zoom in or download it.
+      Toggle the image icon next to the input to generate a picture instead of chatting. A shimmer placeholder holds the spot while it renders. Click any result to zoom in, download, copy, edit with a brush mask, or make variations — every image lands in the Gallery view, newest first.
     </td>
     <td valign="top">
       <h3>🧠 Reasoning summaries</h3>
@@ -238,6 +238,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
+| `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for the Edit flow (`/api/llm/images/edits`). Required — edits refuse clearly without it. |
+| `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — pinned to ten allowed models: Qwen 3 Coder, Nemotron 3 Ultra, Laguna S/XS 2.1, gpt-oss-120b, North Mini Code, Gemma 4 31B, GLM 5.2, MiniMax M3, Nemotron 3.5 Lightning. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
