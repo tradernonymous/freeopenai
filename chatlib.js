@@ -856,6 +856,8 @@ if (typeof module !== 'undefined' && module.exports) {
     isWebTool,
     safeJson,
     isToolsRejection,
+    modelTokens,
+    matchListEntry,
     parseToolArgs,
     describeToolCall,
     extractMessageText,
