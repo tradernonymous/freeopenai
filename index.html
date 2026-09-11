@@ -836,7 +836,11 @@
         /* Responsive */
         @media (max-width: 640px) {
             .drawer-footer .auth-name { max-width: 120px; }
-            .chat-bar { padding: 0 10px; height: 52px; gap: 6px; }
+            .chat-bar { padding: 0 8px; height: 52px; gap: 4px; }
+            .chat-bar-actions { gap: 2px; }
+            /* Icon buttons keep their 44px finger target via the ::after rule
+               below, so the visible glyph can shrink to fit 375px. */
+            .chat-bar-actions .icon-btn { width: 30px; height: 30px; }
             /* The refresh icon is the least-used control on a phone, and with
                the model trigger + provider select it is what pushes the header
                past a 375px screen. The browser's own reload still covers it. */
@@ -858,7 +862,7 @@
                for real rather than padded out like the buttons. */
             .effort-select, #providerSelect { min-height: 44px; }
             .effort-select option { font-size: 14px; }
-            .model-trigger { padding: 6px 8px; }
+            .model-trigger { padding: 6px 6px; }
             .history-sidebar {
                 position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
                 width: 78%; max-width: 300px;
@@ -935,6 +939,18 @@
             /* A generated image must not swallow the whole transcript. Both
                constraints hold at once, so the aspect ratio survives. */
             .message-image { max-height: 52vh; margin-inline: auto; }
+            /* iOS zooms any focused input under 16px. The model search was
+               fixed earlier; these stragglers zoomed the same way. */
+            .palette input { font-size: 16px; }
+            .mask-prompt { font-size: 16px; }
+            #githubPathInput, #githubCommitMessage { font-size: 16px; }
+            /* Turn stats can be long ("nvidia/nemotron-3-ultra… · 12s"); on a
+               phone the status bar must clip, not push the layout sideways. */
+            .status-left { min-width: 0; flex-shrink: 1; }
+            #statusMessage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #usageText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 44vw; flex-shrink: 0; }
+            /* Wide dialogs (mask editor) must fit a 360px viewport. */
+            .modal-wide { width: calc(100vw - 32px); }
         }
 
         @media (max-width: 380px) {
@@ -945,6 +961,9 @@
             #viewChat .chat-bar-title span { display: none; }
             .effort-select { max-width: 76px; }
             .model-trigger span#modelLabel { max-width: 68px; }
+            /* Six header controls don't fit 360px even icon-sized; the theme
+               stays one Ctrl+P away, so it yields first. */
+            #themeToggle { display: none; }
         }
 
         /* A phone that has no hover state never reveals the delete affordances
@@ -3207,7 +3226,11 @@
 
         function autoResize(ta) {
             ta.style.height = '36px';
-            ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+            // A fixed 140px cap eats the whole transcript on a landscape
+            // phone once the keyboard is up; cap against the live viewport
+            // instead. Guarded: the boot-test stub has no innerHeight.
+            const cap = (typeof window !== 'undefined' && window.innerHeight) ? Math.max(80, Math.floor(window.innerHeight * 0.35)) : 140;
+            ta.style.height = Math.min(ta.scrollHeight, cap) + 'px';
             sendButton.disabled = !ta.value.trim();
         }
 
