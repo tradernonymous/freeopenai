@@ -1317,6 +1317,12 @@
         let autoRetryEnabled = true;
         let compactNotices = false;
         let turnStartedAt = 0;
+        // Theme tables live with the other state, not beside the functions
+        // that use them: applyTheme() runs during initializeApp(), so these
+        // must be initialized before that call or the whole init throws and
+        // setupEventListeners() never runs (dead picker, dead composer keys).
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox'];
+        const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
 
@@ -2985,9 +2991,7 @@
 
         // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
         // throughout: the boot-test stub DOM has no theme machinery, so every
-        // DOM touch checks first.
-        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox'];
-        const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
+        // DOM touch checks first. (THEMES/THEME_META live up with the state.)
         function applyTheme(theme) {
             const name = THEMES.includes(theme) ? theme : 'dark';
             try {
