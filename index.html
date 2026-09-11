@@ -2293,7 +2293,7 @@
                 removeTypingIndicator();
                 console.error('Chat request failed:', error);
                 // The credit advice is about Puter's allowance specifically. Shown
-                // for a Cerebras or OpenRouter failure it sends the user to the
+                // for a Nara or OpenRouter failure it sends the user to the
                 // wrong dashboard entirely, which is what it did.
                 if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
                     showStatus('error', 'Out of Puter credits');

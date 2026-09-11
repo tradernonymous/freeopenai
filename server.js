@@ -525,16 +525,16 @@ function githubPutFile(req, res) {
 }
 
 // Direct provider access, as an alternative to Puter. Each of these is
-// OpenAI-compatible, so one adapter covers all three: only the base URL, the
+// OpenAI-compatible, so one adapter covers all of them: only the base URL, the
 // key and a couple of headers differ.
 //
 // Keys live here, never in the browser. The whole API surface already sits
 // behind the login gate, so a key can't be read by anyone who isn't signed in.
 const LLM_PROVIDERS = {
-  cerebras: {
-    label: 'Cerebras',
-    baseUrl: 'https://api.cerebras.ai/v1',
-    envVar: 'CEREBRAS_API_KEY',
+  nara: {
+    label: 'Nara',
+    baseUrl: 'https://router.bynara.id/v1',
+    envVar: 'NARA_API_KEY',
   },
   openrouter: {
     label: 'OpenRouter',
@@ -552,11 +552,6 @@ const LLM_PROVIDERS = {
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
     envVar: 'MISTRAL_API_KEY',
-  },
-  sambanova: {
-    label: 'SambaNova',
-    baseUrl: 'https://api.sambanova.ai/v1',
-    envVar: 'SAMBANOVA_API_KEY',
   },
   // The three below are speech and search services. Probing them directly:
   //
@@ -755,7 +750,7 @@ async function llmModels(req, res) {
 // Every provider is OpenAI-compatible for chat, but each invents its own
 // metadata around it. OpenRouter nests modalities under architecture and
 // prices per token as strings; ZenMux puts modalities at the top level and
-// prices per million tokens as arrays of objects; Cerebras and NVIDIA send
+// prices per million tokens as arrays of objects; Nara and NVIDIA send
 // neither. Flatten all of it into one shape so the client has a single set of
 // rules to rank by.
 function firstPriceValue(entry) {

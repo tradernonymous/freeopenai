@@ -109,8 +109,8 @@
       Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
     </td>
     <td valign="top">
-      <h3>🔌 Five providers</h3>
-      Puter needs no key at all. Add a key for Cerebras, OpenRouter, NVIDIA, Mistral or SambaNova and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
+      <h3>🔌 Four providers</h3>
+      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA or Mistral and they appear in a picker — so one running dry never stops the work. Keys stay on the server.
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
@@ -232,11 +232,10 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
-| `CEREBRAS_API_KEY` | *(unset)* | Adds Cerebras. Answers `402 Payment required` on a key with no billing set up. |
+| `NARA_API_KEY` | *(unset)* | Adds the Nara router — agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
-| `SAMBANOVA_API_KEY` | *(unset)* | Adds SambaNova — DeepSeek, Llama 3.3, gpt-oss, MiniMax. Paid: it publishes real prices and requires a payment method. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
@@ -245,7 +244,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 >
 > The last three are speech and search services rather than LLMs. They're wired up so a key can settle it, but a chat request to Deepgram or AssemblyAI returns `404` because neither has a chat completions endpoint.
 >
-> Model lists are read from each provider at runtime, and free models are floated to the top. Where a provider publishes prices — OpenRouter — that decides it. Where one publishes none, the app assumes an account allowance and shows the catalogue, letting the provider be the one to refuse. That assumption is not always right: Cerebras publishes no prices and still requires billing.
+> Model lists are read from each provider at runtime, and free models are floated to the top. Where a provider publishes prices — OpenRouter — that decides it. Where one publishes none, the app assumes an account allowance and shows the catalogue, letting the provider be the one to refuse. That assumption is not always right: a catalogue with no prices can still refuse on billing or plan limits.
 >
 > A refusal naming one model retires that model. A refusal about the account — "a payment method is required" — suspends the whole provider and switches back to Puter, rather than spending a failed request per model.
 

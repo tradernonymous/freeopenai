@@ -593,7 +593,7 @@ function explainEmptyReply(message, finishReason) {
 
 // OpenRouter publishes real prices, so cost is a fact rather than a guess at
 // the name. Only 21 of its ~430 models are actually free, and the ":free"
-// suffix alone was not a reliable signal. Cerebras and NVIDIA return no
+// suffix alone was not a reliable signal. Nara and NVIDIA return no
 // pricing: their free tier is an account-level allowance, so everything they
 // list is free within it, which is why a missing price counts as free.
 function isFreeModel(model) {
@@ -604,7 +604,7 @@ function isFreeModel(model) {
   }
   // No published price. This is an assumption, not a fact: a provider that
   // publishes nothing might meter an account allowance, or might simply
-  // require billing before any call succeeds -- Cerebras answers "Payment
+  // require billing before any call succeeds -- one answers "Payment
   // required to access this resource" on a key without one. Treating an
   // unpriced model as free keeps it visible so the provider can say which,
   // rather than hiding a catalogue the user may well have access to. The
