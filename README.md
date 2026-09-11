@@ -240,7 +240,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
 | `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for the Edit flow (`/api/llm/images/edits`). Required — edits refuse clearly without it. |
 | `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
-| `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — pinned to ten allowed models: Qwen 3 Coder, Nemotron 3 Ultra, Laguna S/XS 2.1, gpt-oss-120b, North Mini Code, Gemma 4 31B, GLM 5.2, MiniMax M3, Nemotron 3.5 Lightning. |
+| `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — **free tier only**. The picker pins all 19 `:free` models (verified 2026‑09‑12), led by Nemotron 3 Ultra 550B, Inkling / Inkling Small (1M ctx), Nemotron 3.5 Lightning (1M ctx), Gemma 4 31B, Laguna S/XS 2.1 and North Mini Code. `OPENROUTER_FREE_ONLY=0` lifts the free-only gate. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `AI_GATEWAY_API_KEY` | *(unset)* | Adds Vercel AI Gateway — one Bearer key across providers (Laguna S 2.1, Ling 3.0 Flash Sante/Fin, Fish Audio S2.1 Pro among them). |
@@ -250,6 +250,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
 
 > Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
+>
+> **OpenRouter free tier, one note.** The picker never offers a paid model by default: the allowlist carries only `:free` ids, a `freeOnly` gate double-checks the live catalogue, and OpenRouter's own rate limits apply (about 20 requests/min; 50/day without any top-up, 1,000/day once you've ever bought $10 of credits). If a pinned id is retired upstream it silently drops out of the picker — and if every pinned id were retired at once, the picker degrades to the full live catalogue instead of going empty.
 >
 > The last three are speech and search services rather than LLMs. They're wired up so a key can settle it, but a chat request to Deepgram or AssemblyAI returns `404` because neither has a chat completions endpoint.
 >
@@ -276,6 +278,35 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 ```
 
 Your app is live at `https://<project>.up.railway.app` a few seconds later.
+
+### 🦙 Ollama on Railway (the 502 fix)
+
+`Could not load models: 502: Could not reach Ollama: fetch failed — the provider is slow or unreachable` is the app's own error when its HTTP call to the Ollama base URL fails at the socket level — connection refused, DNS miss, or an unreachable host. On Railway it is nearly always one of the four below, in order:
+
+1. **The base URL still points at localhost.** The default `http://localhost:11434/v1` is correct on your laptop; from the Railway app container it must be the Ollama service's URL: `OLLAMA_BASE_URL=https://<ollama-service>.up.railway.app/v1`, or `http://ollama.railway.internal:11434/v1` for the private network (same Railway project, cheaper and faster).
+2. **Ollama listens on loopback inside its own container.** Set `OLLAMA_HOST=0.0.0.0:11434` on the Ollama service or it refuses every off-container connection, which the app sees exactly as "fetch failed".
+3. **No models are installed.** Railway containers wipe on every deploy, so `ollama pull ...` at runtime disappears on the next one. Attach a volume to the Ollama service at `/root/.ollama`, add a start command like `ollama serve & sleep 8 && ollama pull qwen3:8b && ollama pull gemma3:4b`, and pull small models — Railway has no GPUs, so 8B-class is the practical ceiling.
+4. **The free-plan instance was asleep.** Railway's trial/free services sleep and refuse connections while cold — the first request wakes them and can 502 once.
+
+<details>
+<summary><b>Step by step</b></summary>
+
+<br />
+
+1. Railway project → **+ New → Docker Image** → `ollama/ollama`, or **+ New → GitHub Repo** with a Dockerfile based on `ollama/ollama`.
+2. On the Ollama service → **Settings → Networking → Generate Domain** (this is the public URL for `OLLAMA_BASE_URL`) and set the variable `OLLAMA_HOST=0.0.0.0:11434`.
+3. On the Ollama service → **Storage → + New Volume**, mount path `/root/.ollama`, so pulled models survive deploys.
+4. Add a start command that seeds a small model before serving: `sh -c "ollama serve & sleep 8 && ollama pull qwen3:8b && ollama pull gemma3:4b && wait"`. Verify with `curl https://<ollama-service>.up.railway.app/api/tags` — you should see the pulled models listed.
+5. On the **freeopenai** service, set:
+
+| Variable | Value |
+| --- | --- |
+| `OLLAMA_BASE_URL` | `https://<ollama-service>.up.railway.app/v1` (or `http://ollama.railway.internal:11434/v1`) |
+| `OLLAMA_API_KEY` | *(leave unset — keyless is fine, the URL alone enables the provider)* |
+
+6. Open the app → provider picker → **Ollama**. The dropdown fills from the live `/v1/models`; anything missing there is a model Ollama hasn't pulled, not an app error.
+
+</details>
 
 ### 🐙 Working with GitHub
 
