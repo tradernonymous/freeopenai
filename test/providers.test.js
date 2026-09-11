@@ -38,7 +38,7 @@ test("ZenMux's shape is read correctly", () => {
 });
 
 test('a bare OpenAI-shaped list survives with no metadata', () => {
-  // Cerebras and NVIDIA send only id/object/created/owned_by.
+  // Nara and NVIDIA send only id/object/created/owned_by.
   const model = normalizeProviderModel({ id: 'llama-3.3-70b', owned_by: 'Meta' });
   assert.equal(model.pricing, undefined);
   assert.equal(model.outputModalities, undefined);
@@ -115,8 +115,8 @@ function withStubProvider(envVar, baseVar, scheme, run) {
 }
 
 test('a standard provider gets Bearer auth', async () => {
-  const seen = await withStubProvider('CEREBRAS_API_KEY', 'CEREBRAS_BASE_URL', 'Bearer', async (base) => {
-    await fetch(base + '/api/llm/models?provider=cerebras');
+  const seen = await withStubProvider('NARA_API_KEY', 'NARA_BASE_URL', 'Bearer', async (base) => {
+    await fetch(base + '/api/llm/models?provider=nara');
   });
   assert.equal(seen.authorization, 'Bearer KEY123');
 });
@@ -158,22 +158,23 @@ test('non-LLM services are labelled by kind, with a reason', async () => {
   assert.equal(byId.deepgram.kind, 'speech');
   assert.equal(byId.assemblyai.kind, 'speech');
   assert.equal(byId.youcom.kind, 'search');
-  assert.equal(byId.cerebras.kind, 'chat');
+  assert.equal(byId.nara.kind, 'chat');
   assert.equal(byId.openrouter.kind, 'chat');
   assert.equal(byId.mistral.kind, 'chat');
 
   assert.match(byId.deepgram.note, /transcription models/);
   assert.match(byId.youcom.note, /search and research/);
-  assert.equal(byId.cerebras.note, undefined, 'a real chat provider needs no excuse');
+  assert.equal(byId.nara.note, undefined, 'a real chat provider needs no excuse');
 });
 
 test('a provider that never answers fails with our own deadline, not silence', async () => {
+  clearModelCache();
   // The reported symptom was a bare "504: request failed" with no indication
   // of which side stalled.
   const hung = http.createServer(() => { /* deliberately never respond */ });
   await new Promise((r) => hung.listen(0, r));
-  process.env.SAMBANOVA_API_KEY = 'k';
-  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
@@ -183,36 +184,37 @@ test('a provider that never answers fails with our own deadline, not silence', a
   // instead: an unreachable port takes the same path and must name the
   // provider rather than leaking a raw socket error.
   hung.close();
-  const res = await fetch(base + '/api/llm/models?provider=sambanova');
+  const res = await fetch(base + '/api/llm/models?provider=nara');
   const body = await res.json();
 
   app.close();
-  delete process.env.SAMBANOVA_API_KEY;
-  delete process.env.SAMBANOVA_BASE_URL;
+  delete process.env.NARA_API_KEY;
+  delete process.env.NARA_BASE_URL;
 
-  assert.match(body.error, /SambaNova/, 'the message must name the provider');
+  assert.match(body.error, /Nara/, 'the message must name the provider');
   assert.match(body.error, /slow or unreachable|Could not reach/);
   assert.ok(!/^504: request failed$/.test(body.error), 'never the bare message that was reported');
 });
 
 test('a gateway error with no body still names the provider', async () => {
+  clearModelCache();
   // The reported symptom: "504: request failed", with several providers
   // configured and no way to tell which one stalled.
   const dead = http.createServer((req, res) => { res.writeHead(504); res.end(); });
   await new Promise((r) => dead.listen(0, r));
-  process.env.SAMBANOVA_API_KEY = 'k';
-  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${dead.address().port}/v1`;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${dead.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`);
+  const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`);
   const body = await res.json();
 
   app.close(); dead.close();
-  delete process.env.SAMBANOVA_API_KEY;
-  delete process.env.SAMBANOVA_BASE_URL;
+  delete process.env.NARA_API_KEY;
+  delete process.env.NARA_BASE_URL;
 
-  assert.match(body.error, /SambaNova/);
+  assert.match(body.error, /Nara/);
   assert.ok(!body.error.includes('request failed'), 'the useless phrasing must be gone');
 });
 
@@ -225,18 +227,18 @@ test('an HTML error body does not collapse into nothing', async () => {
     res.end('<html><body>Bad Gateway</body></html>');
   });
   await new Promise((r) => html.listen(0, r));
-  process.env.CEREBRAS_API_KEY = 'k';
-  process.env.CEREBRAS_BASE_URL = `http://127.0.0.1:${html.address().port}/v1`;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${html.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=cerebras`)).json();
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
 
   app.close(); html.close();
-  delete process.env.CEREBRAS_API_KEY;
-  delete process.env.CEREBRAS_BASE_URL;
+  delete process.env.NARA_API_KEY;
+  delete process.env.NARA_BASE_URL;
 
-  assert.match(body.error, /Cerebras/);
+  assert.match(body.error, /Nara/);
   assert.match(body.error, /gateway error|slow or unreachable/);
 });
 
@@ -248,9 +250,9 @@ const { isFreeModelId } = require('../chatlib.js');
 
 
 test('an account-allowance provider still treats an unpriced model as free', () => {
-  // Cerebras and NVIDIA meter the account, not the model, so nothing in their
+  // Nara and NVIDIA meter the account, not the model, so nothing in their
   // catalogue is individually paid.
-  assert.ok(isFreeModel(normalizeProviderModel({ id: 'llama-3.3-70b' }, { label: 'Cerebras' })));
+  assert.ok(isFreeModel(normalizeProviderModel({ id: 'llama-3.3-70b' }, { label: 'Nara' })));
   assert.ok(isFreeModel(normalizeProviderModel({ id: 'claude-fable-5' }, undefined)));
 });
 
@@ -278,8 +280,10 @@ test('the removed providers are gone and the new ones are present', async () => 
   const ids = providers.map((p) => p.id);
   assert.ok(!ids.includes('bluesminds'));
   assert.ok(!ids.includes('zenmux'));
+  assert.ok(!ids.includes('cerebras'), 'Cerebras was removed');
+  assert.ok(!ids.includes('sambanova'), 'SambaNova was removed');
   assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
-  for (const id of ['mistral', 'sambanova']) {
+  for (const id of ['mistral', 'nara']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
   for (const p of providers) {
@@ -298,21 +302,22 @@ test('the removed providers are gone and the new ones are present', async () => 
 
 
 test('a provider with no subset still returns its whole catalogue', async () => {
+  clearModelCache();
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.SAMBANOVA_API_KEY = 'k';
-  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`)).json();
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
 
   app.close(); upstream.close();
-  delete process.env.SAMBANOVA_API_KEY;
-  delete process.env.SAMBANOVA_BASE_URL;
+  delete process.env.NARA_API_KEY;
+  delete process.env.NARA_BASE_URL;
 
   assert.equal(body.length, 3);
 });
@@ -337,8 +342,8 @@ test('a bare status still gets its hint', () => {
   const terse = describeProviderError(401, { error: { message: 'Invalid key' } }, { label: 'Mistral' });
   assert.match(terse, /check the API key/);
 
-  const empty = describeProviderError(504, null, { label: 'SambaNova' });
-  assert.match(empty, /SambaNova/);
+  const empty = describeProviderError(504, null, { label: 'Nara' });
+  assert.match(empty, /Nara/);
   assert.match(empty, /slow or unreachable/);
 });
 
@@ -353,7 +358,7 @@ const { isAccountLevelFailure } = require('../chatlib.js');
 test('a billing refusal is recognised as account-wide', () => {
   // Both verbatim from the live app.
   assert.ok(isAccountLevelFailure('402: Payment required to access this resource. Visit your billing tab.', 'gemma-4-31b'));
-  assert.ok(isAccountLevelFailure('402: A payment method is required. Add one at https://cloud.sambanova.ai/plans/billing to continue.', 'Meta-Llama-3.3-70B-Instruct'));
+  assert.ok(isAccountLevelFailure('402: A payment method is required. Add one on the billing page to continue.', 'Meta-Llama-3.3-70B-Instruct'));
 });
 
 test('a refusal naming the model is about that model, not the account', () => {
@@ -484,13 +489,13 @@ test('clearModelCache forces a fresh upstream fetch', async () => {
     res.end(JSON.stringify({ object: 'list', data: [{ id: `m${calls}` }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.SAMBANOVA_API_KEY = 'k';
-  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const url = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=sambanova`;
+    const url = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`;
     await fetch(url);
     assert.equal(calls, 1);
     clearModelCache();
@@ -499,8 +504,8 @@ test('clearModelCache forces a fresh upstream fetch', async () => {
   } finally {
     if (app) app.close();
     upstream.close();
-    delete process.env.SAMBANOVA_API_KEY;
-    delete process.env.SAMBANOVA_BASE_URL;
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_BASE_URL;
     clearModelCache();
   }
 });
@@ -564,7 +569,7 @@ test('llmChat streams SSE error when upstream is unreachable', async () => {
 
 test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
-  process.env.SAMBANOVA_API_KEY = 'k';
+  process.env.NARA_API_KEY = 'k';
   let calls = 0;
   const upstream = http.createServer((req, res) => {
     calls += 1;
@@ -577,10 +582,10 @@ test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
     res.end('data: [DONE]\n\n');
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.SAMBANOVA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
   try {
     const { fetchStreamWithRetry } = require('../server.js');
-    const res = await fetchStreamWithRetry('sambanova', () =>
+    const res = await fetchStreamWithRetry('nara', () =>
       fetch(`http://127.0.0.1:${upstream.address().port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -591,8 +596,8 @@ test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
     assert.ok(calls >= 3, 'should have retried 429s');
   } finally {
     upstream.close();
-    delete process.env.SAMBANOVA_API_KEY;
-    delete process.env.SAMBANOVA_BASE_URL;
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_BASE_URL;
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
   }
 });

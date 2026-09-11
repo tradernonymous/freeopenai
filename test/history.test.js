@@ -144,7 +144,7 @@ test('coding and reasoning families are recognised', () => {
 });
 
 test('on a provider with no pricing, ranking falls to capability', () => {
-  // Cerebras and NVIDIA return the bare OpenAI shape, so every model is free
+  // Nara and NVIDIA return the bare OpenAI shape, so every model is free
   // within the account allowance and cost can't separate them.
   const sorted = usableChatModels([
     { id: 'some-tiny-chat-model' },
@@ -190,7 +190,7 @@ test('cost is read from published pricing, not guessed from the name', () => {
 });
 
 test('a provider that publishes no pricing falls back to the id', () => {
-  // Cerebras and NVIDIA return the bare OpenAI shape; their free tier is an
+  // Nara and NVIDIA return the bare OpenAI shape; their free tier is an
   // account allowance, so an absent price is not a paid model.
   assert.ok(isFreeModel({ id: 'llama-3.3-70b' }));
   assert.ok(isFreeModel({ id: 'qwen-3-32b', pricing: undefined }));
