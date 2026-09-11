@@ -308,6 +308,30 @@ Your app is live at `https://<project>.up.railway.app` a few seconds later.
 
 </details>
 
+### 🧩 Modes & skills (opencode-style)
+
+The composer has a mode chip that cycles **Chat → Plan → Build**, the same three modes opencode uses:
+
+| Mode | What it does | Skills applied |
+| --- | --- | --- |
+| **Chat** | Default assistant — ask anything | None (fast, general) |
+| **Plan** | Reasons about the task, writes an implementation plan, changes nothing | planning/writing skills as matched |
+| **Build** | Executes with the full tool loop, TDD-first discipline | methodology core + best-matched skills |
+
+Skills are pulled automatically from three open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down:
+
+| Library | What it contributes |
+| --- | --- |
+| [anthropics/skills](https://github.com/anthropics/skills) | The full official set (frontend-design, docx, pdf, mcp-builder, …) |
+| [obra/superpowers](https://github.com/obra/superpowers) | Development methodology: TDD, systematic debugging, verification before completion |
+| [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) | Lite pick: `lean-build`, `surgical-patch`, `verify-and-stop`, `caveman-commit`, `caveman` |
+
+How auto-application works: each request's text is scored against every skill's name + description (stemmed, name hits weighted 3×, generic verbs ignored). The top matches ride along as extra system context in Plan and Build modes; Build additionally seeds the process core (TDD, verification-before-completion, lean-build) every turn. In Build mode the model can also call the `use_skill` tool to load any skill's full text mid-task.
+
+- `GET /api/skills` — the installed catalogue (source, name, description)
+- `GET /api/skills/content?source=<repo>&name=<skill>` — one skill's full SKILL.md
+- `SKILLS_CACHE_TTL_MS` — cache lifetime override (default 6h)
+
 ### 🐙 Working with GitHub
 
 Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` (from a [GitHub OAuth App](https://github.com/settings/developers) whose callback URL is `https://<your-app>/api/github/callback`) and a **Connect GitHub** row appears in Settings.

@@ -4,6 +4,245 @@
 // Curated subset of the models Puter.js supports for puter.ai.chat(); see
 // https://developer.puter.com/tutorials/free-unlimited-openai-api/#list-of-supported-text-generation-models
 // for the full list (several dozen ids across the GPT-5.x/4.1/o-series/Codex lines).
+// Build modes, opencode-style. Chat is the default assistant; Plan reasons
+// about an implementation before anything changes; Build executes with the
+// full skill library riding along. The mode shapes the system prompt and
+// which auto-skills are allowed to trigger — never the tool surface, which
+// stays capability-based (GitHub connected, model supports tools).
+const MODES = [
+  { id: 'chat', label: 'Chat', desc: 'Ask anything — default assistant' },
+  { id: 'plan', label: 'Plan', desc: 'Design first: read-only thinking, no changes' },
+  { id: 'build', label: 'Build', desc: 'Execute with the skill library active' },
+];
+
+const DEFAULT_MODE = 'chat';
+
+function isValidMode(id) {
+  return MODES.some((m) => m.id === id);
+}
+
+// Per-mode instructions appended to the base system prompt. Plan is the
+// opencode /plan contract: investigate, propose, wait — never edit. Build
+// is its /build: carry out an agreed approach with the discipline skills
+// (TDD, verification, lean scope) watching over every step.
+const MODE_PROMPTS = {
+  chat: '',
+  plan: [
+    'MODE: PLAN. The user wants an implementation plan, not changes.',
+    'Investigate first (read files via the GitHub tools, search the web for unknowns), then answer with:',
+    'a short goal statement, what you found in the code (file paths), a numbered step-by-step plan, risks, and open decisions.',
+    'Do not write or commit code in this mode. End by asking the user to switch to Build mode to execute.',
+  ].join('\n'),
+  build: [
+    'MODE: BUILD. You are executing agreed work. Be disciplined about it:',
+    '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
+    '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
+    '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
+    '- Summarize what changed, what you verified, and what you deliberately did not do.',
+    '- Commits still require the user\'s explicit approval through the app\'s commit confirmation.',
+  ].join('\n'),
+};
+
+function modePrompt(mode) {
+  return MODE_PROMPTS[mode] || MODE_PROMPTS.chat;
+}
+
+// --- Agent skills (SKILL.md catalogues) ---
+//
+// Skills are markdown files with a YAML-ish frontmatter (name, description).
+// The description's "Use when ..." clause is what the auto-router matches
+// against the user's request, the same trigger language Claude Code uses.
+
+// Parses the `--- ... ---` frontmatter block of a SKILL.md into an object.
+// Tolerates CRLF, blank values and missing blocks; never throws.
+function parseSkillFrontmatter(markdown) {
+  const text = String(markdown || '');
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!match) return { name: '', description: '' };
+  const out = { name: '', description: '' };
+  const lines = match[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(name|description):\s*(.*)$/.exec(lines[i].trim());
+    if (!m) continue;
+    let value = m[2].trim();
+    // YAML block scalars ("description: >" / "|") put the real text on the
+    // following indented lines — fold them into one string, or the router
+    // would score a bare ">" and never match the skill.
+    if (/^[>|][+-]?\d*$/.test(value)) {
+      const chunk = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const line = lines[j];
+        if (!line.trim()) { chunk.push(' '); j++; continue; }
+        if (/^\s/.test(line)) { chunk.push(line.trim()); j++; continue; }
+        break;
+      }
+      value = chunk.join(' ').replace(/\s+/g, ' ').trim();
+      i = j - 1;
+    }
+    out[m[1]] = value.replace(/^"|"$/g, '');
+  }
+  return out;
+}
+
+// Curated sources. anthropics/skills is the full official library,
+// obra/superpowers is the development-methodology set, and caveman is
+// included lite: five of its skills that earn their tokens on top of the
+// other two (its compress/engine machinery is a separate product).
+const SKILL_SOURCES = [
+  { repo: 'anthropics/skills', branch: 'main', dir: 'skills', pick: 'all' },
+  { repo: 'obra/superpowers', branch: 'main', dir: 'skills', pick: 'all' },
+  {
+    repo: 'JuliusBrussee/caveman',
+    branch: 'main',
+    dir: 'skills',
+    pick: ['caveman', 'lean-build', 'surgical-patch', 'verify-and-stop', 'caveman-commit'],
+  },
+];
+
+// Skill names whose whole job is process discipline during Build mode. The
+// router seeds these into every build turn so the methodology applies even
+// when the request text doesn't name it.
+const BUILD_CORE_SKILLS = ['test-driven-development', 'verification-before-completion', 'lean-build'];
+
+// Mode → which auto-skill sets may fire.
+//   chat: none (skills are noise for plain questions)
+//   plan: planning/process skills (writing-plans, brainstorming, lean-build…)
+//   build: everything — methodology plus the capability library
+function skillsAllowedForMode(mode) {
+  if (mode === 'plan') return 'process';
+  if (mode === 'build') return 'all';
+  return 'none';
+}
+
+// Token overlap between the request and a skill's name + description.
+// Deliberately shallow: the descriptions are written as triggers ("Use when
+// implementing any feature"), so word overlap is the signal, not semantics.
+// The name counts too — "write tests" triggers test-driven-development
+// through its name, whose description alone never says "test". Filler words
+// are stopped and a trailing 's' is stemmed, so "and"-heavy descriptions
+// can't outscore real matches and "tests" meets "test".
+const SKILL_STOP = new Set(['free', 'new', 'latest', 'preview', 'instruct', 'the',
+  'use', 'using', 'used', 'when', 'writing', 'write', 'writes', 'create', 'creates',
+  'creating', 'created', 'add', 'adds', 'adding', 'build', 'builds', 'building', 'make',
+  'making', 'help', 'helps', 'helping', 'guide', 'guides', 'guidance', 'set', 'sets',
+  'edit', 'edits', 'editing', 'update', 'updating', 'change', 'changing', 'run', 'runs',
+  'running', 'get', 'gets', 'getting', 'let', 'lets', 'one', 'two', 'also', 'based',
+  'skill', 'skills', 'claude', 'agent', 'agents', 'model', 'models', 'resource', 'resources',
+  'use', 'using', 'used', 'when', 'writing',
+  'creating', 'helps', 'help', 'guidance', 'skill', 'claude', 'user', 'code', 'works', 'work',
+  'working', 'worked', 'and', 'with', 'for', 'from', 'this', 'that', 'are', 'was', 'were',
+  'has', 'have', 'had', 'not', 'but', 'all', 'can', 'will', 'into', 'over', 'any', 'before',
+  'after', 'between', 'through', 'where', 'while', 'more', 'most', 'other', 'some', 'such',
+  'only', 'same', 'than', 'too', 'very', 'just', 'also', 'then', 'they', 'them', 'its',
+  'need', 'needs', 'want', 'wants', 'per', 'via', 'your', 'you', 'our', 'their', 'these',
+  'those', 'been', 'being', 'does', 'doing', 'did', 'done', 'like', 'well', 'way', 'new']);
+
+function stemSkillToken(t) {
+  // Bounded light stemmer: strip common suffixes and a doubled final
+  // consonant (debugging → debug, planning → plan, tests → test). Two passes
+  // max, never below 3 chars — enough for trigger matching, not a linguistics
+  // project.
+  for (let i = 0; i < 2 && t.length > 3; i++) {
+    const next = t.replace(/(ing|ed|es|s)$/, '');
+    if (next === t) break;
+    t = /(.)\1$/.test(next) ? next.slice(0, -1) : next;
+  }
+  return t;
+}
+
+function skillTokens(s) {
+  return String(s || '').toLowerCase().split(/[^a-z0-9.]+/)
+    .filter((t) => t.length > 2 && !SKILL_STOP.has(t))
+    .map(stemSkillToken);
+}
+
+function skillTriggerScore(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return 0;
+  // Name hits count triple: a skill's own name is its strongest signal
+  // ("write tests" → test-driven-development; "make a poster" → canvas-design).
+  // Description-only overlap is the weak signal and cannot outrank it.
+  const nameHits = new Set([...skillTokens(skill && skill.name)].filter((t) => want.has(t))).size;
+  const desc = new Set(skillTokens(skill && skill.description));
+  let descHits = 0;
+  for (const t of want) if (desc.has(t)) descHits += 1;
+  return nameHits * 3 + descHits;
+}
+
+// The auto-pick router. Given the user's request, the current mode, and the
+// loaded catalogue ({ source, name, description } rows), returns the skills
+// to inject, best match first:
+//   - core build skills seed every build turn (when present in the catalogue)
+//   - process skills fire in plan mode on trigger-word overlap
+//   - everything fires in build mode on trigger-word overlap
+//   - always capped, so a vague request can't stuff the prompt with ten skills
+function pickSkills(requestText, mode, skills, limit = 3) {
+  if (skillsAllowedForMode(mode) === 'none' || !Array.isArray(skills) || !skills.length) return [];
+  const processOnly = skillsAllowedForMode(mode) === 'process';
+  // Superpowers' process skills — the ones about how to work rather than
+  // what to make. In plan mode only these may trigger.
+  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif/i;
+  const pool = skills.filter((s) => s && s.name && s.description)
+    .filter((s) => !processOnly || PROCESS_HINT.test(s.description));
+  const scored = pool
+    .map((s) => ({ s, score: skillTriggerScore(requestText, s) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+  const picked = [];
+  const seen = new Set();
+  const push = (name) => {
+    if (seen.has(name) || picked.length >= limit) return;
+    const row = pool.find((s) => s.name === name);
+    if (row) { seen.add(name); picked.push(row); }
+  };
+  // Strongest signal first: actual matches outrank the seeded methodology,
+  // which only fills the slots left over. A UI request therefore gets
+  // frontend-design alongside the core, not instead of it.
+  for (const { s } of scored) push(s.name);
+  if (mode === 'build') for (const name of BUILD_CORE_SKILLS) push(name);
+  return picked;
+}
+
+// Renders picked skills as extra system context. Bounded excerpts: the
+// overview carries the method; the model can ask for the full text via
+// use_skill if it needs the detailed sections.
+function renderSkillsPrompt(picked, excerptLength = 1200) {
+  if (!Array.isArray(picked) || !picked.length) return '';
+  const parts = picked.map((s) =>
+    `### Skill: ${s.name} (from ${s.source})\n${(s.description || '').trim()}\n\n${String(s.body || '').slice(0, excerptLength).trim()}`
+  );
+  return [
+    'ACTIVE SKILLS — follow these methods for this request:',
+    '(If a skill references scripts or files that are not available here, apply its approach manually.)',
+    '',
+    parts.join('\n\n---\n\n'),
+  ].join('\n');
+}
+
+// The use_skill tool spec the model can call to pull a skill's full text
+// mid-turn (OpenAI function schema, same shape as the GitHub/web tools).
+const USE_SKILL_TOOL = {
+  type: 'function',
+  function: {
+    name: 'use_skill',
+    description: 'Load the complete instructions of an installed skill by name. Use it when the active skill excerpts are not detailed enough to follow the method precisely.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The skill name, e.g. "test-driven-development".' },
+      },
+      required: ['name'],
+    },
+  },
+};
+
+// The catalogue lives server-side; the client asks once per session (and on
+// entering Build mode) for the id list, then fetches full text on demand.
+function isUseSkillTool(name) {
+  return name === 'use_skill';
+}
+
 const MODELS = [
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', desc: 'Newest, most capable' },
   { id: 'gpt-6-astra-pro', name: 'GPT-6 Astra Pro', desc: 'Astra, pro reasoning' },
@@ -832,6 +1071,19 @@ function parseSseChunk(decoded) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    MODES,
+    DEFAULT_MODE,
+    isValidMode,
+    modePrompt,
+    SKILL_SOURCES,
+    BUILD_CORE_SKILLS,
+    skillsAllowedForMode,
+    skillTriggerScore,
+    pickSkills,
+    renderSkillsPrompt,
+    USE_SKILL_TOOL,
+    isUseSkillTool,
+    parseSkillFrontmatter,
     MODELS,
     DEFAULT_MODEL,
     isValidModel,

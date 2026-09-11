@@ -606,6 +606,18 @@
         .mask-canvas { width: 100%; border-radius: var(--r-sm); border: 1px solid var(--border); background: #000; touch-action: none; cursor: crosshair; display: block; }
         .mask-prompt { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font: inherit; font-size: 13px; outline: none; margin-top: 10px; }
         .effort-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        /* Mode chip (Chat / Plan / Build) — mirrors the effort chip's shape so
+           the composer stays one visual row. */
+        .mode-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+        .mode-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+        .mode-chip[data-mode="plan"] { color: var(--accent); border-color: var(--accent-bg); }
+        .mode-chip[data-mode="plan"]::before { background: var(--accent); }
+        .mode-chip[data-mode="build"] { color: var(--text); background: var(--accent-bg); border-color: var(--accent); }
+        .mode-chip[data-mode="build"]::before { background: var(--accent); animation: holo-pulse 1.6s ease-in-out infinite; }
+        .skills-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .skill-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 3px 10px; cursor: default; max-width: 100%; }
+        .skill-chip b { color: var(--text); font-weight: 600; }
+        .skill-chip .skill-src { color: var(--text-muted); font-size: 10px; }
         .message-image {
             display: block;
             max-width: 100%;
@@ -1187,6 +1199,9 @@
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
+                            <button class="mode-chip" type="button" id="modeChip" onclick="cycleMode()" aria-label="Build mode" title="Mode: Chat / Plan / Build — opencode-style modes. Plan reasons without changing anything; Build executes with the skill library active.">
+                                <span id="modeChipLabel">Chat</span>
+                            </button>
                             <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
                             <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                         </div>
@@ -1256,6 +1271,13 @@
                             <p class="settings-hint">One extra try after a short wait when a provider answers 429.</p>
                         </div>
                         <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on rate limit">
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Agent skills</strong>
+                            <p class="settings-hint" id="skillsStatus">Loading the skill library…</p>
+                        </div>
+                        <div class="skills-list" id="skillsList" aria-label="Installed agent skills"></div>
                     </div>
                     <div class="settings-row">
                         <div>
@@ -1501,6 +1523,86 @@
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
         let githubConnected = false;
+
+        // --- Modes & skills (opencode-style) ---
+        let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
+            ? localStorage.getItem('freeopenaiMode')
+            : DEFAULT_MODE;
+        let skillsCatalog = []; // { source, name, description } rows
+
+        function updateModeChip() {
+            const chip = document.getElementById('modeChip');
+            const label = document.getElementById('modeChipLabel');
+            if (!chip || !label) return;
+            const meta = MODES.find((m) => m.id === selectedMode) || MODES[0];
+            chip.dataset.mode = meta.id;
+            label.textContent = meta.label;
+            chip.title = meta.desc;
+        }
+
+        function cycleMode() {
+            const idx = MODES.findIndex((m) => m.id === selectedMode);
+            selectedMode = MODES[(idx + 1) % MODES.length].id;
+            localStorage.setItem('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
+            if (selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        async function ensureSkillsLoaded() {
+            if (skillsCatalog.length) return skillsCatalog;
+            try {
+                const res = await fetch('/api/skills');
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'failed');
+                skillsCatalog = Array.isArray(data) ? data : [];
+                renderSkillsList();
+            } catch {
+                renderSkillsList('Skill library unreachable — continuing without skills');
+            }
+            return skillsCatalog;
+        }
+
+        function renderSkillsList(errText) {
+            const status = document.getElementById('skillsStatus');
+            const list = document.getElementById('skillsList');
+            if (!status || !list) return;
+            if (errText) { status.textContent = errText; return; }
+            const bySrc = {};
+            for (const s of skillsCatalog) (bySrc[s.source] = bySrc[s.source] || []).push(s.name);
+            status.textContent = skillsCatalog.length
+                ? skillsCatalog.length + ' skills installed across ' + Object.keys(bySrc).length + ' libraries — auto-applied in Plan & Build modes.'
+                : 'Skill library empty (GitHub unreachable at load).';
+            list.innerHTML = '';
+            for (const [src, names] of Object.entries(bySrc)) {
+                for (const name of names) {
+                    const chip = document.createElement('span');
+                    chip.className = 'skill-chip';
+                    const b = document.createElement('b');
+                    b.textContent = name;
+                    const srcSpan = document.createElement('span');
+                    srcSpan.className = 'skill-src';
+                    srcSpan.textContent = ' · ' + src.split('/')[0];
+                    chip.appendChild(b);
+                    chip.appendChild(srcSpan);
+                    chip.title = (skillsCatalog.find((s) => s.name === name) || {}).description || '';
+                    list.appendChild(chip);
+                }
+            }
+        }
+
+        async function runUseSkillTool(args) {
+            const name = String(args.name || '').trim();
+            if (!name) return 'Error: skill name is required';
+            try {
+                const res = await fetch('/api/skills/content?name=' + encodeURIComponent(name));
+                const data = await safeJson(res);
+                if (!res.ok) return 'Error: ' + (data.error || res.status);
+                return String(data.body || '').slice(0, 12000);
+            } catch (e) {
+                return 'Error loading skill: ' + e.message;
+            }
+        }
         // Set when GitHub handed back an account that was already connected.
         let githubSameAccountNotice = '';
         let messages = [];
@@ -1609,6 +1711,7 @@
             loadUserPreferences();
             loadLimitsHint();
             updateModelLabel();
+            updateModeChip();
             updateAuthUI();
             // Learn up front whether the GitHub tools should be offered to the
             // model, rather than waiting for the user to open Settings.
@@ -2373,9 +2476,11 @@
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
-        function buildConversation(outgoing) {
+        function buildConversation(outgoing, activeSkills = null) {
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
+            const skillsBlock = activeSkills && activeSkills.length ? '\n\n' + renderSkillsPrompt(activeSkills) : '';
             return [
-                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'system', content: system + skillsBlock },
                 ...buildChatHistory(messages.slice(0, -1)),
                 { role: 'user', content: outgoing },
             ];
@@ -2450,7 +2555,9 @@
                         ? await runGithubTool(fn.name, args)
                         : isWebTool(fn.name)
                           ? await runWebTool(fn.name, args)
-                          : 'Error: unknown tool ' + fn.name;
+                          : isUseSkillTool(fn.name)
+                            ? await runUseSkillTool(args)
+                            : 'Error: unknown tool ' + fn.name;
                     convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
                 }
             }
@@ -2620,11 +2727,23 @@
                 if (!attachedImageFile) {
                     const tools = [...WEB_TOOLS];
                     if (githubConnected) tools.push(...GITHUB_TOOLS);
+                    // Skills ride along in Plan & Build: the auto-picked set
+                    // enters the system prompt, and use_skill lets the model
+                    // pull any full skill mid-turn.
+                    let activeSkills = null;
+                    if (selectedMode !== 'chat') {
+                        const catalog = await ensureSkillsLoaded();
+                        activeSkills = pickSkills(outgoing, selectedMode, catalog);
+                        tools.push(USE_SKILL_TOOL);
+                    }
                     const { message, exhausted, finishReason } = await runChatWithTools(
-                        buildConversation(outgoing),
+                        buildConversation(outgoing, activeSkills),
                         chatModel,
                         tools
                     );
+                    if (activeSkills && activeSkills.length) {
+                        addMessage('system', 'Skills applied: ' + activeSkills.map((s) => s.name).join(', '));
+                    }
                     removeTypingIndicator();
                     if (exhausted) {
                         addMessage('system', `Reached ${MAX_TOOL_ROUNDS} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
