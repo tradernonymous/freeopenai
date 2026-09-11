@@ -63,6 +63,37 @@
         html[data-theme="light"] .icon-moon { display: none; }
         html[data-theme="light"] .icon-sun { display: block; }
         .icon-sun { display: none; }
+        /* Theme packs, OpenCode-style: same tokens, new palettes. */
+        html[data-theme="tokyonight"] {
+            --bg: #1a1b26;
+            --bg-elevated: #16161e;
+            --surface: #24283b;
+            --surface-2: #292e42;
+            --border: #3b4261;
+            --border-strong: #565f89;
+            --text: #c0caf5;
+            --text-dim: #a9b1d6;
+            --text-muted: #737aa2;
+            --accent: #7aa2f7;
+            --accent-bg: rgba(122,162,247,.14);
+            --danger: #f7768e;
+            --glass: rgba(26,27,38,.78);
+        }
+        html[data-theme="gruvbox"] {
+            --bg: #282828;
+            --bg-elevated: #1d2021;
+            --surface: #3c3836;
+            --surface-2: #504945;
+            --border: #665c54;
+            --border-strong: #7c6f64;
+            --text: #ebdbb2;
+            --text-dim: #d5c4a1;
+            --text-muted: #928374;
+            --accent: #fabd2f;
+            --accent-bg: rgba(250,189,47,.12);
+            --danger: #fb4934;
+            --glass: rgba(40,40,40,.78);
+        }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
@@ -195,6 +226,19 @@
         .history-item .history-delete:hover { color: var(--danger); }
         .history-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex-shrink: 0; }
         .history-item.active .history-dot { background: var(--accent); }
+        /* Compact notices (/details parity): tool and system chatter hides,
+           the conversation stays. */
+        .hide-system .message.system { display: none; }
+        input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+        /* Command palette (Ctrl+P): model and action search over everything. */
+        .palette-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; background: rgba(0,0,0,.55); }
+        .palette-overlay[hidden] { display: none; }
+        .palette { width: 100%; max-width: 520px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--lift-lg); overflow: hidden; }
+        .palette input { width: 100%; background: transparent; color: var(--text); border: none; border-bottom: 1px solid var(--border); padding: 12px 14px; font: inherit; font-size: 14px; outline: none; }
+        .palette-list { max-height: min(46vh, 340px); overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+        .palette-item { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 9px 10px; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+        .palette-item.selected { background: var(--accent-bg); color: var(--accent); }
+        .palette-item .k { margin-left: auto; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
         .history-scrim { display: none; }
 
@@ -1072,6 +1116,26 @@
                         </div>
                         <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
                     </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Auto-retry on rate limit</strong>
+                            <p class="settings-hint">One extra try after a short wait when a provider answers 429.</p>
+                        </div>
+                        <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on rate limit">
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Server response limits</strong>
+                            <p class="settings-hint" id="limitsHint">Loading…</p>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Compact notices</strong>
+                            <p class="settings-hint">Hide tool and system notices, keeping only the conversation.</p>
+                        </div>
+                        <input type="checkbox" id="compactNoticesCheck" onchange="setCompactNotices(this.checked)" aria-label="Hide tool and system notices">
+                    </div>
                     <div class="settings-row" id="githubDisconnectedRow">
                         <div>
                             <strong>GitHub</strong>
@@ -1141,6 +1205,8 @@
                     <li><strong>OpenAI models</strong> — GPT-6 Astra, the GPT-5.6 and GPT-4o families via Puter.js</li>
                     <li><strong>Image generation</strong> — Toggle the image icon next to the input to generate one instead of chatting</li>
                     <li><strong>Free tier</strong> — Generous free usage limits</li>
+                    <li><strong>Palette</strong> — Ctrl+P jumps to any model or action; Enter runs, Esc closes</li>
+                    <li><strong>Interrupt</strong> — Esc stops a running reply; Enter sends</li>
                 </ul>
             </div>
         </div>
@@ -1153,6 +1219,13 @@
                 <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
                 <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
             </div>
+        </div>
+    </div>
+
+    <div class="palette-overlay" id="paletteOverlay" hidden onclick="if (event.target === this) closePalette();">
+        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+            <input type="text" id="paletteInput" placeholder="Type a model or command…" aria-label="Command palette" autocomplete="off" oninput="renderPalette(this.value)">
+            <div class="palette-list" id="paletteList" role="listbox" aria-label="Results"></div>
         </div>
     </div>
 
@@ -1241,6 +1314,9 @@
         let lastFocusedBeforeModal = null;
         let imageMode = false;
         let currentAbort = null;
+        let autoRetryEnabled = true;
+        let compactNotices = false;
+        let turnStartedAt = 0;
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
 
@@ -1327,6 +1403,7 @@
             renderModelOptions();
             restoreHistoryVisibility();
             loadUserPreferences();
+            loadLimitsHint();
             updateModelLabel();
             updateAuthUI();
             // Learn up front whether the GitHub tools should be offered to the
@@ -1975,7 +2052,7 @@
             });
             let res = await send();
             let data = await res.json();
-            if (res.status === 429 && isRateLimitError(data.error)) {
+            if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
                 showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
                 await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2));
                 res = await send();
@@ -2263,9 +2340,10 @@
             }
 
             try {
-                usageCount++;
-                updateUsageDisplay();
-                maybeWarnAboutCost();
+            usageCount++;
+            updateUsageDisplay();
+            turnStartedAt = Date.now();
+            maybeWarnAboutCost();
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
 
@@ -2295,6 +2373,7 @@
                         attachmentLost: hadAttachment,
                         reasoning: text === reasoning ? '' : reasoning,
                     });
+                    noteTurnStats(text.length);
                     showStatus('success', 'Sent');
                     return;
                 }
@@ -2308,6 +2387,7 @@
                         await streamProviderChat(buildConversation(outgoing), renderer, currentAbort.signal);
                         removeTypingIndicator();
                         finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length);
                         showStatus('success', 'Sent');
                     } catch (e) {
                         removeTypingIndicator();
@@ -2346,6 +2426,7 @@
                     }
                     renderer.flush();
                     finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length);
                 } else {
                     const text = typeof response === 'string'
                         ? response
@@ -2355,6 +2436,7 @@
                           || explainEmptyReply(response.message, response.finishReason);
                     const reasoning = extractMessageReasoning(response && response.message);
                     addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
+                    noteTurnStats(text.length);
                 }
 
                 showStatus('success', 'Sent');
@@ -2860,32 +2942,166 @@
             selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
             const savedEffort = localStorage.getItem('puterChatEffort');
             selectedEffort = isValidEffort(savedEffort) ? savedEffort : DEFAULT_EFFORT;
+            autoRetryEnabled = localStorage.getItem('puterChatAutoRetry') !== '0';
+            const arc = document.getElementById('autoRetryCheck');
+            if (arc) arc.checked = autoRetryEnabled;
+            compactNotices = localStorage.getItem('puterChatCompactNotices') === '1';
+            const cnc = document.getElementById('compactNoticesCheck');
+            if (cnc) cnc.checked = compactNotices;
+            if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
             applyTheme(localStorage.getItem('puterChatTheme') || 'dark');
             updateModelLabel();
             updateEffortPicker();
         }
 
-        // Light/dark theme. Guarded throughout: the boot-test stub DOM has no
-        // visual theme machinery, so every DOM touch checks first.
+        function setAutoRetry(on) {
+            autoRetryEnabled = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatAutoRetry', autoRetryEnabled ? '1' : '0'); } catch { /* private mode */ }
+        }
+
+        function setCompactNotices(on) {
+            compactNotices = !!on;
+            try {
+                if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatCompactNotices', compactNotices ? '1' : '0');
+                if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
+            } catch { /* stub DOM */ }
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactNoticesCheck');
+            if (box) box.checked = compactNotices;
+        }
+
+        // Server limits, shown in Settings so the enforced numbers live in one
+        // place instead of being hardcoded twice.
+        async function loadLimitsHint() {
+            const el = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('limitsHint');
+            if (!el) return;
+            try {
+                const data = await (await fetch('/api/llm/limits')).json();
+                const t = data.timeouts, r = data.retries;
+                el.textContent = `Chat ${Math.round(t.chat / 1000)}s · headers ${Math.round(t.headers / 1000)}s · stall ${Math.round(t.stall / 1000)}s · up to ${r.maxAttempts} tries`;
+            } catch {
+                el.textContent = 'Server limits unavailable.';
+            }
+        }
+
+        // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
+        // throughout: the boot-test stub DOM has no theme machinery, so every
+        // DOM touch checks first.
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox'];
+        const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         function applyTheme(theme) {
-            const light = theme === 'light';
+            const name = THEMES.includes(theme) ? theme : 'dark';
             try {
                 if (document && document.documentElement && typeof document.documentElement.setAttribute === 'function') {
-                    document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+                    document.documentElement.setAttribute('data-theme', name);
                 }
                 const meta = document && typeof document.querySelector === 'function' && document.querySelector('meta[name="theme-color"]');
-                if (meta && typeof meta.setAttribute === 'function') meta.setAttribute('content', light ? '#ffffff' : '#000000');
+                if (meta && typeof meta.setAttribute === 'function') meta.setAttribute('content', THEME_META[name]);
             } catch { /* stub DOM in tests */ }
             try {
                 if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
-                    localStorage.setItem('puterChatTheme', light ? 'light' : 'dark');
+                    localStorage.setItem('puterChatTheme', name);
                 }
             } catch { /* private mode */ }
         }
 
         function toggleTheme() {
             const current = (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('puterChatTheme')) || 'dark';
-            applyTheme(current === 'light' ? 'dark' : 'light');
+            const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
+            applyTheme(next);
+            showStatus('success', 'Theme: ' + next);
+        }
+
+        // Command palette (Ctrl+P): models plus actions, filtered as you type.
+        // OpenCode's command_list parity. Lookups happen on open, so the
+        // boot-test stub never trips over missing nodes at load.
+        let paletteIndex = 0;
+        let paletteItems = [];
+        function paletteActions() {
+            const actions = [
+                { label: 'New chat', hint: 'session', run: () => startNewConversation() },
+                { label: 'Toggle theme', hint: 'theme', run: () => toggleTheme() },
+                { label: 'Toggle compact notices', hint: 'details', run: () => setCompactNotices(!compactNotices) },
+                { label: 'Go to Settings', hint: 'view', run: () => switchView('settings') },
+                { label: 'Go to Models', hint: 'view', run: () => switchView('models') },
+                { label: 'Go to Chat', hint: 'view', run: () => switchView('chat') },
+            ];
+            if (isTyping) actions.unshift({ label: 'Stop generation', hint: 'interrupt', run: () => stopGeneration() });
+            return actions;
+        }
+        function openPalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            const input = document.getElementById('paletteInput');
+            if (!overlay || !input) return;
+            overlay.hidden = false;
+            input.value = '';
+            renderPalette('');
+            input.focus();
+        }
+        function closePalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            if (overlay) overlay.hidden = true;
+            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
+        }
+        function renderPalette(filter) {
+            const list = document.getElementById('paletteList');
+            if (!list) return;
+            const q = (filter || '').trim().toLowerCase();
+            const models = (providerModels || []).map((m) => ({
+                label: 'Model: ' + m.id,
+                hint: (function () { try { return describeProviderModel(m) || m.id; } catch { return m.id; } })(),
+                run: () => selectModel(m.id),
+            }));
+            const items = [...models, ...paletteActions()].filter((it) => !q || (it.label + ' ' + it.hint).toLowerCase().includes(q));
+            paletteItems = items;
+            paletteIndex = 0;
+            list.innerHTML = '';
+            items.slice(0, 30).forEach((it, i) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'palette-item' + (i === 0 ? ' selected' : '');
+                b.setAttribute('role', 'option');
+                const name = document.createElement('span');
+                name.textContent = it.label;
+                const hint = document.createElement('span');
+                hint.className = 'k';
+                hint.textContent = it.hint;
+                b.appendChild(name);
+                b.appendChild(hint);
+                b.addEventListener('click', () => { closePalette(); it.run(); });
+                list.appendChild(b);
+            });
+        }
+        function movePalette(dir) {
+            const list = document.getElementById('paletteList');
+            if (!list || !paletteItems.length) return;
+            paletteIndex = (paletteIndex + dir + paletteItems.length) % paletteItems.length;
+            [...list.children].forEach((el, i) => el.classList.toggle('selected', i === paletteIndex));
+            const sel = list.children[paletteIndex];
+            if (sel && typeof sel.scrollIntoView === 'function') sel.scrollIntoView({ block: 'nearest' });
+        }
+        function runPalette() {
+            const it = paletteItems[paletteIndex];
+            closePalette();
+            if (it) it.run();
+        }
+        function handleGlobalKeys(e) {
+            if (!e) return;
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'k')) {
+                e.preventDefault();
+                const overlay = document.getElementById('paletteOverlay');
+                if (overlay && !overlay.hidden) closePalette();
+                else openPalette();
+                return;
+            }
+            const overlay = document.getElementById('paletteOverlay');
+            if (!overlay || overlay.hidden) return;
+            if (e.key === 'Escape') closePalette();
+            else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
+            else if (e.key === 'Enter') { e.preventDefault(); runPalette(); }
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('keydown', handleGlobalKeys);
         }
 
         function saveUserPreferences() {
@@ -2897,6 +3113,19 @@
                 usageText.textContent = `${usageCount} request${usageCount !== 1 ? 's' : ''}`;
                 usageText.style.display = usageCount ? 'inline' : 'none';
             }
+        }
+
+        // TUI status parity: after each reply the status bar shows what
+        // answered, how long it took, and how much text came back.
+        function noteTurnStats(chars) {
+            if (!turnStartedAt) return;
+            const secs = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
+            const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+            if (usageText) {
+                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars`;
+                usageText.style.display = 'inline';
+            }
+            turnStartedAt = 0;
         }
 
         function newConversationId() {

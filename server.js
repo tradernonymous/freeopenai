@@ -46,7 +46,12 @@ if (!sessionSecret) {
 // an error the user has to act on. Retries are bounded and back off, and a
 // short cooldown stops a burst of tool calls from hammering the same provider.
 // The base delay reads at call time so tests can shrink it via env.
-const RATE_LIMIT_MAX_ATTEMPTS = 4;
+// The attempt cap does too, clamped to a sane range so a typo can't turn a
+// chat call into an unbounded loop.
+function rateLimitMaxAttempts() {
+  const n = Number(process.env.RATE_LIMIT_MAX_ATTEMPTS);
+  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : 4;
+}
 const providerCooldownUntil = new Map();
 
 function retryBaseDelayMs() {
@@ -70,8 +75,9 @@ function markProviderCooldown(providerId, durationMs) {
 // calls `attempt()` (which makes one provider request and returns either a
 // `{ ok, status, data }` packet or a raw `Response`), retrying only on 429.
 async function retryProviderRequest(providerId, attempt) {
+  const maxAttempts = rateLimitMaxAttempts();
   let result;
-  for (let tryNum = 0; tryNum < RATE_LIMIT_MAX_ATTEMPTS; tryNum += 1) {
+  for (let tryNum = 0; tryNum < maxAttempts; tryNum += 1) {
     const wait = providerCooldownRemaining(providerId);
     if (wait > 0) await sleep(wait);
     result = await attempt();
@@ -80,7 +86,7 @@ async function retryProviderRequest(providerId, attempt) {
     if (status !== 429) return result;
     const backoff = retryBaseDelayMs() * 2 ** tryNum;
     markProviderCooldown(providerId, Math.min(backoff * 2, 15000) + retryBaseDelayMs());
-    if (tryNum < RATE_LIMIT_MAX_ATTEMPTS - 1) await sleep(backoff);
+    if (tryNum < maxAttempts - 1) await sleep(backoff);
   }
   return result;
 }
@@ -638,6 +644,16 @@ function llmProviders(req, res) {
   })));
 }
 
+// The effective response knobs, so Settings can show what the server is
+// actually enforcing instead of hardcoding the same numbers twice.
+function llmLimits(req, res) {
+  const t = providerTimeoutMs();
+  sendJson(res, 200, {
+    timeouts: { models: t.models, chat: t.chat, headers: t.headers, stall: t.stall },
+    retries: { maxAttempts: rateLimitMaxAttempts(), baseDelayMs: retryBaseDelayMs() },
+  });
+}
+
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
@@ -698,11 +714,26 @@ function describeProviderError(status, data, provider) {
 // Kept under the hosting platform's own request ceiling on purpose. If the
 // edge times out first it returns its own HTML 504, which parses to nothing
 // and produces exactly the bare "504: request failed" this replaced.
-const PROVIDER_TIMEOUT_MS = { models: 20000, chat: 55000 };
+// Every knob reads at call time so deploys tune without a code change:
+// total per-request budgets, a headers deadline for streams (so 429 backoff
+// between attempts never trips it, each attempt gets its own), and a stall
+// deadline that fires when a stream goes quiet mid-reply.
+function providerTimeoutMs() {
+  const num = (v, d) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : d;
+  };
+  return {
+    models: num(process.env.PROVIDER_TIMEOUT_MODELS_MS, 20000),
+    chat: num(process.env.PROVIDER_TIMEOUT_CHAT_MS, 55000),
+    headers: num(process.env.PROVIDER_TIMEOUT_HEADERS_MS, 25000),
+    stall: num(process.env.PROVIDER_STALL_MS, 60000),
+  };
+}
 
 async function providerFetch(req, provider, path, init = {}) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
-  const budget = path.includes('chat') ? PROVIDER_TIMEOUT_MS.chat : PROVIDER_TIMEOUT_MS.models;
+  const budget = path.includes('chat') ? providerTimeoutMs().chat : providerTimeoutMs().models;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
@@ -840,8 +871,14 @@ function llmChat(req, res) {
       ...extra,
     };
     if (body.stream) {
+      const t = providerTimeoutMs();
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS.chat);
+      // failKind separates our own timeouts (explained, 504) from a client
+      // disconnect (quiet 499). Set just before aborting so the catch below
+      // knows which wait expired.
+      let failKind = '';
+      const fail = (kind) => { failKind = kind; controller.abort(); };
+      const totalTimer = setTimeout(() => fail('total'), t.chat);
       const onClientClose = () => {
         if (!res.writableEnded) controller.abort();
       };
@@ -850,15 +887,21 @@ function llmChat(req, res) {
       // is fully consumed — which happens before we start streaming.
       req.socket.on('close', onClientClose);
       let upstreamConsumed = false;
+      let headersSent = false;
       try {
-        const upstream = await fetchStreamWithRetry(id, () =>
-          fetch(provider.baseUrl + '/chat/completions', {
-            method: 'POST',
-            signal: controller.signal,
-            headers,
-            body: upstreamBody,
-          })
-        );
+        const upstream = await fetchStreamWithRetry(id, async () => {
+          const headerTimer = setTimeout(() => fail('headers'), t.headers);
+          try {
+            return await fetch(provider.baseUrl + '/chat/completions', {
+              method: 'POST',
+              signal: controller.signal,
+              headers,
+              body: upstreamBody,
+            });
+          } finally {
+            clearTimeout(headerTimer);
+          }
+        });
         res.writeHead(upstream.status, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -867,21 +910,51 @@ function llmChat(req, res) {
           // default. This header tells them to flush the data through.
           'X-Accel-Buffering': 'no',
         });
+        headersSent = true;
         // Non-retryable or non-streamable failures still get a readable body.
         if (!upstream.ok) {
           const data = await upstream.json().catch(() => null);
           res.write(`data: ${JSON.stringify({ error: describeProviderError(upstream.status, data, provider) })}\n\n`);
         } else {
-          for await (const chunk of upstream.body) {
-            res.write(chunk);
+          // A stream that goes quiet is hung, not slow: poke a deadline on
+          // every chunk so silence aborts instead of spinning forever.
+          let stallTimer;
+          const poke = () => {
+            clearTimeout(stallTimer);
+            stallTimer = setTimeout(() => fail('stall'), t.stall);
+          };
+          try {
+            poke();
+            for await (const chunk of upstream.body) {
+              poke();
+              res.write(chunk);
+            }
+            upstreamConsumed = true;
+          } finally {
+            clearTimeout(stallTimer);
           }
-          upstreamConsumed = true;
         }
       } catch (e) {
-        res.writeHead(e.name === 'AbortError' ? 499 : 502, { 'Content-Type': 'text/event-stream' });
-        res.write(`data: ${JSON.stringify({ error: e.name === 'AbortError' ? 'Request aborted' : e.message })}\n\n`);
+        // Once streaming has started the status is already on the wire, so a
+        // mid-body failure travels as an SSE error event, not a new status.
+        let status = 502;
+        let message = e.message;
+        if (e.name === 'AbortError' && !failKind) {
+          status = 499;
+          message = 'Request aborted';
+        } else if (failKind) {
+          const secs = Math.round((failKind === 'headers' ? t.headers : failKind === 'stall' ? t.stall : t.chat) / 1000);
+          status = 504;
+          message = failKind === 'headers'
+            ? `${provider.label} sent no response headers within ${secs}s`
+            : failKind === 'stall'
+              ? `${provider.label} stalled mid-reply (no data for ${secs}s)`
+              : `${provider.label} did not finish within ${secs}s`;
+        }
+        if (!headersSent) res.writeHead(status, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
       } finally {
-        clearTimeout(timer);
+        clearTimeout(totalTimer);
         req.socket.removeListener('close', onClientClose);
         if (!res.writableEnded) {
           // Providers already send a [DONE] sentinel at the end of a
@@ -975,6 +1048,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
+    if (urlPath === '/api/llm/limits' && req.method === 'GET') return llmLimits(req, res);
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
@@ -1033,4 +1107,7 @@ module.exports = {
   fetchStreamWithRetry,
   clearModelCache,
   modelsCacheTtlMs,
+  providerTimeoutMs,
+  rateLimitMaxAttempts,
+  retryBaseDelayMs,
 };
