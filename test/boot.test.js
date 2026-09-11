@@ -120,6 +120,8 @@ test('state read during initialization is declared before initializeApp() runs',
     'conversations',
     'activeConversationId',
     'githubConnected',
+    'THEMES',
+    'THEME_META',
   ];
   for (const name of readDuringInit) {
     const declared = script.search(new RegExp(`^\\s*(?:let|const|var)\\s+${name}\\b`, 'm'));
