@@ -13,6 +13,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
+const { matchListEntry } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -542,6 +543,14 @@ const LLM_PROVIDERS = {
     label: 'AI Gateway',
     baseUrl: 'https://ai-gateway.vercel.sh/v1',
     envVar: 'AI_GATEWAY_API_KEY',
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'poolside/laguna-s-2.1',
+      'ling-3.0-flash-sante-free',
+      'ling-3.0-flash-fin-free',
+      'fish-audio/s2.1-pro-free',
+    ],
   },
   nara: {
     label: 'Nara',
@@ -581,6 +590,26 @@ const LLM_PROVIDERS = {
     label: 'NVIDIA',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'z-ai/glm-5.3',
+      'deepseek-ai/deepseek-v4-flash',
+      'deepseek-ai/deepseek-v4-pro',
+      'moonshotai/kimi-k3',
+      'minimaxai/minimax-m3',
+      'z-ai/glm-5.2',
+      'minimaxai/minimax-m2.7',
+      'mistralai/mistral-medium-3.5-128b',
+      'qwen/qwen3-coder-480b-a35b-instruct',
+      'nvidia/nemotron-3.5-lightning',
+      'google/gemma-4-31b-it',
+      'mistralai/mistral-medium-3.5-128b',
+      'qwen/qwen2.5-coder-32b-instruct',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+    ],
   },
   mistral: {
     label: 'Mistral',
@@ -595,6 +624,34 @@ const LLM_PROVIDERS = {
     // explicit base URL puts it in the picker, and an empty key sends no
     // auth header at all rather than a bare "Bearer ".
     needsKey: false,
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'hf.co/unsloth/GLM-5.3-GGUF:latest',
+      'deepseek-r1:8b',
+      'deepseek-r1:70b',
+      'hf.co/unsloth/kimi-k2.7-code-7b-GGUF:latest',
+      'qwen3:8b',
+      'qwen3:4b',
+      'minimax/m3-20b',
+      'minimax/m2.7-9b',
+      'z-ai/glm-5.2',
+      'hf.co/unsloth/glm-5.1-GGUF:latest',
+      'devstral:24b',
+      'devstral:7b',
+      'qwen3-coder:32b',
+      'qwen3-coder:7b',
+      'nvidia/nemotron-3.5-lightning',
+      'mistralai/mistral-medium-3.5-128b',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'hf.co/unsloth/muse-glimmer-30b-GGUF:latest',
+      'qwen2.5-coder:32b',
+      'ibm/granite-4.2b-instruct:latest',
+      'rnj-1:latest',
+      'hf.co/unsloth/north-mini-code-1.0-GGUF:latest',
+      'deepseek-r1:14b',
+    ],
   },
   // The three below are speech and search services. Probing them directly:
   //
@@ -1062,7 +1119,7 @@ async function llmModels(req, res) {
     // A curated allowlist pins the picker to exactly those ids, in that
     // order. Without one the whole catalogue goes through untouched.
     const listed = Array.isArray(provider.models)
-      ? provider.models.map((wanted) => models.find((m) => m.id === wanted)).filter(Boolean)
+      ? provider.models.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
       : models;
     // Only a successful catalogue is worth caching; errors rust nothing.
     modelCache.set(id, { fetchedAt: Date.now(), models: listed });
