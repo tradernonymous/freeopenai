@@ -308,18 +308,42 @@ test('a provider with no subset still returns its whole catalogue', async () => 
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.NARA_API_KEY = 'k';
-  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.MISTRAL_API_KEY = 'k';
+  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=mistral`)).json();
 
   app.close(); upstream.close();
-  delete process.env.NARA_API_KEY;
-  delete process.env.NARA_BASE_URL;
+  delete process.env.MISTRAL_API_KEY;
+  delete process.env.MISTRAL_BASE_URL;
 
   assert.equal(body.length, 3);
+});
+
+test('an allowlist pins the picker to exactly those models, in order', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'stepfun-3.7-flash' }, { id: 'zzz-unlisted' }, { id: 'agnes-2.5-flash' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
+    assert.deepEqual(body.map((m) => m.id), ['agnes-2.5-flash', 'stepfun-3.7-flash']);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_BASE_URL;
+    clearModelCache();
+  }
 });
 
 const { describeProviderError } = require('../server.js');

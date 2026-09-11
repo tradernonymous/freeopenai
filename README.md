@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-182%20passing-22c55e?style=for-the-badge" alt="182 tests passing">
+  <img src="https://img.shields.io/badge/tests-183%20passing-22c55e?style=for-the-badge" alt="183 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -232,8 +232,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
-| `NARA_API_KEY` | *(unset)* | Adds the Nara router — agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
-| `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — ~430 models, 21 of them free. |
+| `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
+| `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — pinned to ten allowed models: Qwen 3 Coder, Nemotron 3 Ultra, Laguna S/XS 2.1, gpt-oss-120b, North Mini Code, Gemma 4 31B, GLM 5.2, MiniMax M3, Nemotron 3.5 Lightning. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
