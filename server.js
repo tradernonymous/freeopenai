@@ -13,7 +13,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -1193,6 +1193,121 @@ function normalizePricing(model) {
   return { prompt: prompt === undefined ? 0 : prompt, completion: completion === undefined ? 0 : completion };
 }
 
+// --- Agent skills ---
+//
+// The catalogues of the installed skill repos (anthropics/skills,
+// obra/superpowers, caveman-lite), fetched from raw.githubusercontent at
+// runtime with a TTL cache and a last-good fallback: GitHub being down must
+// degrade to "stale skills", never to a broken chat.
+const SKILLS_TTL_MS = 6 * 60 * 60 * 1000; // 6h: skills change on human timescales
+let skillsCache = { fetchedAt: 0, skills: [] };
+let skillsFetch = null;
+
+function skillsTtlMs() {
+  const n = Number(process.env.SKILLS_CACHE_TTL_MS);
+  return Number.isFinite(n) && n >= 0 ? n : SKILLS_TTL_MS;
+}
+
+function clearSkillsCache() {
+  skillsCache = { fetchedAt: 0, skills: [] };
+  skillsFetch = null;
+}
+
+async function fetchSkillText(source, skillPath) {
+  const url = `https://raw.githubusercontent.com/${source.repo}/${source.branch}/${skillPath}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Lists one repo's skill names from its git tree, honoring `pick` (an explicit
+// name list = lite) or 'all'. Trees fail closed: an error means no names from
+// this source, not a crash.
+async function fetchSkillNames(source) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${source.repo}/git/trees/${source.branch}?recursive=1`, {
+      headers: { 'User-Agent': 'freeopenai-app', Accept: 'application/vnd.github+json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data.tree)) return [];
+    const all = data.tree
+      .filter((t) => t.type === 'blob' && t.path.endsWith('/SKILL.md') && t.path.startsWith(source.dir + '/'))
+      .map((t) => t.path.split('/')[1])
+      .filter(Boolean);
+    const names = [...new Set(all)];
+    return Array.isArray(source.pick) ? names.filter((n) => source.pick.includes(n)) : names;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadSkills(force = false) {
+  const fresh = skillsCache.fetchedAt && Date.now() - skillsCache.fetchedAt < skillsTtlMs();
+  if (fresh && !force) return skillsCache.skills;
+  if (skillsFetch) return skillsFetch;
+  skillsFetch = (async () => {
+    const perSource = await Promise.all(SKILL_SOURCES.map(async (source) => {
+      const names = await fetchSkillNames(source);
+      // Bounded parallelism per repo; a huge repo shouldn't open 50 sockets.
+      const rows = [];
+      for (let i = 0; i < names.length; i += 8) {
+        const slice = names.slice(i, i + 8);
+        const texts = await Promise.all(slice.map((name) =>
+          fetchSkillText(source, `${source.dir}/${name}/SKILL.md`)
+        ));
+        slice.forEach((name, j) => {
+          const body = texts[j] || '';
+          const meta = parseSkillFrontmatter(body);
+          if (body && meta.description) {
+            rows.push({ source: source.repo, name, description: meta.description, body });
+          }
+        });
+      }
+      return rows;
+    }));
+    const skills = perSource.flat();
+    // Last-good wins over nothing: GitHub unreachable mid-TTL keeps the old
+    // catalogue serving.
+    if (skills.length) skillsCache = { fetchedAt: Date.now(), skills };
+    else if (skillsCache.skills.length) skillsCache.fetchedAt = Date.now();
+    return skillsCache.skills;
+  })().finally(() => { skillsFetch = null; });
+  return skillsFetch;
+}
+
+// GET /api/skills — the id catalogue for the picker.
+function llmSkills(req, res) {
+  loadSkills().then((skills) => {
+    sendJson(res, 200, skills.map((s) => ({ source: s.source, name: s.name, description: s.description })));
+  }).catch((err) => sendJson(res, 502, { error: err.message }));
+}
+
+// GET /api/skills/content?name= — one skill's full SKILL.md, for use_skill.
+async function llmSkillContent(req, res) {
+  const name = new URL(req.url, 'http://x').searchParams.get('name');
+  if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+    return sendJson(res, 400, { error: 'name is required' });
+  }
+  const skills = await loadSkills();
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) return sendJson(res, 404, { error: `No installed skill named "${name}"` });
+  sendJson(res, 200, skill);
+}
+
 function normalizeProviderModel(m) {
   const architecture = m.architecture || {};
   return {
@@ -1400,6 +1515,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
+    if (urlPath === '/api/skills' && req.method === 'GET') return llmSkills(req, res);
+    if (urlPath === '/api/skills/content' && req.method === 'GET') return llmSkillContent(req, res);
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
     if (urlPath === '/api/llm/limits' && req.method === 'GET') return llmLimits(req, res);
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
@@ -1466,6 +1583,8 @@ module.exports = {
   fetchProviderWithRetry,
   fetchStreamWithRetry,
   clearModelCache,
+  clearSkillsCache,
+  loadSkills,
   modelsCacheTtlMs,
   providerTimeoutMs,
   rateLimitMaxAttempts,
