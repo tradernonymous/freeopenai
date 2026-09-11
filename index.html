@@ -630,7 +630,11 @@
         .lightbox-actions { display: flex; gap: 8px; }
 
         /* Typing indicator */
-        .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 8px 16px; align-self: flex-start; color: var(--text-muted); font-size: 12px; }
+        /* Lives in the bot column, not pinned to the viewport edge: same
+           center track and 768px width as .message.bot, so the dots sit
+           exactly where the reply will start instead of floating outside
+           the conversation. */
+        .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 10px 16px; align-self: center; width: 100%; max-width: 768px; color: var(--text-muted); font-size: 12px; }
         .typing-dots { display: flex; gap: 3px; }
         .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: typing 1.2s infinite ease-in-out; }
         .typing-dots span:nth-child(2) { animation-delay: .15s; }
@@ -641,6 +645,9 @@
         .empty-state {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
             text-align: center; color: var(--text-muted); padding: 40px 20px;
+            /* Flex items refuse to shrink below content size by default, which
+               let the hero grid push this box wider than a phone screen. */
+            min-width: 0; max-width: 100%;
         }
         .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.3; }
         .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
@@ -649,7 +656,10 @@
            grid collapses to one column on its own, no breakpoint needed. */
         .hero-greet { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); margin-bottom: 6px; }
         .empty-state .hero-sub { max-width: 340px; margin-bottom: 20px; }
-        .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; width: 100%; max-width: 560px; }
+        /* min(200px, 100%) is the anti-blowout form: a bare 200px minimum
+           forced two columns onto every screen and clipped the right column
+           on phones. */
+        .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; width: 100%; max-width: 560px; }
         .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
         .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift); }
         .hero-card strong { font-size: 13px; color: var(--text); }
@@ -981,9 +991,9 @@
                dropped it into the flow, on top of the first line of code. An
                absolutely positioned element hosts ::after perfectly well. */
             .msg-action-btn, .history-delete,
-            .icon-btn, .menu-trigger-btn, .model-trigger { position: relative; }
+            .icon-btn, .menu-trigger-btn, .model-trigger, .mode-chip { position: relative; }
             .msg-action-btn::after, .history-delete::after, .code-copy-btn::after,
-            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after {
+            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after, .mode-chip::after {
                 content: ''; position: absolute;
                 top: 50%; left: 50%; transform: translate(-50%, -50%);
                 width: max(100%, 44px); height: max(100%, 44px);
@@ -1051,6 +1061,9 @@
             #viewChat .chat-bar-title span { display: none; }
             .effort-select { max-width: 76px; }
             .model-trigger span#modelLabel { max-width: 68px; }
+            /* The mode chip joined the composer row; on a 360px screen its
+               desktop padding is what pushes the input too small. */
+            .mode-chip { padding: 4px 8px; font-size: 10px; }
             /* Six header controls don't fit 360px even icon-sized; the theme
                stays one Ctrl+P away, so it yields first. */
             #themeToggle { display: none; }
@@ -3515,6 +3528,8 @@
             const el = document.createElement('div');
             el.className = 'typing-indicator';
             el.id = 'typingIndicator';
+            el.setAttribute('role', 'status');
+            el.setAttribute('aria-label', 'Assistant is thinking');
             el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
