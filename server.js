@@ -1081,12 +1081,14 @@ function createRequestHandler(root) {
             res.end('Not found');
             return;
           }
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
           res.end(req.method === 'HEAD' ? undefined : html);
         });
         return;
       }
-      res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' });
+      // Static files never cache: the whole UI ships in index.html, so a
+      // cached copy silently runs yesterday's code after a deploy.
+      res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
   };

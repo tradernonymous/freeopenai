@@ -67,3 +67,20 @@ test('server falls back to index.html for extensionless routes', async () => {
   server.close();
   assert.equal(status, 200);
 });
+
+test('static responses are never cached', async () => {
+  // The UI ships in index.html + chatlib.js; a cached copy would silently
+  // run yesterday's code after a deploy, with yesterday's bugs.
+  const server = http.createServer(createRequestHandler(root));
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const headers = await new Promise((resolve) => {
+    http.get({ port, path: '/' }, (res) => resolve(res.headers));
+  });
+  const jsHeaders = await new Promise((resolve) => {
+    http.get({ port, path: '/chatlib.js' }, (res) => resolve(res.headers));
+  });
+  server.close();
+  assert.equal(headers['cache-control'], 'no-cache');
+  assert.equal(jsHeaders['cache-control'], 'no-cache');
+});
