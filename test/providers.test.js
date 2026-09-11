@@ -480,7 +480,7 @@ test('model cache returns cached result within TTL', async () => {
   clearModelCache();
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: [{ id: 'x1', name: 'X1' }] }));
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'z-ai/glm-5.3', name: 'GLM 5.3' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
   process.env.NVIDIA_API_KEY = 'k';
@@ -492,9 +492,10 @@ test('model cache returns cached result within TTL', async () => {
     const url = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`;
     const first = await (await fetch(url)).json();
     assert.equal(first.length, 1);
-    assert.equal(first[0].id, 'x1');
+    assert.equal(first[0].id, 'z-ai/glm-5.3');
     const second = await (await fetch(url)).json();
     assert.equal(second.length, 1);
+    assert.equal(second[0].id, 'z-ai/glm-5.3');
   } finally {
     if (app) app.close();
     upstream.close();
@@ -755,7 +756,7 @@ test('Ollama appears on a base URL alone and sends no auth header', async () => 
   const upstream = http.createServer((req, res) => {
     seen.authorization = req.headers.authorization;
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: [{ id: 'llama3.1' }] }));
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'qwen3:8b' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
   delete process.env.OLLAMA_API_KEY;
@@ -789,7 +790,7 @@ test('NVIDIA returns its whole live catalogue', async () => {
   clearModelCache();
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }] }));
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'z-ai/glm-5.3' }, { id: 'deepseek-ai/deepseek-v4-flash' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
   process.env.NVIDIA_API_KEY = 'k';
@@ -800,6 +801,7 @@ test('NVIDIA returns its whole live catalogue', async () => {
     await new Promise((r) => app.listen(0, r));
     const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`)).json();
     assert.equal(body.length, 2);
+    assert.deepEqual(body.map((m) => m.id).sort(), ['deepseek-ai/deepseek-v4-flash', 'z-ai/glm-5.3'].sort());
   } finally {
     if (app) app.close();
     upstream.close();
