@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Copy or retry any response.
+      Ask anything and get a streamed, markdown-rendered reply (bold, lists, code blocks). Starts on a prompt hero with suggestion cards, copy or retry any response, and a light/dark theme toggle lives in the header.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
