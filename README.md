@@ -109,8 +109,8 @@
       Every conversation is kept in a sidebar, titled by your first message. Reopen, delete, or start a new one without losing the last. Hide the sidebar when you want the room.
     </td>
     <td valign="top">
-      <h3>🔌 Six providers</h3>
-      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA, Mistral or AI Gateway and they appear in a picker — so one running dry never stops the work. A local Ollama joins with just a base URL and needs no key. Keys stay on the server.
+      <h3>🔌 Many providers</h3>
+      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA, Mistral, HuggingFace or AI Gateway and they appear in a picker — so one running dry never stops the work. A local Ollama joins with just a base URL and needs no key, and a self-hosted OmniRoute gateway fronts hundreds of providers — including the `auto` router — behind one endpoint. Keys stay on the server.
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
@@ -252,6 +252,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `ANTIGRAVITY_BASE_URL` | *(unset)* | Adds **Antigravity** through an OpenAI-compatible proxy — Claude Opus / Sonnet and Gemini 3, using a quota your Google account already has. Set it or `ANTIGRAVITY_API_KEY`. See [Antigravity](#antigravity). |
 | `ANTIGRAVITY_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. The proxy holds the Google credentials itself, so this is empty for a default local install — and empty means *no* auth header at all, never a bare `Bearer`. |
 | `ANTIGRAVITY_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list, for a proxy release whose model names differ. |
+| `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
+| `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
+| `OMNIROUTE_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list — the `auto` variants and the direct flagships — when your gateway's catalogue routes different names. |
 
 > Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
 >
@@ -457,6 +460,36 @@ Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not ap
 One implementation note: the proxy publishes no model catalogue, so this provider is declared `catalogue: false` and serves its pinned list directly rather than asking for `/v1/models`. A proxy that never implemented that endpoint would otherwise produce a fetch error and an empty picker. `ANTIGRAVITY_MODELS` is the escape hatch when a proxy release renames things.
 
 **If the picker says "this provider returned no chat models".** That message means the model list resolved to nothing, which is a configuration mistake rather than the proxy failing — and the likeliest spelling of it is a **stray space** in `ANTIGRAVITY_MODELS`, which is truthy, splits to an empty id and filters away. A declared list that resolves to nothing now falls back to the pinned list instead of publishing nothing, and an entry that could not address a model at all (a zero-width space or a smart quote left by a paste) is dropped rather than served as a row that cannot work. If the effective list is *still* empty — a provider with no pinned list of its own and nothing usable declared — the route answers with an error naming the variable and the character position that spoiled it, so the fix is readable from the message instead of looking like the provider is down. The same fallback applies to every provider with a declared list.
+
+### 🚀 OmniRoute (hundreds of providers through one local endpoint)
+
+[**OmniRoute**](https://github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway you run yourself. It fronts **352 providers / 1,312 model ids / 154 free tiers** behind one OpenAI-compatible endpoint, with automatic routing, quota-aware fallback and a dashboard you manage. The killer feature is the `auto` model: one id that routes every request to whichever connected provider best fits at that moment — so the picker stays small even though the reach is huge.
+
+```bash
+# terminal 1: the gateway (it opens on http://localhost:20128)
+npm install -g omniroute && omniroute
+# or Docker: docker run -d --name omniroute -p 127.0.0.1:20128:20128 \
+#   -v omniroute-data:/app/data diegosouzapw/omniroute:latest
+
+# terminal 2: this app, pointed at it
+OMNIROUTE_BASE_URL=http://127.0.0.1:20128 npm start
+```
+
+`OmniRoute` then appears in the provider picker led by `auto` and its variants (`auto/coding`, `auto/fast`, `auto/cheap`, `auto/smart`, `auto/offline`), plus a handful of direct flagships. Node `>=22.22.2` (or `>=24`); the catalogue is fetched live from the gateway's `/v1/models` (deduplicated with `?prefix=alias`) and intersected with the pinned list, so a model your gateway doesn't publish simply stays out of the picker instead of failing on use.
+
+| Setting | Value |
+| --- | --- |
+| `OMNIROUTE_BASE_URL` | `http://127.0.0.1:20128` (local) or wherever the gateway runs. Both with and without `/v1` work — the version segment is added when it is missing. |
+| `OMNIROUTE_API_KEY` | *(leave unset for a default install with `REQUIRE_API_KEY=false`)* |
+| `OMNIROUTE_MODELS` | Optional comma-separated override when your gateway's route names differ from the pinned list |
+
+Until that variable (or `OMNIROUTE_API_KEY`) is set, **OmniRoute does not appear in the picker at all** — the provider stays out of it entirely rather than showing up and failing, so "I can't see the auto models" on a deploy almost always means the variable is missing.
+
+**Connecting providers to OmniRoute.** Run the gateway, open its dashboard at `http://localhost:20128`, sign in with the initial admin password, and connect whichever accounts/keys you want — OmniRoute keeps them in its own SQLite database, encrypted at rest. This app never sees them; it only talks to the gateway.
+
+**Hardening the gateway.** A default install asks for no key, and anything that can reach it can spend every account you connected. If you expose it beyond your own machine, set `REQUIRE_API_KEY=true` in the gateway's environment, create an API key in its dashboard, and put that key in `OMNIROUTE_API_KEY` here.
+
+**A local gateway is not reachable from a deployed app.** `http://127.0.0.1:20128` from the Railway container means the container itself, where no gateway is running. Either run this app locally against the gateway (the command above), or run the gateway somewhere this app can reach — a second service on the same Railway project (private network), a VPS, or your own server — and point `OMNIROUTE_BASE_URL` at it. Don't publish an unhardened gateway to the open internet.
 
 ### 💸 What keeps a turn affordable
 

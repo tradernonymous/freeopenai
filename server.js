@@ -973,6 +973,52 @@ const LLM_PROVIDERS = {
       'gemini-2.5-flash',
     ],
   },
+  // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
+  // one OpenAI-compatible endpoint in front of hundreds of upstream providers
+  // (OpenAI, Anthropic, Google, GLM, DeepSeek, Mistral, Kimi, plus dozens of
+  // free tiers), with automatic routing and fallback between them. It keeps
+  // its own catalogue and key/account database in SQLite, so this app needs
+  // nothing more than the gateway's address -- and optionally a key, for when
+  // the operator has hardened the gateway with REQUIRE_API_KEY=true.
+  //
+  // The model ids below are the point of it. `auto` and its variants are
+  // virtual combos that route each request to whichever connected provider
+  // best fits at that moment; direct `provider/model` ids are pinned for when
+  // the picker wants a concrete name. All of them are intersected with the
+  // gateway's live /v1/models catalogue, so an id a release retires drops out
+  // silently instead of failing on use. OMNIROUTE_MODELS replaces the whole
+  // list, like the other providers.
+  omniroute: {
+    label: 'OmniRoute',
+    baseUrl: 'http://127.0.0.1:20128/v1',
+    envVar: 'OMNIROUTE_API_KEY',
+    // A fresh install answers without a key (REQUIRE_API_KEY=false). When the
+    // operator turns that on, the key here is sent as Bearer; when it stays
+    // off, no auth header goes at all, never a bare "Bearer ".
+    needsKey: false,
+    // The gateway lists every model twice by default (a `cc/...` alias and a
+    // `provider/...` canonical id for the same model). One id per model is
+    // enough for a picker, and the allowlist below is written in those alias
+    // ids, so ask for the deduplicated catalogue.
+    modelsPath: '/models?prefix=alias',
+    models: [
+      // The router itself: let OmniRoute pick the best provider per request.
+      'auto',
+      'auto/coding',
+      'auto/fast',
+      'auto/cheap',
+      'auto/smart',
+      'auto/offline',
+      // Direct flagships, as documented in the OmniRoute README / affiliates.
+      'openai/gpt-5.4',
+      'glm/glm-5.2',
+      'cc/claude-opus-4-6',
+      'cc/claude-sonnet-4-6',
+      'agentrouter/claude-opus-4-8',
+      'agentrouter/claude-opus-5',
+      'agentrouter/gpt-5.6-sol',
+    ],
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -1032,7 +1078,7 @@ function providerIsConfigured(provider) {
 // and the Antigravity proxy both accept "http://host:port", and both serve
 // /v1/... underneath it, so the version segment is added when it is missing
 // rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface']);
+const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
@@ -1687,7 +1733,7 @@ async function llmModels(req, res) {
   try {
     const result = id === 'ollama'
       ? await fetchOllamaModels(req, provider)
-      : await providerFetch(req, provider, '/models');
+      : await providerFetch(req, provider, provider.modelsPath || '/models');
     const { ok, status, data } = result;
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
