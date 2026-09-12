@@ -231,7 +231,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `PROVIDER_STALL_MS` | `60000` | Aborts a stream quiet longer than this, with a stall message instead of silence. |
 | `PROVIDER_TIMEOUT_MODELS_MS` | `20000` | Budget for model-catalogue fetches. |
 | `RATE_LIMIT_MAX_ATTEMPTS` | `4` | 429 retries per call, 1–10. Backoff grows per attempt. |
-| `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. |
+| `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. It also decides what a *direct* provider (Nara, Antigravity, OpenRouter, Ollama …) needs: with a login of its own the app has already identified the visitor and enforces that on every API route, so those providers work with no Puter account. With no login gate, the Puter sign-in stays required even for a direct provider, because there it is the only thing between an anonymous visitor and your API keys. |
 | `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
 | `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
@@ -421,6 +421,8 @@ ANTIGRAVITY_BASE_URL=http://localhost:3000 npm start
 | `ANTIGRAVITY_BASE_URL` | `http://localhost:3000` (local) or the URL of wherever the proxy runs |
 | `ANTIGRAVITY_API_KEY` | *(leave unset for a default local proxy)* |
 | `ANTIGRAVITY_MODELS` | Optional comma-separated override when your proxy's model names differ from the pinned list |
+
+Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not appear in the picker at all** — the provider stays out of it entirely rather than showing up and failing, so "I can't see the Opus models" on a deploy almost always means the variable is missing.
 
 **A local proxy is not reachable from a deployed app.** `http://localhost:3000` from the Railway container means the container itself, where no proxy is running. So either run this app locally against the proxy (the command above), or put the proxy somewhere the app can reach and point `ANTIGRAVITY_BASE_URL` at it. Don't publish the proxy to the open internet to do that: it holds your Google accounts, a default install asks for no key, and anyone who finds the URL is spending your quota. Put it behind your own authentication, or reach it over a private network.
 

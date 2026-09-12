@@ -1087,6 +1087,22 @@ function imageFailureMessage({ puterError = '', serverError = '' } = {}) {
   return 'Could not generate an image. Tried ' + tried.join(' and ') + '.';
 }
 
+// Whether a turn needs a Puter account before it can start.
+//
+// Puter is our own provider and needs one, always. Every other provider goes
+// through our server with the operator's key, so whether it needs a Puter
+// account depends on who is standing there: a deployment with a login of its
+// own has already established that, and enforces it on every API route, so a
+// direct provider can be used without one. A deployment with no login has
+// established nothing, and there the Puter sign-in is the only thing between an
+// anonymous visitor and the operator's keys — so it stays required even for a
+// direct provider.
+function needsPuterAccount(input) {
+  const options = input && typeof input === 'object' ? input : {};
+  if (String(options.provider || '') === PUTER_PROVIDER) return true;
+  return !options.loginRequired;
+}
+
 // Response bodies are JSON until a proxy, edge, or gateway hands back an
 // HTML/text error page instead (mid-restart deploys do this routinely).
 // Parsing that raw throws SyntaxError, which reads as gibberish to the user,
@@ -1900,6 +1916,8 @@ if (typeof module !== 'undefined' && module.exports) {
     EMPTY_REPLY_NUDGE,
     isGithubTool,
     isWebTool,
+    PUTER_PROVIDER,
+    needsPuterAccount,
     IMAGE_BACKENDS,
     imageBackendOrder,
     imageFailureMessage,

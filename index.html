@@ -1591,6 +1591,10 @@
         // Which service answers. 'puter' needs no key; the others go through our
         // own server, which holds the key.
         let selectedProvider = PUTER_PROVIDER;
+        // Whether this deployment asks for a login of its own, read from
+        // /api/health. Declared with the rest of the state because the startup
+        // block below already renders a UI that depends on it.
+        let loginRequired = false;
         let providerModels = [];
         let providerInfo = {};
 
@@ -1788,6 +1792,7 @@
         initializeApp();
         setupEventListeners();
         loadMessagesFromStorage();
+        refreshLoginRequirement();
         renderWorkspaceFiles();
         renderTaskList();
 
@@ -2098,6 +2103,25 @@
             modelLabel.textContent = model ? model.name : selectedModel;
         }
 
+        // A Puter account is needed for Puter itself, and only for a direct
+        // provider when the deployment has no login of its own to vouch for the
+        // visitor. The rule lives in chatlib.js so it can be tested.
+        function needsPuterLogin() {
+            return needsPuterAccount({ provider: selectedProvider, loginRequired });
+        }
+
+        async function refreshLoginRequirement() {
+            try {
+                const data = await safeJson(await fetch('/api/health'));
+                loginRequired = !!data.loginRequired;
+            } catch {
+                // Unreadable means unknown, and unknown keeps the stricter
+                // requirement rather than quietly opening the provider keys.
+                loginRequired = false;
+            }
+            updateAuthUI();
+        }
+
         function updateAuthUI() {
             const signedIn = !!currentUser;
             const name = signedIn ? (currentUser.username || currentUser.email || currentUser.name || 'Signed in') : '';
@@ -2107,7 +2131,11 @@
             authName.hidden = !signedIn;
             authName.textContent = name;
 
-            settingsAuthStatus.textContent = signedIn ? `Signed in as ${name}` : 'Not signed in — required to chat';
+            settingsAuthStatus.textContent = signedIn
+                ? `Signed in as ${name}`
+                : (needsPuterLogin()
+                    ? 'Not signed in — required to chat'
+                    : 'Not signed in — not needed for ' + selectedProvider);
             settingsAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
 
             document.querySelectorAll('.menu-trigger-btn').forEach((btn) => btn.classList.toggle('signed-in', signedIn));
@@ -2664,6 +2692,8 @@
             renderModelOptions();
             updateModelLabel();
             updateEffortPicker();
+            // Switching provider can change whether a Puter account is needed.
+            updateAuthUI();
             showStatus('success', 'Provider: ' + id);
         }
 
@@ -3204,8 +3234,11 @@
         async function sendMessage() {
             const raw = chatInput.value.trim();
             if (!raw || isTyping) return;
-            if (!puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
-            if (puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
+            // Only a turn that actually needs Puter is held up by Puter: a
+            // direct provider was previously unreachable without a Puter
+            // account, which its own error named as a Puter problem.
+            if (needsPuterLogin() && !puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
+            if (needsPuterLogin() && puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
                 addMessage('system', 'Please sign in to chat (see the account icon above).', { error: true });
                 return;
             }

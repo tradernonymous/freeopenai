@@ -825,6 +825,12 @@ function llmHealth(req, res) {
     uptimeSeconds: Math.round(process.uptime()),
     // Source knowledge, not deployment state: every provider this build knows.
     providers: Object.keys(LLM_PROVIDERS),
+    // Whether this deployment asks for a login of its own. Not a secret, and
+    // not deployment state either: an unauthenticated visitor already learns it
+    // from the redirect to /login.html. The page needs it to decide whether a
+    // direct provider can be used without a Puter account — see
+    // needsPuterAccount in chatlib.js for why that matters.
+    loginRequired: getConfiguredAccounts(process.env).length > 0,
   }, { 'Cache-Control': 'no-store' });
 }
 
