@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS } = require('../server.js');
+const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS, providerConfig } = require('../server.js');
 const { isFreeModel, isFreeModelId, emitsText, usableChatModels } = require('../chatlib.js');
 
 // The OpenRouter allowlist is a free-tier commitment: paid ids only ever
@@ -530,6 +530,7 @@ test('a provider that 429s twice then answers is retried into success', async ()
 
 test('a provider that never stops 429ing returns the last refusal, capped', async () => {
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  process.env.RATE_LIMIT_MAX_ATTEMPTS = '4';
   try {
     let calls = 0;
     const result = await fetchProviderWithRetry('nvidia', async () => {
@@ -540,10 +541,55 @@ test('a provider that never stops 429ing returns the last refusal, capped', asyn
     assert.equal(calls, 4, 'retries are bounded, so a dead provider cannot hang');
   } finally {
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+    delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
   }
 });
 
-test('a non-429 failure is returned immediately, no retry', async () => {
+test('a 5xx is retried too, because a busy upstream can settle', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('nvidia', async () => {
+      calls += 1;
+      if (calls < 3) return { ok: false, status: 503, data: { error: 'overloaded' } };
+      return { ok: true, status: 200, data: { choices: [] } };
+    });
+    assert.equal(result.ok, true);
+    assert.equal(calls, 3, 'a 503 got the same retry-then-succeed ride as a 429');
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('Retry-After is parsed from the shapes providers actually send', () => {
+  const { parseRetryAfterMs, retryBackoffMs } = require('../server.js');
+  assert.equal(parseRetryAfterMs(null), undefined);
+  assert.equal(parseRetryAfterMs({}), undefined);
+  assert.equal(parseRetryAfterMs({ 'retry-after-ms': 50 }), 50);
+  assert.equal(parseRetryAfterMs({ 'retry-after-ms': '50' }), 50);
+  assert.equal(parseRetryAfterMs({ 'retry-after-ms': 'junk' }), undefined, 'unreadable ms falls through');
+  assert.equal(parseRetryAfterMs({ 'retry-after': '7' }), 7000, 'seconds without a header prefix');
+  assert.equal(parseRetryAfterMs({ 'retry-after': 'Mon, 01 Jan 2099 00:00:00 GMT' }) > 1_000_000_000, true, 'an HTTP-date is honoured');
+  assert.equal(parseRetryAfterMs({ 'retry-after': 'junk' }), undefined);
+  assert.equal(retryBackoffMs(3) >= retryBackoffMs(2), true, 'backoff grows, and jitter never shrinks it below the last run');
+});
+
+test('a packet Retry-After rides the retry shell', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  let calls = 0;
+  // A unique provider id keeps this test's cooldown from spilling into the
+  // other nvidia tests that run later in the same file.
+  const result = await fetchProviderWithRetry('retryafter-test', async () => {
+    calls += 1;
+    if (calls === 1) return { ok: false, status: 429, data: { error: 'wait' }, retryAfterMs: 1 };
+    return { ok: true, status: 200, data: { choices: [] } };
+  });
+  delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  assert.equal(result.ok, true);
+  assert.equal(calls, 2, 'the packet Retry-After path is wired through the shared shell');
+});
+
+test('a client fault is returned immediately, no retry', async () => {
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
   try {
     let calls = 0;
@@ -552,7 +598,7 @@ test('a non-429 failure is returned immediately, no retry', async () => {
       return { ok: false, status: 401, data: { error: 'bad key' } };
     });
     assert.equal(result.status, 401);
-    assert.equal(calls, 1, 'only rate limits deserve another try');
+    assert.equal(calls, 1, 'only 429, 5xx and no-response deserve another try');
   } finally {
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
   }
@@ -651,6 +697,9 @@ test('llmChat streams SSE when body.stream is true', async () => {
 
 test('llmChat streams SSE error when upstream is unreachable', async () => {
   clearModelCache();
+  // With retries now covering no-response too, one attempt keeps this test
+  // about the SSE error shape rather than the backoff ride of a dead port.
+  process.env.RATE_LIMIT_MAX_ATTEMPTS = '1';
   process.env.NVIDIA_API_KEY = 'k';
   process.env.NVIDIA_BASE_URL = 'http://127.0.0.1:1/v1';
   let app;
@@ -670,6 +719,7 @@ test('llmChat streams SSE error when upstream is unreachable', async () => {
     if (app) app.close();
     delete process.env.NVIDIA_API_KEY;
     delete process.env.NVIDIA_BASE_URL;
+    delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
     clearModelCache();
   }
 });
@@ -740,7 +790,27 @@ test('retry attempts are capped by env', async () => {
     delete process.env.RATE_LIMIT_BASE_DELAY_MS;
     delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
   }
-  assert.equal(rateLimitMaxAttempts(), 4, 'unset means the default');
+  assert.equal(rateLimitMaxAttempts(), 6, 'unset means the default');
+});
+
+test('a thrown fetch is retried, then the real error is surfaced', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  process.env.RATE_LIMIT_MAX_ATTEMPTS = '3';
+  try {
+    let calls = 0;
+    await assert.rejects(
+      fetchProviderWithRetry('nvidia', async () => {
+        calls += 1;
+        throw new Error('ECONNREFUSED: nothing listening');
+      }),
+      /ECONNREFUSED/,
+      'a no-response attempt gets the same bound, then the error is reported as-is'
+    );
+    assert.equal(calls, 3, 'a dead endpoint is probed up to the cap, not reported after one try');
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+    delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
+  }
 });
 
 test('/api/llm/limits reports the effective knobs', async () => {
@@ -750,7 +820,7 @@ test('/api/llm/limits reports the effective knobs', async () => {
   app.close();
   assert.deepEqual(Object.keys(body).sort(), ['retries', 'timeouts']);
   assert.equal(body.timeouts.chat, 55000);
-  assert.equal(body.retries.maxAttempts, 4);
+  assert.equal(body.retries.maxAttempts, 6);
 });
 
 test('a stream that goes quiet aborts with a stall message, not silence', async () => {
@@ -909,6 +979,41 @@ test('Ollama sends Bearer when a key is set', async () => {
     await fetch(base + '/api/llm/models?provider=ollama');
   });
   assert.equal(seen.authorization, 'Bearer KEY123');
+});
+
+test('Ollama key alone resolves to the cloud endpoint', () => {
+  clearModelCache();
+  delete process.env.OLLAMA_BASE_URL;
+  process.env.OLLAMA_API_KEY = 'real-key';
+  try {
+    const cfg = providerConfig('ollama');
+    assert.ok(cfg, 'ollama should be configured when a key is present');
+    assert.equal(cfg.baseUrl, 'https://ollama.com/v1', 'key + no base URL → Ollama Cloud');
+    assert.equal(cfg.key, 'real-key');
+  } finally {
+    delete process.env.OLLAMA_API_KEY;
+    clearModelCache();
+  }
+});
+
+test('Ollama key plus base URL honours the explicit base', () => {
+  clearModelCache();
+  process.env.OLLAMA_API_KEY = 'real-key';
+  process.env.OLLAMA_BASE_URL = 'http://localhost:11434/v1';
+  try {
+    const cfg = providerConfig('ollama');
+    assert.equal(cfg.baseUrl, 'http://localhost:11434/v1', 'explicit base URL wins over cloud');
+  } finally {
+    delete process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('Ollama with no key and no base URL is unconfigured', () => {
+  delete process.env.OLLAMA_API_KEY;
+  delete process.env.OLLAMA_BASE_URL;
+  assert.equal(providerConfig('ollama'), null);
 });
 
 test('NVIDIA returns its whole live catalogue', async () => {

@@ -230,7 +230,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `PROVIDER_TIMEOUT_HEADERS_MS` | `25000` | Per-attempt deadline for upstream response headers on streams. |
 | `PROVIDER_STALL_MS` | `60000` | Aborts a stream quiet longer than this, with a stall message instead of silence. |
 | `PROVIDER_TIMEOUT_MODELS_MS` | `20000` | Budget for model-catalogue fetches. |
-| `RATE_LIMIT_MAX_ATTEMPTS` | `4` | 429 retries per call, 1–10. Backoff grows per attempt. |
+| `RATE_LIMIT_MAX_ATTEMPTS` | `6` | Retries per call for a transient answer — 429, a 5xx, or no response at all. 1–10. Backoff grows per attempt with jitter; a provider's `Retry-After` header is honoured when one is sent. |
 | `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. It also decides what a *direct* provider (Nara, Antigravity, OpenRouter, Ollama …) needs: with a login of its own the app has already identified the visitor and enforces that on every API route, so those providers work with no Puter account. With no login gate, the Puter sign-in stays required even for a direct provider, because there it is the only thing between an anonymous visitor and your API keys. |
 | `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
 | `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
@@ -244,7 +244,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `AI_GATEWAY_API_KEY` | *(unset)* | Adds Vercel AI Gateway — one Bearer key across providers (Laguna S 2.1, Ling 3.0 Flash Sante/Fin, Fish Audio S2.1 Pro among them). |
-| `OLLAMA_API_KEY` | *(unset)* | Optional key for Ollama. Set it or `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. The app also accepts a Railway root URL and falls back from OpenAI-compatible `/v1/models` to native `/api/tags`. |
+| `OLLAMA_API_KEY` | *(unset)* | Key for Ollama. A key alone means **Ollama Cloud** (`https://ollama.com/v1`) — the hosted catalogue appears. A key with no `OLLAMA_BASE_URL` never touches a local install; to reach one, set `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. The app also accepts a Railway root URL and falls back from OpenAI-compatible `/v1/models` to native `/api/tags`. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
@@ -445,7 +445,7 @@ Puter fronts several providers, and they disagree in ways that surface as raw AP
 | Some Claude models reject the effort setting with a `thinking.type` error | Retries once without it, then hides the picker for that model |
 | A reply object carries `model`, `id`, `usage` | Strips them before echoing the turn back, which the provider rejects otherwise |
 | Codex model ids need an `openai/` prefix | Baked into the model list |
-| A free-tier provider answers `429 Too Many Requests` | The server retries with backoff (up to 4 attempts, ~17s worst case) and the page gives it one more try, so a rate-limited NVIDIA burst rides itself out instead of failing every message. |
+| A free-tier provider answers `429 Too Many Requests` — or a 5xx, or goes silent | The server retries with exponential backoff plus jitter, honouring any `Retry-After` the provider sends (up to 6 attempts), the page gives it one more try, and a provider that never settles reports its own message. A rate-limited NVIDIA burst rides itself out instead of failing every message. |
 | The user stops a streaming reply | The red stop button (or Escape) aborts the fetch, and the server cancels the upstream request the moment the client disconnects, so a cancelled answer doesn't keep burning tokens. |
 
 <br>

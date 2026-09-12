@@ -14,6 +14,7 @@ const {    errorDetailFromBody,
     nextUsableModel,
     refusedModelIds,
     safeJson,
+    isRetryableStatus,
     MAX_MODEL_REFUSAL_RETRIES,
 } = require('../chatlib.js');
 
@@ -127,6 +128,7 @@ function harness({ models, answers, streamed = null }) {
     safeJson,
     normalizeProviderReply: (data) => ({ reply: data.answer }),
     isRateLimitError: () => false,
+    isRetryableStatus,
     abortError: () => new Error('aborted'),
     parseSseChunk: () => (streamed ? [{ choices: [{ delta: { content: streamed } }] }] : []),
     fetch: async (url, init) => {

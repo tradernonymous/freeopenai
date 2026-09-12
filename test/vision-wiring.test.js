@@ -15,6 +15,7 @@ const {
   refusedModelIds,
   isSendableImageUrl,
   withImageTurn,
+  isRetryableStatus,
   MAX_IMAGE_DATA_URL_CHARS,
   MAX_IMAGE_EDGE,
   MAX_MODEL_REFUSAL_RETRIES,
@@ -117,6 +118,7 @@ function baseDeps(overrides = {}) {
     safeJson: async (res) => res.json(),
     normalizeProviderReply: (data) => ({ reply: data.answer }),
     isRateLimitError: () => false,
+    isRetryableStatus,
     abortError: () => new Error('aborted'),
     parseSseChunk: () => [],
     // Defaults that fail loudly: a test that forgets to stub one must not get a
@@ -193,6 +195,8 @@ test('every page-scope name the extracted code closes over is in the sandbox', (
     'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout', 'globalThis',
     // Globals in both the browser and Node, so `with` falls through to them.
     'TextDecoder', 'TextEncoder', 'Buffer', 'URL', 'URLSearchParams', 'AbortController',
+    // Promise executor parameters of an inline wait (`new Promise((resolve, reject) => …)`).
+    'resolve', 'reject',
   ]);
   // A leading dot means a method call (`.drawImage(`), which is not page scope.
   const referenced = new Set([...sources.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]));

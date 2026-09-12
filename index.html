@@ -109,11 +109,15 @@
             display: flex; flex-direction: column;
             padding-top: env(safe-area-inset-top);
             padding-bottom: env(safe-area-inset-bottom);
+            /* Landscape notches at the left/right edges: without these, the
+               chat bar and sidebar ride under the screen cutout on iOS. */
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
             -webkit-tap-highlight-color: transparent;
         }
         /* Without this, every tap on a phone waits on the browser's double-tap
            zoom detector before the handler runs. */
-        button, select, input, textarea,
+        button, select, input, textarea, a,
         .model-option, .history-item, .model-card, .drawer-nav-btn,
         .attach-menu-item, .msg-action-btn, .code-copy-btn, .message-image {
             touch-action: manipulation;
@@ -231,7 +235,7 @@
         .hide-system .message.system { display: none; }
         input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
         /* Command palette (Ctrl+P): model and action search over everything. */
-        .palette-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; background: rgba(0,0,0,.55); }
+        .palette-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: calc(12vh + env(safe-area-inset-top)) 16px 16px; background: rgba(0,0,0,.55); }
         .palette-overlay[hidden] { display: none; }
         .palette { width: 100%; max-width: 520px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--lift-lg); overflow: hidden; }
         .palette input { width: 100%; background: transparent; color: var(--text); border: none; border-bottom: 1px solid var(--border); padding: 12px 14px; font: inherit; font-size: 14px; outline: none; }
@@ -868,7 +872,10 @@
             background: rgba(0,0,0,0.7);
             backdrop-filter: blur(4px);
             display: none; align-items: center; justify-content: center;
-            padding: 20px;
+            padding: calc(16px + env(safe-area-inset-top))
+                     calc(20px + env(safe-area-inset-left))
+                     calc(16px + env(safe-area-inset-bottom))
+                     calc(20px + env(safe-area-inset-right));
         }
         .modal-overlay.open { display: flex; }
         .modal {
@@ -1341,10 +1348,10 @@
                     </div>
                     <div class="settings-row">
                         <div>
-                            <strong>Auto-retry on rate limit</strong>
-                            <p class="settings-hint">One extra try after a short wait when a provider answers 429.</p>
+                            <strong>Auto-retry on a transient provider error</strong>
+                            <p class="settings-hint">One extra try after a short wait when a provider answers 429, a server error, or goes silent.</p>
                         </div>
-                        <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on rate limit">
+                        <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on a rate limit or server error">
                     </div>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
@@ -2846,17 +2853,35 @@
                     delete payload.tools;
                     showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
                 }
-                // A 429 means the provider's free tier wants a moment before the
-                // next call. The server already retried with backoff, so we only
-                // give it one more gentle try here before showing the rate-limit
-                // message instead of a raw error the user has to decode.
+                // A transient answer — 429 from a free tier, a 5xx from a busy
+                // upstream, or no response at all — deserves one more gentle try
+                // before the message is shown. The server already retried with
+                // backoff, so the page adds exactly this one, exactly here.
                 const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
                     ...(signal ? { signal } : {}),
                 });
-                let res = await send();
+                const retryWait = () => new Promise((resolve, reject) => {
+                    if (signal?.aborted) { reject(abortError()); return; }
+                    const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                    signal?.addEventListener('abort', () => {
+                        clearTimeout(timer);
+                        reject(abortError());
+                    }, { once: true });
+                });
+                let res;
+                try {
+                    res = await send();
+                } catch (fetchErr) {
+                    // No answer came back at all — a dropped connection. Same
+                    // treatment as a rate limit: wait and try once more.
+                    if (!autoRetryEnabled || signal?.aborted) throw fetchErr;
+                    showStatus('info', 'No answer from the provider — waiting a moment, then retrying');
+                    await retryWait();
+                    res = await send();
+                }
                 let data = await safeJson(res);
                 if (data.parseFailed) {
                     const err = new Error(data.error);
@@ -2866,16 +2891,11 @@
                     err.providerId = selectedProvider;
                     throw err;
                 }
-                if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
-                    showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
-                    await new Promise((resolve, reject) => {
-                        if (signal?.aborted) { reject(abortError()); return; }
-                        const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
-                        signal?.addEventListener('abort', () => {
-                            clearTimeout(timer);
-                            reject(abortError());
-                        }, { once: true });
-                    });
+                if (autoRetryEnabled && isRetryableStatus(res.status)) {
+                    showStatus('info', isRateLimitError(data.error)
+                        ? 'The provider is rate limiting — waiting a moment, then retrying'
+                        : 'The provider answered with a server error — waiting a moment, then retrying');
+                    await retryWait();
                     res = await send();
                     data = await safeJson(res);
                 }
@@ -2922,6 +2942,28 @@
                     body: JSON.stringify(payload),
                     signal,
                 });
+                // The server already retried a rate limit or 5xx with backoff;
+                // here the page gives a transient answer exactly one more try
+                // before settling for the report below.
+                if (!res.ok && autoRetryEnabled && isRetryableStatus(res.status)) {
+                    showStatus('info', isRateLimitError(await res.text().catch(() => ''))
+                        ? 'The provider is rate limiting — waiting a moment, then retrying'
+                        : 'The provider answered with a server error — waiting a moment, then retrying');
+                    await new Promise((resolve, reject) => {
+                        if (signal?.aborted) { reject(abortError()); return; }
+                        const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                        signal?.addEventListener('abort', () => {
+                            clearTimeout(timer);
+                            reject(abortError());
+                        }, { once: true });
+                    });
+                    res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                        signal,
+                    });
+                }
                 if (res.ok) break;
                 // The server reports a failed stream as an SSE frame and a failed
                 // plain request as JSON, so read the body as text and take the

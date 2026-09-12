@@ -12,6 +12,7 @@ const {
   DEFAULT_VISION_MODEL,
   isDocumentFile,
   isRateLimitError,
+  isRetryableStatus,
   safeJson,
   isToolsRejection,
   parseSseChunk,
@@ -210,6 +211,20 @@ test('isRateLimitError recognizes the shapes a 429 actually arrives in', () => {
   assert.equal(isRateLimitError(''), false);
   assert.equal(isRateLimitError(null), false);
   assert.equal(isRateLimitError(undefined), false);
+});
+
+test('isRetryableStatus marks quotas, server failures and silence as worth another try', () => {
+  assert.equal(isRetryableStatus(429), true, 'a rate limit is a transient refusal');
+  for (const status of [500, 502, 503, 504, 524, 599]) {
+    assert.equal(isRetryableStatus(status), true, `${status} is a server-side failure`);
+  }
+  assert.equal(isRetryableStatus(0), true, 'no response at all is retried');
+  assert.equal(isRetryableStatus(undefined), false);
+  assert.equal(isRetryableStatus(null), false);
+  assert.equal(isRetryableStatus('429'), false, 'a string status is not a status');
+  for (const status of [200, 400, 401, 402, 403, 404, 422]) {
+    assert.equal(isRetryableStatus(status), false, `${status} is a fixed outcome, not retried`);
+  }
 });
 
 test('parseSseChunk extracts JSON payloads from data lines', () => {

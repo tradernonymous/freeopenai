@@ -14,7 +14,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, selectAllowedModels, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -47,21 +47,46 @@ if (!sessionSecret) {
   console.warn('SESSION_SECRET not set — using an ephemeral secret; sessions will not survive a restart.');
 }
 
-// A 429 from a provider means the request arrived before the free tier was
-// ready for it, so it is worth waiting and trying again rather than surfacing
-// an error the user has to act on. Retries are bounded and back off, and a
-// short cooldown stops a burst of tool calls from hammering the same provider.
-// The base delay reads at call time so tests can shrink it via env.
-// The attempt cap does too, clamped to a sane range so a typo can't turn a
-// chat call into an unbounded loop.
+// A transient provider answer — 429 from a free tier, or the 5xx/no-response
+// of a busy or overloaded upstream — means the work deserves another try rather
+// than an error the user has to act on. Mirrors OpenCode's retry layer: a
+// bounded attempt cap, exponential backoff with jitter, and a provider's own
+// Retry-After (or retry-after-ms) header taking priority over our schedule
+// when they send one, so their requested wait is respected instead of guessed.
+// All of it reads at call time so tests can shrink it via env.
 function rateLimitMaxAttempts() {
   const n = Number(process.env.RATE_LIMIT_MAX_ATTEMPTS);
-  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : 4;
+  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : 6;
 }
 const providerCooldownUntil = new Map();
 
 function retryBaseDelayMs() {
   return Number(process.env.RATE_LIMIT_BASE_DELAY_MS) || 2500;
+}
+
+// OpenCode's backoff shape: delay = base * 2^attempt, with up to 25% random
+// jitter so a burst of retries does not stampede the provider in lockstep.
+function retryBackoffMs(attempt) {
+  const base = retryBaseDelayMs() * 2 ** attempt;
+  return Math.ceil(base + base * 0.25 * Math.random());
+}
+
+// Honest Retry-After parsing across the two shapes providers actually use:
+// "retry-after-ms" as a millisecond number, then "retry-after" as either
+// seconds or an HTTP-date. Anything unreadable returns undefined, which lets
+// the caller fall back to its own backoff.
+function parseRetryAfterMs(headers) {
+  if (!headers) return undefined;
+  const get = (name) => {
+    try { return headers.get ? headers.get(name) : headers[name]; } catch { return undefined; }
+  };
+  const ms = get('retry-after-ms');
+  if (ms !== undefined && ms !== null && ms !== '' && Number.isFinite(Number(ms))) return Number(ms);
+  const sec = get('retry-after');
+  if (sec === undefined || sec === null || sec === '') return undefined;
+  if (Number.isFinite(Number(sec))) return Number(sec) * 1000;
+  const date = Date.parse(sec);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
 function sleep(ms) {
@@ -79,40 +104,69 @@ function markProviderCooldown(providerId, durationMs) {
 
 // The shared retry shell behind both the JSON and streaming chat paths. It
 // calls `attempt()` (which makes one provider request and returns either a
-// `{ ok, status, data }` packet or a raw `Response`), retrying only on 429.
+// `{ ok, status, data, retryAfterMs }` packet or a raw `Response`), retrying
+// only on retryable statuses. A packet carries an optional retryAfterMs; a
+// raw Response is read directly so the stream path honours upstream headers.
 async function retryProviderRequest(providerId, attempt) {
   const maxAttempts = rateLimitMaxAttempts();
   let result;
   for (let tryNum = 0; tryNum < maxAttempts; tryNum += 1) {
     const wait = providerCooldownRemaining(providerId);
     if (wait > 0) await sleep(wait);
-    result = await attempt();
+    try {
+      result = await attempt();
+    } catch (err) {
+      // Our own deadline (headers/chat budget, or a client abort) is not a
+      // provider "no response" to ride out — retrying it would re-spend the
+      // same budget again. A genuine connection failure, though, is worth
+      // probing up to the cap before the caller reports the real error.
+      if (err.name === 'AbortError') throw err;
+      const delay = Math.min(retryBackoffMs(tryNum), 30000);
+      markProviderCooldown(providerId, delay + retryBaseDelayMs());
+      if (tryNum >= maxAttempts - 1) throw err;
+      await sleep(delay);
+      continue;
+    }
     let status = result && typeof result.status === 'number' ? result.status : 0;
     if (result && typeof result.status !== 'number') status = result.ok ? 200 : 599;
-    if (status !== 429) return result;
-    const backoff = retryBaseDelayMs() * 2 ** tryNum;
-    markProviderCooldown(providerId, Math.min(backoff * 2, 15000) + retryBaseDelayMs());
-    if (tryNum < maxAttempts - 1) await sleep(backoff);
+    // A timeout we imposed (providerFetch's own deadline) is a budget spent,
+    // not a transient refusal to retry through.
+    if (result.selfTimeout) return result;
+    if (!isRetryableStatus(status)) return result;
+    if (tryNum >= maxAttempts - 1) break;
+    const retryAfterMs =
+      result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
+        ? parseRetryAfterMs(result.headers)
+        : result && typeof result.retryAfterMs === 'number'
+          ? result.retryAfterMs
+          : undefined;
+    // A provider's own wait wins; otherwise grow our backoff, capped so a long
+    // run of refusals never sleeps past the hosting platform's own patience
+    // (OpenCode caps its no-header delay at 30s too).
+    const delay = retryAfterMs !== undefined ? retryAfterMs : Math.min(retryBackoffMs(tryNum), 30000);
+    markProviderCooldown(providerId, delay + retryBaseDelayMs());
+    await sleep(delay);
   }
   return result;
 }
 
-// Retries an idempotent provider call (chat completions) only on 429. Anything
-// else is final and returned as-is, and if the provider keeps refusing the
-// last 429 is returned too, so the caller can describe it normally.
+// Retries an idempotent provider call (chat completions) on retryable statuses.
+// The last attempt is always returned as-is, so the caller can describe it.
 async function fetchProviderWithRetry(providerId, fetchOnce) {
   return retryProviderRequest(providerId, fetchOnce);
 }
 
 // The streaming sibling: each attempt resolves to a raw Response so the caller
-// can pipe the upstream body through. The 429 arrives as the initial status,
-// before any body is read, so the same retry/cooldown logic applies. When the
-// client cancels, `onAbort` aborts the in-flight upstream read immediately.
+// can pipe the upstream body through. The retryable status arrives as the
+// initial status before any body is read, so the same retry/cooldown logic
+// applies. When the client cancels, `onAbort` aborts the in-flight read.
 async function fetchStreamWithRetry(providerId, fetchRaw) {
   return retryProviderRequest(providerId, async () => {
     const response = await fetchRaw();
-    if (!response || typeof response.status !== 'number' || response.status !== 429) return response;
-    // Drain 429 bodies so the socket is reusable before we retry.
+    if (!response || typeof response.status !== 'number' || !isRetryableStatus(response.status)) return response;
+    // Drain the body so the socket is reusable before we retry. The raw
+    // Response stays raw: its Retry-After is read from the headers by the
+    // shared shell, and the caller needs the real `.ok`/`.json()`/`.body`.
     try { await response.body?.cancel(); } catch { /* ignore */ }
     return response;
   });
@@ -662,6 +716,12 @@ const LLM_PROVIDERS = {
   ollama: {
     label: 'Ollama',
     baseUrl: 'http://localhost:11434/v1',
+    // A key alone means Ollama Cloud rather than a local server: no key is
+    // needed to reach a local instance (it usually sends none), while a real
+    // OLLAMA_API_KEY from ollama.com pairs with its hosted /v1 endpoint.
+    // An explicit OLLAMA_BASE_URL always wins, so a self-hosted install or a
+    // different gateway is reachable with the same key anyway.
+    cloudBaseUrl: 'https://ollama.com/v1',
     envVar: 'OLLAMA_API_KEY',
     // Local servers usually take no key. Appearing is opt-in: a key or an
     // explicit base URL puts it in the picker, and an empty key sends no
@@ -794,8 +854,12 @@ function providerConfig(id) {
   if (!providerIsConfigured(provider)) return null;
   const key = process.env[provider.envVar] || '';
   // A base URL override lets the same adapter reach a self-hosted NIM or a
-  // proxy, and lets the tests point at a local stand-in.
-  const rawBaseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
+  // proxy, and lets the tests point at a local stand-in. Without one, a
+  // key-less/local provider keeps its default address — except a provider
+  // that ships a cloudBaseUrl: there a real key means the hosted endpoint,
+  // and the local default only applies when it is the operator's own install.
+  const override = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
+  const rawBaseUrl = override || (key && provider.cloudBaseUrl) || provider.baseUrl;
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
@@ -1263,7 +1327,10 @@ async function providerFetch(req, provider, path, init = {}) {
     } catch {
       data = null;
     }
-    return { ok: res.ok, status: res.status, data };
+    // A provider's Retry-After rides the packet so the shared retry shell can
+    // respect their schedule instead of guessing our own backoff.
+    const retryAfterMs = parseRetryAfterMs(res.headers);
+    return { ok: res.ok, status: res.status, data, retryAfterMs };
   } catch (err) {
     // Report our own deadline as such. A generic network error here would look
     // identical to the provider refusing us, which sends the user hunting
@@ -1272,6 +1339,9 @@ async function providerFetch(req, provider, path, init = {}) {
       return {
         ok: false,
         status: 504,
+        // Marks the deadline as ours, so the shared retry shell does not re-spend
+        // the same budget trying to ride out a wait we already imposed.
+        selfTimeout: true,
         data: { error: { message: `${provider.label} did not respond within ${Math.round(budget / 1000)}s` } },
       };
     }
@@ -1819,6 +1889,9 @@ module.exports = {
   normalizeProviderModel,
   normalizePricing,
   normalizeProviderBaseUrl,
+  providerConfig,
+  parseRetryAfterMs,
+  retryBackoffMs,
   fetchOllamaModels,
   describeProviderError,
   fetchFailureReason,

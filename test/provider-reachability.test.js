@@ -54,6 +54,9 @@ test('a cause chain that loops does not hang', () => {
 // localhost trap is real: the server making the call is not the browser.
 async function chatWith(providerId, env) {
   for (const [key, value] of Object.entries(env)) process.env[key] = value;
+  // A dead port is retried like any other 5xx now; one attempt keeps this
+  // about the error message, not the backoff ride to a closed endpoint.
+  process.env.RATE_LIMIT_MAX_ATTEMPTS = '1';
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
   try {
@@ -66,6 +69,7 @@ async function chatWith(providerId, env) {
   } finally {
     app.close();
     for (const key of Object.keys(env)) delete process.env[key];
+    delete process.env.RATE_LIMIT_MAX_ATTEMPTS;
   }
 }
 

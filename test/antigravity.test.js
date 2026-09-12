@@ -190,7 +190,7 @@ test('a refusal from the proxy is reported with its own message', async () => {
     // A 429 is retried, since the proxy cools accounts and comes back -- but a
     // bounded number of times, not forever.
     assert.ok(hits.length > 1, 'a rate limit is retried');
-    assert.ok(hits.length <= 4, 'and gives up rather than looping');
+    assert.ok(hits.length <= 6, 'and gives up rather than looping');
   });
 });
 

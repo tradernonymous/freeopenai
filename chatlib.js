@@ -1433,6 +1433,15 @@ function isRateLimitError(error) {
   return /\b429\b|too many requests|rate.?limit/i.test(message);
 }
 
+// Matching OpenCode's retry layer, a transient provider answer deserves another
+// try: quotas (429) and the server-side failures that mean "try again later"
+// (5xx), but never a fixed client fault (400/401/402/403/404/422), which
+// retrying can only repeat. Status 0 means "no response at all" — a socket
+// error or our own deadline — which OpenCode also classifies as retryable.
+function isRetryableStatus(status) {
+  return status === 0 || status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599);
+}
+
 // Puter runs a "User-Pays" model: free for whoever builds the app, billed to
 // whoever is signed in. On the free plan that's a fixed credit allowance, and
 // running out surfaces as a bare "No usage left for request", which reads like
@@ -1972,6 +1981,7 @@ if (typeof module !== 'undefined' && module.exports) {
     isValidEffort,
     isEffortUnsupportedError,
     isRateLimitError,
+    isRetryableStatus,
     RATE_LIMIT_RETRIES,
     RATE_LIMIT_BASE_DELAY_MS,
     isOutOfCreditsError,
