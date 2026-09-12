@@ -1329,6 +1329,16 @@
                         </div>
                         <div class="workspace-list" id="workspaceFileList" aria-label="Workspace files"></div>
                     </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Tasks</strong>
+                            <p class="settings-hint" id="taskStatus">Empty.</p>
+                        </div>
+                        <div class="workspace-list" id="taskListRows" aria-label="Recorded tasks"></div>
+                        <div style="margin-top: 8px;">
+                            <button class="icon-btn-text danger" onclick="clearTaskList()">Clear the task list</button>
+                        </div>
+                    </div>
                     <div class="settings-row">
                         <div>
                             <strong>Auto-retry on rate limit</strong>
@@ -1597,6 +1607,13 @@
         const WORKSPACE_KEY = 'freeopenaiWorkspace';
         let workspaceFiles = loadWorkspaceFiles();
 
+        // The task list, kept between chats in this browser for exactly the same
+        // reason. Unlike a commit or a file write it changes nothing outside the
+        // conversation, so it is not put to the user each time -- the list is
+        // visible and removable in Settings instead.
+        const TASK_KEY = 'freeopenaiTasks';
+        let taskGraph = loadTaskGraph();
+
         // --- Modes & skills (opencode-style) ---
         let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
             ? localStorage.getItem('freeopenaiMode')
@@ -1772,6 +1789,7 @@
         setupEventListeners();
         loadMessagesFromStorage();
         renderWorkspaceFiles();
+        renderTaskList();
 
         function initializeApp() {
             if (typeof puter === 'undefined') {
@@ -2448,6 +2466,91 @@
             return 'Error: unknown tool ' + name;
         }
 
+        function loadTaskGraph() {
+            try {
+                return normalizeTaskGraph(JSON.parse(localStorage.getItem(TASK_KEY) || 'null'));
+            } catch (e) {
+                console.error('Failed to read the saved task list:', e);
+                return newTaskGraph();
+            }
+        }
+
+        function saveTaskGraph() {
+            try {
+                localStorage.setItem(TASK_KEY, JSON.stringify(taskGraph));
+            } catch (e) {
+                showStatus('error', 'Could not save the task list: ' + e.message);
+            }
+            renderTaskList();
+        }
+
+        async function runTaskTool(name, args) {
+            if (name === 'task_list') return renderTaskGraphText(taskGraph);
+            if (name === 'task_add') {
+                const added = addTask(taskGraph, args);
+                if (added.error) return 'Error: ' + added.error;
+                taskGraph = added.graph;
+                saveTaskGraph();
+                return 'Added ' + added.task.id + ': ' + added.task.title + '. ' +
+                    taskGraph.tasks.length + ' task(s) on the list.';
+            }
+            if (name === 'task_update') {
+                const updated = setTaskStatus(taskGraph, args.id, args.status);
+                if (updated.error) return 'Error: ' + updated.error;
+                taskGraph = updated.graph;
+                saveTaskGraph();
+                return updated.task.id + ' is now ' + updated.task.status + ': ' + updated.task.title;
+            }
+            return 'Error: unknown tool ' + name;
+        }
+
+        function renderTaskList() {
+            const list = document.getElementById('taskListRows');
+            const status = document.getElementById('taskStatus');
+            if (!list || !status) return;
+            list.innerHTML = '';
+            const tasks = taskGraph.tasks;
+            if (!tasks.length) {
+                status.textContent = 'Empty. Tasks the model records are kept in this browser and carried between chats.';
+                return;
+            }
+            const open = tasks.filter((t) => t.status !== 'done').length;
+            status.textContent = tasks.length + ' task(s), ' + open + ' still open. Kept in this browser only.';
+            for (const task of tasks) {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const name = document.createElement('span');
+                name.className = 'workspace-name';
+                name.textContent = '[' + task.status + '] ' + task.id + ' ' + task.title;
+                const after = document.createElement('span');
+                after.className = 'workspace-size';
+                after.textContent = task.dependsOn.length ? 'after ' + task.dependsOn.join(', ') : '';
+                const remove = document.createElement('button');
+                remove.className = 'icon-btn-text danger';
+                remove.textContent = 'Delete';
+                remove.onclick = () => deleteTask(task.id);
+                row.append(name, after, remove);
+                list.append(row);
+            }
+        }
+
+        function deleteTask(id) {
+            const next = normalizeTaskGraph(taskGraph);
+            next.tasks = next.tasks.filter((task) => task.id !== id)
+                // A dependency on a task that no longer exists would leave a
+                // task that can never be finished, so it goes with it.
+                .map((task) => Object.assign({}, task, {
+                    dependsOn: task.dependsOn.filter((dep) => dep !== id),
+                }));
+            taskGraph = next;
+            saveTaskGraph();
+        }
+
+        function clearTaskList() {
+            taskGraph = newTaskGraph();
+            saveTaskGraph();
+        }
+
         function renderWorkspaceFiles() {
             const list = document.getElementById('workspaceFileList');
             const status = document.getElementById('workspaceStatus');
@@ -2835,7 +2938,10 @@
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
         function buildConversation(outgoing, activeSkills = null) {
-            const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
+            // The task list rides in the system prompt so a follow-up turn
+            // already knows what was planned, and can pick up rather than ask.
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode), renderTaskGraphPrompt(taskGraph)]
+                .filter(Boolean).join('\n\n');
             const skillsBlock = activeSkills && activeSkills.length ? '\n\n' + renderSkillsPrompt(activeSkills) : '';
             return [
                 { role: 'system', content: system + skillsBlock },
@@ -2877,6 +2983,7 @@
             if (isGithubTool(name)) return runGithubTool(name, args);
             if (isWebTool(name)) return runWebTool(name, args);
             if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
+            if (isTaskTool(name)) return runTaskTool(name, args);
             if (isUseSkillTool(name)) return runUseSkillTool(args);
             return Promise.resolve('Error: unknown tool ' + name);
         }
@@ -3142,7 +3249,7 @@
                 // when GitHub is connected. An image attachment keeps the plain
                 // path since the image argument has no place in a message array.
                 if (!attachedImageFile) {
-                    const tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS];
+                    const tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) tools.push(...GITHUB_TOOLS);
                     // Skills ride along in Plan & Build: the auto-picked set
                     // enters the system prompt, and use_skill lets the model

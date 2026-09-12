@@ -89,6 +89,9 @@ function harness({ toolCalls }) {
     // has no way to tell a new branch from a typo.
     isWorkspaceTool: (n) => n.startsWith('workspace_'),
     runWorkspaceTool: async () => 'workspace',
+    // Same again for the task tools, which added their own branch.
+    isTaskTool: (n) => n.startsWith('task_'),
+    runTaskTool: async () => 'task',
     // Each runner marks itself busy, waits a tick, then marks itself done. Two
     // overlapping calls therefore appear interleaved, which is the whole point.
     githubTool: 'github',

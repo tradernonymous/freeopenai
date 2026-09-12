@@ -295,9 +295,11 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   'github_read_file',
   'use_skill',
   // Workspace reads only. A write is absent on purpose, so it keeps running on
-  // its own and cannot interleave with another call.
+  // its own and cannot interleave with another call. The task writers are
+  // absent for the same reason.
   'workspace_list_files',
   'workspace_read_file',
+  'task_list',
 ]);
 
 // A ceiling on how many go at once. A model can ask for a dozen lookups in one
@@ -842,6 +844,222 @@ function workspaceWrite(files, path, content) {
   return { files: store, path: target, chars: text.length, created, totalFiles: names.length };
 }
 
+// A small task list the model keeps between turns, so work that spans several
+// conversations does not have to be re-described each time. It lives in the
+// browser beside the workspace, for the same reason: a shared server would show
+// one person's plan to everybody else.
+const TASK_STATUSES = ['todo', 'doing', 'done', 'blocked'];
+const MAX_TASKS = 40;
+const MAX_TASK_TITLE_CHARS = 120;
+const MAX_TASK_DETAIL_CHARS = 600;
+
+function newTaskGraph() {
+  return { nextId: 1, tasks: [] };
+}
+
+// Anything read back from storage goes through here first: a shape written by an
+// older build, or edited by hand, must not become a task the tools cannot
+// reason about. Ids are kept when they are usable so a reference from the model
+// still resolves after a reload.
+function normalizeTaskGraph(raw) {
+  const graph = newTaskGraph();
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.tasks)) return graph;
+  const used = new Set();
+  let maxId = 0;
+  const kept = [];
+  for (const task of raw.tasks.slice(0, MAX_TASKS)) {
+    if (!task || typeof task !== 'object') continue;
+    const title = String(task.title || '').trim().slice(0, MAX_TASK_TITLE_CHARS);
+    if (!title) continue;
+    let id = '';
+    if (typeof task.id === 'string' && /^t[1-9]\d*$/.test(task.id) && !used.has(task.id)) {
+      id = task.id;
+      used.add(id);
+      maxId = Math.max(maxId, Number(id.slice(1)));
+    }
+    kept.push({ source: task, id, title });
+  }
+  for (const item of kept) {
+    if (!item.id) {
+      maxId += 1;
+      item.id = 't' + maxId;
+      used.add(item.id);
+    }
+  }
+  const known = new Set(kept.map((item) => item.id));
+  for (const item of kept) {
+    graph.tasks.push({
+      id: item.id,
+      title: item.title,
+      detail: String(item.source.detail || '').trim().slice(0, MAX_TASK_DETAIL_CHARS),
+      status: TASK_STATUSES.includes(item.source.status) ? item.source.status : 'todo',
+      dependsOn: [...new Set((Array.isArray(item.source.dependsOn) ? item.source.dependsOn : []).map(String))]
+        .filter((dep) => known.has(dep) && dep !== item.id),
+    });
+  }
+  // A stored nextId is what stops an id being handed out twice after a task was
+  // deleted, so it is kept when it is ahead of the ids actually present.
+  const storedNext = Number.isInteger(raw.nextId) && raw.nextId > 0 ? raw.nextId : 0;
+  graph.nextId = Math.max(maxId + 1, storedNext);
+  return graph;
+}
+
+function findTask(graph, id) {
+  const tasks = graph && Array.isArray(graph.tasks) ? graph.tasks : [];
+  return tasks.find((task) => task.id === String(id == null ? '' : id).trim()) || null;
+}
+
+function knownTaskIds(graph) {
+  const tasks = graph && Array.isArray(graph.tasks) ? graph.tasks : [];
+  return tasks.length ? tasks.map((task) => task.id).join(', ') : 'none yet';
+}
+
+// A dependency has to name a task that already exists, and ids are handed out in
+// order, so a cycle is impossible to express rather than something to detect
+// afterwards.
+function addTask(graph, input = {}) {
+  const current = normalizeTaskGraph(graph);
+  const title = String(input.title || '').trim().slice(0, MAX_TASK_TITLE_CHARS);
+  if (!title) return { error: 'A task needs a title.' };
+  if (current.tasks.length >= MAX_TASKS) {
+    return { error: 'The task list already holds ' + MAX_TASKS + ' tasks. Finish or drop one before adding another.' };
+  }
+  const known = new Set(current.tasks.map((task) => task.id));
+  const wanted = Array.isArray(input.dependsOn)
+    ? input.dependsOn
+    : input.depends_on == null ? [] : [input.depends_on];
+  const dependsOn = [...new Set(wanted.map((dep) => String(dep).trim()).filter(Boolean))];
+  const unknown = dependsOn.filter((dep) => !known.has(dep));
+  if (unknown.length) {
+    return { error: 'No such task: ' + unknown.join(', ') + '. Known ids: ' + knownTaskIds(current) + '.' };
+  }
+  const task = {
+    id: 't' + current.nextId,
+    title,
+    detail: String(input.detail || '').trim().slice(0, MAX_TASK_DETAIL_CHARS),
+    status: 'todo',
+    dependsOn,
+  };
+  current.tasks.push(task);
+  current.nextId += 1;
+  return { graph: current, task };
+}
+
+// Finishing something that still waits on unfinished work is refused: that is
+// the one status change that can quietly make a plan look complete when it is
+// not, and it is cheap to catch here.
+function setTaskStatus(graph, id, status) {
+  const current = normalizeTaskGraph(graph);
+  const task = findTask(current, id);
+  const wanted = String(status == null ? '' : status).trim();
+  if (!task) {
+    return { error: 'No task "' + String(id == null ? '' : id) + '". Known ids: ' + knownTaskIds(current) + '.' };
+  }
+  if (!TASK_STATUSES.includes(wanted)) {
+    return { error: 'Status must be one of: ' + TASK_STATUSES.join(', ') + '.' };
+  }
+  if (wanted === 'done') {
+    const unfinished = task.dependsOn.filter((dep) => (findTask(current, dep) || {}).status !== 'done');
+    if (unfinished.length) {
+      return { error: 'Cannot finish "' + task.title + '" while it still depends on ' + unfinished.join(', ') + '.' };
+    }
+  }
+  const updated = Object.assign({}, task, { status: wanted });
+  current.tasks = current.tasks.map((entry) => (entry.id === task.id ? updated : entry));
+  return { graph: current, task: updated };
+}
+
+function readyTasks(graph) {
+  const current = normalizeTaskGraph(graph);
+  // 'blocked' is a deliberate park, so it is not offered as ready even when
+  // everything it waits on is finished.
+  return current.tasks.filter((task) => task.status === 'todo' || task.status === 'doing')
+    .filter((task) => task.dependsOn.every((dep) => (findTask(current, dep) || {}).status === 'done'));
+}
+
+function taskGraphLines(graph) {
+  const current = normalizeTaskGraph(graph);
+  return current.tasks.map((task) => {
+    const after = task.dependsOn.length ? ' (after ' + task.dependsOn.join(', ') + ')' : '';
+    const detail = task.detail ? ' -- ' + task.detail : '';
+    return '- [' + task.status + '] ' + task.id + ' ' + task.title + after + detail;
+  });
+}
+
+// What the model sees when it asks for the list.
+function renderTaskGraphText(graph) {
+  const lines = taskGraphLines(graph);
+  return lines.length ? lines.join('\n') : 'The task list is empty.';
+}
+
+// The same list rides in the system prompt, so a follow-up turn knows what was
+// already planned without spending a tool call to find out. Empty graphs add
+// nothing at all rather than an empty heading.
+function renderTaskGraphPrompt(graph) {
+  const lines = taskGraphLines(graph);
+  if (!lines.length) return '';
+  return [
+    'TASK LIST — kept in this browser and carried between chats. Keep it current with ' +
+      'the task tools as work moves, rather than restating the plan in prose.',
+    ...lines,
+  ].join('\n');
+}
+
+// The tools the model calls to keep that list up to date.
+const TASK_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'task_list',
+      description: 'List the tasks already recorded for this work, with their status, id and dependencies. Call it before adding or updating anything, so you extend the plan instead of duplicating it.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_add',
+      description: 'Record one task in the list that is kept between chats. Add work you have not done yet, not a log of what you just did. A task that has to wait for another names that task\'s id in depends_on.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short description of the work, e.g. "Add retry to the deploy poller".' },
+          detail: { type: 'string', description: 'Anything needed to pick this up later: the file, the approach, the decision already made.' },
+          depends_on: { type: 'array', items: { type: 'string' }, description: 'Ids of tasks that must finish first, e.g. ["t1"].' },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task_update',
+      description: 'Move a task to a new status. Mark "done" only when the work is genuinely finished and checked, not when the code has merely been written.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Task id from task_list, e.g. "t2".' },
+          status: { type: 'string', enum: TASK_STATUSES, description: 'New status.' },
+        },
+        required: ['id', 'status'],
+      },
+    },
+  },
+];
+
+const TASK_TOOL_NAMES = TASK_TOOLS.map((t) => t.function.name);
+
+function isTaskTool(name) {
+  return TASK_TOOL_NAMES.includes(name);
+}
+
+// Only the reading one may share a wave: two status changes at once would
+// depend on each other's outcome, and one would silently win.
+function isTaskWriteTool(name) {
+  return name === 'task_add' || name === 'task_update';
+}
+
 // Response bodies are JSON until a proxy, edge, or gateway hands back an
 // HTML/text error page instead (mid-restart deploys do this routinely).
 // Parsing that raw throws SyntaxError, which reads as gibberish to the user,
@@ -986,6 +1204,12 @@ function describeToolCall(name, args = {}) {
       return `Reading "${args.path || '?'}" from the workspace`;
     case 'workspace_write_file':
       return `Writing "${args.path || '?'}" to the workspace`;
+    case 'task_list':
+      return 'Reading the task list';
+    case 'task_add':
+      return `Adding a task: "${args.title || '?'}"`;
+    case 'task_update':
+      return `Marking ${args.id || 'a task'} as ${args.status || '?'}`;
     default:
       return `Running ${name}`;
   }
@@ -1657,6 +1881,22 @@ if (typeof module !== 'undefined' && module.exports) {
     workspaceList,
     workspaceRead,
     workspaceWrite,
+    TASK_TOOLS,
+    TASK_TOOL_NAMES,
+    TASK_STATUSES,
+    isTaskTool,
+    isTaskWriteTool,
+    newTaskGraph,
+    normalizeTaskGraph,
+    findTask,
+    addTask,
+    setTaskStatus,
+    readyTasks,
+    renderTaskGraphText,
+    renderTaskGraphPrompt,
+    MAX_TASKS,
+    MAX_TASK_TITLE_CHARS,
+    MAX_TASK_DETAIL_CHARS,
     MAX_WORKSPACE_PATH_CHARS,
     MAX_WORKSPACE_FILES,
     MAX_WORKSPACE_FILE_CHARS,

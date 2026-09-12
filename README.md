@@ -378,6 +378,20 @@ Paths are relative to the workspace root and a `..` is refused rather than resol
 
 Reads run in parallel with other reads; writes never do, since two writes to one path in the same moment is a race whose loser vanishes.
 
+### ✅ The task list
+
+The model can also keep a **task list**: the plan for work that spans several turns and chats, so a follow-up doesn't have to be told the whole story again.
+
+| Tool | What it does |
+| --- | --- |
+| `task_list` | Shows every task with its status, id and dependencies |
+| `task_add` | Records a task, optionally waiting on an existing one by id |
+| `task_update` | Moves a task to `todo`, `doing`, `done` or `blocked` |
+
+A task that still waits on unfinished work cannot be marked `done` — the one status change that can make a plan look finished when it isn't. A dependency must name a task that already exists, and ids are handed out in order, so a cycle cannot be expressed in the first place.
+
+The list is kept in the browser like the workspace, rides in the system prompt when it isn't empty, and is visible and editable in **Settings → Tasks**. No approval is asked for a change: it alters nothing outside the conversation, and a dialog in front of every status change would make planning unusable.
+
 ### 🩹 Provider quirks the app works around
 
 Puter fronts several providers, and they disagree in ways that surface as raw API errors. These are handled rather than passed through:
