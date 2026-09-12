@@ -226,6 +226,12 @@ function stemSkillToken(t) {
 
 function skillTokens(s) {
   return String(s || '').toLowerCase().split(/[^a-z0-9.]+/)
+    // A full stop at the edge belongs to the sentence, not the word. Without
+    // this, the last word of every description is unmatchable -- "abstractions."
+    // never meets "abstractions" -- which quietly costs every skill that ends a
+    // sentence with the word it is really about. Dots *inside* a token stay, so
+    // ids like gpt-5.4 survive.
+    .map((t) => t.replace(/^\.+|\.+$/g, ''))
     .filter((t) => t.length > 2 && !SKILL_STOP.has(t))
     .map(stemSkillToken);
 }
@@ -355,6 +361,116 @@ function skillsForTurn({ mode, skillsEnabled, requestText, active, catalog } = {
   const auto = skillsEnabled ? pickSkills(requestText, mode, catalog) : [];
   const seen = new Set(pinned.map((s) => s.name));
   return [...pinned, ...auto.filter((s) => !seen.has(s.name))];
+}
+
+// ---------------------------------------------------------------------------
+// Which skills someone actually reaches for
+// ---------------------------------------------------------------------------
+//
+// A pin is the strongest signal this app has about what a person wants from a
+// skill: it is deliberate, it is per chat, and it is typed or clicked rather
+// than inferred. One pin in one chat is a mood. The same skill pinned in two
+// different chats is a habit, and a habit is worth offering before it has to be
+// typed a third time.
+//
+// Two rules keep this from becoming a suggestion engine with opinions of its
+// own. Habit is counted by *chat*, not by click: pinning the same skill twice in
+// one conversation is one intention, and un-pinning and re-pinning it must not
+// look like enthusiasm. And only deliberate pins count -- a skill the model
+// loaded for itself with use_skill is the app's doing, not a preference, and
+// counting it would make the model's own choices suggest themselves back.
+const SKILL_HABIT_CHATS = 2;
+const MAX_TRACKED_SKILLS = 60;
+const MAX_TRACKED_CHATS_PER_SKILL = 12;
+// One name hit is worth three description hits in skillTriggerScore, so this is
+// "the request names it, or shares two of the skill's own words".
+//
+// Two, and not three, because descriptions are long and written in trigger
+// language that rarely repeats a person's phrasing verbatim: "compress this prose
+// into fewer words" shares four tokens with caveman's description but none with
+// its name, and an offer nobody ever sees is not cautious, it is absent. One
+// shared word is below the line: that is where a suggestion engine starts
+// interrupting. The offer is also dismissible per chat, capped at one at a time,
+// and only ever made for a skill already pinned in two other chats, which is the
+// part doing most of the work.
+const SUGGEST_MIN_SCORE = 2;
+
+function normalizeSkillUsage(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [name, entry] of Object.entries(raw)) {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key || !entry || typeof entry !== 'object') continue;
+    const chats = (Array.isArray(entry.chats) ? entry.chats : [])
+      .filter((c) => typeof c === 'string' && c)
+      .slice(-MAX_TRACKED_CHATS_PER_SKILL);
+    if (!chats.length) continue;
+    const lastAt = Number(entry.lastAt);
+    out[key] = { chats, lastAt: Number.isFinite(lastAt) ? lastAt : 0 };
+  }
+  return out;
+}
+
+function pruneSkillUsage(usage) {
+  const entries = Object.entries(normalizeSkillUsage(usage));
+  if (entries.length <= MAX_TRACKED_SKILLS) return Object.fromEntries(entries);
+  // Bounded by recency, so a long-lived browser cannot accumulate every skill
+  // it has ever seen pinned.
+  return Object.fromEntries(entries.sort((a, b) => b[1].lastAt - a[1].lastAt).slice(0, MAX_TRACKED_SKILLS));
+}
+
+// Records a deliberate pin. `counted` says whether this was a new chat for that
+// skill -- the bar can then stay quiet about a habit it already knows.
+function recordSkillPin(usage, name, conversationId, now = Date.now()) {
+  const key = String(name || '').trim().toLowerCase();
+  const id = String(conversationId == null ? '' : conversationId);
+  const next = normalizeSkillUsage(usage);
+  if (!key || !id) return { usage: next, counted: false };
+  const entry = next[key] || { chats: [], lastAt: 0 };
+  const known = entry.chats.includes(id);
+  next[key] = {
+    chats: known ? entry.chats : [...entry.chats, id].slice(-MAX_TRACKED_CHATS_PER_SKILL),
+    lastAt: Number(now),
+  };
+  return { usage: pruneSkillUsage(next), counted: !known };
+}
+
+// Skills pinned in enough different chats to count as a habit, most-used first.
+function learnedSkillNames(usage) {
+  return Object.entries(normalizeSkillUsage(usage))
+    .filter(([, entry]) => entry.chats.length >= SKILL_HABIT_CHATS)
+    .sort((a, b) => (b[1].chats.length - a[1].chats.length) || (b[1].lastAt - a[1].lastAt))
+    .map(([name]) => name);
+}
+
+// The one skill to offer for this text, or null.
+//
+// Deliberately at most one: a row of suggestions is a menu, and a menu is what
+// the picker is for. The offer is a question, never an action -- a skill that
+// switched itself on would be spending prompt budget on every request of a chat
+// that never asked for it.
+function suggestSkillFor(requestText, catalog, usage, { active = [], dismissed = [] } = {}) {
+  const text = String(requestText || '').trim();
+  // Too little to be a request: "ok", "hi", a paste of one word.
+  if (text.length < 8) return null;
+  const taken = new Set([...active, ...dismissed].map((n) => String(n).toLowerCase()));
+  const habits = learnedSkillNames(usage);
+  const rows = Array.isArray(catalog) ? catalog : [];
+  const chatCounts = normalizeSkillUsage(usage);
+  let best = null;
+  for (const name of habits) {
+    if (taken.has(name)) continue;
+    const row = rows.find((s) => s && String(s.name).toLowerCase() === name);
+    // A skill that is no longer installed cannot be offered.
+    if (!row) continue;
+    const score = skillTriggerScore(text, row);
+    if (score < SUGGEST_MIN_SCORE) continue;
+    const chats = chatCounts[name].chats.length;
+    if (!best || score > best.score || (score === best.score && chats > best.chats)) {
+      best = { skill: row, score, chats };
+    }
+  }
+  return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -2698,6 +2814,13 @@ if (typeof module !== 'undefined' && module.exports) {
     deactivateSkill,
     pinnedSkills,
     skillsForTurn,
+    SKILL_HABIT_CHATS,
+    SUGGEST_MIN_SCORE,
+    MAX_TRACKED_SKILLS,
+    normalizeSkillUsage,
+    recordSkillPin,
+    learnedSkillNames,
+    suggestSkillFor,
     CHAT_COMMANDS,
     resolveChatCommand,
     renderCommandsHelp,

@@ -54,13 +54,13 @@ test('a pinned skill is consulted even in Chat mode, where nothing is auto-picke
   // skill someone pinned do nothing at all in a normal chat.
   assert.match(
     HTML,
-    /if \(activeSkillNames\.length \|\| \(skillsEnabled && selectedMode !== 'chat'\)\)/,
-    'the library is consulted when something is pinned, or when auto-picking could apply'
+    /if \(activeSkillNames\.length \|\| learnedSkills\.length \|\| \(skillsEnabled && selectedMode !== 'chat'\)\)/,
+    'the library is consulted when something is pinned, when an offer could be made, or when auto-picking could apply'
   );
   assert.match(HTML, /skillsForTurn\(\{[\s\S]{0,200}active: activeSkillNames,/);
   assert.match(HTML, /if \(activeSkills\.length\) tools\.push\(USE_SKILL_TOOL\)/);
   // A plain chat with nothing pinned does not drag the library in at all.
-  const gate = HTML.slice(HTML.indexOf('if (activeSkillNames.length || (skillsEnabled'), HTML.indexOf('const stored = readPendingTurn()'));
+  const gate = HTML.slice(HTML.indexOf('if (activeSkillNames.length || learnedSkills'), HTML.indexOf('const stored = readPendingTurn()'));
   assert.match(gate, /const catalog = await ensureSkillsLoaded\(\)/);
 });
 
@@ -110,4 +110,50 @@ test('the toggle and the picker stay out of each other\'s way', () => {
   assert.match(HTML, /document\.addEventListener\('click',[\s\S]{0,120}closeSkillMenu\(\)/);
   assert.match(HTML, /function handleSkillMenuKeydown[\s\S]{0,800}closeSkillMenu\(\); skillTrigger\.focus\(\)/);
   assert.match(HTML, /function openSkillMenu\(\)[\s\S]{0,400}closeModelDropdown\(\);[\s\S]{0,80}closeAttachMenu\(\)/);
+});
+
+test('offers are scored while typing, before the message they are for is sent', () => {
+  // After sending would be too late: the offer has to be acceptable for the
+  // request being written, not the next one.
+  assert.match(HTML, /chatInput\.addEventListener\('input', scheduleSkillSuggestion\)/);
+  assert.match(HTML, /function scheduleSkillSuggestion\(\)[\s\S]{0,300}setTimeout\([\s\S]{0,120}updateSkillSuggestion\(\)/);
+  assert.match(HTML, /function updateSkillSuggestion\(\)[\s\S]{0,400}suggestSkillFor\(chatInput\.value, skillsCatalog, skillUsage/);
+  // Both halves of "do not offer this again": what is pinned, and what was refused.
+  assert.match(HTML, /active: activeSkillNames,\s+dismissed: activeSkillDismissals,/);
+  // And the offer does not survive the send it was made for.
+  const send = HTML.slice(HTML.indexOf('async function sendMessage()'));
+  assert.match(send, /setSkillSuggestion\(null\);[\s\S]{0,200}chatInput\.value = ''/);
+});
+
+test('accepting an offer pins it and teaches the app; dismissing it is remembered per chat', () => {
+  // Accepting goes through the same pin as the button and the command.
+  assert.match(HTML, /function acceptSkillSuggestion\(\)[\s\S]{0,300}pinSkillForChat\(name\)/);
+  // Only deliberate pins count as a habit: the model's own use_skill must not.
+  assert.match(HTML, /function rememberSkillHabit\(name\)[\s\S]{0,300}recordSkillPin\(skillUsage, name, activeConversationId\)/);
+  const pin = HTML.slice(HTML.indexOf('function pinSkillForChat'), HTML.indexOf('function pinSkillQuietly'));
+  assert.match(pin, /rememberSkillHabit\(row\.name\)/);
+  const quiet = HTML.slice(HTML.indexOf('function pinSkillQuietly'), HTML.indexOf('// --- The skill picker ---'));
+  assert.doesNotMatch(quiet, /rememberSkillHabit/, 'a skill the model loaded is not a preference');
+  // A refusal belongs to the chat that made it, and is saved with it.
+  assert.match(HTML, /function dismissSkillSuggestion\(\)[\s\S]{0,500}activeSkillDismissals = \[\.\.\.activeSkillDismissals, name\]/);
+  assert.match(HTML, /skillsDismissed: activeSkillDismissals,/);
+  assert.match(HTML, /function syncDismissedSuggestionsFromConversation\(\)[\s\S]{0,400}convo\.skillsDismissed/);
+  assert.match(HTML, /function renderActiveConversation[\s\S]{0,500}syncDismissedSuggestionsFromConversation\(\)/);
+});
+
+test('the offer is visible with nothing pinned, and says why it is being made', () => {
+  // The bar used to hide itself whenever there were no pins, which is exactly
+  // the state an offer arrives in.
+  const bar = HTML.slice(HTML.indexOf('function renderSkillBar'), HTML.indexOf('function buildSkillSuggestionChip'));
+  assert.match(bar, /const suggestion = pendingSkillSuggestion/);
+  assert.match(bar, /if \(!activeSkillNames\.length && !suggestion\) \{ bar\.hidden = true; return; \}/);
+  assert.match(bar, /if \(suggestion\) bar\.appendChild\(buildSkillSuggestionChip\(suggestion\)\)/);
+  // A suggestion with no reason reads as the app being random.
+  const chip = HTML.slice(HTML.indexOf('function buildSkillSuggestionChip'), HTML.indexOf('function removePinnedSkill'));
+  assert.match(chip, /'Try ' \+ suggestion\.skill\.name \+ '\?'/);
+  assert.match(chip, /suggestion\.chats/);
+  assert.match(chip, /acceptSkillSuggestion\(\)/);
+  assert.match(chip, /dismissSkillSuggestion\(\)/);
+  // It must not look like something already on.
+  assert.match(HTML, /\.skill-suggest \{[\s\S]{0,200}border: 1px dashed/);
 });

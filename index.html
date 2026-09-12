@@ -778,6 +778,24 @@
         }
         .skill-pin button:hover, .skill-pin button:focus-visible { color: var(--text); }
         .skill-option-pin { font-size: 10px; color: var(--accent); margin-left: 6px; }
+
+        /* An offer, not a pin: dashed, dimmer, and dismissible. It has to look
+           unlike the chips beside it, or it reads as something already on. */
+        .skill-suggest {
+            display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+            border: 1px dashed var(--border-strong); color: var(--text-dim);
+            border-radius: 999px; font-size: 11px; padding: 3px 6px 3px 10px;
+        }
+        .skill-suggest span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .skill-suggest-add {
+            background: var(--accent-bg); border: 1px solid var(--accent); color: var(--text);
+            border-radius: 999px; font-size: 11px; padding: 1px 8px; cursor: pointer;
+        }
+        .skill-suggest button:last-child {
+            background: none; border: 0; color: var(--text-muted); cursor: pointer;
+            font-size: 14px; line-height: 1; padding: 0 4px;
+        }
+        .skill-suggest button:last-child:hover { color: var(--text); }
         .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 150px; padding: 5px 7px; }
         .composer-controls .effort-chip { display: inline-flex; }
         .composer-model-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -1760,6 +1778,9 @@
                 : 'Skill library empty (GitHub unreachable at load).';
             status.textContent = skillsStatusText;
             renderSkillBar();
+            // The library may have arrived after the first keystrokes, so the
+            // offer is recomputed now that there is something to offer from.
+            updateSkillSuggestion();
             if (isSkillMenuOpen()) renderSkillMenuOptions();
             list.innerHTML = '';
             for (const [src, names] of Object.entries(bySrc)) {
@@ -1788,6 +1809,41 @@
         // with none of them, so a choice is never inherited by a conversation
         // that did not make it.
         let activeSkillNames = [];
+        // Skills this chat has said no to, so the same offer is not repeated at
+        // someone who has already declined it.
+        let activeSkillDismissals = [];
+        // What the app has learned about which skills this person reaches for:
+        // { name: { chats: [conversationId], lastAt } }, in storage rather than on
+        // one chat, because a habit is what survives between them.
+        let skillUsage = readSkillUsage();
+        // At most one offer at a time, and only while the composer is being typed in.
+        let pendingSkillSuggestion = null;
+        const SKILL_USAGE_KEY = 'freeopenaiSkillUsage';
+
+        function readSkillUsage() {
+            try {
+                return normalizeSkillUsage(JSON.parse(localStorage.getItem(SKILL_USAGE_KEY) || '{}'));
+            } catch {
+                return {};
+            }
+        }
+
+        function saveSkillUsage() {
+            try {
+                localStorage.setItem(SKILL_USAGE_KEY, JSON.stringify(skillUsage));
+            } catch {
+                // A full quota must not lose the chat; habits are a courtesy.
+            }
+        }
+
+        // Counted per chat, and only for deliberate pins. A skill the model
+        // loaded for itself is the app's doing, not a preference, and counting it
+        // would make the model's own choices suggest themselves back.
+        function rememberSkillHabit(name) {
+            const { usage } = recordSkillPin(skillUsage, name, activeConversationId);
+            skillUsage = usage;
+            saveSkillUsage();
+        }
 
         function setActiveSkillNames(names) {
             activeSkillNames = Array.isArray(names) ? names.filter(Boolean).map(String) : [];
@@ -1803,11 +1859,76 @@
             renderSkillBar();
         }
 
+        // A declined offer belongs to the chat that declined it, and an offer
+        // computed for one chat must not follow you into the next.
+        function syncDismissedSuggestionsFromConversation() {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            activeSkillDismissals = convo && Array.isArray(convo.skillsDismissed) ? convo.skillsDismissed.filter(Boolean).map(String) : [];
+            pendingSkillSuggestion = null;
+            renderSkillBar();
+        }
+
+        // --- Offers built from what someone already chose ---
+        //
+        // Nothing is applied here. The chip is a question, and answering it is a
+        // click -- a skill that switched itself on would be spending prompt
+        // budget on every request of a chat that never asked for it.
+        function setSkillSuggestion(next) {
+            pendingSkillSuggestion = next || null;
+            renderSkillBar();
+        }
+
+        function updateSkillSuggestion() {
+            if (!skillsCatalog.length) {
+                if (pendingSkillSuggestion) setSkillSuggestion(null);
+                return;
+            }
+            setSkillSuggestion(suggestSkillFor(chatInput.value, skillsCatalog, skillUsage, {
+                active: activeSkillNames,
+                dismissed: activeSkillDismissals,
+            }));
+        }
+
+        // Scored as the composer is typed in rather than after sending, so that
+        // accepting the offer applies to the request being written -- an offer
+        // that arrives after the message it was for is worse than no offer.
+        let skillSuggestionTimer = null;
+        function scheduleSkillSuggestion() {
+            if (skillSuggestionTimer) clearTimeout(skillSuggestionTimer);
+            skillSuggestionTimer = setTimeout(() => {
+                skillSuggestionTimer = null;
+                updateSkillSuggestion();
+            }, 350);
+        }
+
+        function acceptSkillSuggestion() {
+            const name = pendingSkillSuggestion && pendingSkillSuggestion.skill && pendingSkillSuggestion.skill.name;
+            setSkillSuggestion(null);
+            if (name) pinSkillForChat(name);
+        }
+
+        function dismissSkillSuggestion() {
+            const name = pendingSkillSuggestion && pendingSkillSuggestion.skill && pendingSkillSuggestion.skill.name;
+            if (name && !activeSkillDismissals.some((n) => String(n).toLowerCase() === String(name).toLowerCase())) {
+                activeSkillDismissals = [...activeSkillDismissals, name];
+            }
+            setSkillSuggestion(null);
+            persistMessages();
+            if (name) showStatus('info', 'Not suggesting ' + name + ' in this chat');
+        }
+
+        function forgetSkillHabits() {
+            skillUsage = {};
+            saveSkillUsage();
+            setSkillSuggestion(null);
+        }
+
         function renderSkillBar() {
             const bar = document.getElementById('skillBar');
             if (!bar) return;
+            const suggestion = pendingSkillSuggestion;
             bar.innerHTML = '';
-            if (!activeSkillNames.length) { bar.hidden = true; return; }
+            if (!activeSkillNames.length && !suggestion) { bar.hidden = true; return; }
             bar.hidden = false;
             for (const name of activeSkillNames) {
                 const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === String(name).toLowerCase());
@@ -1825,7 +1946,36 @@
                 if (row && row.description) chip.title = row.description;
                 bar.appendChild(chip);
             }
-            bar.title = 'Pinned to this chat (' + activeSkillNames.length + ' of ' + MAX_ACTIVE_SKILLS + ') — they apply to every request in it';
+            if (suggestion) bar.appendChild(buildSkillSuggestionChip(suggestion));
+            bar.title = activeSkillNames.length
+                ? 'Pinned to this chat (' + activeSkillNames.length + ' of ' + MAX_ACTIVE_SKILLS + ') — they apply to every request in it'
+                : '';
+        }
+
+        // An offer built from what someone did before, and it has to be said that
+        // way: a suggestion with no reason reads as the app being random.
+        function buildSkillSuggestionChip(suggestion) {
+            const chip = document.createElement('span');
+            chip.className = 'skill-suggest';
+            const label = document.createElement('span');
+            label.textContent = 'Try ' + suggestion.skill.name + '?';
+            chip.appendChild(label);
+            const why = 'You pinned this in ' + suggestion.chats + ' earlier chat(s)';
+            chip.title = suggestion.skill.description ? why + ' — ' + suggestion.skill.description : why;
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'skill-suggest-add';
+            add.textContent = 'Add';
+            add.setAttribute('aria-label', 'Add ' + suggestion.skill.name + ' to this chat');
+            add.addEventListener('click', (e) => { e.stopPropagation(); acceptSkillSuggestion(); });
+            chip.appendChild(add);
+            const no = document.createElement('button');
+            no.type = 'button';
+            no.textContent = '×';
+            no.setAttribute('aria-label', 'Do not suggest ' + suggestion.skill.name + ' in this chat');
+            no.addEventListener('click', (e) => { e.stopPropagation(); dismissSkillSuggestion(); });
+            chip.appendChild(no);
+            return chip;
         }
 
         function removePinnedSkill(name) {
@@ -1850,6 +2000,7 @@
                 return '"' + row.name + '" is already pinned to this chat.';
             }
             setActiveSkillNames(names);
+            rememberSkillHabit(row.name);
             renderSkillMenuOptions();
             showStatus('success', 'Skill on: ' + row.name);
             const lines = ['"' + row.name + '" is pinned to this chat — it applies to every request here until you remove it or start a new chat.'];
@@ -2314,6 +2465,10 @@
             document.addEventListener('keydown', handleModalKeydown);
 
             defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
+
+            // Offers are scored while typing, debounced: one score per pause
+            // rather than one per keystroke, and still before the send.
+            chatInput.addEventListener('input', scheduleSkillSuggestion);
         }
 
         function switchView(name) {
@@ -4005,6 +4160,10 @@
 
             addMessage('user', raw);
             clearAttachment();
+            // The offer belonged to the text being written, and that text has
+            // been sent: leaving the chip up would offer a skill for the next
+            // message on the evidence of the last one.
+            setSkillSuggestion(null);
             chatInput.value = '';
             chatInput.style.height = '36px';
             setComposerBusy(true);
@@ -4043,7 +4202,8 @@
                     // half could produce something. A plain chat with nothing
                     // pinned never touches the library.
                     let activeSkills = null;
-                    if (activeSkillNames.length || (skillsEnabled && selectedMode !== 'chat')) {
+                    const learnedSkills = learnedSkillNames(skillUsage);
+                    if (activeSkillNames.length || learnedSkills.length || (skillsEnabled && selectedMode !== 'chat')) {
                         const catalog = await ensureSkillsLoaded();
                         if (activeSkillNames.length && !catalog.length) {
                             addMessage('system', 'The skill library could not be loaded, so the pinned skills are not applying to this request.');
@@ -5568,8 +5728,10 @@
                 title: deriveChatTitle(trimmed),
                 messages: trimmed,
                 // Saved with the chat, so a skill someone pinned is still on
-                // after a reload -- and is not carried into the next chat.
+                // after a reload -- and is not carried into the next chat. The
+                // declined offers travel with it for the same reason.
                 skills: activeSkillNames,
+                skillsDismissed: activeSkillDismissals,
                 updatedAt: Date.now(),
             });
             writeConversations();
@@ -5605,6 +5767,7 @@
             renderHistoryList();
             // The chat reopened with whatever it had pinned; a brand-new one has none.
             syncActiveSkillsFromConversation();
+            syncDismissedSuggestionsFromConversation();
         }
 
         function renderHistoryList() {
@@ -5707,8 +5870,10 @@
             emptyState.style.display = messages.length ? 'none' : 'flex';
             if (messages.length) renderSavedMessages();
             renderHistoryList();
-            // Whatever this chat pinned comes back with it; a fresh chat has none.
+            // Whatever this chat pinned -- and refused -- comes back with it; a
+            // fresh chat has neither.
             syncActiveSkillsFromConversation();
+            syncDismissedSuggestionsFromConversation();
         }
 
         function openConversation(id) {
