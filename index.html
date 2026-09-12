@@ -2387,18 +2387,22 @@
         }
 
         // Takes a refused model out of circulation for the session and moves to
-        // one that works, so the next message doesn't repeat the failure.
+        // one that works, so the next message doesn't repeat the failure. Returns
+        // the model it moved to, or null when the provider has nothing left --
+        // which is the caller's signal to report the failure, not retry it.
         function forgetRefusedModel(modelId) {
-            if (!modelId || modelsRefusedBy.has(selectedProvider + ':' + modelId)) return;
+            if (!modelId || modelsRefusedBy.has(selectedProvider + ':' + modelId)) return null;
             modelsRefusedBy.add(selectedProvider + ':' + modelId);
             providerModels = providerModels.filter((m) => m.id !== modelId);
-            if (providerModels.length) {
-                selectedModel = providerModels[0].id;
+            const next = nextUsableModel(providerModels, refusedModelIds(modelsRefusedBy, selectedProvider));
+            if (next) {
+                selectedModel = next;
                 localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
                 showStatus('info', 'Switched to ' + selectedModel);
             }
             renderModelOptions();
             updateModelLabel();
+            return next;
         }
 
         // The catalogue comes from the provider itself, so it can't go stale.
@@ -2443,86 +2447,111 @@
                     puter.ai.chat(convo, { ...opts, ...extra })
                 );
             }
-            // Tools go only to models that accept them; sending them to one
-            // that doesn't is a request that can only fail.
-            const chosen = providerModels.find((m) => m.id === selectedModel);
-            const payload = { model: selectedModel, messages: convo, ...extra };
-            if (payload.tools && chosen && chosen.tools === false) {
-                delete payload.tools;
-                showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
-            }
-            // A 429 means the provider's free tier wants a moment before the
-            // next call. The server already retried with backoff, so we only
-            // give it one more gentle try here before showing the rate-limit
-            // message instead of a raw error the user has to decode.
-            const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                ...(signal ? { signal } : {}),
-            });
-            let res = await send();
-            let data = await safeJson(res);
-            if (data.parseFailed) {
-                const err = new Error(data.error);
-                err.parseFailed = true;
-                err.statusCode = res.status;
-                throw err;
-            }
-            if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
-                showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
-                await new Promise((resolve, reject) => {
-                    if (signal?.aborted) { reject(abortError()); return; }
-                    const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
-                    signal?.addEventListener('abort', () => {
-                        clearTimeout(timer);
-                        reject(abortError());
-                    }, { once: true });
+            // A refusal is about one model, not the request, so the same turn can
+            // be answered by the next one. Bounded, because a provider whose
+            // whole list refuses must report the failure rather than crawl it.
+            for (let attempt = 0; attempt <= MAX_MODEL_REFUSAL_RETRIES; attempt++) {
+                // Read the model per attempt: a refusal moves selectedModel on,
+                // and the payload has to follow it or the retry repeats the very
+                // request that just failed.
+                const modelId = selectedModel;
+                // Tools go only to models that accept them; sending them to one
+                // that doesn't is a request that can only fail.
+                const chosen = providerModels.find((m) => m.id === modelId);
+                const payload = { model: modelId, messages: convo, ...extra };
+                if (payload.tools && chosen && chosen.tools === false) {
+                    delete payload.tools;
+                    showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
+                }
+                // A 429 means the provider's free tier wants a moment before the
+                // next call. The server already retried with backoff, so we only
+                // give it one more gentle try here before showing the rate-limit
+                // message instead of a raw error the user has to decode.
+                const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    ...(signal ? { signal } : {}),
                 });
-                res = await send();
-                data = await safeJson(res);
-            }
-            if (!res.ok) {
-                // A refusal is about this model, not the request, so drop it
-                // from the picker rather than let it be chosen again.
-                const detail = data.error || 'Request failed';
+                let res = await send();
+                let data = await safeJson(res);
+                if (data.parseFailed) {
+                    const err = new Error(data.error);
+                    err.parseFailed = true;
+                    err.statusCode = res.status;
+                    err.modelId = modelId;
+                    err.providerId = selectedProvider;
+                    throw err;
+                }
+                if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
+                    showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
+                    await new Promise((resolve, reject) => {
+                        if (signal?.aborted) { reject(abortError()); return; }
+                        const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                        signal?.addEventListener('abort', () => {
+                            clearTimeout(timer);
+                            reject(abortError());
+                        }, { once: true });
+                    });
+                    res = await send();
+                    data = await safeJson(res);
+                }
+                if (res.ok) return normalizeProviderReply(data);
                 // 404 belongs here too: NVIDIA lists models an account may not
                 // have access to and answers "Not found for account" for them,
                 // which is a refusal of that model rather than a broken request.
-                if (res.status === 403 || res.status === 402 || res.status === 404) {
+                const detail = data.error || 'Request failed';
+                if (isModelScopedRefusal(res.status, detail, modelId)) {
+                    // Drop it from the picker and move to one that answers.
+                    const next = forgetRefusedModel(modelId);
+                    if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
+                } else if (res.status === 403 || res.status === 402 || res.status === 404) {
                     // Account-level refusals apply to every model, so removing
                     // them one at a time would spend a failed request per model.
-                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
-                    else forgetRefusedModel(selectedModel);
+                    suspendProvider(detail);
                 }
+                // Name the model that actually refused. forgetRefusedModel has
+                // already moved the selection on, so the message has to explain
+                // the failure rather than the recovery.
                 const err = new Error(detail);
                 err.statusCode = res.status;
+                err.modelId = modelId;
+                err.providerId = selectedProvider;
                 throw err;
             }
-            return normalizeProviderReply(data);
         }
 
         // Stream a direct-provider reply as SSE, rendering each chunk into a
         // bubble as it arrives. Returns { text, reasoning } when complete.
         async function streamProviderChat(convo, renderer, signal) {
-            const chosen = providerModels.find((m) => m.id === selectedModel);
-            const payload = { model: selectedModel, messages: convo, stream: true };
-            if (payload.tools && chosen && chosen.tools === false) delete payload.tools;
-            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                signal,
-            });
-            if (!res.ok) {
+            // Resolve the response before rendering anything. A refusal comes
+            // back on the headers, so re-sending this turn to the next model
+            // never leaves a half-written answer on screen.
+            let res = null;
+            for (let attempt = 0; attempt <= MAX_MODEL_REFUSAL_RETRIES; attempt++) {
+                const modelId = selectedModel;
+                const chosen = providerModels.find((m) => m.id === modelId);
+                const payload = { model: modelId, messages: convo, stream: true };
+                if (payload.tools && chosen && chosen.tools === false) delete payload.tools;
+                res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal,
+                });
+                if (res.ok) break;
                 const data = await res.json().catch(() => ({ error: 'Request failed' }));
                 const detail = data.error || 'Request failed';
-                if (res.status === 403 || res.status === 402 || res.status === 404) {
-                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
-                    else forgetRefusedModel(selectedModel);
+                if (isModelScopedRefusal(res.status, detail, modelId)) {
+                    const next = forgetRefusedModel(modelId);
+                    if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
+                } else if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    suspendProvider(detail);
                 }
                 const err = new Error(detail);
                 err.statusCode = res.status;
+                err.modelId = modelId;
+                err.providerId = selectedProvider;
                 throw err;
             }
             const reader = res.body.getReader();
@@ -2958,10 +2987,12 @@
                     showStatus('error', 'Out of Puter credits');
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else {
-                    // Name the provider and model: a bare message is
-                    // undebuggable once several providers are configured.
+                    // Name the provider and model that actually failed. Reading
+                    // the current selection here named a model the app never
+                    // called, because a refusal moves the picker before throwing.
                     showStatus('error', 'Failed: ' + error.message);
-                    addMessage('system', `Error (${selectedProvider}/${selectedModel}): ` + error.message, { error: true });
+                    const failedOn = (error.providerId || selectedProvider) + '/' + (error.modelId || selectedModel);
+                    addMessage('system', `Error (${failedOn}): ` + error.message, { error: true });
                 }
             } finally {
                 releaseRun(controller);

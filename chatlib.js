@@ -1101,6 +1101,25 @@ function isModelScopedRefusal(status, message, modelId) {
   return !isAccountLevelFailure(message, modelId);
 }
 
+// The bare model ids refused for one provider, recovered from the
+// provider-prefixed keys the app stores. nextUsableModel compares ids, so
+// handing it the raw set would match nothing and retry the same dead model.
+//
+// The prefix matters across a provider switch: refusing a model on OpenRouter
+// must not hide an id of the same name on NVIDIA.
+function refusedModelIds(refusedKeys, providerId) {
+  const prefix = String(providerId || '') + ':';
+  const keys = refusedKeys instanceof Set || Array.isArray(refusedKeys) ? [...refusedKeys] : [];
+  return keys
+    .filter((key) => typeof key === 'string' && key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length));
+}
+
+// How many models one turn may try after a refusal. Enough to route around a
+// couple of dead ids; small enough that a provider whose whole list refuses
+// reports the failure instead of walking the entire catalogue.
+const MAX_MODEL_REFUSAL_RETRIES = 3;
+
 // The id worth trying next, given the models already refused here, or null when
 // nothing is left -- which is the caller's signal to stop retrying and report
 // the failure instead of looping. Returning the id rather than the model keeps
@@ -1281,6 +1300,8 @@ if (typeof module !== 'undefined' && module.exports) {
     explainEmptyReply,
     isAccountLevelFailure,
     isModelScopedRefusal,
+    refusedModelIds,
+    MAX_MODEL_REFUSAL_RETRIES,
     nextUsableModel,
     usableChatModels,
     isFreeModelId,
