@@ -1732,10 +1732,37 @@ function isAccountLevelFailure(message, modelId) {
   const text = String(message || '');
   if (!text) return false;
   if (modelId && text.includes(modelId)) return false;
+  // "this model requires a subscription or usage credits" (Ollama Cloud) is a
+  // per-model paywall, not an account refusal: it says "this model", which the
+  // account-level phrasings never do. Treating it as account-level suspended
+  // the whole provider on the strength of one model's price.
+  if (/\bthis model\b/i.test(text)) return false;
   // Matched on the concepts rather than a word order: providers phrase this as
   // "payment required", "a payment method is required" and "requires a payment
   // method", and all three mean the same thing.
   return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
+}
+
+// A 429 whose body says the allowance is spent is not a rate limit to ride
+// out — retrying it re-spends the same wait for the same answer. Ollama Cloud
+// words a spent monthly cap as "you have reached your monthly usage limit",
+// and the Antigravity proxy as "Quota Exhausted: All accounts failed or are
+// exhausted for this model".
+function isQuotaExhausted(message) {
+  return /monthly usage limit|quota exhausted|all accounts failed or are exhausted/i.test(String(message || ''));
+}
+
+// A provider key travels in an HTTP header, so it must be printable ASCII.
+// A paste that carried a word processor's em dash (U+2014) or smart quote
+// makes undici throw "Cannot convert argument to a ByteString" — a crash that
+// says nothing about the key. Name the first offending character instead.
+function unsafeHeaderChar(value) {
+  const s = String(value || '');
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c > 0x7e) return { index: i, char: s[i], code: c };
+  }
+  return null;
 }
 
 // Whether a refusal is about this one model, and so can be routed around by
@@ -2000,6 +2027,8 @@ if (typeof module !== 'undefined' && module.exports) {
     explainEmptyReply,
     isAccountLevelFailure,
     isModelScopedRefusal,
+    isQuotaExhausted,
+    unsafeHeaderChar,
     refusedModelIds,
     MAX_MODEL_REFUSAL_RETRIES,
     nextUsableModel,
