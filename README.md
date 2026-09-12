@@ -248,6 +248,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
+| `ANTIGRAVITY_BASE_URL` | *(unset)* | Adds **Antigravity** through an OpenAI-compatible proxy — Claude Opus / Sonnet and Gemini 3, using a quota your Google account already has. Set it or `ANTIGRAVITY_API_KEY`. See [Antigravity](#antigravity). |
+| `ANTIGRAVITY_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. The proxy holds the Google credentials itself, so this is empty for a default local install — and empty means *no* auth header at all, never a bare `Bearer`. |
+| `ANTIGRAVITY_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list, for a proxy release whose model names differ. |
 
 > Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
 >
@@ -391,6 +394,39 @@ The model can also keep a **task list**: the plan for work that spans several tu
 A task that still waits on unfinished work cannot be marked `done` — the one status change that can make a plan look finished when it isn't. A dependency must name a task that already exists, and ids are handed out in order, so a cycle cannot be expressed in the first place.
 
 The list is kept in the browser like the workspace, rides in the system prompt when it isn't empty, and is visible and editable in **Settings → Tasks**. No approval is asked for a change: it alters nothing outside the conversation, and a dialog in front of every status change would make planning unusable.
+
+<a name="antigravity"></a>
+
+### 🛰️ Antigravity (Claude Opus and Gemini through a proxy)
+
+Antigravity models are reached through an OpenAI-compatible proxy that you run yourself. Two projects make up that stack, and they do different jobs:
+
+- [**antigravity-auth**](https://github.com/cortexkit/antigravity-auth) signs a Google account in and stores the resulting tokens on your machine.
+- [**antigravity-proxy**](https://github.com/frieser/antigravity-proxy) is the gateway: it holds those accounts and serves `POST /v1/chat/completions` in OpenAI's shape, so this app can talk to it as an ordinary provider.
+
+The app needs no Google credentials of its own — the proxy owns them. Set the base URL and the provider appears:
+
+```bash
+# terminal 1: the proxy (it opens on http://localhost:3000)
+bunx antigravity-proxy@0.7.0
+
+# terminal 2: this app, pointed at it
+ANTIGRAVITY_BASE_URL=http://localhost:3000 npm start
+```
+
+`Antigravity` then appears in the provider picker with Claude Opus 4.6 (thinking low / medium / high), Sonnet and the Gemini 3 family. Both `/v1` and a bare `http://host:port` work as the base URL — the version segment is added when it is missing. Docker works too (`docker run -d -p 3000:3000 frieserpaldi/antigravity-proxy:0.7.0`), and a non-default port goes in the URL.
+
+| Setting | Value |
+| --- | --- |
+| `ANTIGRAVITY_BASE_URL` | `http://localhost:3000` (local) or the URL of wherever the proxy runs |
+| `ANTIGRAVITY_API_KEY` | *(leave unset for a default local proxy)* |
+| `ANTIGRAVITY_MODELS` | Optional comma-separated override when your proxy's model names differ from the pinned list |
+
+**A local proxy is not reachable from a deployed app.** `http://localhost:3000` from the Railway container means the container itself, where no proxy is running. So either run this app locally against the proxy (the command above), or put the proxy somewhere the app can reach and point `ANTIGRAVITY_BASE_URL` at it. Don't publish the proxy to the open internet to do that: it holds your Google accounts, a default install asks for no key, and anyone who finds the URL is spending your quota. Put it behind your own authentication, or reach it over a private network.
+
+**Read this before you use it.** Using Antigravity through a proxy runs against Google's Terms of Service, and the projects' own documentation reports account suspensions, bans and shadow-bans. Those accounts are yours. The risk is yours too — this app simply speaks to whatever gateway you point it at.
+
+One implementation note: the proxy publishes no model catalogue, so this provider is declared `catalogue: false` and serves its pinned list directly rather than asking for `/v1/models`. A proxy that never implemented that endpoint would otherwise produce a fetch error and an empty picker. `ANTIGRAVITY_MODELS` is the escape hatch when a proxy release renames things.
 
 ### 🩹 Provider quirks the app works around
 

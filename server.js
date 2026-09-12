@@ -696,6 +696,42 @@ const LLM_PROVIDERS = {
       'deepseek-r1:14b',
     ],
   },
+  // Google Antigravity through an OpenAI-compatible proxy (antigravity-proxy),
+  // which owns the Google accounts — antigravity-auth is how those accounts are
+  // obtained, and it stays on the operator's machine. The proxy speaks plain
+  // OpenAI, so this is an ordinary provider with two differences: it has no key
+  // of its own, and it usually runs beside the user rather than on the public
+  // internet, so it appears only once its base URL (or a key) is set.
+  //
+  // It publishes no model catalogue, so `catalogue: false` serves the pinned
+  // list below instead of asking an endpoint the proxy may not implement — a
+  // 404 there would turn a working setup into an empty picker plus a fetch
+  // error. These ids are the ones the proxy documented; they drift between its
+  // releases, so ANTIGRAVITY_MODELS replaces the list without a code change.
+  antigravity: {
+    label: 'Antigravity',
+    baseUrl: 'http://localhost:3000/v1',
+    envVar: 'ANTIGRAVITY_API_KEY',
+    needsKey: false,
+    catalogue: false,
+    models: [
+      // The reason this provider is worth wiring up at all: Opus through a
+      // quota the user already has, with the thinking variants alongside it.
+      'antigravity-claude-opus-4-6-thinking-high',
+      'antigravity-claude-opus-4-6-thinking-medium',
+      'antigravity-claude-opus-4-6-thinking-low',
+      'antigravity-claude-opus-4-6-thinking',
+      'antigravity-claude-sonnet-4-6-thinking-high',
+      'antigravity-claude-sonnet-4-6',
+      'antigravity-claude-sonnet-4-5',
+      'antigravity-gemini-3.1-pro-high',
+      'antigravity-gemini-3.1-pro-low',
+      'antigravity-gemini-3-pro-high',
+      'antigravity-gemini-3-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+    ],
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -740,9 +776,15 @@ function providerIsConfigured(provider) {
   return provider.needsKey === false && !!process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
 }
 
+// Providers whose documented base URL stops short of the OpenAI path. Ollama
+// and the Antigravity proxy both accept "http://host:port", and both serve
+// /v1/... underneath it, so the version segment is added when it is missing
+// rather than making every operator remember to type it.
+const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity']);
+
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
-  if (id !== 'ollama' || /\/v1$/i.test(base)) return base;
+  if (!V1_APPENDED_PROVIDERS.has(id) || /\/v1$/i.test(base)) return base;
   return base + '/v1';
 }
 
@@ -755,7 +797,14 @@ function providerConfig(id) {
   // proxy, and lets the tests point at a local stand-in.
   const rawBaseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
-  return { ...provider, key, baseUrl };
+  // A model list can be declared outright, which matters for a provider whose
+  // catalogue is missing or whose ids move between releases: setting
+  // PROVIDER_MODELS replaces the pinned allowlist for that provider alone.
+  const declared = process.env[provider.envVar.replace(/_API_KEY$/, '_MODELS')];
+  const models = declared
+    ? declared.split(',').map((id) => id.trim()).filter(Boolean)
+    : provider.models;
+  return { ...provider, key, baseUrl, models };
 }
 
 // Deploy verification, deliberately public: it exists so a merge can be
@@ -1210,6 +1259,13 @@ async function llmModels(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  // A provider that publishes no catalogue serves its declared list as-is. It
+  // is not a fallback for a failed fetch: nothing is fetched at all, so a
+  // working proxy cannot be reported as broken by an endpoint it never had.
+  if (provider.catalogue === false) {
+    const ids = Array.isArray(provider.models) ? provider.models : [];
+    return sendJson(res, 200, ids.filter((id) => typeof id === 'string' && id).map((id) => ({ id })));
+  }
   const ttl = modelsCacheTtlMs();
   const cached = modelCache.get(id);
   if (cached && Date.now() - cached.fetchedAt < ttl) {
