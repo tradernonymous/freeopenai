@@ -7,6 +7,8 @@ const {
   imageBackendOrder,
   imageFailureMessage,
   IMAGE_BACKENDS,
+  isAccountLevelFailure,
+  isOutOfCreditsError,
   safeJson,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
@@ -20,6 +22,8 @@ function harness({ signedIn = false, puterResult = null, route = null } = {}) {
     imageBackendOrder,
     imageFailureMessage,
     IMAGE_BACKENDS,
+    isAccountLevelFailure,
+    isOutOfCreditsError,
     safeJson,
     IMAGE_MODELS: ['gpt-image-2', 'gpt-image-1.5'],
     puter: {
@@ -78,11 +82,20 @@ test('a URL answer is used as-is, the way the edit flow reads one', async () => 
 });
 
 test('a signed-in Puter that fails falls through to the server route', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
   assert.equal(await h.generate('a fox'), 'u');
-  // Both of Puter's models were tried before giving up on it.
+  // A failure that might be this one model's fault tries the next model first.
   assert.deepEqual(h.calls.puter, ['gpt-image-2', 'gpt-image-1.5']);
   assert.equal(h.calls.fetch.length, 1);
+});
+
+test('a spent Puter account is not asked once per model before moving on', async () => {
+  const h = harness({ signedIn: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
+  assert.equal(await h.generate('a fox'), 'u');
+  // The account being out of credits is the same answer for every model, so the
+  // second call could only buy the same refusal.
+  assert.deepEqual(h.calls.puter, ['gpt-image-2']);
+  assert.equal(h.calls.fetch.length, 1, 'and the other backend is still given its chance');
 });
 
 test('a route that refuses is reported with its own message, and names what was tried', async () => {

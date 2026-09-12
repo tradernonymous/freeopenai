@@ -47,6 +47,7 @@ function harness({ graph = newTaskGraph() } = {}) {
   return {
     deps,
     call: (name, args) => loaded.runTaskTool(name, args),
+    request: () => loaded.buildConversation('hello'),
     system: () => loaded.buildConversation('hello')[0].content,
     graph: () => deps.taskGraph,
     tasks: () => deps.taskGraph.tasks,
@@ -74,14 +75,33 @@ test('the list starts empty and says so', async () => {
   assert.equal(await harness().call('task_list', {}), 'The task list is empty.');
 });
 
-test('the recorded list rides in the system prompt, and an empty one adds nothing', () => {
+test('the list rides at the end of the request, never in the cacheable system prompt', () => {
   const withTasks = harness({ graph: addTask(newTaskGraph(), { title: 'Ship the poller fix' }).graph });
-  const system = withTasks.system();
-  assert.ok(system.includes('You are a helpful assistant.'), 'the base prompt is still there');
-  assert.ok(system.includes('TASK LIST'), 'the list is announced');
-  assert.ok(system.includes('t1 Ship the poller fix'), 'and the tasks are in it');
+  const request = withTasks.request();
+  assert.equal(request[0].role, 'system');
+  assert.ok(request[0].content.includes('You are a helpful assistant.'), 'the base prompt is still there');
+  // The system message is the part a provider can reuse between turns, so the
+  // list that changes as work moves must not be inside it.
+  assert.equal(request[0].content.includes('TASK LIST'), false);
+  const last = request[request.length - 1];
+  assert.equal(last.role, 'user');
+  assert.ok(last.content.startsWith('hello'), 'the user turn is still the user turn');
+  assert.ok(last.content.includes('TASK LIST'), 'the list is announced');
+  assert.ok(last.content.includes('t1 Ship the poller fix'), 'and the tasks are in it');
   // An empty list must not add a heading about nothing on every single request.
-  assert.equal(harness().system().includes('TASK LIST'), false);
+  assert.equal(harness().request().slice(-1)[0].content.includes('TASK LIST'), false);
+});
+
+test('the system prompt does not change when the task list does', () => {
+  // This is the whole reason the list moved: a prefix that changes on every turn
+  // can never be served from the provider's cache, so every turn re-reads the
+  // entire conversation at full price.
+  const first = addTask(newTaskGraph(), { title: 'one' }).graph;
+  const h = harness({ graph: first });
+  const before = h.request()[0].content;
+  h.deps.taskGraph = addTask(first, { title: 'two' }).graph;
+  assert.equal(h.request()[0].content, before, 'a moving task list must not invalidate the prefix');
+  assert.ok(h.request().slice(-1)[0].content.includes('t2 two'), 'and the new task still reaches the model');
 });
 
 test('adding a task records it, saves once, and reports its id', async () => {

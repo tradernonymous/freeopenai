@@ -9,12 +9,24 @@ const {
   isConcurrentSafeTool,
   planToolCalls,
   MAX_CONCURRENT_TOOLS,
+  MAX_TOOL_RESULT_CHARS,
+  toolCallKey,
+  clipToolResult,
+  REPEATED_TOOL_CALL_NOTICE,
+  MAX_REPEATED_TOOL_CALLS,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const NAMES = ['runChatWithTools', 'runToolCall'];
 
-const call = (name, id) => ({ id, type: 'function', function: { name, arguments: '{}' } });
+// Arguments are real JSON, not an empty object for every call: two calls to the
+// same tool are only the same call when their arguments match, so a harness
+// that erased them would make every repeat look identical.
+const call = (name, id, args = {}) => ({
+  id,
+  type: 'function',
+  function: { name, arguments: JSON.stringify(args) },
+});
 
 test('only reads are allowed to overlap', () => {
   assert.equal(isConcurrentSafeTool('web_search'), true);
@@ -57,7 +69,7 @@ test('a long round is sent in waves rather than all at once', () => {
   assert.ok(MAX_CONCURRENT_TOOLS > 0);
 });
 
-function harness({ toolCalls }) {
+function harness({ toolCalls, rounds = null, webResult = null }) {
   const events = [];
   const conversation = [];
   const runs = [];
@@ -67,6 +79,10 @@ function harness({ toolCalls }) {
     planToolCalls,
     batchIndices,
     isConcurrentSafeTool,
+    toolCallKey,
+    clipToolResult,
+    REPEATED_TOOL_CALL_NOTICE,
+    MAX_REPEATED_TOOL_CALLS,
     MAX_TOOL_ROUNDS: 5,
     EMPTY_REPLY_NUDGE: 'nudge',
     TOOL_ROUNDS_EXHAUSTED_PROMPT: 'summarise',
@@ -77,7 +93,9 @@ function harness({ toolCalls }) {
     extractMessageReasoning: () => '',
     toConversationMessage: (m) => ({ role: 'assistant', content: '', tool_calls: m.tool_calls }),
     extractToolCalls: (m) => (m && m.tool_calls) || [],
-    parseToolArgs: () => ({}),
+    parseToolArgs: (raw) => {
+      try { return JSON.parse(raw || '{}'); } catch { return {}; }
+    },
     describeToolCall: (name) => 'step: ' + name,
     addMessage: (role, text) => events.push(text),
     showStatus: (kind, text) => events.push(kind + ': ' + text),
@@ -108,12 +126,15 @@ function harness({ toolCalls }) {
       runs.push({ name, phase: 'start' });
       await new Promise((r) => setTimeout(r, 1));
       runs.push({ name, phase: 'end' });
-      return 'web:' + name;
+      return webResult || 'web:' + name;
     },
     runUseSkillTool: async () => 'skill',
+    // `rounds` lets a test script what the model asks for turn by turn, which
+    // is what a repeat across rounds needs; `toolCalls` stays the simple case.
     callModel: async () => {
+      const planned = rounds ? rounds[round] : round === 0 ? toolCalls : [];
       round += 1;
-      if (round === 1) return { message: { tool_calls: toolCalls }, finishReason: 'tool_calls' };
+      if (planned && planned.length) return { message: { tool_calls: planned }, finishReason: 'tool_calls' };
       return { message: { content: 'done' }, finishReason: 'stop' };
     },
   };
@@ -130,7 +151,11 @@ test('the extracted source is the shipped one, and the sandbox covers it', () =>
 });
 
 test('independent reads are issued together instead of one after another', async () => {
-  const calls = [call('github_read_file', 'a'), call('github_read_file', 'b'), call('github_read_file', 'c')];
+  const calls = [
+    call('github_read_file', 'a', { repo: 'o/r', path: 'a.md' }),
+    call('github_read_file', 'b', { repo: 'o/r', path: 'b.md' }),
+    call('github_read_file', 'c', { repo: 'o/r', path: 'c.md' }),
+  ];
   const h = harness({ toolCalls: calls });
   await h.runChatWithTools(h.conversation, 'model', [], null);
   const order = h.runs.map((r) => r.name + ':' + r.phase);
@@ -150,9 +175,9 @@ test('independent reads are issued together instead of one after another', async
 
 test('a write never overlaps another tool', async () => {
   const calls = [
-    call('github_read_file', 'a'),
-    call('github_commit_file', 'b'),
-    call('github_read_file', 'c'),
+    call('github_read_file', 'a', { repo: 'o/r', path: 'a.md' }),
+    call('github_commit_file', 'b', { repo: 'o/r', path: 'a.md', content: 'x', message: 'y' }),
+    call('github_read_file', 'c', { repo: 'o/r', path: 'c.md' }),
   ];
   const h = harness({ toolCalls: calls });
   await h.runChatWithTools(h.conversation, 'model', [], null);
@@ -191,7 +216,66 @@ test('results come back in the order the model asked for, whatever order they fi
 });
 
 test('a single lookup does not announce a wave', async () => {
-  const h = harness({ toolCalls: [call('github_read_file', 'a')] });
+  const h = harness({ toolCalls: [call('github_read_file', 'a', { repo: 'o/r', path: 'a.md' })] });
   await h.runChatWithTools(h.conversation, 'model', [], null);
   assert.equal(h.events.some((e) => /things at once/.test(e)), false);
+});
+
+test('the same call twice in one round runs once and shares the answer', async () => {
+  const h = harness({
+    toolCalls: [
+      call('web_search', 'a', { query: 'railway deploy' }),
+      call('web_search', 'b', { query: 'railway deploy' }),
+    ],
+  });
+  await h.runChatWithTools(h.conversation, 'model', [], null, new Map());
+  // A runner records a start and an end, so one search is two entries here.
+  assert.deepEqual(h.runs.map((r) => r.name + ':' + r.phase), ['web_search:start', 'web_search:end'], 'one search, not two');
+  // Both tool_call_ids still get an answer, or the provider rejects the turn.
+  const toolMessages = h.conversation.filter((m) => m.role === 'tool');
+  assert.deepEqual(toolMessages.map((m) => m.tool_call_id), ['a', 'b']);
+  assert.deepEqual(toolMessages.map((m) => m.content), ['web:web_search', 'web:web_search']);
+  assert.ok(h.events.some((e) => /Reused 1 earlier tool/.test(e)));
+});
+
+test('a call already answered earlier in the question is not paid for again', async () => {
+  // Different ids, different rounds, identical arguments: the model re-reading
+  // the same file. The memos are what make this one round trip instead of two.
+  const read = (id) => call('github_read_file', id, { repo: 'o/r', path: 'README.md' });
+  const h = harness({ rounds: [[read('a')], [read('b')], []] });
+  const memo = new Map();
+  await h.runChatWithTools(h.conversation, 'model', [], null, memo);
+  assert.deepEqual(h.runs.map((r) => r.name + ':' + r.phase), [
+    'github_read_file:start',
+    'github_read_file:end',
+  ]);
+  const toolMessages = h.conversation.filter((m) => m.role === 'tool');
+  assert.equal(toolMessages[1].content, toolMessages[0].content, 'the second answer is the first one');
+  assert.equal(memo.size, 1, 'and the answer is on record for the rest of the question');
+});
+
+test('a question that repeats itself is told plainly to stop', async () => {
+  const search = (id) => call('web_search', id, { query: 'same thing' });
+  const h = harness({ rounds: [[search('a')], [search('b')], [search('c')], []] });
+  await h.runChatWithTools(h.conversation, 'model', [], null, new Map());
+  // The search ran once for three asks.
+  assert.deepEqual(h.runs.map((r) => r.name + ':' + r.phase), ['web_search:start', 'web_search:end']);
+  // And the instruction not to repeat it arrived in the conversation, where the
+  // next round can read it -- a status toast is what the model never sees.
+  const said = h.conversation.filter((m) => m.role === 'user');
+  assert.equal(said.length, 1);
+  assert.match(said[0].content, /already called that tool/i);
+});
+
+test('a huge tool result is clipped before every later round re-sends it', async () => {
+  const huge = 'y'.repeat(MAX_TOOL_RESULT_CHARS + 500);
+  const h = harness({
+    toolCalls: [call('web_fetch', 'a', { url: 'https://example.com/long' })],
+    webResult: huge,
+  });
+  await h.runChatWithTools(h.conversation, 'model', [], null, new Map());
+  const content = h.conversation.find((m) => m.role === 'tool').content;
+  assert.ok(content.length < huge.length);
+  assert.equal(content.startsWith('y'.repeat(MAX_TOOL_RESULT_CHARS)), true);
+  assert.match(content, /clipped/);
 });

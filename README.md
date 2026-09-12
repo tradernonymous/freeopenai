@@ -435,6 +435,22 @@ Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not ap
 
 One implementation note: the proxy publishes no model catalogue, so this provider is declared `catalogue: false` and serves its pinned list directly rather than asking for `/v1/models`. A proxy that never implemented that endpoint would otherwise produce a fetch error and an empty picker. `ANTIGRAVITY_MODELS` is the escape hatch when a proxy release renames things.
 
+### 💸 What keeps a turn affordable
+
+Every call is billed again with the whole conversation in front of it, so what a turn costs is mostly what it sends twice. Five rules keep that down, and each one is visible in the app rather than buried:
+
+| Rule | What it does |
+| --- | --- |
+| **The stable part comes first** | The system message holds only what does not change: the base prompt and the mode. The task list and any active skills ride at the *end* of the request instead, on the live user turn. A prefix that changes every turn can never be reused, so the provider re-reads the entire conversation at full price every time; now everything up to the newest message can be. Where the provider caches automatically — OpenAI, Gemini 2.5, DeepSeek, Grok, Moonshot, Groq — those hits now actually happen. |
+| **A tool call runs once** | Results are remembered for the duration of a question, keyed by the tool name and its arguments (argument *order* does not matter). A model that reads the same file twice, or asks for it twice in one round, gets the answer it already paid for, and the transcript says `Reused N earlier tool result(s) instead of repeating the call`. A commit asked for twice therefore commits once. |
+| **A repeat is called out** | When the same call comes back a second time, the app says so *in the conversation* — a status toast is something the model never reads — so it uses what it already has instead of asking a third time. |
+| **Oversized results are clipped** | A tool result longer than 20,000 characters is cut once, with the missing size stated, because every later round of the turn re-sends it. The limit is deliberately high enough that reading an ordinary source file still delivers the whole file; what it bounds is the file nobody meant to open. |
+| **History has a weight cap, not just a count** | The last twelve turns travel, but only up to roughly 24,000 estimated tokens of them. Twelve turns of chat are cheap, twelve turns carrying a pasted file are not, and a request that overflows the model's window fails outright rather than costing less. The newest turn always travels, however large: without it, it is a different question. |
+
+When a question fails part-way through a tool loop, the answers it already collected are kept — so retrying replays those lookups instead of buying them a second time, while a genuinely new question starts from nothing. The status bar reports what the provider cached, so the saving is visible: `gpt-5.4-nano · 3s · 812 chars · 120 tok · 12.4k cached`. A provider that caches nothing reports nothing.
+
+<br>
+
 ### 🩹 Provider quirks the app works around
 
 Puter fronts several providers, and they disagree in ways that surface as raw API errors. These are handled rather than passed through:

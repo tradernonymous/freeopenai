@@ -3073,7 +3073,13 @@
                         renderer.appendText(delta.content || '');
                     }
                     const usage = part && part.usage;
-                    if (usage) renderer.usage = (renderer.usage || 0) + (usage.completion_tokens || usage.total_tokens || 0);
+                    if (usage) {
+                        renderer.usage = (renderer.usage || 0) + (usage.completion_tokens || usage.total_tokens || 0);
+                        // Read from the cache is the whole point of keeping the
+                        // front of the request stable, so it is counted rather
+                        // than guessed at -- and a miss reports zero.
+                        renderer.cached = (renderer.cached || 0) + cachedTokensFromUsage(usage);
+                    }
                 }
             }
             renderer.flush();
@@ -3082,16 +3088,29 @@
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
+        //
+        // The request is ordered so the part that never changes sits at the front
+        // and the part that changes every turn sits at the end. Providers bill the
+        // prompt again on every call, and the only piece they can reuse is the
+        // unchanged prefix. The task list and the active skills used to sit in the
+        // system message, which meant the very first block differed on nearly every
+        // turn -- so nothing behind it could be reused and the whole conversation
+        // was re-read at full price each time. Now the system message is identical
+        // unless the mode changes, and the volatile half rides on the live user
+        // turn, after everything a provider is able to cache.
         function buildConversation(outgoing, activeSkills = null) {
-            // The task list rides in the system prompt so a follow-up turn
-            // already knows what was planned, and can pick up rather than ask.
-            const system = [SYSTEM_PROMPT, modePrompt(selectedMode), renderTaskGraphPrompt(taskGraph)]
-                .filter(Boolean).join('\n\n');
-            const skillsBlock = activeSkills && activeSkills.length ? '\n\n' + renderSkillsPrompt(activeSkills) : '';
+            const skills = activeSkills && activeSkills.length ? renderSkillsPrompt(activeSkills) : '';
+            const turnContext = [renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
             return [
-                { role: 'system', content: system + skillsBlock },
+                { role: 'system', content: system },
                 ...buildChatHistory(messages.slice(0, -1)),
-                { role: 'user', content: outgoing },
+                {
+                    role: 'user',
+                    content: turnContext
+                        ? outgoing + '\n\n---\nContext for this request (not written by the user):\n' + turnContext
+                        : outgoing,
+                },
             ];
         }
 
@@ -3133,10 +3152,41 @@
             return Promise.resolve('Error: unknown tool ' + name);
         }
 
-        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null) {
+        // Tool results already paid for while answering the current question.
+        //
+        // A tool loop re-asks the same thing more often than it looks -- the same
+        // file, the same search, the same listing -- and every repeat is a billed
+        // request for an answer that is already in the conversation. Keying the
+        // memo by the question makes a retry of a failed turn replay the lookups
+        // it already paid for, rather than buying them all a second time, while a
+        // genuinely new question starts from nothing.
+        let toolMemo = new Map();
+        let toolMemoKey = '';
+
+        function toolMemoFor(question) {
+            const key = String(question == null ? '' : question);
+            if (key !== toolMemoKey) {
+                toolMemo.clear();
+                toolMemoKey = key;
+            }
+            return toolMemo;
+        }
+
+        // An answered question no longer needs its lookups: the next question
+        // must not read a stale file through a memo left over from this one.
+        function releaseToolMemo() {
+            toolMemo.clear();
+            toolMemoKey = '';
+        }
+
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
+            // Counted across the whole turn, not per round: a model that repeats
+            // one call round after round only ever shows one repeat per round, so
+            // a per-round count could never reach the threshold.
+            const memoHits = new Map();
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 if (signal?.aborted) throw abortError();
                 let response;
@@ -3181,11 +3231,46 @@
                 }
                 const plan = planToolCalls(calls);
                 const results = new Array(calls.length);
+                // Everything already asked and answered while working on this
+                // question comes out of the memo instead of being paid for a
+                // second time, and a call repeated inside one round is run once
+                // rather than once per copy. A write benefits most: the same
+                // commit asked for twice runs once, which is the difference
+                // between a duplicate and a saved repository.
+                const answeredFrom = new Map();
+                const roundFirstIndex = new Map();
+                const pending = [];
+                let reused = 0;
+                let repeated = 0;
+                for (let i = 0; i < calls.length; i++) {
+                    const fn = calls[i].function || {};
+                    const key = toolCallKey(fn.name, parseToolArgs(fn.arguments));
+                    if (!key) { pending.push(i); continue; }
+                    if (memo && memo.has(key)) {
+                        results[i] = memo.get(key);
+                        const hits = (memoHits.get(key) || 0) + 1;
+                        memoHits.set(key, hits);
+                        reused += 1;
+                        if (hits >= MAX_REPEATED_TOOL_CALLS) repeated += 1;
+                        continue;
+                    }
+                    if (roundFirstIndex.has(key)) {
+                        answeredFrom.set(i, roundFirstIndex.get(key));
+                        reused += 1;
+                        continue;
+                    }
+                    roundFirstIndex.set(key, i);
+                    pending.push(i);
+                }
+                if (reused) {
+                    addMessage('system', 'Reused ' + reused + ' earlier tool result(s) instead of repeating the call');
+                }
                 // Reads that do not depend on each other go out together: three
                 // files used to cost three round trips. Anything that writes is
                 // left to run in turn, because two writes at once is a race and
                 // one of them would silently win.
-                for (const batch of batchIndices(plan.concurrent)) {
+                const stillPending = (index) => pending.indexOf(index) !== -1;
+                for (const batch of batchIndices(plan.concurrent.filter(stillPending))) {
                     if (signal?.aborted) throw abortError();
                     if (batch.length > 1) showStatus('info', 'Looking up ' + batch.length + ' things at once');
                     const done = await Promise.all(batch.map(async (index) => {
@@ -3196,14 +3281,33 @@
                 }
                 for (const index of plan.serial) {
                     if (signal?.aborted) throw abortError();
+                    if (!stillPending(index)) continue;
                     const fn = calls[index].function || {};
                     results[index] = await runToolCall(fn.name, parseToolArgs(fn.arguments));
                 }
+                // A duplicate in this round borrows the result of the copy that
+                // actually ran.
+                for (const [copy, source] of answeredFrom) results[copy] = results[source];
+                // Kept for the rest of this question. Only calls that produced
+                // something are stored, so a skipped one leaves no trace.
+                if (memo) {
+                    for (let i = 0; i < calls.length; i++) {
+                        if (results[i] === undefined) continue;
+                        const fn = calls[i].function || {};
+                        const key = toolCallKey(fn.name, parseToolArgs(fn.arguments));
+                        if (key) memo.set(key, results[i]);
+                    }
+                }
+                // Said in the conversation rather than in a toast, because the
+                // next round reads the conversation and a toast is what it never
+                // sees.
+                if (repeated) convo.push({ role: 'user', content: REPEATED_TOOL_CALL_NOTICE });
                 // Recorded in the order the model asked for, not the order they
-                // finished, so every tool_call_id still has its own result.
+                // finished, so every tool_call_id still has its own result -- and
+                // clipped, because every later round of this turn re-sends it.
                 for (let i = 0; i < calls.length; i++) {
                     if (signal?.aborted) throw abortError();
-                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: String(results[i]) });
+                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: clipToolResult(String(results[i])) });
                 }
             }
             // Out of rounds. Everything read so far is still in `convo` and was
@@ -3412,7 +3516,8 @@
                         buildConversation(outgoing, activeSkills),
                         chatModel,
                         tools,
-                        controller.signal
+                        controller.signal,
+                        toolMemoFor(raw)
                     );
                     if (!isActiveRun(runId, controller)) return;
                     if (activeSkills && activeSkills.length) {
@@ -3436,6 +3541,7 @@
                         reasoning: text === reasoning ? '' : reasoning,
                     });
                     noteTurnStats(text.length);
+                    releaseToolMemo();
                     showStatus('success', 'Sent');
                     return;
                 }
@@ -3473,11 +3579,11 @@
                         // A partial ending already finalized its bubble and set
                         // the status; finalizing again would double the message.
                         if (partial) {
-                            noteTurnStats(renderer.full.length, renderer.usage || 0);
+                            noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
                             return;
                         }
                         finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
-                        noteTurnStats(renderer.full.length, renderer.usage || 0);
+                        noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
                         showStatus('success', 'Sent');
                     } catch (error) {
                         removeTypingIndicator();
@@ -3610,6 +3716,12 @@
                         } catch (error) {
                             if (error && error.name === 'AbortError') throw error;
                             errors.puterError = String((error && error.message) || error);
+                            // A spent allowance, or an account-level refusal, is the
+                            // same answer for every model on the account -- so
+                            // trying the rest spends more calls to be told the same
+                            // thing. Move on to the next backend instead, which is a
+                            // different bill entirely.
+                            if (isOutOfCreditsError(errors.puterError) || isAccountLevelFailure(errors.puterError, '')) break;
                         }
                     }
                     continue;
@@ -4755,13 +4867,17 @@
         // TUI status parity: after each reply the status bar shows what
         // answered, how long it took, how much text came back, and token
         // usage when the provider reports it.
-        function noteTurnStats(chars, tokens = 0) {
+        function noteTurnStats(chars, tokens = 0, cached = 0) {
             if (!turnStartedAt) return;
             const secs = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
             const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
             const tok = tokens > 0 ? ` · ${(tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : tokens)} tok` : '';
+            // Shown because it is the one number that says whether the stable
+            // prefix is actually paying off: a turn that reads most of its input
+            // from the provider's cache costs a fraction of one that does not.
+            const cache = cached > 0 ? ` · ${(cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached)} cached` : '';
             if (usageText) {
-                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars${tok}`;
+                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars${tok}${cache}`;
                 usageText.style.display = 'inline';
             }
             turnStartedAt = 0;

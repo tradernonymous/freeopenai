@@ -20,6 +20,7 @@ const {
   MAX_IMAGE_DATA_URL_CHARS,
   MAX_IMAGE_EDGE,
   MAX_MODEL_REFUSAL_RETRIES,
+  cachedTokensFromUsage,
 } = require('../chatlib.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -101,6 +102,7 @@ function baseDeps(overrides = {}) {
     isAccountLevelFailure,
     isModelScopedRefusal,
     isQuotaExhausted,
+    cachedTokensFromUsage,
     modelForImage,
     nextUsableModel,
     refusedModelIds,

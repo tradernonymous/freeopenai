@@ -1327,6 +1327,13 @@ async function llmImage(req, res, kind) {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    // A render legitimately takes a while, but not forever. Without a deadline a
+    // stalled image service keeps this request open until the hosting platform's
+    // own ceiling answers it, and that arrives as an opaque failure rather than
+    // the sentence below -- which is the same class of bug the chat path fixed.
+    const budget = providerTimeoutMs().chat;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), budget);
     try {
       const headers = { Authorization: `Bearer ${key}` };
       let upstream;
@@ -1354,6 +1361,7 @@ async function llmImage(req, res, kind) {
         parts.push(Buffer.from(`--${boundary}--\r\n`));
         upstream = await fetch(naraImagesBase() + '/v1/images/edits', {
           method: 'POST',
+          signal: controller.signal,
           headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
           body: Buffer.concat(parts),
         });
@@ -1369,6 +1377,7 @@ async function llmImage(req, res, kind) {
         }
         upstream = await fetch(naraImagesBase() + '/v1/images/generations', {
           method: 'POST',
+          signal: controller.signal,
           headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt,
@@ -1383,7 +1392,17 @@ async function llmImage(req, res, kind) {
       }
       sendJson(res, 200, data);
     } catch (e) {
+      if (e && e.name === 'AbortError') {
+        return sendJson(res, 504, {
+          error:
+            what + ' timed out: Nara did not respond within ' +
+            Math.round(budget / 1000) +
+            's — the image service is slow or unreachable, not your prompt. Try again.',
+        });
+      }
       sendJson(res, 502, { error: e.message });
+    } finally {
+      clearTimeout(timer);
     }
   });
 }
