@@ -294,6 +294,10 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   'github_list_files',
   'github_read_file',
   'use_skill',
+  // Workspace reads only. A write is absent on purpose, so it keeps running on
+  // its own and cannot interleave with another call.
+  'workspace_list_files',
+  'workspace_read_file',
 ]);
 
 // A ceiling on how many go at once. A model can ask for a dozen lookups in one
@@ -678,6 +682,166 @@ function isWebTool(name) {
   return WEB_TOOL_NAMES.includes(name);
 }
 
+// A small scratch space of text files the model can keep notes and drafts in.
+// It lives in the browser next to the conversations, not on the server: the
+// deployment is shared and its container is rebuilt on every push, so a
+// server-side workspace would be both visible to other users and temporary.
+// Nothing written here is reachable from another browser.
+const WORKSPACE_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_list_files',
+      description: 'List the files in the workspace, a scratch space of text files kept in this browser. Call it first to see what is already there.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Folder to list, e.g. "notes". Empty string or omitted lists every file.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_read_file',
+      description: 'Read one text file from the workspace. Read a file before rewriting it, so you keep the parts you are not changing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file, e.g. "notes/todo.md".' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_write_file',
+      description: 'Write a text file in the workspace, creating it or replacing it whole. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every write before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file, e.g. "notes/todo.md".' },
+          content: { type: 'string', description: 'The complete new contents of the file.' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+];
+
+const WORKSPACE_TOOL_NAMES = WORKSPACE_TOOLS.map((t) => t.function.name);
+
+function isWorkspaceTool(name) {
+  return WORKSPACE_TOOL_NAMES.includes(name);
+}
+
+// A write is never parallel-safe, however it is spelled: two writes to one path
+// in the same round is a race whose loser disappears without a trace.
+function isWorkspaceWriteTool(name) {
+  return name === 'workspace_write_file';
+}
+
+// Caps, so one runaway turn cannot fill the browser's storage. localStorage
+// holds a few megabytes for the whole origin and the conversations share it.
+const MAX_WORKSPACE_PATH_CHARS = 160;
+const MAX_WORKSPACE_FILES = 64;
+const MAX_WORKSPACE_FILE_CHARS = 100000;
+const MAX_WORKSPACE_TOTAL_CHARS = 200000;
+
+// Paths are relative to the workspace root and can never leave it. A `..` is
+// refused rather than resolved away: "notes/../../elsewhere" is a different
+// request from "elsewhere", and quietly rewriting it would hide that.
+function normalizeWorkspacePath(input) {
+  const raw = String(input == null ? '' : input).trim().replace(/\\/g, '/');
+  if (!raw || raw.length > MAX_WORKSPACE_PATH_CHARS) return null;
+  if (raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) return null;
+  // Control characters, the null byte among them, are part of no real path.
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return null;
+  const parts = [];
+  for (const part of raw.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') return null;
+    parts.push(part);
+  }
+  return parts.length ? parts.join('/') : null;
+}
+
+function workspaceFileNames(files) {
+  const store = files && typeof files === 'object' ? files : {};
+  return Object.keys(store).sort();
+}
+
+// The immediate children of a folder. Folders are derived from the paths rather
+// than stored, so there is no empty-folder state to keep consistent, and a name
+// that is both a file and a folder is reported as the folder.
+function workspaceList(files, dir = '') {
+  const wanted = String(dir == null ? '' : dir).trim();
+  const base = wanted ? normalizeWorkspacePath(wanted) : '';
+  if (base === null) return { error: 'Invalid folder path.' };
+  const prefix = base ? base + '/' : '';
+  const names = new Map();
+  for (const path of workspaceFileNames(files)) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const slash = rest.indexOf('/');
+    if (slash === -1) {
+      const existing = names.get(rest);
+      if (!existing || existing.type === 'file') {
+        names.set(rest, { name: rest, path, type: 'file', chars: String(files[path]).length });
+      }
+    } else {
+      const name = rest.slice(0, slash);
+      names.set(name, { name, path: prefix + name, type: 'folder' });
+    }
+  }
+  const entries = [...names.values()].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return { path: base, entries, totalFiles: workspaceFileNames(files).length };
+}
+
+function workspaceRead(files, path) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const store = files && typeof files === 'object' ? files : {};
+  if (!Object.prototype.hasOwnProperty.call(store, target)) {
+    const all = workspaceFileNames(store);
+    return {
+      error: 'No file at "' + target + '". ' +
+        (all.length ? 'Existing files: ' + all.join(', ') : 'The workspace is empty.'),
+    };
+  }
+  return { path: target, content: String(store[target]) };
+}
+
+// Returns a whole new store rather than mutating: the caller decides whether to
+// keep it, and a refused write leaves the workspace exactly as it was.
+function workspaceWrite(files, path, content) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const text = typeof content === 'string' ? content : content == null ? '' : String(content);
+  if (text.length > MAX_WORKSPACE_FILE_CHARS) {
+    return { error: 'That file is ' + text.length + ' characters; the limit is ' + MAX_WORKSPACE_FILE_CHARS + '.' };
+  }
+  const store = Object.assign({}, files && typeof files === 'object' ? files : {});
+  const created = !Object.prototype.hasOwnProperty.call(store, target);
+  if (created && workspaceFileNames(store).length >= MAX_WORKSPACE_FILES) {
+    return { error: 'The workspace already holds ' + MAX_WORKSPACE_FILES + ' files. Delete one before adding another.' };
+  }
+  store[target] = text;
+  const names = workspaceFileNames(store);
+  const total = names.reduce((sum, name) => sum + String(store[name]).length, 0);
+  if (total > MAX_WORKSPACE_TOTAL_CHARS) {
+    return { error: 'That would put the workspace at ' + total + ' characters; the limit is ' + MAX_WORKSPACE_TOTAL_CHARS + '.' };
+  }
+  return { files: store, path: target, chars: text.length, created, totalFiles: names.length };
+}
+
 // Response bodies are JSON until a proxy, edge, or gateway hands back an
 // HTML/text error page instead (mid-restart deploys do this routinely).
 // Parsing that raw throws SyntaxError, which reads as gibberish to the user,
@@ -816,6 +980,12 @@ function describeToolCall(name, args = {}) {
       return `Searching the web for "${args.query || '?'}"`;
     case 'web_fetch':
       return `Reading ${args.url || 'a page'}`;
+    case 'workspace_list_files':
+      return args.path ? `Listing the workspace folder "${args.path}"` : 'Listing the workspace files';
+    case 'workspace_read_file':
+      return `Reading "${args.path || '?'}" from the workspace`;
+    case 'workspace_write_file':
+      return `Writing "${args.path || '?'}" to the workspace`;
     default:
       return `Running ${name}`;
   }
@@ -1479,6 +1649,18 @@ if (typeof module !== 'undefined' && module.exports) {
     EMPTY_REPLY_NUDGE,
     isGithubTool,
     isWebTool,
+    WORKSPACE_TOOLS,
+    WORKSPACE_TOOL_NAMES,
+    isWorkspaceTool,
+    isWorkspaceWriteTool,
+    normalizeWorkspacePath,
+    workspaceList,
+    workspaceRead,
+    workspaceWrite,
+    MAX_WORKSPACE_PATH_CHARS,
+    MAX_WORKSPACE_FILES,
+    MAX_WORKSPACE_FILE_CHARS,
+    MAX_WORKSPACE_TOTAL_CHARS,
     safeJson,
     errorDetailFromBody,
     CONCURRENT_SAFE_TOOLS,
