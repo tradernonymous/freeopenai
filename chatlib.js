@@ -1720,6 +1720,28 @@ function parseToolArgs(raw) {
   }
 }
 
+// Did the model send arguments that are not usable JSON?
+//
+// parseToolArgs has to swallow a parse failure -- one malformed call must not
+// take down a turn -- and swallowing it also hides it: the call runs with {}
+// and the result reads as the tool's answer. That is fine for running a tool and
+// wrong for deciding whether a step is working, because a model emitting broken
+// arguments is a model that cannot do the step. No arguments at all (a
+// no-parameter tool such as task_list) is a legitimate call, not a failure.
+function toolArgsUnusable(raw) {
+  if (raw == null || raw === '') return false;
+  if (typeof raw === 'object') return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return true;
+    // An array parses as an object and is no more usable as named arguments
+    // than a number is: every tool reads its arguments by key.
+    return Array.isArray(parsed);
+  } catch {
+    return true;
+  }
+}
+
 // One plain line describing what the model is about to do, used both in the
 // transcript and in the commit confirmation dialog.
 function describeToolCall(name, args = {}) {
@@ -2642,14 +2664,24 @@ function isCapableModelId(id) {
   return CAPABLE_MODEL_PATTERN.test(String(id || ''));
 }
 
+// Embedding, audio and image models sit in the same catalogue as chat models
+// and can only fail on a chat call. One list, because the picker and the router
+// must agree about what is even a candidate -- the router asking a text-to-image
+// model to digest a tool result is the kind of bug nobody would look for.
+const UNUSABLE_CHAT_MODEL_PATTERN =
+  /(embed|rerank|whisper|tts|moderation|guard|safety|vision-only|image|dall-e|stable-diffusion|flux|lyria)/i;
+
+function isUsableChatModelId(id) {
+  return typeof id === 'string' && !!id && !UNUSABLE_CHAT_MODEL_PATTERN.test(id);
+}
+
 // Providers return their whole catalogue -- OpenRouter's runs to hundreds --
 // including embedding and audio models that can only fail on a chat call.
 // Drop those, then float what the user actually wants to the top: free first,
 // then models suited to research and coding.
 function usableChatModels(models, limit = 60) {
-  const skip = /(embed|rerank|whisper|tts|moderation|guard|safety|vision-only|image|dall-e|stable-diffusion|flux|lyria)/i;
   const usable = (models || [])
-    .filter((m) => m && typeof m.id === 'string' && !skip.test(m.id) && emitsText(m))
+    .filter((m) => m && isUsableChatModelId(m.id) && emitsText(m))
     .map((m) => ({
       id: m.id,
       ownedBy: m.ownedBy || m.owned_by,
@@ -2667,6 +2699,144 @@ function usableChatModels(models, limit = 60) {
     .sort((a, b) => rank(a.m) - rank(b.m) || a.index - b.index)
     .map(({ m }) => m)
     .slice(0, limit);
+}
+
+// --- Per-step routing ---
+//
+// A turn with tools is not one call, it is up to a dozen, and every one of them
+// re-sends the whole conversation. The user picks the model that should think
+// about their request, but the rounds in between only have to read what a tool
+// just handed back and choose the next move -- and because each of those rounds
+// carries the entire conversation as input, they are the expensive ones. So the
+// chosen model plans the turn and writes the reply; a cheaper one digests.
+//
+// This is a stage router in Switchyard's sense (NVIDIA-NeMo/Switchyard). Their
+// benchmark puts the trade in numbers: their stage router reaches 72.7% at
+// $68.19 against a 76.0% / $98.06 baseline -- 30.5% cheaper for 3.3 points of
+// accuracy. A trade like that belongs behind a switch and on the record, which
+// is why routing is one click from off and why the transcript names the model
+// each step actually used rather than only the one that was picked.
+const ROUTING_MODES = ['off', 'auto'];
+
+// Which part of a turn a call is, from what the loop already knows. Three
+// stages, because they differ in what the answer has to be good at:
+//   plan   -- the first call of a turn. Nothing has been read yet, so this is
+//             the call that decides what the turn is even going to do
+//   work   -- a call with tool output in hand: read it, choose the next move
+//   answer -- a call with tools withheld, or a retry with nothing new to read.
+//             This is the reply the user is waiting for
+function callStage({ round = 0, toolsOffered = false, toolResults = 0 } = {}) {
+  if (!toolsOffered) return 'answer';
+  if (round <= 0) return 'plan';
+  if (toolResults > 0) return 'work';
+  return 'answer';
+}
+
+// Names that read as the small member of a family. This is the *last* tiebreak,
+// used only when a provider publishes no prices at all -- which is exactly the
+// case for the allowance-backed ones (Nara, NVIDIA, the Antigravity proxy)
+// where there is no price to rank on. Antigravity's list holds Claude Opus and a
+// Gemini flash against one shared quota, so the name is the only signal that
+// exists there. It is a heuristic, and being wrong costs quality rather than
+// money, which is why any published price outranks it. Sizes are spelled out
+// rather than matched as \d+b: 70b is not the lite member of anything.
+const LITE_MODEL_PATTERN =
+  /(flash|mini|nano|lite|small|haiku|turbo|instant|0\.5b|1b|1\.5b|2b|3b|4b|7b|8b|9b)\b/i;
+
+function isLiteModelId(id) {
+  return LITE_MODEL_PATTERN.test(String(id || ''));
+}
+
+// What a step costs, as one number to sort on. Input dominates a round of this
+// size -- the conversation goes up, a tool call comes back -- so prompt price is
+// weighted 3:1 over completion.
+//
+// A published price of zero is free by fact. A model with *no* published price
+// returns null here rather than 0, which is a deliberate departure from
+// isFreeModel: that function gives an unpriced model the benefit of the doubt so
+// it stays visible in the picker, and that is right. It is the wrong answer for
+// choosing a model automatically -- an unpriced premium model would sort as
+// free and get handed every step. Unknown is not cheap.
+function routeCost(model) {
+  const pricing = (model && model.pricing) || {};
+  const prompt = Number(pricing.prompt);
+  const completion = Number(pricing.completion);
+  if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return null;
+  const input = Number.isFinite(prompt) ? prompt : 0;
+  const output = Number.isFinite(completion) ? completion : 0;
+  return input * 3 + output;
+}
+
+// How a model ranks for a work step: lower tier first, then lower cost. null
+// means there is nothing to rank it on, so it is never chosen automatically.
+function routeRank(model) {
+  if (!model) return null;
+  const cost = routeCost(model);
+  if (isFreeModelId(model.id) || cost === 0) return { tier: 0, cost: 0, why: 'free' };
+  if (cost !== null) return { tier: 1, cost, why: 'the cheapest price' };
+  if (isLiteModelId(model.id)) return { tier: 2, cost: 0, why: 'the small model in this family' };
+  return null;
+}
+
+// The model a step should run on, or null to leave it on the user's own.
+//
+// Only a work step moves: the plan decides what the turn does and the answer is
+// what the user reads, so both stay on the model they chose. A model that cannot
+// take tools is skipped when tools are being sent -- routing a tool round to a
+// model that cannot ask for a tool is not a saving, it is a failed turn.
+function routeStep({ stage, mode = 'auto', model, models = [], needsTools = false, refused = [] } = {}) {
+  if (mode !== 'auto') return null;
+  if (stage !== 'work') return null;
+  if (!model) return null;
+  const skip = new Set((refused || []).map((id) => String(id)));
+  const ranked = (models || [])
+    .filter((m) => m && isUsableChatModelId(m.id) && !skip.has(String(m.id)) && emitsText(m))
+    .filter((m) => (needsTools ? supportsTools(m) && m.tools !== false : true))
+    .map((m) => ({ m, rank: routeRank(m) }))
+    .filter((row) => row.rank)
+    .sort((a, b) =>
+      a.rank.tier - b.rank.tier || a.rank.cost - b.rank.cost || String(a.m.id).localeCompare(String(b.m.id)));
+  if (!ranked.length) return null;
+  const best = ranked[0];
+  // The chosen model may already be the cheapest thing here. Re-sending the same
+  // step to the same model would report a saving that does not exist.
+  const own = ranked.find((row) => String(row.m.id) === String(model));
+  if (own && own.rank.tier <= best.rank.tier && own.rank.cost <= best.rank.cost) return null;
+  if (String(best.m.id) === String(model)) return null;
+  return { model: best.m.id, from: model, why: best.rank.why, free: best.rank.tier === 0 };
+}
+
+// The four ways a routed step can fail at the job -- all observable, none
+// guessed: it refused, it came back with nothing, its tool arguments were not
+// usable JSON, or it asked again for something it already had. Any of them means
+// the step goes back to the model the user chose rather than ending the turn.
+//
+// Returns the phrase for the one that applies, or '' for a step that is fine, so
+// the wording is decided here rather than invented at three call sites -- and so
+// the precedence is a decision in one place: a step that both came back empty
+// and repeated itself is reported as empty, because that is what the reader can
+// act on.
+function routedStepFailure({ errored = false, empty = false, badArguments = false, repeatedCall = false } = {}) {
+  if (errored) return 'refused the step';
+  if (empty) return 'came back with nothing';
+  if (badArguments) return 'sent tool arguments that could not be used';
+  if (repeatedCall) return 'asked again for something it already had';
+  return '';
+}
+
+// One line for the transcript. Routing is invisible in the reply, so a turn that
+// was served by two models has to say so where the conversation is -- a toast is
+// gone in seconds, and a switch the user never made must not be a secret.
+// The wording deliberately does not promise the chosen model writes the reply. A
+// work step can be the step that answers -- it is the one holding the tool
+// results -- and a note claiming otherwise would be the app describing a turn it
+// did not run.
+function describeRoute(route) {
+  if (!route || !route.model) return '';
+  return (
+    'Reading tool results goes to ' + route.model + ' (' + route.why + '); ' +
+    route.from + ' plans the turn and takes any step back that goes wrong.'
+  );
 }
 
 // One line under a model's name in the picker.
@@ -3150,11 +3320,21 @@ if (typeof module !== 'undefined' && module.exports) {
     modelFamily,
     nearestUsableModel,
     usableChatModels,
+    isUsableChatModelId,
     isFreeModelId,
     isFreeModel,
     supportsTools,
     emitsText,
     isCapableModelId,
+    ROUTING_MODES,
+    callStage,
+    toolArgsUnusable,
+    isLiteModelId,
+    routeCost,
+    routeRank,
+    routeStep,
+    routedStepFailure,
+    describeRoute,
     describeProviderModel,
     placeDropdown,
     MODEL_MENU_MAX_HEIGHT,

@@ -1741,6 +1741,13 @@
                         </div>
                         <input type="checkbox" id="reasoningCheck" checked onchange="setReasoningVisible(this.checked)" aria-label="Show the reasoning summary">
                     </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Cheaper models for tool steps</strong>
+                            <p class="settings-hint" id="routingHint">A tool turn is up to a dozen calls and every one re-sends the whole conversation. Your model plans the turn; the rounds that read tool output — including the one that often writes the reply — go to the cheapest model this provider lists. A cheaper model that cannot take a step hands it straight back. The transcript says so, and the status bar names the model that answered.</p>
+                        </div>
+                        <input type="checkbox" id="routingCheck" checked onchange="setRoutingEnabled(this.checked)" aria-label="Send tool-reading steps to the cheapest model">
+                    </div>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
                             <strong>Agent skills</strong>
@@ -2027,6 +2034,14 @@
         // for people who want the answer and nothing else.
         const REASONING_KEY = 'freeopenaiReasoningHidden';
         let reasoningVisible = localStorage.getItem(REASONING_KEY) !== '1';
+
+        // Whether a step that only has to read tool output may be sent somewhere
+        // cheaper than the model the user chose. On by default, because that is
+        // what a tool turn mostly is -- but a switch, because it is a real trade
+        // rather than a free win: NVIDIA's own benchmark has a stage router 30.5%
+        // cheaper for 3.3 points of accuracy.
+        const ROUTING_KEY = 'freeopenaiRoutingOff';
+        let routingMode = localStorage.getItem(ROUTING_KEY) === '1' ? 'off' : 'auto';
 
         // --- Modes & skills (opencode-style) ---
         let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
@@ -2636,6 +2651,7 @@
         restoreSkillRailVisibility();
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
+        document.getElementById('routingCheck').checked = routingMode === 'auto';
 
         function initializeApp() {
             if (typeof puter === 'undefined') {
@@ -3712,6 +3728,53 @@
             toggleSkillRail(!hidden, false);
         }
 
+        // --- Sending a work step to a cheaper model, or not ---
+        //
+        // The rules live in chatlib (routeStep) so they can be tested without a
+        // page. This is the wiring: what the loop knows about a step, and what it
+        // does when the cheaper model turns out not to be able to take it.
+        function setRoutingEnabled(on) {
+            routingMode = on ? 'auto' : 'off';
+            try {
+                localStorage.setItem(ROUTING_KEY, routingMode === 'off' ? '1' : '');
+            } catch {
+                // Storage refusing must not break the setting itself.
+            }
+            const box = document.getElementById('routingCheck');
+            if (box) box.checked = routingMode === 'auto';
+            showStatus('info', routingMode === 'auto'
+                ? 'Tool-reading steps will use the cheapest model this provider lists'
+                : 'Every step of a turn uses ' + selectedModel);
+        }
+
+        // The model to ask for one step, or null to leave the step on the model
+        // the user chose. One function so the loop cannot disagree with itself
+        // about which steps are worth moving.
+        function routeForStep(stage, needsTools, needsVision) {
+            // A turn carrying an image stays where it is: the model was already
+            // switched to one that can read the picture, and a cheaper model that
+            // cannot is a failed turn rather than a saving.
+            if (needsVision) return null;
+            return routeStep({
+                stage,
+                mode: routingMode,
+                model: selectedModel,
+                models: providerModels,
+                needsTools,
+                refused: refusedModelIds(modelsRefusedBy, selectedProvider),
+            });
+        }
+
+        // Said once per turn, in the conversation rather than in a toast: a reply
+        // gives no sign that two models served it, and a switch the user never
+        // made must not be a secret. Once, because a line per step would bury the
+        // work under notes about the work.
+        function noteRouteOnce(route) {
+            if (!route || routeNotedThisTurn) return;
+            routeNotedThisTurn = true;
+            addMessage('system', describeRoute(route));
+        }
+
         // --- The reasoning summary, on or off ---
         function setReasoningVisible(on) {
             reasoningVisible = !!on;
@@ -3981,6 +4044,19 @@
             return next;
         }
 
+        // The same bookkeeping for a *routed* model, without the part that moves
+        // the user's choice. A step's model refusing is worth remembering --
+        // routing to it again would repeat the failure -- but it was never what
+        // the user picked, so it must not change what they are talking to.
+        function forgetRoutedModel(modelId, detail) {
+            if (!modelId) return;
+            modelsRefusedBy.add(selectedProvider + ':' + modelId);
+            providerModels = providerModels.filter((m) => m.id !== modelId);
+            renderModelOptions();
+            updateModelLabel();
+            addMessage('system', modelId + ' refused a routed step (' + resummarizeRefusal(detail) + ') — that step goes back to ' + selectedModel + '.');
+        }
+
         // One short line for the transcript: the upstream's message is often a
         // long JSON-ish blob, and the family fact is what the user needs.
         function resummarizeRefusal(detail) {
@@ -4093,8 +4169,9 @@
         }
 
         // One call site for "ask a model", so the rest of the app doesn't care
-        // which service is answering.
-        async function callModel(convo, extra = {}, signal = null) {
+        // which service is answering. askModel is the model routed for this one
+        // step, or null to use the model the user chose.
+        async function callModel(convo, extra = {}, signal = null, askModel = null) {
             if (selectedProvider === PUTER_PROVIDER) {
                 return chatWithEffortFallback(selectedModel, (opts) =>
                     puter.ai.chat(convo, { ...opts, ...extra })
@@ -4106,8 +4183,10 @@
             for (let attempt = 0; attempt <= MAX_MODEL_REFUSAL_RETRIES; attempt++) {
                 // Read the model per attempt: a refusal moves selectedModel on,
                 // and the payload has to follow it or the retry repeats the very
-                // request that just failed.
-                const modelId = selectedModel;
+                // request that just failed. A routed step is different -- it is
+                // not the user's choice and must not follow anything, so it
+                // either succeeds or fails back to the chosen model.
+                const modelId = askModel || selectedModel;
                 // Tools go only to models that accept them; sending them to one
                 // that doesn't is a request that can only fail.
                 const chosen = providerModels.find((m) => m.id === modelId);
@@ -4173,6 +4252,20 @@
                 // which is a refusal of that model rather than a broken request.
                 const detail = data.error || 'Request failed (' + res.status + ')';
                 if (isModelScopedRefusal(res.status, detail, modelId)) {
+                    if (askModel) {
+                        // The step's model refused, not the user's. Take it out of
+                        // circulation and throw it marked, so the loop puts this
+                        // one step back on the chosen model instead of reporting
+                        // the turn as failed. Moving the picker here would answer
+                        // a refusal by silently switching what the user is using.
+                        forgetRoutedModel(modelId, typeof detail === 'string' ? detail : JSON.stringify(detail));
+                        const routedErr = new Error(detail);
+                        routedErr.statusCode = res.status;
+                        routedErr.modelId = modelId;
+                        routedErr.providerId = selectedProvider;
+                        routedErr.routed = true;
+                        throw routedErr;
+                    }
                     // Drop it from the picker and move to one that answers.
                     const next = forgetRefusedModel(modelId, typeof detail === 'string' ? detail : JSON.stringify(detail));
                     if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
@@ -4498,7 +4591,20 @@
             return true;
         }
 
-        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null, remembered = null) {
+        // Turn-scoped routing state. routeNotedThisTurn is the one note a turn
+        // gets; escalateNextStep means the cheaper model showed it could not use
+        // what it asked for, so the next step goes back to the chosen model;
+        // toolResultsSeen is what makes a round a *work* step rather than the
+        // plan or the answer.
+        let routeNotedThisTurn = false;
+        let escalateNextStep = false;
+        let toolResultsSeen = 0;
+        let escalatedBlankThisTurn = false;
+        // The model that actually produced the reply, which is not always the one
+        // that was picked: the status bar has to name the one that answered.
+        let lastReplyModel = null;
+
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null, remembered = null, needsVision = false) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
@@ -4518,9 +4624,18 @@
             const memoHits = new Map();
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
                 if (signal?.aborted) throw abortError();
+                // Which part of the turn this call is, and whether a cheaper model
+                // should take it. escalateNextStep is read here and cleared, so a
+                // flag set by the previous step moves exactly one step and cannot
+                // accumulate into a whole turn running on the wrong model.
+                const stage = callStage({ round, toolsOffered: tools.length > 0, toolResults: toolResultsSeen });
+                const route = escalateNextStep ? null : routeForStep(stage, tools.length > 0, needsVision);
+                escalateNextStep = false;
+                const askModel = route ? route.model : null;
+                noteRouteOnce(route);
                 let response;
                 try {
-                    response = await callModel(convo, { tools }, signal);
+                    response = await callModel(convo, { tools }, signal, askModel);
                 } catch (err) {
                     // Some endpoints reject the tools shape outright or answer
                     // non-JSON. A plain call still answers; tools were a bonus,
@@ -4529,17 +4644,38 @@
                         showStatus('info', 'This model takes no tools — answering directly');
                         tools = [];
                         response = await callModel(convo, {}, signal);
+                    } else if (askModel && err && err.routed) {
+                        // The cheaper model refused *this step* -- it is out of
+                        // circulation now, and forgetRoutedModel has already said
+                        // so -- so the step goes back to the chosen model rather
+                        // than ending a turn that is already paid for. Only a
+                        // refusal lands here: a transport failure belongs to the
+                        // provider, and the retry and failover paths exist for it.
+                        response = await callModel(convo, { tools }, signal, null);
                     } else throw err;
                 }
                 const message = (response && response.message) || null;
                 if (signal?.aborted) throw abortError();
                 const calls = extractToolCalls(message);
                 if (!calls.length) {
+                    const blank = !extractMessageText(message) && !extractMessageReasoning(message);
+                    const routedFailure = askModel ? routedStepFailure({ empty: blank }) : '';
+                    // A routed step that came back with nothing is a step the
+                    // cheaper model could not take. The chosen model is asked
+                    // instead, rather than nudging a model that has just shown it
+                    // is out of its depth -- once per turn, so a hard question
+                    // cannot ping-pong between the two.
+                    if (routedFailure && !escalatedBlankThisTurn) {
+                        escalatedBlankThisTurn = true;
+                        escalateNextStep = true;
+                        addMessage('system', askModel + ' ' + routedFailure + ' on a tool step — asking ' + selectedModel + ' instead.');
+                        continue;
+                    }
                     // A model that ran its tools and then said nothing has the
                     // answer in hand and simply stopped short. One more call,
                     // tools withheld, usually produces it -- and reporting an
                     // empty reply instead wastes everything already paid for.
-                    if (!extractMessageText(message) && !extractMessageReasoning(message) && !nudged) {
+                    if (blank && !nudged) {
                         nudged = true;
                         convo.push(toConversationMessage(message));
                         convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
@@ -4556,6 +4692,10 @@
                         convo.push({ role: 'user', content: openTodos });
                         continue;
                     }
+                    // The reply is in hand: record which model wrote it, because a
+                    // routed step can be the one that answers and the status bar
+                    // must not credit the picker's choice for it.
+                    lastReplyModel = askModel || selectedModel;
                     return { message, response, finishReason: response && response.finishReason };
                 }
                 // A status change is the model saying it is working from the
@@ -4592,8 +4732,14 @@
                 let reused = 0;
                 let reusedEarlier = 0;
                 let repeated = 0;
+                // Arguments that are not usable JSON. parseToolArgs has to swallow
+                // that to keep the turn alive, which is exactly why it has to be
+                // noticed here: the call runs with {} and the result reads as the
+                // tool's answer.
+                let unusableArguments = false;
                 for (let i = 0; i < calls.length; i++) {
                     const fn = calls[i].function || {};
+                    if (toolArgsUnusable(fn.arguments)) unusableArguments = true;
                     const key = toolCallKey(fn.name, parseToolArgs(fn.arguments));
                     if (!key) { pending.push(i); continue; }
                     if (memo && memo.has(key)) {
@@ -4672,6 +4818,19 @@
                 // next round reads the conversation and a toast is what it never
                 // sees.
                 if (repeated) convo.push({ role: 'user', content: REPEATED_TOOL_CALL_NOTICE });
+                // A routed step that asked again for something it already has, or
+                // that sent arguments the tools cannot use, is a step the cheaper
+                // model is not managing. The next step goes back to the chosen
+                // model -- which is the one that has to make sense of this result,
+                // so re-asking the failed step now would only spend a second call
+                // on the same failure.
+                const stepFailure = askModel
+                    ? routedStepFailure({ repeatedCall: repeated > 0, badArguments: unusableArguments })
+                    : '';
+                if (stepFailure) {
+                    escalateNextStep = true;
+                    addMessage('system', askModel + ' ' + stepFailure + ' — the next step goes back to ' + selectedModel + '.');
+                }
                 // Recorded in the order the model asked for, not the order they
                 // finished, so every tool_call_id still has its own result -- and
                 // clipped, because every later round of this turn re-sends it.
@@ -4682,6 +4841,9 @@
                     const note = rememberedHere.get(i) || '';
                     convo.push({ role: 'tool', tool_call_id: calls[i].id, content: clipToolResult(note + String(results[i])) });
                 }
+                // Counted for the next round: this is what makes it a *work* step
+                // with something to read rather than the plan or the answer.
+                toolResultsSeen += calls.length;
             }
             // Out of rounds. Everything read so far is still in `convo` and was
             // paid for, so spend one more call -- without tools, so it can't
@@ -4689,6 +4851,9 @@
             // discarding it.
             convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
             const summary = await callModel(convo, {}, signal);
+            // Tools are withheld here, so this call is never routed: the summary
+            // comes from the model the user chose.
+            lastReplyModel = selectedModel;
             return {
                 message: (summary && summary.message) || null,
                 response: summary,
@@ -4883,6 +5048,13 @@
             usageCount++;
             updateUsageDisplay();
             turnStartedAt = Date.now();
+            // Fresh turn, fresh routing state: a flag left over from the last turn
+            // would move a step of this one for no reason.
+            routeNotedThisTurn = false;
+            escalateNextStep = false;
+            toolResultsSeen = 0;
+            escalatedBlankThisTurn = false;
+            lastReplyModel = null;
             maybeWarnAboutCost();
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
@@ -4950,7 +5122,7 @@
                     let hops = 0;
                     while (!outcome) {
                         try {
-                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo, remembered);
+                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo, remembered, !!attachedImageFile);
                         } catch (turnError) {
                             if (controller.signal.aborted || (turnError && turnError.name === 'AbortError')) throw turnError;
                             // Recorded before anything moves: a failure has to name
@@ -6427,7 +6599,10 @@
             // from the provider's cache costs a fraction of one that does not.
             const cache = cached > 0 ? ` · ${(cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached)} cached` : '';
             if (usageText) {
-                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars${tok}${cache}`;
+                // The model that answered, not the one that was picked: a routed
+                // step can produce the reply, and naming the picker's choice there
+                // would report a model that did not write it.
+                usageText.textContent = `${lastReplyModel || selectedModel} · ${secs}s · ${size} chars${tok}${cache}`;
                 usageText.style.display = 'inline';
             }
             turnStartedAt = 0;
