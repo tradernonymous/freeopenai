@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
+  errorDetailFromBody,
   isAccountLevelFailure,
   isModelScopedRefusal,
   modelForImage,
@@ -94,6 +95,7 @@ function baseDeps(overrides = {}) {
     MAX_MODEL_REFUSAL_RETRIES,
     MAX_IMAGE_EDGE,
     MAX_IMAGE_DATA_URL_CHARS,
+    errorDetailFromBody,
     isAccountLevelFailure,
     isModelScopedRefusal,
     modelForImage,
@@ -132,7 +134,10 @@ function baseDeps(overrides = {}) {
 
 test('the extracted source is the shipped one, and still brace-matches cleanly', () => {
   for (const name of NAMES) {
-    assert.equal(sourceOf(name).includes('`'), false, `${name}() gained a template literal -- the scanner needs updating`);
+    // Comments are stripped first: a backtick quoted in prose cannot confuse
+    // the scanner, but one in code can, and that is what this guards.
+    const code = sourceOf(name).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(code.includes('`'), false, `${name}() gained a template literal -- the scanner needs updating`);
   }
 });
 
@@ -172,7 +177,13 @@ test('a provider with no image-capable model reports rather than sends the pictu
 // the names the extracted code closes over are derived and checked instead of
 // being remembered.
 test('every page-scope name the extracted code closes over is in the sandbox', () => {
-  const sources = NAMES.map(sourceOf).join('\n');
+  // Analysed with comments and string literals removed, or prose such as
+  // "Request failed (" reads as a call to a function named `failed`.
+  const sources = NAMES.map(sourceOf).join('\n')
+    .replace(/\/\/[^\n]*/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const declared = new Set([...sources.matchAll(/(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]));
   const notNames = new Set([
     'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'async', 'function',
