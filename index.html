@@ -2627,8 +2627,11 @@
                     signal,
                 });
                 if (res.ok) break;
-                const data = await res.json().catch(() => ({ error: 'Request failed' }));
-                const detail = data.error || 'Request failed';
+                // The server reports a failed stream as an SSE frame and a failed
+                // plain request as JSON, so read the body as text and take the
+                // detail from either shape. Reading it as JSON only both lost the
+                // provider's own words and threw on a body of `null`.
+                const detail = errorDetailFromBody(await res.text().catch(() => '')) || 'Request failed (' + res.status + ')';
                 if (isModelScopedRefusal(res.status, detail, modelId)) {
                     const next = forgetRefusedModel(modelId);
                     if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;

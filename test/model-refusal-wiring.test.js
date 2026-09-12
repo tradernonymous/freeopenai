@@ -8,12 +8,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 // The real decisions, not stubs, so this exercises the shipped pairing of
 // index.html's wiring with chatlib.js's rules.
-const {
-  isAccountLevelFailure,
-  isModelScopedRefusal,
-  nextUsableModel,
-  refusedModelIds,
-  MAX_MODEL_REFUSAL_RETRIES,
+const {    errorDetailFromBody,
+    isAccountLevelFailure,
+    isModelScopedRefusal,
+    nextUsableModel,
+    refusedModelIds,
+    safeJson,
+    MAX_MODEL_REFUSAL_RETRIES,
 } = require('../chatlib.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -81,10 +82,14 @@ function load(deps) {
   return new Function('deps', `with (deps) {\n${body}\n}`)(deps);
 }
 
+// Both shapes of a refusal, because the two request paths read it differently:
+// a plain request gets JSON, a streamed one gets an SSE frame.
+const refusalMessage = (id) => `403: ${id} is only available on agentic harnesses`;
 const refusal = (id) => ({
   ok: false,
   status: 403,
-  json: async () => ({ error: `403: ${id} is only available on agentic harnesses` }),
+  json: async () => ({ error: refusalMessage(id) }),
+  text: async () => 'data: ' + JSON.stringify({ error: refusalMessage(id) }) + '\n\n',
 });
 
 function harness({ models, answers, streamed = null }) {
@@ -105,6 +110,7 @@ function harness({ models, answers, streamed = null }) {
     modelsRefusedBy: new Set(),
     PUTER_PROVIDER: 'puter',
     MAX_MODEL_REFUSAL_RETRIES,
+    errorDetailFromBody,
     isAccountLevelFailure,
     isModelScopedRefusal,
     nextUsableModel,
@@ -116,7 +122,9 @@ function harness({ models, answers, streamed = null }) {
     renderModelOptions() {},
     updateModelLabel() {},
     suspendProvider(detail) { status.push(`suspended: ${detail}`); },
-    safeJson: async (res) => res.json(),
+    // The real one: a stubbed safeJson would hide exactly the null-body
+    // handling these tests exist to check.
+    safeJson,
     normalizeProviderReply: (data) => ({ reply: data.answer }),
     isRateLimitError: () => false,
     abortError: () => new Error('aborted'),
@@ -149,7 +157,10 @@ test('the extracted source is the shipped one, and still brace-matches cleanly',
   // The three functions this file depends on must parse the same way in both
   // files; a rename or a template literal in them invalidates the extraction.
   for (const name of ['forgetRefusedModel', 'callModel', 'streamProviderChat']) {
-    assert.equal(sourceOf(name).includes('`'), false, `${name}() gained a template literal -- the scanner needs updating`);
+    // Comments are stripped first: a backtick quoted in prose cannot confuse
+    // the scanner, but one in code can, and that is what this guards.
+    const code = sourceOf(name).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.equal(code.includes('`'), false, `${name}() gained a template literal -- the scanner needs updating`);
   }
 });
 
@@ -213,11 +224,61 @@ test('a streaming turn retries before rendering, so no half-answer is left behin
 
 test('an account-level refusal suspends the provider instead of walking models', async () => {
   const h = harness({ models: MODELS.slice(0, 3), answers: () => false });
-  h.deps.fetch = async () => ({ ok: false, status: 402, json: async () => ({ error: '402: A payment method is required.' }) });
+  h.deps.fetch = async () => ({
+    ok: false,
+    status: 402,
+    json: async () => ({ error: '402: A payment method is required.' }),
+    text: async () => JSON.stringify({ error: '402: A payment method is required.' }),
+  });
   await h.callModel([{ role: 'user', content: 'hi' }]).catch(() => {});
   // Every model fails identically here, so removing them one at a time would
   // spend a failed request per model for no gain.
   assert.equal(h.status.filter((s) => s.startsWith('suspended:')).length, 1);
   // And nothing was treated as a per-model refusal.
   assert.equal(h.deps.modelsRefusedBy.size, 0);
+});
+
+// The reported crash: the proxy forwarded a 200 whose body was a bare `null`,
+// and the client read `data.parseFailed` off it.
+const nullBody = (status) => ({ ok: status === 200, status, json: async () => null, text: async () => 'null' });
+
+test('a reply whose body is null is reported, not crashed on', async () => {
+  const h = harness({ models: MODELS.slice(0, 4), answers: () => false });
+  h.deps.fetch = async () => nullBody(200);
+  let error = null;
+  try { await h.callModel([{ role: 'user', content: 'hi' }]); } catch (err) { error = err; }
+  assert.ok(error, 'it has to fail rather than answer nothing');
+  assert.doesNotMatch(error.message, /Cannot read properties of null/, 'the TypeError is the bug');
+  assert.match(error.message, /unreadable/i, 'and the user is told what happened');
+  // The label still names the model that was actually called.
+  assert.ok(MODELS.slice(0, 4).includes(error.modelId));
+});
+
+test('a streamed reply whose body is null is reported, not crashed on', async () => {
+  const h = harness({ models: MODELS.slice(0, 3), answers: () => false });
+  h.deps.fetch = async () => nullBody(502);
+  const renderer = { full: '', appendText() {}, appendReasoning() {}, flush() {}, abort() {} };
+  let error = null;
+  try { await h.streamProviderChat([{ role: 'user', content: 'hi' }], renderer, undefined); } catch (err) { error = err; }
+  assert.ok(error);
+  assert.doesNotMatch(error.message, /Cannot read properties of null/);
+  // Nothing was readable, so the status is the only fact left to report.
+  assert.match(error.message, /502/);
+});
+
+test('a streamed failure keeps the provider own wording instead of losing it', async () => {
+  // The server reports a failed stream as an SSE frame. Reading the body as
+  // JSON meant the frame could not be parsed, so the explanation was dropped
+  // and the refusal looked generic -- which also hid account-level refusals
+  // from the code that is supposed to recognise them.
+  const h = harness({ models: MODELS.slice(0, 2), answers: () => false });
+  const frame = 'data: ' + JSON.stringify({ error: '403: ' + MODELS[0] + ' is only available on agentic harnesses' }) + '\n\n';
+  h.deps.fetch = async () => ({ ok: false, status: 403, text: async () => frame });
+  const renderer = { full: '', appendText() {}, appendReasoning() {}, flush() {}, abort() {} };
+  let error = null;
+  try { await h.streamProviderChat([{ role: 'user', content: 'hi' }], renderer, undefined); } catch (err) { error = err; }
+  assert.ok(error);
+  assert.match(error.message, /only available on agentic harnesses/, 'the provider explained itself, so keep it');
+  // And it is still recognised as being about that model, so the next one is tried.
+  assert.ok(h.deps.modelsRefusedBy.has('openrouter:' + MODELS[0]));
 });

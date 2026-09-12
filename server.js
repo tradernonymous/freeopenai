@@ -1545,6 +1545,16 @@ function llmChat(req, res) {
         // what the provider actually said.
         return sendJson(res, status, { error: describeProviderError(status, data, provider) });
       }
+      // A 200 whose body could not be read as an object is not a success, and
+      // forwarding it put a bare `null` on the wire: the client parsed that and
+      // then read a field off it -- "Cannot read properties of null (reading
+      // 'parseFailed')". An empty body lands here too.
+      if (!data || typeof data !== 'object') {
+        const who = provider && provider.label ? provider.label : 'The provider';
+        return sendJson(res, 502, {
+          error: `${who} accepted the request but sent nothing readable back. Try again, or pick another model.`,
+        });
+      }
       sendJson(res, 200, data);
     } catch (e) {
       sendJson(res, 502, { error: e.message });

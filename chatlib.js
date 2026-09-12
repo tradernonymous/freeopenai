@@ -636,15 +636,64 @@ function isWebTool(name) {
 // Parsing that raw throws SyntaxError, which reads as gibberish to the user,
 // so normalize it here into a retryable message at every call site. A parse
 // failure is marked so callers can tell it apart from a real error body.
+//
+// A body that parses into something which is not an object is unusable for the
+// same reason, and is worse: `null` is valid JSON, so nothing throws and the
+// caller finds out only when it reads a field off it.
+const UNREADABLE_BODY =
+  'The server answered with something unreadable (often a proxy page while redeploying) — wait a moment and retry.';
+
+function unreadableBody() {
+  return { error: UNREADABLE_BODY, parseFailed: true };
+}
+
 async function safeJson(res) {
   try {
-    return await res.json();
+    const data = await res.json();
+    // `null` is valid JSON, so it resolves rather than throwing and the catch
+    // below never sees it. The first caller to read a field off it then died
+    // with "Cannot read properties of null (reading 'parseFailed')", so a body
+    // that is not an object counts as unreadable whatever produced it.
+    if (!data || typeof data !== 'object') return unreadableBody();
+    return data;
   } catch {
-    return {
-      error: 'The server answered with something unreadable (often a proxy page while redeploying) — wait a moment and retry.',
-      parseFailed: true,
-    };
+    return unreadableBody();
   }
+}
+
+// A failed provider response explains itself in JSON when the request was plain
+// and in an SSE frame when it was streaming, and a proxy in the middle can
+// answer with neither. Read whichever arrived, because reading only JSON both
+// loses the provider's own words and, on a body of `null`, throws where the
+// caller expected a string.
+function errorDetailFromBody(text) {
+  const raw = String(text === null || text === undefined ? '' : text).trim();
+  if (!raw) return '';
+  const asDetail = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const detail = value.error || value.message || value.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object') {
+      const nested = detail.message || detail.code;
+      return typeof nested === 'string' ? nested : JSON.stringify(detail);
+    }
+    return '';
+  };
+  try {
+    const parsed = asDetail(JSON.parse(raw));
+    if (parsed) return parsed;
+  } catch { /* not plain JSON: an SSE frame, or a proxy page */ }
+  for (const line of raw.split('\n')) {
+    const frame = line.trim();
+    if (!frame.startsWith('data:')) continue;
+    const payload = frame.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const parsed = asDetail(JSON.parse(payload));
+      if (parsed) return parsed;
+    } catch { /* keep looking at the other frames */ }
+  }
+  return '';
 }
 
 // Allowlist matching for provider pickers. An entry is either a plain string
@@ -1384,6 +1433,7 @@ if (typeof module !== 'undefined' && module.exports) {
     isGithubTool,
     isWebTool,
     safeJson,
+    errorDetailFromBody,
     isToolsRejection,
     modelTokens,
     matchListEntry,
