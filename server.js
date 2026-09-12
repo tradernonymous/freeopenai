@@ -722,6 +722,84 @@ const LLM_PROVIDERS = {
       ],
     },
   },
+  // Hugging Face Inference Providers: one OpenAI-compatible router
+  // (router.huggingface.co/v1) in front of every serverless provider on the
+  // Hub, metered in monthly inference credits — the free tier is "what the
+  // account's credits still cover". The allowlist below is therefore a
+  // free-tier choice, not a capability claim: the ids Hugging Face itself
+  // tags free-inference (the filter behind huggingface.co/models?other=free)
+  // that the router actually serves, verified against the live catalogue on
+  // 2026-09-12 (138 router models, 50 in the intersection). Anything priced
+  // outside the free set was left out on purpose — it would only ever burn
+  // credits into a 402 at send time. When HF retires an id, the intersection
+  // with the live catalogue drops it from the picker instead of failing on
+  // use — the same contract as the OpenRouter list above. HF's own docs and
+  // clients standardise on HF_TOKEN, so that is the variable here too.
+  huggingface: {
+    label: 'HuggingFace',
+    baseUrl: 'https://router.huggingface.co/v1',
+    envVar: 'HF_TOKEN',
+    models: [
+      // Flagships and big reasoners.
+      'zai-org/GLM-5.3',
+      'deepseek-ai/DeepSeek-V4-Pro',
+      'deepseek-ai/DeepSeek-V4-Pro-0813',
+      'deepseek-ai/DeepSeek-V3.2',
+      'deepseek-ai/DeepSeek-V3.1',
+      'deepseek-ai/DeepSeek-V3',
+      'deepseek-ai/DeepSeek-V3-0324',
+      'Qwen/Qwen3-Next-80B-A3B-Instruct',
+      'Qwen/Qwen3-Coder-480B-A35B-Instruct',
+      'Qwen/Qwen3.8-2.4T-A95B',
+      'nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16',
+      'nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4',
+      'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16',
+      'MiniMaxAI/MiniMax-M2.7',
+      'XiaomiMiMo/MiMo-V2.5-Pro',
+      'XiaomiMiMo/MiMo-V2.5',
+      'zai-org/GLM-5.2',
+      'zai-org/GLM-4.7-Flash',
+      'meta-llama/Llama-3.3-70B-Instruct',
+      'meta-llama/Llama-3.1-8B-Instruct',
+      // Code.
+      'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+      'Qwen/Qwen3-Coder-Next',
+      'Qwen/Qwen2.5-Coder-32B-Instruct',
+      'Qwen/Qwen2.5-Coder-7B-Instruct',
+      'Qwen/Qwen2.5-Coder-3B-Instruct',
+      // The DeepSeek-R1 reasoning line.
+      'deepseek-ai/DeepSeek-R1',
+      'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+      'deepseek-ai/DeepSeek-R1-Distill-Llama-8B',
+      'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+      'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+      // Flash and fast general.
+      'deepseek-ai/DeepSeek-V4-Flash',
+      'deepseek-ai/DeepSeek-V4-Flash-0731',
+      'inclusionAI/Ling-3.0-flash',
+      'inclusionAI/Ling-3.0-flash-Fin',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      // Qwen 3 core.
+      'Qwen/Qwen3-32B',
+      'Qwen/Qwen3-14B',
+      'Qwen/Qwen3-8B',
+      'Qwen/Qwen3-4B-Instruct-2507',
+      'Qwen/Qwen3-30B-A3B',
+      // Qwen 2.5 general.
+      'Qwen/Qwen2.5-72B-Instruct',
+      'Qwen/Qwen2.5-7B-Instruct',
+      // Granite.
+      'ibm-granite/granite-4.2-30b',
+      'ibm-granite/granite-4.2-8b',
+      'ibm-granite/granite-4.2-3b',
+      // Small and specialty.
+      'microsoft/phi-4',
+      'speakleash/Bielik-11B-v3.0-Instruct',
+      'Sao10K/L3-8B-Stheno-v3.2',
+      'prism-ml/Ternary-Bonsai-27B-gguf',
+    ],
+  },
   mistral: {
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
@@ -844,17 +922,28 @@ const LLM_PROVIDERS = {
   },
 };
 
+// Companion variable names derive from the key variable: NARA_API_KEY pairs
+// with NARA_BASE_URL and NARA_MODELS. A key variable that does not end in
+// _API_KEY (Hugging Face standardises on HF_TOKEN) must never map onto itself
+// -- the replace() would no-op and the key would be read back as the base-URL
+// override, sending every request to a host named after the token. A variable
+// with neither suffix still gets a sibling rather than itself.
+function providerEnvName(envVar, suffix) {
+  const stem = envVar.replace(/_(API_KEY|TOKEN)$/, '');
+  return stem === envVar ? envVar + suffix : stem + suffix;
+}
+
 function providerIsConfigured(provider) {
   if (process.env[provider.envVar]) return true;
   // Key-optional providers (local servers) opt in with an explicit base URL.
-  return provider.needsKey === false && !!process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
+  return provider.needsKey === false && !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
 }
 
 // Providers whose documented base URL stops short of the OpenAI path. Ollama
 // and the Antigravity proxy both accept "http://host:port", and both serve
 // /v1/... underneath it, so the version segment is added when it is missing
 // rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity']);
+const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
@@ -872,13 +961,13 @@ function providerConfig(id) {
   // key-less/local provider keeps its default address — except a provider
   // that ships a cloudBaseUrl: there a real key means the hosted endpoint,
   // and the local default only applies when it is the operator's own install.
-  const override = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
+  const override = process.env[providerEnvName(provider.envVar, '_BASE_URL')];
   const rawBaseUrl = override || (key && provider.cloudBaseUrl) || provider.baseUrl;
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
   // PROVIDER_MODELS replaces the pinned allowlist for that provider alone.
-  const declared = process.env[provider.envVar.replace(/_API_KEY$/, '_MODELS')];
+  const declared = process.env[providerEnvName(provider.envVar, '_MODELS')];
   const models = declared
     ? declared.split(',').map((id) => id.trim()).filter(Boolean)
     : provider.models;
