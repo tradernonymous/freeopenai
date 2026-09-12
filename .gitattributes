@@ -1,0 +1,11 @@
+# Shell scripts must keep LF endings in the working copy, whatever the machine.
+#
+# With core.autocrlf=true (the default on Windows), a checkout rewrites text
+# files to CRLF -- and a CRLF shell script fails at its shebang with
+# "/bin/sh^M: bad interpreter". That applies to deploy/antigravity-proxy/
+# entrypoint.sh, which is the container's ENTRYPOINT: a Windows-side checkout
+# would build an image that cannot start.
+#
+# Docker builds from a Linux clone are unaffected, which is what makes this the
+# kind of problem that only appears for whoever tries it locally first.
+*.sh text eol=lf
