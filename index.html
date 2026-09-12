@@ -761,6 +761,23 @@
         .skills-toggle { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
         .skills-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
         .skills-toggle[aria-pressed="false"] { opacity: .7; }
+
+        /* Skills pinned to this chat, above the composer. Hidden when there are
+           none: a permanent empty row is worse than no row. */
+        .skill-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; align-items: center; }
+        .skill-bar[hidden] { display: none; }
+        .skill-pin {
+            display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+            background: var(--accent-bg); border: 1px solid var(--accent); color: var(--text);
+            border-radius: 999px; font-size: 11px; padding: 3px 4px 3px 10px;
+        }
+        .skill-pin span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .skill-pin button {
+            background: none; border: 0; color: var(--text-dim); cursor: pointer;
+            font-size: 14px; line-height: 1; padding: 0 4px;
+        }
+        .skill-pin button:hover, .skill-pin button:focus-visible { color: var(--text); }
+        .skill-option-pin { font-size: 10px; color: var(--accent); margin-left: 6px; }
         .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 150px; padding: 5px 7px; }
         .composer-controls .effort-chip { display: inline-flex; }
         .composer-model-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -1244,6 +1261,7 @@
                             <span class="attachment-name" id="attachmentName"></span>
                             <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
                         </div>
+                        <div class="skill-bar" id="skillBar" hidden aria-label="Skills pinned to this chat"></div>
                         <div class="composer">
                             <div class="composer-input-row">
                                 <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
@@ -1285,7 +1303,14 @@
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
-                            <button class="skills-toggle" type="button" id="skillsToggle" onclick="toggleSkills()" aria-pressed="true" title="Automatically apply relevant skills in Plan and Build modes">Skills on</button>
+                            <button class="skills-toggle" type="button" id="skillsToggle" onclick="toggleSkills()" aria-pressed="true" title="Automatically apply relevant skills in Plan and Build modes">Auto-skills on</button>
+                            <div style="position: relative;">
+                                <button class="skills-toggle" type="button" id="skillTrigger" onclick="event.stopPropagation(); toggleSkillMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Skills" title="Add a skill to this chat — it stays on for every later request">Skills</button>
+                                <div class="model-dropdown" id="skillMenu" role="listbox" aria-label="Installed skills">
+                                    <input type="text" class="model-dropdown-search" id="skillSearch" placeholder="Filter skills…" aria-label="Filter skills" autocomplete="off" oninput="filterSkillOptions(this.value)">
+                                    <div class="model-dropdown-list" id="skillMenuList"></div>
+                                </div>
+                            </div>
                             <div class="composer-model-controls">
                                 <div style="position: relative;">
                                     <button class="model-trigger" id="modelTrigger" aria-label="Select model" aria-haspopup="listbox" aria-expanded="false">
@@ -1674,7 +1699,7 @@
             const toggle = document.getElementById('skillsToggle');
             if (!toggle) return;
             toggle.setAttribute('aria-pressed', String(skillsEnabled));
-            toggle.textContent = skillsEnabled ? 'Skills on' : 'Skills off';
+            toggle.textContent = skillsEnabled ? 'Auto-skills on' : 'Auto-skills off';
         }
 
         function toggleSkills() {
@@ -1718,16 +1743,24 @@
             return skillsCatalog;
         }
 
+        // Remembered so the picker can explain an empty library in the same words
+        // the settings panel uses, instead of inventing a second story.
+        let skillsStatusText = '';
+
         function renderSkillsList(errText) {
             const status = document.getElementById('skillsStatus');
             const list = document.getElementById('skillsList');
-            if (!status || !list) return;
+            if (errText) skillsStatusText = errText;
+            if (!status || !list) { renderSkillBar(); return; }
             if (errText) { status.textContent = errText; return; }
             const bySrc = {};
             for (const s of skillsCatalog) (bySrc[s.source] = bySrc[s.source] || []).push(s.name);
-            status.textContent = skillsCatalog.length
-                ? skillsCatalog.length + ' skills installed across ' + Object.keys(bySrc).length + ' libraries — auto-applied in Plan & Build modes.'
+            skillsStatusText = skillsCatalog.length
+                ? skillsCatalog.length + ' skills installed across ' + Object.keys(bySrc).length + ' libraries — pinned ones apply in every mode, the rest are auto-picked in Plan & Build.'
                 : 'Skill library empty (GitHub unreachable at load).';
+            status.textContent = skillsStatusText;
+            renderSkillBar();
+            if (isSkillMenuOpen()) renderSkillMenuOptions();
             list.innerHTML = '';
             for (const [src, names] of Object.entries(bySrc)) {
                 for (const name of names) {
@@ -1746,6 +1779,278 @@
             }
         }
 
+        // --- Skills pinned to the chat ---
+        //
+        // The router picks per request and forgets; these are the ones someone
+        // asked for by name, so they belong to the conversation. `/ponytail` on
+        // the first message is still applying on the ninth, in every mode, and it
+        // survives a reload because it is saved with the chat. A new chat starts
+        // with none of them, so a choice is never inherited by a conversation
+        // that did not make it.
+        let activeSkillNames = [];
+
+        function setActiveSkillNames(names) {
+            activeSkillNames = Array.isArray(names) ? names.filter(Boolean).map(String) : [];
+            renderSkillBar();
+            persistMessages();
+        }
+
+        // Loading a conversation is the only place the pinned set comes from:
+        // whatever is saved on the chat, or nothing at all for a fresh one.
+        function syncActiveSkillsFromConversation() {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            activeSkillNames = convo && Array.isArray(convo.skills) ? convo.skills.filter(Boolean).map(String) : [];
+            renderSkillBar();
+        }
+
+        function renderSkillBar() {
+            const bar = document.getElementById('skillBar');
+            if (!bar) return;
+            bar.innerHTML = '';
+            if (!activeSkillNames.length) { bar.hidden = true; return; }
+            bar.hidden = false;
+            for (const name of activeSkillNames) {
+                const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === String(name).toLowerCase());
+                const chip = document.createElement('span');
+                chip.className = 'skill-pin';
+                const label = document.createElement('span');
+                label.textContent = name;
+                chip.appendChild(label);
+                const off = document.createElement('button');
+                off.type = 'button';
+                off.textContent = '×';
+                off.setAttribute('aria-label', 'Remove ' + name + ' from this chat');
+                off.addEventListener('click', (e) => { e.stopPropagation(); removePinnedSkill(name); });
+                chip.appendChild(off);
+                if (row && row.description) chip.title = row.description;
+                bar.appendChild(chip);
+            }
+            bar.title = 'Pinned to this chat (' + activeSkillNames.length + ' of ' + MAX_ACTIVE_SKILLS + ') — they apply to every request in it';
+        }
+
+        function removePinnedSkill(name) {
+            setActiveSkillNames(deactivateSkill(activeSkillNames, name));
+            renderSkillMenuOptions();
+            showStatus('info', 'Skill off: ' + name);
+        }
+
+        // Adds a skill by name and says what happened, including when something
+        // had to give way: the cap is small on purpose, and a silent refusal
+        // would read as the app ignoring the request.
+        function pinSkillForChat(name) {
+            const wanted = String(name || '').trim().toLowerCase();
+            if (!wanted) return 'Which skill? `/skills` lists what is installed.';
+            const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === wanted);
+            if (!row) {
+                return 'No installed skill named "' + wanted + '". Open the Skills button to browse the ' + skillsCatalog.length + ' that are installed.';
+            }
+            const { names, dropped } = activateSkill(activeSkillNames, row.name);
+            if (names.length === activeSkillNames.length) {
+                showStatus('info', row.name + ' is already on');
+                return '"' + row.name + '" is already pinned to this chat.';
+            }
+            setActiveSkillNames(names);
+            renderSkillMenuOptions();
+            showStatus('success', 'Skill on: ' + row.name);
+            const lines = ['"' + row.name + '" is pinned to this chat — it applies to every request here until you remove it or start a new chat.'];
+            if (dropped) lines.push('"' + dropped + '" was turned off to stay within ' + MAX_ACTIVE_SKILLS + '.');
+            return lines.join('\n\n');
+        }
+
+        // A skill the model loaded mid-turn is in use, so it is pinned for the
+        // rest of the chat: forgetting it would make the next turn fetch the same
+        // text again. Shown in the bar, where it can be removed.
+        function pinSkillQuietly(name) {
+            const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === String(name || '').trim().toLowerCase());
+            if (!row) return false;
+            const before = activeSkillNames.length;
+            const { names, dropped } = activateSkill(activeSkillNames, row.name);
+            if (names.length === before) return false;
+            setActiveSkillNames(names);
+            if (isSkillMenuOpen()) renderSkillMenuOptions();
+            addMessage('system', 'Pinned "' + row.name + '" to this chat' + (dropped ? ' — turned off "' + dropped + '" to make room' : '') + '. It applies to every later request here; × on the chip removes it.');
+            return true;
+        }
+
+        // --- The skill picker ---
+        function isSkillMenuOpen() {
+            return skillMenu.classList.contains('open');
+        }
+
+        function renderSkillMenuOptions() {
+            skillMenuList.innerHTML = '';
+            if (!skillsCatalog.length) {
+                const empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = skillsStatusText || 'No skills installed — the skill library could not be loaded.';
+                skillMenuList.appendChild(empty);
+                return;
+            }
+            const pinned = activeSkillNames.map((n) => String(n).toLowerCase());
+            for (const row of skillsCatalog) {
+                const opt = document.createElement('button');
+                opt.type = 'button';
+                opt.className = 'model-option skill-option';
+                opt.dataset.skill = row.name;
+                const name = document.createElement('span');
+                name.className = 'model-name';
+                name.textContent = row.name;
+                opt.appendChild(name);
+                if (pinned.includes(String(row.name).toLowerCase())) {
+                    const on = document.createElement('span');
+                    on.className = 'skill-option-pin';
+                    on.textContent = 'on';
+                    opt.appendChild(on);
+                    opt.classList.add('active');
+                }
+                const desc = document.createElement('span');
+                desc.className = 'model-desc';
+                desc.textContent = row.source ? row.source.split('/').pop() : '';
+                opt.appendChild(desc);
+                if (row.description) opt.title = row.description;
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // A second click turns it off, so the picker is a toggle list
+                    // and not a one-way door.
+                    if (activeSkillNames.some((n) => String(n).toLowerCase() === String(row.name).toLowerCase())) removePinnedSkill(row.name);
+                    else pinSkillForChat(row.name);
+                    filterSkillOptions(skillSearch.value);
+                });
+                skillMenuList.appendChild(opt);
+            }
+        }
+
+        function filterSkillOptions(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            skillMenuList.querySelectorAll('.skill-option').forEach((opt) => {
+                const match = !needle || opt.textContent.toLowerCase().includes(needle);
+                opt.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = skillMenuList.querySelector('.model-dropdown-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = 'No skill matches that.';
+                skillMenuList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
+        }
+
+        // Placed from the trigger's own rect, like the other two popups: the
+        // controls row scrolls sideways on a phone, and a menu positioned inside
+        // it would be clipped out of sight.
+        function positionSkillMenu() {
+            if (!isSkillMenuOpen()) return;
+            const spot = placeDropdown(
+                skillTrigger.getBoundingClientRect(),
+                { width: window.innerWidth, height: window.innerHeight }
+            );
+            skillMenu.style.width = spot.width + 'px';
+            skillMenu.style.maxWidth = spot.width + 'px';
+            skillMenu.style.maxHeight = spot.maxHeight + 'px';
+            skillMenu.style.left = spot.left + 'px';
+            skillMenu.style.right = 'auto';
+            skillMenu.style.top = spot.openUp ? 'auto' : spot.top + 'px';
+            skillMenu.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
+        }
+
+        function toggleSkillMenu() {
+            if (isSkillMenuOpen()) closeSkillMenu();
+            else openSkillMenu();
+        }
+
+        async function openSkillMenu() {
+            closeModelDropdown();
+            closeAttachMenu();
+            await ensureSkillsLoaded();
+            renderSkillMenuOptions();
+            skillMenu.classList.add('open');
+            positionSkillMenu();
+            skillSearch.hidden = skillsCatalog.length <= 8;
+            skillSearch.value = '';
+            filterSkillOptions('');
+            if (!skillSearch.hidden) skillSearch.focus();
+            skillTrigger.setAttribute('aria-expanded', 'true');
+        }
+
+        function closeSkillMenu() {
+            skillMenu.classList.remove('open');
+            skillTrigger.setAttribute('aria-expanded', 'false');
+        }
+
+        function focusSkillOption(index) {
+            const opts = Array.from(skillMenuList.querySelectorAll('.skill-option:not([hidden])'));
+            if (!opts.length) return;
+            const i = ((index % opts.length) + opts.length) % opts.length;
+            opts[i].focus();
+        }
+
+        function handleSkillMenuKeydown(e) {
+            const opts = Array.from(skillMenuList.querySelectorAll('.skill-option:not([hidden])'));
+            const current = opts.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); focusSkillOption(current + 1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); focusSkillOption(current - 1); }
+            else if (e.key === 'Escape') { e.preventDefault(); closeSkillMenu(); skillTrigger.focus(); }
+        }
+
+        // --- Commands ---
+        // Resolved against the installed skills, so `/ponytail` works when no
+        // command is named that. Anything unrecognised returns null and is sent
+        // as ordinary text: a message that merely starts with a slash is still a
+        // message, and swallowing it would be worse than any typo.
+        async function resolveComposerCommand(raw) {
+            if (!String(raw || '').trim().startsWith('/')) return null;
+            const catalog = await ensureSkillsLoaded();
+            const parsed = resolveChatCommand(raw, catalog.map((s) => s.name));
+            if (!parsed) return null;
+            if (parsed.kind === 'skill') { pinSkillForChat(parsed.name); return ''; }
+            if (parsed.name === 'help') return renderCommandsHelp();
+            if (parsed.name === 'skills') return renderSkillsCommandReply(activeSkillNames, catalog);
+            if (parsed.name === 'mode') return applyModeCommand(parsed.args);
+            if (parsed.name === 'clear') {
+                const wasEmpty = !messages.length;
+                startNewConversation();
+                return wasEmpty ? 'Already on a new chat.' : 'Started a new chat — this one stays in the sidebar.';
+            }
+            if (parsed.name === 'skill') return applySkillCommand(parsed.args);
+            return null;
+        }
+
+        function applySkillCommand(args) {
+            const text = String(args || '').trim();
+            if (!text) return renderSkillsCommandReply(activeSkillNames, skillsCatalog);
+            const off = /^off\b\s*(.*)$/i.exec(text);
+            if (off) {
+                const which = off[1].trim();
+                if (!which) {
+                    const had = activeSkillNames.length;
+                    setActiveSkillNames([]);
+                    renderSkillMenuOptions();
+                    return had ? 'Turned off every skill pinned to this chat.' : 'Nothing was pinned to this chat.';
+                }
+                const before = activeSkillNames.length;
+                setActiveSkillNames(deactivateSkill(activeSkillNames, which));
+                renderSkillMenuOptions();
+                return activeSkillNames.length === before ? '"' + which + '" was not pinned to this chat.' : 'Turned off "' + which + '".';
+            }
+            return pinSkillForChat(text.split(/\s+/)[0]);
+        }
+
+        function applyModeCommand(args) {
+            const wanted = String(args || '').trim().toLowerCase();
+            if (!isValidMode(wanted)) {
+                return 'Mode is one of: ' + MODES.map((m) => m.id).join(', ') + '. Currently ' + selectedMode + '.';
+            }
+            selectedMode = wanted;
+            localStorage.setItem('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase());
+            return 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc;
+        }
+
         async function runUseSkillTool(args) {
             const name = String(args.name || '').trim();
             if (!name) return 'Error: skill name is required';
@@ -1753,6 +2058,8 @@
                 const res = await fetch('/api/skills/content?name=' + encodeURIComponent(name));
                 const data = await safeJson(res);
                 if (!res.ok) return 'Error: ' + (data.error || res.status);
+                // Loaded once, used for the rest of the chat.
+                pinSkillQuietly(name);
                 return String(data.body || '').slice(0, 12000);
             } catch (e) {
                 return 'Error loading skill: ' + e.message;
@@ -1825,6 +2132,11 @@
         const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
         const attachTrigger = document.getElementById('attachTrigger');
         const attachMenu = document.getElementById('attachMenu');
+        const skillTrigger = document.getElementById('skillTrigger');
+        const skillMenu = document.getElementById('skillMenu');
+        const skillMenuList = document.getElementById('skillMenuList');
+        const skillSearch = document.getElementById('skillSearch');
+        const skillBar = document.getElementById('skillBar');
         const fileInput = document.getElementById('fileInput');
         const views = {
             chat: document.getElementById('viewChat'),
@@ -1981,11 +2293,24 @@
             window.addEventListener('resize', () => {
                 positionModelDropdown();
                 positionAttachMenu();
+                positionSkillMenu();
             });
             document.addEventListener('click', () => {
                 closeModelDropdown();
                 closeAttachMenu();
+                closeSkillMenu();
             });
+
+            skillTrigger.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openSkillMenu().then(() => focusSkillOption(0));
+                } else if (e.key === 'Escape' && isSkillMenuOpen()) {
+                    e.preventDefault();
+                    closeSkillMenu();
+                }
+            });
+            skillMenu.addEventListener('keydown', handleSkillMenuKeydown);
             document.addEventListener('keydown', handleModalKeydown);
 
             defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
@@ -3655,6 +3980,19 @@
                 return;
             }
 
+            // A command is answered here and never sent to a model: there is
+            // nothing to bill for opening the skill picker. Anything that is not
+            // a command falls through and is sent as the message it is.
+            const commandReply = await resolveComposerCommand(raw);
+            if (commandReply !== null) {
+                addMessage('user', raw);
+                chatInput.value = '';
+                chatInput.style.height = '36px';
+                if (commandReply) addMessage('system', commandReply);
+                persistMessages();
+                return;
+            }
+
             const generateImage = imageMode || detectsImageIntent(raw);
             if (imageMode) toggleImageMode();
 
@@ -3698,14 +4036,26 @@
                 if (!attachedImageFile) {
                     let tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) tools.push(...GITHUB_TOOLS);
-                    // Skills ride along in Plan & Build: the auto-picked set
-                    // enters the system prompt, and use_skill lets the model
-                    // pull any full skill mid-turn.
+                    // Skills ride along: whatever this chat pinned, plus what the
+                    // router picks when auto-skills are on and the mode allows it.
+                    // A pinned skill applies in Chat mode too -- that is the point
+                    // of pinning it -- so the catalogue is loaded whenever either
+                    // half could produce something. A plain chat with nothing
+                    // pinned never touches the library.
                     let activeSkills = null;
-                    if (selectedMode !== 'chat' && skillsEnabled) {
+                    if (activeSkillNames.length || (skillsEnabled && selectedMode !== 'chat')) {
                         const catalog = await ensureSkillsLoaded();
-                        activeSkills = pickSkills(outgoing, selectedMode, catalog);
-                        tools.push(USE_SKILL_TOOL);
+                        if (activeSkillNames.length && !catalog.length) {
+                            addMessage('system', 'The skill library could not be loaded, so the pinned skills are not applying to this request.');
+                        }
+                        activeSkills = skillsForTurn({
+                            mode: selectedMode,
+                            skillsEnabled,
+                            requestText: outgoing,
+                            active: activeSkillNames,
+                            catalog,
+                        });
+                        if (activeSkills.length) tools.push(USE_SKILL_TOOL);
                     }
                     // A turn that stopped part-way can be picked back up: the
                     // question is the same, so the lookups already paid for are
@@ -5217,6 +5567,9 @@
                 id: activeConversationId,
                 title: deriveChatTitle(trimmed),
                 messages: trimmed,
+                // Saved with the chat, so a skill someone pinned is still on
+                // after a reload -- and is not carried into the next chat.
+                skills: activeSkillNames,
                 updatedAt: Date.now(),
             });
             writeConversations();
@@ -5250,6 +5603,8 @@
             }
             writeConversations();
             renderHistoryList();
+            // The chat reopened with whatever it had pinned; a brand-new one has none.
+            syncActiveSkillsFromConversation();
         }
 
         function renderHistoryList() {
@@ -5352,6 +5707,8 @@
             emptyState.style.display = messages.length ? 'none' : 'flex';
             if (messages.length) renderSavedMessages();
             renderHistoryList();
+            // Whatever this chat pinned comes back with it; a fresh chat has none.
+            syncActiveSkillsFromConversation();
         }
 
         function openConversation(id) {

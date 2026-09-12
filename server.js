@@ -14,7 +14,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter, skillEntriesFromTree } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -1757,10 +1757,15 @@ async function fetchSkillText(source, skillPath) {
   }
 }
 
-// Lists one repo's skill names from its git tree, honoring `pick` (an explicit
-// name list = lite) or 'all'. Trees fail closed: an error means no names from
-// this source, not a crash.
-async function fetchSkillNames(source) {
+// Lists one repo's skills from its git tree as { name, path } pairs, honoring
+// `pick` (an explicit name list = lite) or 'all'. Trees fail closed: an error
+// means no skills from this source, not a crash.
+//
+// The path is carried out of here rather than reconstructed from the name: a
+// repo may nest its skills (`skills/engineering/code-review/SKILL.md`) or put
+// the file at its root, and the fetcher below has to ask for the file that is
+// actually there.
+async function fetchSkillEntries(source) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -1770,13 +1775,7 @@ async function fetchSkillNames(source) {
     });
     if (!res.ok) return [];
     const data = await res.json();
-    if (!Array.isArray(data.tree)) return [];
-    const all = data.tree
-      .filter((t) => t.type === 'blob' && t.path.endsWith('/SKILL.md') && t.path.startsWith(source.dir + '/'))
-      .map((t) => t.path.split('/')[1])
-      .filter(Boolean);
-    const names = [...new Set(all)];
-    return Array.isArray(source.pick) ? names.filter((n) => source.pick.includes(n)) : names;
+    return skillEntriesFromTree(data.tree, source);
   } catch {
     return [];
   } finally {
@@ -1790,17 +1789,18 @@ async function loadSkills(force = false) {
   if (skillsFetch) return skillsFetch;
   skillsFetch = (async () => {
     const perSource = await Promise.all(SKILL_SOURCES.map(async (source) => {
-      const names = await fetchSkillNames(source);
+      const entries = await fetchSkillEntries(source);
       // Bounded parallelism per repo; a huge repo shouldn't open 50 sockets.
       const rows = [];
-      for (let i = 0; i < names.length; i += 8) {
-        const slice = names.slice(i, i + 8);
-        const texts = await Promise.all(slice.map((name) =>
-          fetchSkillText(source, `${source.dir}/${name}/SKILL.md`)
-        ));
-        slice.forEach((name, j) => {
+      for (let i = 0; i < entries.length; i += 8) {
+        const slice = entries.slice(i, i + 8);
+        const texts = await Promise.all(slice.map((entry) => fetchSkillText(source, entry.path)));
+        slice.forEach((entry, j) => {
           const body = texts[j] || '';
           const meta = parseSkillFrontmatter(body);
+          // The frontmatter name wins when it disagrees with the folder: it is
+          // what the skill calls itself, and what the model will ask for.
+          const name = meta.name || entry.name;
           if (body && meta.description) {
             rows.push({ source: source.repo, name, description: meta.description, body });
           }
