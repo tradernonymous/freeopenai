@@ -333,23 +333,34 @@ The composer has a mode chip that cycles **Chat → Plan → Build**, the same t
 
 | Mode | What it does | Skills applied |
 | --- | --- | --- |
-| **Chat** | Default assistant — ask anything | None (fast, general) |
+| **Chat** | Default assistant — ask anything | Nothing auto-picked — but pinned skills still apply |
 | **Plan** | Reasons about the task, writes an implementation plan, changes nothing | planning/writing skills as matched |
 | **Build** | Executes with the full tool loop, TDD-first discipline | methodology core + best-matched skills |
 
-Skills are pulled automatically from three open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down:
+Skills are pulled from open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down. **136 skills** across eleven libraries, loaded in about half a second cold and 3 ms warm:
 
 | Library | What it contributes |
 | --- | --- |
 | [anthropics/skills](https://github.com/anthropics/skills) | The full official set (frontend-design, docx, pdf, mcp-builder, …) |
 | [obra/superpowers](https://github.com/obra/superpowers) | Development methodology: TDD, systematic debugging, verification before completion |
+| [mattpocock/skills](https://github.com/mattpocock/skills) | Engineering practice: code review, diagnosing bugs, codebase and domain design |
+| [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) | Copy, SEO, ads, analytics — the other half of an assistant's work |
+| [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) | The lazy-senior-dev discipline (YAGNI, stdlib first) plus its review/audit/debt/gain companions |
 | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) | Lite pick: `lean-build`, `surgical-patch`, `verify-and-stop`, `caveman-commit`, `caveman` |
+| [blader/humanizer](https://github.com/blader/humanizer) · [petergyang/no-ai-slop](https://github.com/petergyang/no-ai-slop) | Writing: rewriting AI tells out of prose, and sharpening a draft without flattening it |
+| [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design) · [tt-a1i/archify](https://github.com/tt-a1i/archify) | Diagrams as standalone HTML/SVG, from a description or a repository |
+| [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) | Output shaped for a reader who needs the next action first |
 
 How auto-application works: each request's text is scored against every skill's name + description (stemmed, name hits weighted 3×, generic verbs ignored). The top matches ride along as extra system context in Plan and Build modes; Build additionally seeds the process core (TDD, verification-before-completion, lean-build) every turn. In Build mode the model can also call the `use_skill` tool to load any skill's full text mid-task.
 
+**Pinning a skill to a chat.** Auto-picking is per request and forgotten by the next question. The **Skills** button in the composer (or typing `/` and a name) does the other thing: it pins a skill to the **conversation**, so `/ponytail` on the first message is still applying on the ninth — in Chat mode too, where no auto-skills fire at all, and with auto-skills switched off entirely. A pinned skill is saved with the chat, survives a reload, and a new chat starts with none of them, so a choice is never inherited by a conversation that did not make it. Up to five at once; past that the oldest is turned off and the app says which. Pinned chips sit above the composer with an `×` each, the picker is searchable and toggles items on and off, and a skill the model loads itself with `use_skill` is pinned too, visibly — otherwise the next turn would fetch the same text again.
+
+**Commands.** Typed into the composer: `/help`, `/skill <name>`, `/skill off <name>`, `/skills`, `/mode chat|plan|build`, `/clear`. Or skip the verb: `/ponytail` and `/caveman` are the shorthand, since typing the name is how people actually reach for a skill. Anything else that starts with a slash — `/usr/bin is missing` — is sent to the model as the ordinary message it is; the app never swallows text it did not understand. Commands are answered locally, so opening the skill picker costs nothing.
+
 - `GET /api/skills` — the installed catalogue (source, name, description)
-- `GET /api/skills/content?source=<repo>&name=<skill>` — one skill's full SKILL.md
+- `GET /api/skills/content?name=<skill>` — one skill's full SKILL.md
 - `SKILLS_CACHE_TTL_MS` — cache lifetime override (default 6h)
+- Add your own in `SKILL_SOURCES` (chatlib.js): `dir` is the folder holding the skills and `pick: [...]` narrows a big repo to a chosen few. Nesting and root-level `SKILL.md` files are handled; the name comes from the folder holding the file.
 
 ### 🐙 Working with GitHub
 

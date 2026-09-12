@@ -85,20 +85,93 @@ function parseSkillFrontmatter(markdown) {
   return out;
 }
 
-// Curated sources. anthropics/skills is the full official library,
-// obra/superpowers is the development-methodology set, and caveman is
-// included lite: five of its skills that earn their tokens on top of the
-// other two (its compress/engine machinery is a separate product).
+// Curated sources. anthropics/skills is the full official library and
+// obra/superpowers is the development-methodology set; the rest are added for
+// what they do that those two do not.
+//
+// Three rules kept this list from growing a tail. A source has to publish real
+// SKILL.md files with frontmatter (that is what the router scores). Its skills
+// have to be *useful to a chat app* -- `mksglu/context-mode` was left out
+// because its skills instruct the agent to call tools this app does not have,
+// and `heygen-com/hyperframes` because they produce video. And a repo whose
+// skills would swamp the picker was left out whole: `openai/plugins` ships 536
+// across vendor plugins, which is a browsing problem, not a library.
 const SKILL_SOURCES = [
   { repo: 'anthropics/skills', branch: 'main', dir: 'skills', pick: 'all' },
   { repo: 'obra/superpowers', branch: 'main', dir: 'skills', pick: 'all' },
+  // Engineering practice: review, diagnosis, codebase and domain design.
+  { repo: 'mattpocock/skills', branch: 'main', dir: 'skills', pick: 'all' },
+  // The other half of a general assistant's work: copy, SEO, ads, analytics.
+  { repo: 'coreyhaines31/marketingskills', branch: 'main', dir: 'skills', pick: 'all' },
+  // Ponytail is the lazy-senior-dev discipline -- YAGNI, stdlib first, no
+  // unrequested abstraction. Its audit/review/debt/gain companions earn their
+  // place beside it; the rest of the repo is packaging for other clients.
+  {
+    repo: 'DietrichGebert/ponytail',
+    branch: 'main',
+    dir: '.openclaw/skills',
+    pick: ['ponytail', 'ponytail-review', 'ponytail-audit', 'ponytail-debt', 'ponytail-gain', 'ponytail-help'],
+  },
   {
     repo: 'JuliusBrussee/caveman',
     branch: 'main',
     dir: 'skills',
     pick: ['caveman', 'lean-build', 'surgical-patch', 'verify-and-stop', 'caveman-commit'],
   },
+  // Writing, in deliberately different voices: rewriting AI tells out of prose,
+  // sharpening a draft without flattening it, and the compression discipline.
+  // A SKILL.md at the repository root is the whole skill -- hence dir ''.
+  { repo: 'blader/humanizer', branch: 'main', dir: '', pick: 'all' },
+  { repo: 'petergyang/no-ai-slop', branch: 'main', dir: 'skills', pick: 'all' },
+  // Diagrams as standalone HTML/SVG, from a plain description or a repo.
+  { repo: 'cathrynlavery/diagram-design', branch: 'main', dir: 'skills', pick: 'all' },
+  { repo: 'tt-a1i/archify', branch: 'main', dir: 'archify', pick: 'all' },
+  // Output shaped for a reader who needs the next action first.
+  { repo: 'ayghri/i-have-adhd', branch: 'main', dir: 'skills', pick: 'all' },
 ];
+
+// The skills in one repo's git tree, as { name, path } pairs.
+//
+// Nesting is real and has to be handled: a repo can keep
+// `skills/engineering/code-review/SKILL.md`, and naming a skill by the first
+// segment under the directory would call all thirty-seven of one repo's skills
+// "engineering" and collapse them into one. The name is therefore the folder
+// *holding* the file. A SKILL.md directly inside the directory, or at the root
+// of a repo whose `dir` is '', is the skill itself and takes the repo's name.
+//
+// Same-named skills within one source keep the first: the catalogue addresses
+// skills by name, so a duplicate would be unreachable anyway.
+function skillEntriesFromTree(tree, source) {
+  const dir = String((source && source.dir) || '').replace(/^\/+|\/+$/g, '');
+  const repo = String((source && source.repo) || '');
+  const fallback = repo.split('/').pop() || 'skill';
+  const prefix = dir ? dir + '/' : '';
+  const found = [];
+  for (const node of Array.isArray(tree) ? tree : []) {
+    if (!node || node.type !== 'blob' || typeof node.path !== 'string') continue;
+    const path = node.path;
+    if (!path.endsWith('SKILL.md')) continue;
+    if (prefix) {
+      if (!path.startsWith(prefix)) continue;
+    } else if (path !== 'SKILL.md') {
+      continue;
+    }
+    const segments = path.split('/');
+    const folder = segments.length >= 2 ? segments[segments.length - 2] : '';
+    found.push({ name: folder || fallback, path: path });
+  }
+  const wanted = Array.isArray(source && source.pick)
+    ? found.filter((e) => source.pick.includes(e.name))
+    : found;
+  const seen = new Set();
+  const out = [];
+  for (const entry of wanted) {
+    if (seen.has(entry.name)) continue;
+    seen.add(entry.name);
+    out.push(entry);
+  }
+  return out;
+}
 
 // Skill names whose whole job is process discipline during Build mode. The
 // router seeds these into every build turn so the methodology applies even
@@ -207,17 +280,138 @@ function pickSkills(requestText, mode, skills, limit = 3) {
 // Renders picked skills as extra system context. Bounded excerpts: the
 // overview carries the method; the model can ask for the full text via
 // use_skill if it needs the detailed sections.
+//
+// A pinned skill (see below) is marked, and the header changes with it: "this
+// request" is the wrong instruction for something the user asked to apply to the
+// whole chat, and the model follows that instruction literally.
 function renderSkillsPrompt(picked, excerptLength = 1200) {
   if (!Array.isArray(picked) || !picked.length) return '';
   const parts = picked.map((s) =>
-    `### Skill: ${s.name} (from ${s.source})\n${(s.description || '').trim()}\n\n${String(s.body || '').slice(0, excerptLength).trim()}`
+    `### Skill: ${s.name} (from ${s.source})${s && s.pinned ? ' [pinned]' : ''}\n${(s.description || '').trim()}\n\n${String(s.body || '').slice(0, excerptLength).trim()}`
   );
+  const pinned = picked.some((s) => s && s.pinned);
   return [
-    'ACTIVE SKILLS — follow these methods for this request:',
+    pinned
+      ? 'ACTIVE SKILLS — the user pinned these to this chat, so they apply to every request in it:'
+      : 'ACTIVE SKILLS — follow these methods for this request:',
     '(If a skill references scripts or files that are not available here, apply its approach manually.)',
     '',
     parts.join('\n\n---\n\n'),
   ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Skills a chat was told to use
+// ---------------------------------------------------------------------------
+//
+// The router above picks per request and then forgets: the next question scores
+// from scratch. These are different. A skill the user asked for by name belongs
+// to the conversation -- `/ponytail` on the first message is still applying on
+// the ninth, in every mode, and survives a reload because it is stored with the
+// chat. A new chat starts with none of them, so a choice is never inherited by a
+// conversation that did not make it.
+//
+// Explicit beats automatic in both directions: a pinned skill rides along even
+// when auto-picking is switched off, or the mode allows no skills at all,
+// because someone naming a skill is not asking for the router's opinion.
+
+// A ceiling, because every skill is prompt budget on every request. Adding past
+// it drops the oldest choice and says so rather than silently refusing.
+const MAX_ACTIVE_SKILLS = 5;
+
+function activateSkill(active, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  const list = (Array.isArray(active) ? active : []).map((n) => String(n));
+  if (!wanted) return { names: list, dropped: '' };
+  if (list.some((n) => n.toLowerCase() === wanted)) return { names: list, dropped: '' };
+  const next = [...list, wanted];
+  const dropped = next.length > MAX_ACTIVE_SKILLS ? next.shift() : '';
+  return { names: next, dropped };
+}
+
+function deactivateSkill(active, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  return (Array.isArray(active) ? active : []).filter((n) => String(n).toLowerCase() !== wanted);
+}
+
+// The pinned names as catalogue rows, in the order they were chosen. A name that
+// is not installed is dropped: the catalogue is the truth about what can run.
+function pinnedSkills(active, catalog) {
+  const rows = [];
+  for (const name of Array.isArray(active) ? active : []) {
+    const wanted = String(name).toLowerCase();
+    const row = (Array.isArray(catalog) ? catalog : [])
+      .find((s) => s && String(s.name).toLowerCase() === wanted);
+    if (row) rows.push(row);
+  }
+  return rows;
+}
+
+// Everything that rides one request: the pinned skills, always, then whatever
+// the router adds for this question. Pinned first, because someone's choice
+// should not be the one that falls off the end of the prompt.
+function skillsForTurn({ mode, skillsEnabled, requestText, active, catalog } = {}) {
+  const pinned = pinnedSkills(active, catalog).map((s) => ({ ...s, pinned: true }));
+  const auto = skillsEnabled ? pickSkills(requestText, mode, catalog) : [];
+  const seen = new Set(pinned.map((s) => s.name));
+  return [...pinned, ...auto.filter((s) => !seen.has(s.name))];
+}
+
+// ---------------------------------------------------------------------------
+// Commands typed into the composer
+// ---------------------------------------------------------------------------
+
+// Deliberately short: a command has to do something the buttons cannot, or it is
+// noise in a list people have to read. `/skill` is the important one, and typing
+// the skill's own name is shorthand for it -- how people actually reach for one.
+const CHAT_COMMANDS = [
+  { name: 'help', usage: '/help', desc: 'List these commands' },
+  { name: 'skill', usage: '/skill <name>  ·  /skill off <name>', desc: 'Use an installed skill for the rest of this chat' },
+  { name: 'skills', usage: '/skills', desc: 'Show what this chat is using' },
+  { name: 'mode', usage: '/mode chat | plan | build', desc: 'Switch mode' },
+  { name: 'clear', usage: '/clear', desc: 'Start a new chat — this one stays in the sidebar' },
+];
+
+// What a line typed into the composer means:
+//   { kind: 'command', name, args }   a known command
+//   { kind: 'skill', name }           /ponytail, when no command is named that
+//   null                              plain text, sent to the model as usual
+//
+// Returning null for anything unrecognised is the important half: a message that
+// merely starts with a slash -- a path, a date, a shrug -- is a message, and an
+// app that swallowed it would be worse than a typo it never claimed to fix.
+function resolveChatCommand(text, skillNames) {
+  const line = String(text == null ? '' : text).trim();
+  const match = /^\/([a-z][a-z0-9-]*)\s*([\s\S]*)$/i.exec(line);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  const args = match[2].trim();
+  if (CHAT_COMMANDS.some((c) => c.name === name)) return { kind: 'command', name, args };
+  const known = (Array.isArray(skillNames) ? skillNames : []).map((n) => String(n).toLowerCase());
+  if (known.includes(name)) return { kind: 'skill', name };
+  return null;
+}
+
+function renderCommandsHelp() {
+  return [
+    'Commands',
+    ...CHAT_COMMANDS.map((c) => '`' + c.usage + '` — ' + c.desc),
+    '',
+    'Or type `/` and a skill name — `/ponytail`, `/caveman`, `/humanizer` — to use it for the rest of this chat.',
+  ].join('\n');
+}
+
+function renderSkillsCommandReply(active, catalog) {
+  const installed = Array.isArray(catalog) ? catalog : [];
+  const pinned = pinnedSkills(active, installed);
+  const missing = (Array.isArray(active) ? active : [])
+    .filter((n) => !pinned.some((s) => String(s.name).toLowerCase() === String(n).toLowerCase()));
+  const lines = pinned.length
+    ? ['Pinned to this chat: ' + pinned.map((s) => '`' + s.name + '`').join(', ')]
+    : ['Nothing is pinned to this chat' + (installed.length ? ' — ' + installed.length + ' skills are installed' : '') + '.'];
+  if (missing.length) lines.push('Not installed, so ignored: ' + missing.join(', '));
+  lines.push('Type `/skill <name>`, or just `/<name>`, to add one; the × on a chip removes it.');
+  return lines.join('\n\n');
 }
 
 // The use_skill tool spec the model can call to pull a skill's full text
@@ -2498,6 +2692,16 @@ if (typeof module !== 'undefined' && module.exports) {
     modePrompt,
     SKILL_SOURCES,
     BUILD_CORE_SKILLS,
+    skillEntriesFromTree,
+    MAX_ACTIVE_SKILLS,
+    activateSkill,
+    deactivateSkill,
+    pinnedSkills,
+    skillsForTurn,
+    CHAT_COMMANDS,
+    resolveChatCommand,
+    renderCommandsHelp,
+    renderSkillsCommandReply,
     skillsAllowedForMode,
     skillTriggerScore,
     pickSkills,
