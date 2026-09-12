@@ -990,7 +990,9 @@
             .chat-messages { padding: 14px 12px; gap: 22px; }
             .message { max-width: 96%; }
             .message.user { max-width: 88%; }
-            .chat-input-area { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
+            /* The body already pads for the home indicator; padding for it here
+               too doubled the dead zone under the composer on every phone. */
+            .chat-input-area { padding: 10px 10px 10px; }
             .status-bar { padding: 0 12px; }
             /* iOS: prevent input zoom */
             .composer-input, .model-trigger, .effort-select { font-size: 16px; }
@@ -1069,6 +1071,10 @@
             .settings-body { padding: 14px; }
             .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
             .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
+            /* A settings select keeps its 13px on desktop, which iOS answers
+               with a zoomed viewport the moment it is tapped — same treatment
+               the composer inputs already get, plus a finger-sized target. */
+            .settings-row select { font-size: 16px; min-height: 44px; }
             .empty-state p { font-size: 14px; }
             /* 13px is fine with a mouse, but iOS zooms any focused input
                under 16px -- and a zoomed dropdown is a broken dropdown. */
@@ -1120,7 +1126,7 @@
            steals a big slice of the transcript. Tighten them. */
         @media (max-height: 520px) and (orientation: landscape) {
             .chat-bar { height: 44px; }
-            .chat-input-area { padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); }
+            .chat-input-area { padding: 6px 10px 6px; }
             .chat-messages { padding: 12px; gap: 16px; }
             .composer { padding: 6px; border-radius: 18px; }
             .composer-model-controls { gap: 2px; }
@@ -1131,6 +1137,25 @@
             .composer-send, .composer-attach { width: 38px; height: 38px; }
             .status-bar { height: 22px; }
             .modal { max-height: 90vh; }
+            /* A 224px sidebar is a third of a landscape phone's width, so the
+               off-canvas treatment from the portrait block applies here too,
+               with the same scrim and toggle behaviour. */
+            .history-sidebar {
+                position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
+                width: 34%; max-width: 300px;
+                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
+                transform: translateX(0); transition: transform 180ms ease;
+            }
+            .chat-shell.history-hidden .history-sidebar {
+                width: 34%; opacity: 1; transform: translateX(-102%);
+                border-right-color: var(--border);
+            }
+            .chat-shell { position: relative; }
+            .history-scrim {
+                display: block; position: absolute; inset: 0; z-index: 39;
+                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
+            }
+            .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
         }
     </style>
 </head>
@@ -4900,7 +4925,11 @@
         }
 
         function isNarrowScreen() {
-            return window.matchMedia('(max-width: 640px)').matches;
+            // Portrait phones, and any short landscape phone: in both, the
+            // history sidebar overlays the chat instead of sitting beside it,
+            // so it should start out of the way.
+            return window.matchMedia('(max-width: 640px)').matches
+                || window.matchMedia('(hover: none) and (orientation: landscape) and (max-height: 520px)').matches;
         }
 
         // force true shows, false hides, undefined toggles. persist false is for
