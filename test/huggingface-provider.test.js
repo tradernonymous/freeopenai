@@ -27,6 +27,9 @@ function startUpstream() {
       return;
     }
     if (req.url === '/v1/chat/completions') {
+      // Consume the request body (resume) or 'end' never fires and the
+      // handler never answers -- the client then hangs to its full timeout.
+      req.resume();
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -42,17 +45,21 @@ function startUpstream() {
   });
 }
 
-test('HuggingFace declares an allowlist of free-tier ids', () => {
+test('HuggingFace declares the priced-catalogue allowlist', () => {
   const provider = LLM_PROVIDERS.huggingface;
   assert.ok(provider, 'the provider exists');
   assert.equal(provider.baseUrl, 'https://router.huggingface.co/v1');
   assert.equal(provider.envVar, 'HF_TOKEN');
-  assert.ok(Array.isArray(provider.models) && provider.models.length >= 40, `declares a real allowlist, got ${provider.models && provider.models.length}`);
+  assert.ok(Array.isArray(provider.models) && provider.models.length >= 100, `declares the full priced catalogue, got ${provider.models && provider.models.length}`);
   // Ids are Hub namespace ids, which is what the router serves.
   for (const id of provider.models) assert.match(id, /^[^/]+\/[^/]+$/, `id looks like a Hub repo: ${id}`);
-  // The reason for the provider: free-tier flagships.
+  // The reason for the provider: usable models at every price point.
   assert.ok(provider.models.includes('zai-org/GLM-5.3'));
   assert.ok(provider.models.includes('openai/gpt-oss-120b'));
+  // The list is ordered cheapest-first, so the zero-priced offerings (which
+  // never touch credits) lead it.
+  const zeroPriced = ['Qwen/Qwen3.8-27B', 'inclusionAI/Ling-3.0-flash-VL', 'prism-ml/Ternary-Bonsai-27B-gguf', 'inclusionAI/Ling-3.0-flash-Fin', 'prism-ml/Ternary-Bonsai-27B-AWQ-4bit'];
+  assert.deepEqual([...provider.models.slice(0, 5)].sort(), zeroPriced.sort(), 'the five zero-priced models lead the picker');
   // A repeated id must not be possible twice in the picker.
   assert.equal(new Set(provider.models).size, provider.models.length, 'no duplicate ids');
 });
@@ -69,8 +76,9 @@ test('the picker serves the allowlist intersected with the catalogue, in declare
     await new Promise((r) => app.listen(0, r));
     const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=huggingface`)).json();
     const ids = listed.map((m) => m.id);
-    // Declared order kept; retired id dropped; paid model never offered.
-    assert.deepEqual(ids, ['zai-org/GLM-5.3', 'meta-llama/Llama-3.1-8B-Instruct']);
+    // Declared order kept (cheapest-first puts Llama 3.1 8B ahead of GLM 5.3);
+    // retired id dropped; paid model never offered.
+    assert.deepEqual(ids, ['meta-llama/Llama-3.1-8B-Instruct', 'zai-org/GLM-5.3']);
     assert.ok(!ids.includes('some-vendor/paid-model'), 'a model outside the free allowlist must not be offered');
   } finally {
     if (app) app.close();
