@@ -3240,6 +3240,28 @@
             toolMemoKey = '';
         }
 
+        // Reads remembered past the question that paid for them, one memory per
+        // conversation. A follow-up about a file should not buy that file again,
+        // and by the time it is asked the history the file was read into may
+        // have been trimmed away for weight, leaving the model no choice but to
+        // ask. createReadMemory holds the rules that keep that honest: a write
+        // forgets what it touched, a read expires, and a reused answer says how
+        // old it is.
+        //
+        // It lives in memory rather than in storage: a reload is a fine time to
+        // stop trusting a file read twenty minutes ago.
+        let readMemory = null;
+        let readMemoryOwner = '';
+
+        function readMemoryFor(conversationId) {
+            const id = String(conversationId == null ? '' : conversationId);
+            if (!readMemory || id !== readMemoryOwner) {
+                readMemory = createReadMemory();
+                readMemoryOwner = id;
+            }
+            return readMemory;
+        }
+
         // A turn that stopped part-way has already paid for everything in it:
         // the model calls that decided what to look up, and the lookups
         // themselves. Throwing that away and asking the same question from the
@@ -3291,13 +3313,19 @@
         }
 
         // Carries a restored turn's answers into the memo, so continuing does not
-        // buy the same file reads a second time.
-        function seedToolMemo(memo, convo) {
-            const restored = toolMemoFromConversation(convo);
-            for (const [key, value] of restored) {
-                if (!memo.has(key)) memo.set(key, value);
+        // buy the same file reads a second time. The remembered reads are seeded
+        // too, with what each answer was about, so a write during the rest of the
+        // turn still forgets the answers it made wrong.
+        function seedToolMemo(memo, convo, remembered = null) {
+            const records = toolCallRecords(convo);
+            const seen = new Set();
+            for (const record of records) {
+                if (!record.key || seen.has(record.key)) continue;
+                seen.add(record.key);
+                if (!memo.has(record.key)) memo.set(record.key, record.result);
+                if (remembered) remembered.remember(record.name, record.args, record.key, record.result);
             }
-            return restored.size;
+            return seen.size;
         }
 
         // What to say when a tool loop stops part-way: the steps already paid
@@ -3316,7 +3344,7 @@
             return true;
         }
 
-        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null) {
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null, remembered = null) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
@@ -3377,7 +3405,12 @@
                 const answeredFrom = new Map();
                 const roundFirstIndex = new Map();
                 const pending = [];
+                // Which of this round's answers came out of memory instead of
+                // being asked for again, and how old each one was -- the note has
+                // to reach the model, not just the transcript.
+                const rememberedHere = new Map();
                 let reused = 0;
+                let reusedEarlier = 0;
                 let repeated = 0;
                 for (let i = 0; i < calls.length; i++) {
                     const fn = calls[i].function || {};
@@ -3391,6 +3424,18 @@
                         if (hits >= MAX_REPEATED_TOOL_CALLS) repeated += 1;
                         continue;
                     }
+                    // Nothing in this question, but the same read may have been
+                    // paid for by an earlier one: a follow-up about a file usually
+                    // opens by reading that file again, and an answer already
+                    // given is not worth buying twice while it is still true.
+                    const recalled = remembered ? remembered.recall(key) : null;
+                    if (recalled) {
+                        results[i] = recalled.result;
+                        if (memo) memo.set(key, recalled.result);
+                        rememberedHere.set(i, recalled.note);
+                        reusedEarlier += 1;
+                        continue;
+                    }
                     if (roundFirstIndex.has(key)) {
                         answeredFrom.set(i, roundFirstIndex.get(key));
                         reused += 1;
@@ -3401,6 +3446,9 @@
                 }
                 if (reused) {
                     addMessage('system', 'Reused ' + reused + ' earlier tool result(s) instead of repeating the call');
+                }
+                if (reusedEarlier) {
+                    addMessage('system', 'Reused ' + reusedEarlier + ' result(s) from earlier in this conversation instead of asking for them again');
                 }
                 // Reads that do not depend on each other go out together: three
                 // files used to cost three round trips. Anything that writes is
@@ -3431,8 +3479,13 @@
                     for (let i = 0; i < calls.length; i++) {
                         if (results[i] === undefined) continue;
                         const fn = calls[i].function || {};
-                        const key = toolCallKey(fn.name, parseToolArgs(fn.arguments));
+                        const args = parseToolArgs(fn.arguments);
+                        const key = toolCallKey(fn.name, args);
                         if (key) memo.set(key, results[i]);
+                        // And, for a read, past this question: a write instead
+                        // forgets every remembered answer it may have made wrong,
+                        // which is why the two halves are one call.
+                        if (key && remembered) remembered.record(fn.name, args, key, results[i], memo);
                     }
                 }
                 // Said in the conversation rather than in a toast, because the
@@ -3444,7 +3497,10 @@
                 // clipped, because every later round of this turn re-sends it.
                 for (let i = 0; i < calls.length; i++) {
                     if (signal?.aborted) throw abortError();
-                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: clipToolResult(String(results[i])) });
+                    // A remembered answer carries its age, in the result the model
+                    // reads: it is the one that has to decide whether to ask again.
+                    const note = rememberedHere.get(i) || '';
+                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: clipToolResult(note + String(results[i])) });
                 }
             }
             // Out of rounds. Everything read so far is still in `convo` and was
@@ -3660,6 +3716,7 @@
                     if (stored && !resuming) clearPendingTurn();
                     let turnConvo = resuming ? resuming.convo : buildConversation(outgoing, activeSkills);
                     const memo = toolMemoFor(raw);
+                    const remembered = readMemoryFor(activeConversationId);
                     if (resuming) {
                         // One continuation line, however many times it is resumed.
                         const last = turnConvo[turnConvo.length - 1];
@@ -3668,7 +3725,7 @@
                         }
                         // Rebuilt from the conversation, so the steps already done
                         // are not bought a second time -- even after a reload.
-                        seedToolMemo(memo, turnConvo);
+                        seedToolMemo(memo, turnConvo, remembered);
                         addMessage('system', 'Resuming the interrupted request — ' + resuming.steps + ' tool step(s) already done');
                     }
                     inFlightConvo = turnConvo;
@@ -3680,7 +3737,7 @@
                     let hops = 0;
                     while (!outcome) {
                         try {
-                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo);
+                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo, remembered);
                         } catch (turnError) {
                             if (controller.signal.aborted || (turnError && turnError.name === 'AbortError')) throw turnError;
                             // Recorded before anything moves: a failure has to name

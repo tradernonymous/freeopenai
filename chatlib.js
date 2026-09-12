@@ -1723,16 +1723,16 @@ const REPEATED_TOOL_CALL_NOTICE =
 // is told plainly that repeating it will not help.
 const MAX_REPEATED_TOOL_CALLS = 2;
 
-// Rebuilds the "already answered" memo from a conversation that was stored
-// part-way through its tool loop: every call the model made, paired back to the
-// result recorded against it.
+// Reads a conversation that was stored part-way through its tool loop back into
+// the calls it records: every call the model made, paired back to the result
+// recorded against it, with the name and arguments that produced it.
 //
 // This is the other half of resuming. Handing a model its own tool results and
 // nothing else makes it ask for the same tools again, because from where it sits
 // there is no record that they were paid for -- which costs exactly what never
 // having saved the turn would have.
-function toolMemoFromConversation(messages, parseArgs = parseToolArgs) {
-  const memo = new Map();
+function toolCallRecords(messages, parseArgs = parseToolArgs) {
+  const records = [];
   let issued = [];
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!message || typeof message !== 'object') continue;
@@ -1740,17 +1740,209 @@ function toolMemoFromConversation(messages, parseArgs = parseToolArgs) {
     if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
       issued = message.tool_calls.map((call) => {
         const fn = (call && call.function) || {};
-        return { id: call && call.id, key: toolCallKey(fn.name, parseArgs(fn.arguments)) };
+        const args = parseArgs(fn.arguments);
+        return { id: call && call.id, name: String(fn.name || ''), args: args, key: toolCallKey(fn.name, args) };
       });
       continue;
     }
     if (message.role !== 'tool' || !message.tool_call_id) continue;
     const match = issued.find((entry) => entry.id === message.tool_call_id);
     if (match && match.key) {
-      memo.set(match.key, String(message.content == null ? '' : message.content));
+      records.push({
+        key: match.key,
+        name: match.name,
+        args: match.args,
+        result: String(message.content == null ? '' : message.content),
+      });
     }
   }
+  return records;
+}
+
+// The same rebuild as the memo below, with the call behind each answer kept.
+// Resuming needs both halves: the answers, so the steps already done are not
+// bought again, and what each one was *about*, so a write later in the turn can
+// forget the answers it made wrong.
+function toolMemoFromConversation(messages, parseArgs = parseToolArgs) {
+  const memo = new Map();
+  for (const record of toolCallRecords(messages, parseArgs)) {
+    memo.set(record.key, record.result);
+  }
   return memo;
+}
+
+// ---------------------------------------------------------------------------
+// What a read answered, remembered past the question that paid for it
+// ---------------------------------------------------------------------------
+//
+// A tool loop re-asks the same things between questions as well as inside one:
+// the follow-up to an answer about a file opens by reading that file again. The
+// question-scoped memo above cannot help there -- it is deliberately empty when
+// a new question starts -- so the read is bought a second time for an answer
+// the app already has. Worse, by then the history it was read into may have been
+// trimmed away for weight, leaving the model no choice but to ask again.
+//
+// Remembering a read is only safe while the answer is still true, so this
+// carries three rules rather than a size:
+//
+//   * a write forgets what it touched. An answer about a path -- and any listing
+//     of a folder that path sits in -- stops being true once something writes
+//     there. This is the correctness half: without it, a model that writes a
+//     file and reads it back is handed the text from before its own write, and
+//     concludes the write failed.
+//   * a remembered read expires. Fifteen minutes is long enough for a follow-up
+//     question to reuse what the last answer read, and short enough that a file
+//     edited since is not quoted as current.
+//   * the answer says how old it is, in the result itself. Silently handing back
+//     a stale file is how a coding turn goes wrong in a way nothing in the
+//     transcript explains, so the model is told and can choose to re-read.
+
+// Which tools may be remembered across questions: only reads of something
+// outside the app -- a file, a listing, a page. A write is absent because
+// remembering one would let the app claim work it never did in this turn.
+const REMEMBERED_READ_TOOLS = new Set([
+  'workspace_read_file',
+  'workspace_list_files',
+  'github_list_repos',
+  'github_list_files',
+  'github_read_file',
+  'web_search',
+  'web_fetch',
+]);
+
+function isRememberableRead(name) {
+  return REMEMBERED_READ_TOOLS.has(String(name || ''));
+}
+
+// Which tools change something. Kept separate from "not concurrent-safe": the
+// task writers are never run in parallel either, but a task list is not a file
+// and nothing remembered has to be forgotten because one was written.
+const MUTATING_TOOLS = new Set(['workspace_write_file', 'github_commit_file']);
+
+function isMutatingTool(name) {
+  return MUTATING_TOOLS.has(String(name || ''));
+}
+
+// What an answer is about, as a place a later write can be compared against:
+// "workspace/notes/a.md", "github/owner/name/src/index.js", "workspace" for the
+// whole scratch space, and '' for anything not about one place at all (a search,
+// an unfamiliar tool).
+//
+// The family prefixes are load-bearing: a workspace path and a repo path can be
+// spelled identically, and a write to one must not be read as a write to the
+// other. The bare family is the root, so a write anywhere below it still matches
+// by prefix -- which is what makes a folder listing read before a file appeared
+// in it get forgotten too.
+function memoSubject(name, args) {
+  const tool = String(name || '');
+  const values = args && typeof args === 'object' ? args : {};
+  const path = String(values.path == null ? '' : values.path).replace(/^\/+|\/+$/g, '');
+  if (tool.startsWith('workspace_')) return path ? 'workspace/' + path : 'workspace';
+  if (tool.startsWith('github_')) {
+    // Case-folded: the same repository spelled two ways is the same repository,
+    // so a commit under one spelling still forgets a read made under the other.
+    const repo = String(values.repo == null ? '' : values.repo).trim().replace(/^\/+|\/+$/g, '').toLowerCase();
+    if (!repo) return 'github';
+    return 'github/' + repo + (path ? '/' + path : '');
+  }
+  return '';
+}
+
+// Whether a write makes a remembered answer wrong. A write with no place in it
+// -- a tool this file has not been taught -- invalidates every placed answer,
+// because a thing allowed to change anywhere has to be assumed to have changed
+// everywhere. It never invalidates an unplaced answer: writing a file did not
+// make a search result stale.
+function memoSubjectInvalidatedByWrite(subject, writtenSubject) {
+  const read = String(subject == null ? '' : subject).replace(/^\/+|\/+$/g, '');
+  const written = String(writtenSubject == null ? '' : writtenSubject).replace(/^\/+|\/+$/g, '');
+  if (!written) return read !== '';
+  if (!read) return false;
+  return read === written || written.startsWith(read + '/');
+}
+
+// How long a remembered read may be trusted.
+const REMEMBERED_READ_TTL_MS = 15 * 60 * 1000;
+
+function describeRememberedAge(ageMs) {
+  const seconds = Math.max(0, Math.round(Number(ageMs) / 1000));
+  if (!Number.isFinite(seconds) || seconds < 45) return 'a moment ago';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return minutes + (minutes === 1 ? ' minute ago' : ' minutes ago');
+  const hours = Math.round(minutes / 60);
+  return hours + (hours === 1 ? ' hour ago' : ' hours ago');
+}
+
+// One conversation's remembered reads. A plain object rather than module state,
+// so the rules are testable without a browser and the caller decides which
+// conversation the memory belongs to -- the memory is only worth having inside
+// the conversation whose files it describes.
+function createReadMemory({ now = () => Date.now(), ttlMs = REMEMBERED_READ_TTL_MS } = {}) {
+  const entries = new Map();
+
+  function recall(key) {
+    if (!key) return null;
+    const entry = entries.get(key);
+    if (!entry) return null;
+    const at = Number(now());
+    const ageMs = at - entry.at;
+    if (!Number.isFinite(ageMs) || ageMs > ttlMs) {
+      entries.delete(key);
+      return null;
+    }
+    // The note travels with the answer so the caller cannot forget to say how
+    // old it is.
+    return { result: entry.result, ageMs: ageMs, note: '[remembered from ' + describeRememberedAge(ageMs) + '] ' };
+  }
+
+  function remember(name, args, key, result) {
+    if (!key || !isRememberableRead(name)) return false;
+    // What it was about is recorded from the arguments themselves, where they
+    // are still real values: a call key is a fingerprint, not a description, and
+    // reading paths back out of it would guess.
+    entries.set(key, { result: result, subject: memoSubject(name, args), at: Number(now()) });
+    return true;
+  }
+
+  // Forgets what a write may have made wrong, here and in the question memo the
+  // caller passes in. Both hold the same read under the same key, and a stale
+  // copy left in either would be served back as current.
+  //
+  // A write is not in here: it is never an entry, so the guard that makes the
+  // same commit run once cannot be forgotten by a later write to the same path.
+  function forgetWritten(name, args, questionMemo) {
+    const written = memoSubject(name, args);
+    const doomed = [];
+    for (const [key, entry] of entries) {
+      if (memoSubjectInvalidatedByWrite(entry && entry.subject, written)) doomed.push(key);
+    }
+    for (const key of doomed) {
+      entries.delete(key);
+      if (questionMemo && questionMemo.delete) questionMemo.delete(key);
+    }
+    return doomed.length;
+  }
+
+  // The one entry point for "a call just ran": a read is kept, a write is not
+  // remembered and instead forgets what it touched. Both halves of the rule are
+  // stated in one place, so no caller can apply half of it and leave the other
+  // half out.
+  function record(name, args, key, result, questionMemo) {
+    if (isMutatingTool(name)) {
+      forgetWritten(name, args, questionMemo);
+      return false;
+    }
+    return remember(name, args, key, result);
+  }
+
+  return {
+    recall,
+    remember,
+    forgetWritten,
+    record,
+    size: () => entries.size,
+    clear: () => entries.clear(),
+  };
 }
 
 // How much of a stopped turn is already done, in tool steps. Shown to the user
@@ -2453,6 +2645,14 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_REPEATED_TOOL_CALLS,
     cachedTokensFromUsage,
     toolMemoFromConversation,
+    isRememberableRead,
+    isMutatingTool,
+    memoSubject,
+    memoSubjectInvalidatedByWrite,
+    describeRememberedAge,
+    toolCallRecords,
+    createReadMemory,
+    REMEMBERED_READ_TTL_MS,
     pendingTurnStepCount,
     hasToolWork,
     RESUME_CONTINUATION_PROMPT,
