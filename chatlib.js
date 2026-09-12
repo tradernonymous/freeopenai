@@ -284,6 +284,63 @@ function isVisionCapable(id) {
   return VISION_MODEL_IDS.includes(id);
 }
 
+// The browser re-encodes an attached image before it is sent, because the chat
+// endpoint refuses bodies over 1MB while the attach menu allows images up to
+// 8MB. The cap sits below the server's with room for the prompt and history
+// still to fit, and the edge is what vision models are usually fed anyway.
+const MAX_IMAGE_DATA_URL_CHARS = 700000;
+const MAX_IMAGE_EDGE = 1600;
+
+// Whether a model is *known* to read images. Absent is not the same as capable:
+// the request would only fail, and the failure would read as the model being
+// broken rather than the picture being unsupported.
+function acceptsImages(model) {
+  return !!(model && model.vision === true);
+}
+
+// The model that should answer a turn carrying an image, or null when this
+// provider has none. A model that can already see is never swapped away from.
+function modelForImage(models, preferredId) {
+  const list = Array.isArray(models) ? models.filter((m) => m && m.id) : [];
+  if (acceptsImages(list.find((m) => m.id === preferredId))) return preferredId;
+  const capable = list.find(acceptsImages);
+  return capable ? capable.id : null;
+}
+
+// Only an inline image or a plain http(s) link may ride in a request. A
+// data:text/html or javascript: URL must never reach a provider.
+function isSendableImageUrl(url) {
+  return /^data:image\//i.test(String(url || '')) || /^https?:\/\//i.test(String(url || ''));
+}
+
+// Put an image on the turn as content parts, the shape every OpenAI-compatible
+// provider understands. Pure -- neither the array nor its messages are
+// touched, because the same conversation is re-sent when a model refuses.
+//
+// Throws on a URL that could not be sent rather than quietly returning a
+// text-only turn: silently dropping the image is the bug this exists to fix.
+function withImageTurn(messages, imageUrl, promptText) {
+  const list = Array.isArray(messages) ? messages : [];
+  const last = list[list.length - 1];
+  if (!last || last.role !== 'user') return list;
+  if (!isSendableImageUrl(imageUrl)) {
+    throw new Error('Refusing to send an image URL that is not a data:image or http(s) link');
+  }
+  // Already multimodal: leave the caller's own content parts alone.
+  if (Array.isArray(last.content)) return list;
+  const text = String(promptText || last.content || '').trim();
+  return [
+    ...list.slice(0, -1),
+    {
+      ...last,
+      content: [
+        { type: 'text', text: text || 'What is in this image?' },
+        { type: 'image_url', image_url: { url: imageUrl } },
+      ],
+    },
+  ];
+}
+
 // Extensions handled by each attach menu option. "document" files are parsed
 // client-side (PDF via pdf.js, DOCX via mammoth.js) into plain text; "file"
 // covers the original plain-text attach behavior.
@@ -1254,6 +1311,12 @@ if (typeof module !== 'undefined' && module.exports) {
     VISION_MODEL_IDS,
     DEFAULT_VISION_MODEL,
     isVisionCapable,
+    MAX_IMAGE_DATA_URL_CHARS,
+    MAX_IMAGE_EDGE,
+    acceptsImages,
+    modelForImage,
+    isSendableImageUrl,
+    withImageTurn,
     DOCUMENT_EXTENSIONS,
     isDocumentFile,
     GITHUB_TOOLS,

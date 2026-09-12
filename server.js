@@ -1400,6 +1400,7 @@ async function llmSkillContent(req, res) {
 
 function normalizeProviderModel(m) {
   const architecture = m.architecture || {};
+  const inputModalities = m.input_modalities || architecture.input_modalities;
   return {
     id: m.id,
     name: m.name || m.display_name,
@@ -1408,6 +1409,11 @@ function normalizeProviderModel(m) {
     contextLength: m.context_length,
     supportedParameters: m.supported_parameters,
     outputModalities: m.output_modalities || architecture.output_modalities,
+    // Only a catalogue that actually lists image input counts as capable.
+    // Nara and NVIDIA publish no modalities at all, and claiming vision there
+    // would send an image to a model that can only reject it -- so the field
+    // stays absent rather than false, leaving "unknown" distinguishable.
+    vision: Array.isArray(inputModalities) ? inputModalities.includes('image') : undefined,
   };
 }
 
