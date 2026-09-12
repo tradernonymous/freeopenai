@@ -1036,7 +1036,8 @@ function naraImagesBase() {
 
 async function llmImage(req, res, kind) {
   const key = process.env.NARA_API_KEY;
-  if (!key) return sendJson(res, 400, { error: 'Image editing needs a Nara key (NARA_API_KEY).' });
+  const what = kind === 'edits' ? 'Image editing' : 'Image generation';
+  if (!key) return sendJson(res, 400, { error: what + ' needs a Nara key (NARA_API_KEY).' });
   readJsonBody(req, 12 * 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
@@ -1072,12 +1073,21 @@ async function llmImage(req, res, kind) {
           body: Buffer.concat(parts),
         });
       } else {
+        // The alias is required, the same way it is for an edit: the upstream
+        // answers "Image model is required" to a body without one, and that
+        // sentence arrives here as a 400 that looks like our bug. Falling back
+        // to the operator's configured alias keeps the client from having to
+        // know Nara's model names.
+        const model = body.model || process.env.NARA_IMAGE_MODEL;
+        if (!model) {
+          return sendJson(res, 400, { error: 'Image generation needs NARA_IMAGE_MODEL set to an image-capable alias.' });
+        }
         upstream = await fetch(naraImagesBase() + '/v1/images/generations', {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt,
-            ...(body.model ? { model: body.model } : {}),
+            model,
             ...(body.size ? { size: body.size } : {}),
           }),
         });

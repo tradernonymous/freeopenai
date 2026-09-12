@@ -41,6 +41,50 @@ test('generations without a prompt is a 400', async () => {
   }
 });
 
+test('generations without a model alias is a guided 400', async () => {
+  // Found by pointing the app at the real service: Nara answers "Image model is
+  // required" to a body without one, which arrived here looking like our bug.
+  process.env.NARA_API_KEY = 'k';
+  delete process.env.NARA_IMAGE_MODEL;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a cat' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /NARA_IMAGE_MODEL/);
+  } finally {
+    app.close();
+    delete process.env.NARA_API_KEY;
+  }
+});
+
+test('generations sends the configured alias, so the upstream has a model to use', async () => {
+  let seenBody = '';
+  const upstream = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      seenBody = raw;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ url: 'https://img.test/2.png' }] }));
+    });
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_IMAGE_MODEL = 'img-alias-1';
+  process.env.NARA_IMAGES_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red circle' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(JSON.parse(seenBody), { prompt: 'a red circle', model: 'img-alias-1' });
+  } finally {
+    app.close(); upstream.close();
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_IMAGE_MODEL;
+    delete process.env.NARA_IMAGES_BASE_URL;
+  }
+});
+
 test('generations proxies prompt JSON upstream and returns the payload', async () => {
   let seenBody = '';
   const upstream = http.createServer((req, res) => {
@@ -54,16 +98,18 @@ test('generations proxies prompt JSON upstream and returns the payload', async (
   });
   await new Promise((r) => upstream.listen(0, r));
   process.env.NARA_API_KEY = 'k';
+  process.env.NARA_IMAGE_MODEL = 'img-alias-1';
   process.env.NARA_IMAGES_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a red circle' });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { data: [{ url: 'https://img.test/1.png' }] });
-    assert.deepEqual(JSON.parse(seenBody), { prompt: 'a red circle' });
+    assert.deepEqual(JSON.parse(seenBody), { prompt: 'a red circle', model: 'img-alias-1' });
   } finally {
     app.close(); upstream.close();
     delete process.env.NARA_API_KEY;
+    delete process.env.NARA_IMAGE_MODEL;
     delete process.env.NARA_IMAGES_BASE_URL;
   }
 });
@@ -145,6 +191,9 @@ test('an upstream refusal passes through named, not bare', async () => {
   });
   await new Promise((r) => upstream.listen(0, r));
   process.env.NARA_API_KEY = 'k';
+  // Set, or the request would be refused for having no model alias and never
+  // reach the upstream this test is about.
+  process.env.NARA_IMAGE_MODEL = 'img-alias-1';
   process.env.NARA_IMAGES_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
   const app = await startApp();
   try {
@@ -154,6 +203,7 @@ test('an upstream refusal passes through named, not bare', async () => {
   } finally {
     app.close(); upstream.close();
     delete process.env.NARA_API_KEY;
+    delete process.env.NARA_IMAGE_MODEL;
     delete process.env.NARA_IMAGES_BASE_URL;
   }
 });

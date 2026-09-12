@@ -3434,6 +3434,52 @@
 
         const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
 
+        function puterCanDraw() {
+            return typeof puter !== 'undefined' && !!puter.ai &&
+                (!puter.auth || typeof puter.auth.isSignedIn !== 'function' || puter.auth.isSignedIn());
+        }
+
+        // One place that produces an image, so the composer and the variations
+        // path cannot drift apart. Puter first when it is signed in, then the
+        // server's own route: without that second backend, a chat on a direct
+        // provider had no way to draw at all and reported it with Puter's
+        // "not signed in", which names the wrong problem entirely.
+        async function generateImageSource(promptText, signal) {
+            const errors = { puterError: '', serverError: '' };
+            for (const backend of imageBackendOrder({ puterSignedIn: puterCanDraw() })) {
+                if (backend === 'puter') {
+                    for (const model of IMAGE_MODELS) {
+                        try {
+                            const imgEl = await puter.ai.txt2img(promptText, { model });
+                            if (imgEl && imgEl.src) return imgEl.src;
+                            errors.puterError = 'returned no image';
+                        } catch (error) {
+                            if (error && error.name === 'AbortError') throw error;
+                            errors.puterError = String((error && error.message) || error);
+                        }
+                    }
+                    continue;
+                }
+                try {
+                    const res = await fetch('/api/llm/images/generations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: promptText }),
+                        signal,
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) throw new Error(data.error || 'the route refused the request');
+                    const url = imageUrlFrom(data);
+                    if (!url) throw new Error('the route returned no image');
+                    return url;
+                } catch (error) {
+                    if (error && error.name === 'AbortError') throw error;
+                    errors.serverError = String((error && error.message) || error);
+                }
+            }
+            throw new Error(imageFailureMessage(errors));
+        }
+
         async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort) {
             let bubble = null;
             let filled = false;
@@ -3443,27 +3489,14 @@
                 updateUsageDisplay();
 
                 bubble = createImageBubble();
-                let imgEl;
-                let lastError;
-                for (const model of IMAGE_MODELS) {
-                    if (!isActiveRun(runId, controller)) throw abortError();
-                    try {
-                        imgEl = await puter.ai.txt2img(promptText, { model });
-                        if (!isActiveRun(runId, controller)) throw abortError();
-                        break;
-                    } catch (error) {
-                        if (!isActiveRun(runId, controller)) throw abortError();
-                        lastError = error;
-                    }
-                }
-                if (!imgEl) throw lastError;
+                const imageSrc = await generateImageSource(promptText, controller.signal);
 
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
                 }
                 removeTypingIndicator();
-                fillImageBubble(bubble, promptText, imgEl.src);
+                fillImageBubble(bubble, promptText, imageSrc);
                 filled = true;
                 showStatus('success', 'Image ready');
             } catch (error) {
@@ -3667,23 +3700,12 @@
                 const second = createHoloForge('Generating variation…');
                 bubble.appendChild(second);
                 for (let i = 0; i < 2; i++) {
-                    let imgEl = null;
-                    let lastError = null;
-                    for (const model of IMAGE_MODELS) {
-                        if (!isActiveRun(runId, controller)) throw abortError();
-                        try {
-                            imgEl = await puter.ai.txt2img(promptText, { model });
-                            if (!isActiveRun(runId, controller)) throw abortError();
-                            break;
-                        } catch (error) {
-                            lastError = error;
-                            if (error && error.name === 'AbortError') throw error;
-                        }
-                    }
-                    if (!imgEl) throw lastError || new Error('Image generation returned no image');
-                    made.push(imgEl.src);
+                    if (!isActiveRun(runId, controller)) throw abortError();
+                    const imageSrc = await generateImageSource(promptText, controller.signal);
+                    if (!isActiveRun(runId, controller)) throw abortError();
+                    made.push(imageSrc);
                     const shimmers = bubble.querySelectorAll('.holo-forge');
-                    const wrap = buildImageWrap(imgEl.src, promptText);
+                    const wrap = buildImageWrap(imageSrc, promptText);
                     if (shimmers[i]) {
                         const t = Number(shimmers[i].dataset.holoTimer);
                         if (t) clearInterval(t);
