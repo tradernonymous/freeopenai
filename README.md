@@ -297,10 +297,12 @@ The response carries provider **ids** only. It deliberately never includes keys,
 
 ### 🦙 Ollama on Railway (the 502 fix)
 
-`Could not load models: 502: Could not reach Ollama: fetch failed — the provider is slow or unreachable` is the app's own error when its HTTP call to the Ollama base URL fails at the socket level — connection refused, DNS miss, or an unreachable host. On Railway it is nearly always one of the four below, in order:
+`Could not load models: 502: Could not reach Ollama: fetch failed (ENOTFOUND: the host name did not resolve) — this is the endpoint you configured, so check that it is running and reachable from the server` is the app's own error when its HTTP call to the Ollama base URL fails at the socket level.
+
+The parenthetical is the underlying socket error, and it is the part that names which problem you have: `ENOTFOUND` / `EAI_AGAIN` means the name does not resolve — case 1 below; `ECONNREFUSED` means it resolves but nothing is listening on that port — case 2; `ETIMEDOUT` or `EHOSTUNREACH` means the path is blocked, or the instance is asleep — case 4. On Railway it is nearly always one of the four, in this order:
 
 1. **The base URL still points at localhost.** The default `http://localhost:11434/v1` is correct on your laptop; from the Railway app container it must be the Ollama service's URL: `OLLAMA_BASE_URL=https://<ollama-service>.up.railway.app/v1`, or `http://ollama.railway.internal:11434/v1` for the private network (same Railway project, cheaper and faster).
-2. **Ollama listens on loopback inside its own container.** Set `OLLAMA_HOST=0.0.0.0:11434` on the Ollama service or it refuses every off-container connection, which the app sees exactly as "fetch failed".
+2. **Ollama listens on loopback inside its own container.** Set `OLLAMA_HOST=0.0.0.0:11434` on the Ollama service or it refuses every off-container connection — which the app sees exactly as `ECONNREFUSED`, because it reached the host and found no listener.
 3. **No models are installed.** Railway containers wipe on every deploy, so `ollama pull ...` at runtime disappears on the next one. Attach a volume to the Ollama service at `/root/.ollama`, add a start command like `ollama serve & sleep 8 && ollama pull qwen3:8b && ollama pull gemma3:4b`, and pull small models — Railway has no GPUs, so 8B-class is the practical ceiling.
 4. **The free-plan instance was asleep.** Railway's trial/free services sleep and refuse connections while cold — the first request wakes them and can 502 once.
 
@@ -423,6 +425,8 @@ ANTIGRAVITY_BASE_URL=http://localhost:3000 npm start
 | `ANTIGRAVITY_MODELS` | Optional comma-separated override when your proxy's model names differ from the pinned list |
 
 Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not appear in the picker at all** — the provider stays out of it entirely rather than showing up and failing, so "I can't see the Opus models" on a deploy almost always means the variable is missing.
+
+**Running the proxy alongside a deployed app.** [`deploy/antigravity-proxy/`](deploy/antigravity-proxy/) builds the gateway with its accounts seeded from a variable and explains the Railway service: the variables, the private-network base URL, and how to read the logs when it does not come up. It exists because a hosted instance cannot create accounts — the proxy's OAuth redirect is hardcoded to `localhost:3000` — so they are signed in once locally and carried over.
 
 **A local proxy is not reachable from a deployed app.** `http://localhost:3000` from the Railway container means the container itself, where no proxy is running. So either run this app locally against the proxy (the command above), or put the proxy somewhere the app can reach and point `ANTIGRAVITY_BASE_URL` at it. Don't publish the proxy to the open internet to do that: it holds your Google accounts, a default install asks for no key, and anyone who finds the URL is spending your quota. Put it behind your own authentication, or reach it over a private network.
 

@@ -1124,6 +1124,52 @@ function notFoundHint(provider) {
   return " — that model isn't available to your key, even though the provider lists it";
 }
 
+// What a socket-level failure actually was, in words.
+//
+// undici collapses every connection failure into `TypeError: fetch failed` and
+// puts the useful part one level down, in `cause`. That left "Could not reach
+// Antigravity: fetch failed" describing three different problems at once: a
+// host name that does not resolve, a service that is not listening, and a
+// connection that was refused or timed out -- each with its own fix. The code
+// alone would be cryptic, so this carries the meaning with it, and the code
+// stays alongside for anyone grepping.
+const FETCH_CAUSE_MEANINGS = {
+  ENOTFOUND: 'the host name did not resolve',
+  EAI_AGAIN: 'the host name did not resolve',
+  ECONNREFUSED: 'the host resolved but nothing is listening on that port',
+  ECONNRESET: 'the connection was closed as soon as it opened',
+  ETIMEDOUT: 'the connection timed out',
+  EHOSTUNREACH: 'the host is not reachable',
+  ENETUNREACH: 'the network is not reachable',
+  EPIPE: 'the connection broke mid-request',
+  CERT_HAS_EXPIRED: 'the TLS certificate has expired',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'the TLS certificate is self-signed',
+};
+
+// With autoSelectFamily enabled, Node tries every address a name resolves to
+// and reports an AggregateError, so the first cause is often not the whole
+// story. Walk them, keeping the first code that says something -- plus anything
+// else distinct, since "refused on one address, timed out on the other" is a
+// real and useful thing to see. The walk is bounded twice: the visited set
+// stops a shared or self-referential cause being walked again, and the depth
+// cap stops a pathologically nested one recursing without end. Either bound
+// alone would stop a cycle; they cost nothing and guard different shapes.
+function fetchFailureReason(err) {
+  const codes = [];
+  const seen = new Set();
+  const walk = (e, depth) => {
+    if (!e || typeof e !== 'object' || depth > 4 || seen.has(e)) return;
+    seen.add(e);
+    if (typeof e.code === 'string' && !codes.includes(e.code)) codes.push(e.code);
+    if (Array.isArray(e.errors)) e.errors.forEach((inner) => walk(inner, depth + 1));
+    if (e.cause) walk(e.cause, depth + 1);
+  };
+  walk(err, 0);
+  if (!codes.length) return '';
+  const described = codes.map((code) => (FETCH_CAUSE_MEANINGS[code] ? `${code}: ${FETCH_CAUSE_MEANINGS[code]}` : code));
+  return ` (${described.join('; ')})`;
+}
+
 // A message that carries a link, or is long enough to be a real sentence rather
 // than a status echo, is already telling the user what to do.
 function isSelfExplanatory(message) {
@@ -1229,7 +1275,21 @@ async function providerFetch(req, provider, path, init = {}) {
         data: { error: { message: `${provider.label} did not respond within ${Math.round(budget / 1000)}s` } },
       };
     }
-    return { ok: false, status: 502, data: { error: { message: `Could not reach ${provider.label}: ${err.message}` } } };
+    // A keyless provider is one the operator runs themselves: Ollama and the
+    // Antigravity proxy. There is no "their side" to blame and no key to check,
+    // and the address is one the operator typed -- so this says so, in the
+    // message rather than the generic hint below (an explained message is long
+    // enough to be treated as speaking for itself, which is right for the
+    // cause and wrong here). The distinction that costs people the most time:
+    // a localhost address here means the *server*, not the browser.
+    const advice = provider.needsKey === false
+      ? ' — this is the endpoint you configured, so check that it is running and reachable from the server (a localhost address here means the server itself, not your machine)'
+      : '';
+    return {
+      ok: false,
+      status: 502,
+      data: { error: { message: `Could not reach ${provider.label}: ${err.message}${fetchFailureReason(err)}${advice}` } },
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -1761,6 +1821,7 @@ module.exports = {
   normalizeProviderBaseUrl,
   fetchOllamaModels,
   describeProviderError,
+  fetchFailureReason,
   fetchProviderWithRetry,
   fetchStreamWithRetry,
   clearModelCache,
