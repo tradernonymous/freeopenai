@@ -1372,6 +1372,107 @@ function sortConversations(list) {
   return [...(list || [])].sort((a, b) => (b.updatedAt - a.updatedAt) || String(a.id).localeCompare(String(b.id)));
 }
 
+// How many times one turn may move to a different provider. Bounded because the
+// point is to survive one provider going down, not to crawl every service the
+// operator ever configured while the user watches.
+const MAX_PROVIDER_FAILOVERS = 2;
+
+// The providers a turn may move to, in the order they are worth trying.
+//
+// The order is the server's, kept as-is: that list is not a ranking, and
+// re-sorting it would move a request onto whichever provider sorts first for no
+// better reason. What is filtered is the genuinely unusable -- a service that
+// serves no chat models at all (speech, search), and anything not configured,
+// since a turn moved to a provider with no key can only fail.
+function failoverProviderOrder(providers, options = {}) {
+  const ids = (Array.isArray(providers) ? providers : [])
+    .filter((p) => p && typeof p.id === 'string' && p.id)
+    .filter((p) => p.configured === true && (!p.kind || p.kind === 'chat'))
+    .map((p) => p.id);
+  // Puter goes last, and only when it is actually usable: it is the one provider
+  // that needs an account rather than a key, so a turn that moved there because
+  // a keyed provider failed would often fail on the sign-in instead. It is still
+  // worth reaching when it is the only thing left.
+  if (options.puterUsable && !ids.includes(PUTER_PROVIDER)) ids.push(PUTER_PROVIDER);
+  return ids;
+}
+
+// The first provider in that order which has not been tried this turn and is not
+// already known to have refused the whole account. Null when there is nowhere
+// left to go -- the caller then reports the original failure rather than a
+// fallback that also failed.
+function nextFailoverProvider(order, tried = [], blocked = new Set()) {
+  const skip = new Set(Array.isArray(tried) ? tried : []);
+  const refused = blocked instanceof Set ? blocked : new Set();
+  for (const id of Array.isArray(order) ? order : []) {
+    if (typeof id !== 'string' || !id) continue;
+    if (skip.has(id) || refused.has(id)) continue;
+    return id;
+  }
+  return null;
+}
+
+// Whether a failure is worth moving providers for.
+//
+// A spent allowance, a refused account, a rate limit, an upstream outage or a
+// dead socket is a property of *that* provider, and another one has its own
+// account and its own capacity. A model that refused the request is a different
+// matter: the model walker has already tried its siblings, so moving provider
+// would multiply the attempts for a request that is going to fail everywhere.
+function isFailoverWorthyFailure(message, statusCode, modelId) {
+  const text = String(message || '');
+  const status = Number(statusCode) || 0;
+  if (!text && !status) return false;
+  if (isOutOfCreditsError(text) || isQuotaExhausted(text)) return true;
+  if (isAccountLevelFailure(text, modelId)) return true;
+  if (status === 429 || status >= 500) return true;
+  return /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|socket hang up|did not respond within|not reachable/i.test(
+    text,
+  );
+}
+
+// Rewrites a conversation that contains tool calls into one that does not.
+//
+// Moving a turn to a model that cannot call tools is the one case where the work
+// already recorded has to change shape: a provider whose model has no tool
+// support rejects a request carrying assistant tool_calls outright, so the calls
+// and their results are folded into plain text. The information survives; only
+// the envelope does not. Consecutive same-role messages are merged, because a
+// run of user turns is itself rejected by some providers.
+function flattenToolTurn(messages) {
+  const out = [];
+  const push = (role, content) => {
+    const previous = out[out.length - 1];
+    if (previous && previous.role === role) previous.content += '\n\n' + content;
+    else out.push({ role, content });
+  };
+  let issued = new Map();
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || typeof message !== 'object') continue;
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+      issued = new Map(
+        message.tool_calls.map((call) => {
+          const fn = (call && call.function) || {};
+          return [call && call.id, describeToolCall(fn.name, parseToolArgs(fn.arguments))];
+        }),
+      );
+      const said = typeof message.content === 'string' ? message.content.trim() : '';
+      push('assistant', said || 'Working on it.');
+      continue;
+    }
+    if (message.role === 'tool') {
+      const what = issued.get(message.tool_call_id) || 'a tool call';
+      const body = String(message.content == null ? '' : message.content);
+      push('user', 'Result of ' + what + ':\n' + body);
+      continue;
+    }
+    if (typeof message.role === 'string' && message.role) {
+      push(message.role, typeof message.content === 'string' ? message.content : String(message.content == null ? '' : message.content));
+    }
+  }
+  return out;
+}
+
 // What a message's Retry button should resend, if it has one at all.
 //
 // A bot reply's target is the user turn above it, so the saved transcript does
@@ -2348,5 +2449,10 @@ if (typeof module !== 'undefined' && module.exports) {
     serializePendingTurn,
     parsePendingTurn,
     retryTargetFor,
+    MAX_PROVIDER_FAILOVERS,
+    failoverProviderOrder,
+    nextFailoverProvider,
+    isFailoverWorthyFailure,
+    flattenToolTurn,
   };
 }

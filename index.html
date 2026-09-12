@@ -2750,6 +2750,58 @@
             if (select) select.value = PUTER_PROVIDER;
         }
 
+        function providerLabel(id) {
+            if (id === PUTER_PROVIDER) return 'Puter';
+            return (providerInfo[id] && providerInfo[id].label) || id;
+        }
+
+        // The providers a turn may be moved to, in the order they are worth
+        // trying. Built from the server's own list rather than from the picker,
+        // which can only show one at a time.
+        function providerFailoverOrder() {
+            return failoverProviderOrder(Object.values(providerInfo || {}), { puterUsable: puterCanDraw() });
+        }
+
+        // The provider's own words, short enough to sit inside a sentence.
+        function failureReasonText(error) {
+            const text = String((error && (error.message || error)) || 'it stopped answering')
+                .replace(/\s+/g, ' ')
+                .trim();
+            return text.length > 160 ? text.slice(0, 157) + '…' : text;
+        }
+
+        // Moves the request in flight onto another configured provider, so a
+        // provider dying half-way through does not take a turn that was already
+        // paid for with it.
+        //
+        // Returns the provider it moved to, or null when there is nowhere left
+        // to go -- the caller then reports the original failure rather than a
+        // fallback that also failed. A provider that is configured but lists no
+        // chat models is skipped rather than becoming the reason.
+        async function moveTurnToNextProvider(blocked, error) {
+            const order = providerFailoverOrder();
+            for (let hop = 0; hop < MAX_PROVIDER_FAILOVERS; hop++) {
+                const next = nextFailoverProvider(order, [], blocked);
+                if (!next) return null;
+                // Marked before the attempt, so a provider that fails to load
+                // cannot be picked again on the next hop.
+                blocked.add(next);
+                const from = providerLabel(selectedProvider);
+                await selectProvider(next);
+                if (!providerModels.length) {
+                    addMessage('system', 'Skipped ' + providerLabel(next) + ' — it lists no chat models.');
+                    continue;
+                }
+                addMessage(
+                    'system',
+                    from + ' could not continue this request (' + failureReasonText(error) + ') — moving it to ' +
+                        providerLabel(next) + ' rather than losing the steps already done.'
+                );
+                return next;
+            }
+            return null;
+        }
+
         // Takes a refused model out of circulation for the session and moves to
         // one that works, so the next message doesn't repeat the failure. The
         // move stays inside the refused model's family when a sibling is still
@@ -3579,7 +3631,7 @@
                 // when GitHub is connected. An image attachment keeps the plain
                 // path since the image argument has no place in a message array.
                 if (!attachedImageFile) {
-                    const tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
+                    let tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) tools.push(...GITHUB_TOOLS);
                     // Skills ride along in Plan & Build: the auto-picked set
                     // enters the system prompt, and use_skill lets the model
@@ -3597,7 +3649,7 @@
                     const stored = readPendingTurn();
                     const resuming = stored && stored.question === raw ? stored : null;
                     if (stored && !resuming) clearPendingTurn();
-                    const turnConvo = resuming ? resuming.convo : buildConversation(outgoing, activeSkills);
+                    let turnConvo = resuming ? resuming.convo : buildConversation(outgoing, activeSkills);
                     const memo = toolMemoFor(raw);
                     if (resuming) {
                         // One continuation line, however many times it is resumed.
@@ -3611,13 +3663,48 @@
                         addMessage('system', 'Resuming the interrupted request — ' + resuming.steps + ' tool step(s) already done');
                     }
                     inFlightConvo = turnConvo;
-                    const { message, exhausted, finishReason } = await runChatWithTools(
-                        turnConvo,
-                        chatModel,
-                        tools,
-                        controller.signal,
-                        memo
-                    );
+                    // A provider that dies half-way through takes a paid-for turn
+                    // with it, so the same request is carried to another one
+                    // rather than ending in an error the user cannot act on.
+                    const blockedProviders = new Set([selectedProvider, ...providersSuspended]);
+                    let outcome = null;
+                    let hops = 0;
+                    while (!outcome) {
+                        try {
+                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo);
+                        } catch (turnError) {
+                            if (controller.signal.aborted || (turnError && turnError.name === 'AbortError')) throw turnError;
+                            // Recorded before anything moves: a failure has to name
+                            // the provider it actually happened on, not the one the
+                            // request was carried to afterwards.
+                            if (turnError && !turnError.providerId) turnError.providerId = selectedProvider;
+                            hops += 1;
+                            // Only failures another provider could plausibly answer:
+                            // an outage, a spent allowance, a refused account. A model
+                            // that refused is a model problem, and the walker inside
+                            // callModel has already tried its siblings.
+                            const worthy = isFailoverWorthyFailure(
+                                turnError && turnError.message,
+                                turnError && turnError.statusCode,
+                                turnError && turnError.modelId
+                            );
+                            const moved = hops <= MAX_PROVIDER_FAILOVERS && worthy
+                                ? await moveTurnToNextProvider(blockedProviders, turnError)
+                                : null;
+                            if (!moved) throw turnError;
+                            // A model without tool support cannot be handed a
+                            // conversation full of tool calls, so the work already
+                            // done is folded into text it can read.
+                            const nowChosen = providerModels.find((m) => m.id === selectedModel);
+                            if (nowChosen && nowChosen.tools === false) {
+                                turnConvo = flattenToolTurn(turnConvo);
+                                tools = [];
+                                inFlightConvo = turnConvo;
+                                addMessage('system', 'The model now answering cannot call tools, so the steps already done were folded into the request as text.');
+                            }
+                        }
+                    }
+                    const { message, exhausted, finishReason } = outcome;
                     if (!isActiveRun(runId, controller)) return;
                     if (activeSkills && activeSkills.length) {
                         addMessage('system', 'Skills applied: ' + activeSkills.map((s) => s.name).join(', '));
@@ -3755,7 +3842,7 @@
                 // The credit advice is about Puter's allowance specifically. Shown
                 // for a Nara or OpenRouter failure it sends the user to the
                 // wrong dashboard entirely, which is what it did.
-                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                if ((error.providerId || selectedProvider) === PUTER_PROVIDER && isOutOfCreditsError(error)) {
                     showStatus('error', 'Out of Puter credits');
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else {

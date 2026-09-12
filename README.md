@@ -449,6 +449,14 @@ Every call is billed again with the whole conversation in front of it, so what a
 
 When a question fails part-way through a tool loop, the answers it already collected are kept — so retrying replays those lookups instead of buying them a second time, while a genuinely new question starts from nothing. The status bar reports what the provider cached, so the saving is visible: `gpt-5.4-nano · 3s · 812 chars · 120 tok · 12.4k cached`. A provider that caches nothing reports nothing.
 
+### 🔀 Moving a request that a provider stopped answering
+
+When a provider fails part-way through a tool loop — a 5xx, a rate limit that outlives the retries, a spent allowance, a refused account, a dead socket — the turn is carried to the next configured provider **with everything it already collected**, rather than ending in an error and throwing the work away. The transcript says which provider failed and where the request went, so a change you did not make yourself is never invisible.
+
+Not every failure moves: a failure another account could plausibly answer does, while a *model* refusal does not. The model walker has already tried that model's siblings on the same provider, so moving would just multiply the attempts for a request that is going to fail everywhere. One turn may move twice at most, and a provider that already refused the whole account, or was already tried, is never asked again.
+
+If the model that takes over cannot call tools, the calls and their results are folded into plain text instead — the steps keep their content and lose only their envelope, which is the difference between an answer and a request the new provider rejects outright. **Puter is the last resort** in that order, because it is the one provider that needs an account rather than a key, so a turn moved there for another reason would often fail on the sign-in instead.
+
 ### ⏸️ Continuing a turn that stopped
 
 A tool loop that stops part-way — a provider 5xx, a timeout, or you pressing **Stop** — keeps everything it had already collected: the file it read, the search it ran, the listing it fetched. The transcript says so (`Kept 3 completed tool step(s)`), and the **Retry** button on that notice continues from where it stopped instead of asking the same question from the beginning, reusing every result already paid for. Stopping is deliberately treated the same as failing: a long tool loop you interrupt is usually one you want to steer, not one you want thrown away.
