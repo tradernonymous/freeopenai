@@ -1056,10 +1056,23 @@ function providerConfig(id) {
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
   // PROVIDER_MODELS replaces the pinned allowlist for that provider alone.
+  //
+  // A declaration that resolves to nothing falls back to the provider's own
+  // list. Setting the variable to a blank value is far more often a mistake
+  // (an empty Railway field, a stray space, a commented-out line) than an
+  // instruction to publish no models at all -- and the version of it that
+  // reaches the picker is an empty list, which reads as the provider being
+  // broken. Something is better than nothing here, always.
+  // An id has to be able to address a model, so anything that is not printable
+  // ASCII with no spaces is dropped rather than served: a paste from a word
+  // processor can leave a zero-width space or a smart quote in the list, and a
+  // row in the picker that cannot possibly work is worse than no row. Dropping
+  // every entry falls back to the pinned list, like a blank declaration does.
   const declared = process.env[providerEnvName(provider.envVar, '_MODELS')];
-  const models = declared
-    ? declared.split(',').map((id) => id.trim()).filter(Boolean)
-    : provider.models;
+  const declaredIds = declared
+    ? declared.split(',').map((id) => id.trim()).filter((id) => id && !/[^\x21-\x7e]/.test(id))
+    : [];
+  const models = declaredIds.length ? declaredIds : provider.models;
   const configured = { ...provider, key, baseUrl, models };
   // A key travels in an HTTP header, so a non-ASCII character in it (an em
   // dash from a word processor, a smart quote from autocorrect) makes the
@@ -1646,8 +1659,25 @@ async function llmModels(req, res) {
   // is not a fallback for a failed fetch: nothing is fetched at all, so a
   // working proxy cannot be reported as broken by an endpoint it never had.
   if (provider.catalogue === false) {
-    const ids = Array.isArray(provider.models) ? provider.models : [];
-    return sendJson(res, 200, ids.filter((id) => typeof id === 'string' && id).map((id) => ({ id })));
+    const ids = (Array.isArray(provider.models) ? provider.models : [])
+      .filter((id) => typeof id === 'string' && id.trim())
+      .map((id) => ({ id: id.trim() }));
+    // An empty 200 here is the worst possible answer: the client renders it as
+    // "this provider returned no chat models", which blames the provider for
+    // what is always a configuration mistake. Say which variable decides the
+    // list instead, so the fix is obvious from the message alone.
+    if (!ids.length) {
+      const variable = providerEnvName(provider.envVar, '_MODELS');
+      const bad = unsafeHeaderChar(process.env[variable] || '');
+      return sendJson(res, 500, {
+        error:
+          'This provider publishes no model catalogue of its own, and no models are declared for it. ' +
+          'Set ' + variable + ' to a comma-separated list of the ids it serves' +
+          (bad ? " -- the value currently set contains a non-ASCII character at position " + bad.index + '.' : '.') +
+          ' (Leave it unset to use the list this build ships with.)',
+      });
+    }
+    return sendJson(res, 200, ids);
   }
   const ttl = modelsCacheTtlMs();
   const cached = modelCache.get(id);

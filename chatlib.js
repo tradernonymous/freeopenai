@@ -32,12 +32,18 @@ const MODE_PROMPTS = {
     'Investigate first (read files via the GitHub tools, search the web for unknowns), then answer with:',
     'a short goal statement, what you found in the code (file paths), a numbered step-by-step plan, risks, and open decisions.',
     'Do not write or commit code in this mode. End by asking the user to switch to Build mode to execute.',
+    'Record the plan you propose as tasks with the task tools, so Build mode can pick it up rather than re-deriving it.',
   ].join('\n'),
   build: [
     'MODE: BUILD. You are executing agreed work. Be disciplined about it:',
     '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
     '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
     '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
+    // The todo list is the plan of record. Kept in the mode prompt rather than
+    // added to each request, because this text never changes between turns and a
+    // request that grows on every turn cannot be cached (#89).
+    '- Work from the todo list: record the plan as tasks before a multi-step job, update each status as it moves, and when the request changes revise the list -- add what is new, drop what is no longer wanted -- rather than starting a second plan beside it.',
+    '- Finish every todo before you report. If one is genuinely still open, name it and say why; never report the work as complete while the list says otherwise.',
     '- Summarize what changed, what you verified, and what you deliberately did not do.',
     '- Commits still require the user\'s explicit approval through the app\'s commit confirmation.',
   ].join('\n'),
@@ -1386,9 +1392,118 @@ function renderTaskGraphPrompt(graph) {
   const lines = taskGraphLines(graph);
   if (!lines.length) return '';
   return [
-    'TASK LIST — kept in this browser and carried between chats. Keep it current with ' +
-      'the task tools as work moves, rather than restating the plan in prose.',
+    'TASK LIST — kept in this browser and carried between chats, so a later turn ' +
+      'picks the work up where it stopped. Keep it current with the task tools as ' +
+      'work moves: add what the work turns out to need, update each status as it ' +
+      'changes, and finish every task before reporting. Never restate the plan in ' +
+      'prose instead of the list.',
     ...lines,
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Showing the model thinking
+// ---------------------------------------------------------------------------
+//
+// A reasoning model's scratchpad arrives as a token stream and is usually longer
+// than the answer. Two views of it, in opposite directions: while it is still
+// coming you want the newest line, and afterwards you want only enough to decide
+// whether to open it.
+
+// The last thing thought, flattened to a single line. The tail and not the head:
+// the first line of a four-thousand-character scratchpad says what it started
+// with, while the end says what it is doing now -- which is the only question a
+// live view answers.
+function reasoningTailLine(text, limit = 180) {
+  const line = String(text || '').replace(/\s+/g, ' ').trim();
+  if (line.length <= limit) return line;
+  return '\u2026' + line.slice(-limit);
+}
+
+// The one-line summary over a finished scratchpad. Given no start time -- a
+// conversation restored from storage on a later day -- it says how much there is
+// and nothing about how long it took, rather than inventing a duration.
+function describeReasoning(text, { startedAt = 0, now = 0 } = {}) {
+  const chars = String(text || '').length;
+  const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+  const seconds = startedAt > 0 && now > 0 ? Math.max(0, (now - startedAt) / 1000) : 0;
+  const label = seconds >= 0.5 ? 'Thought for ' + seconds.toFixed(1) + 's' : 'Thought';
+  return label + ' · ' + size + ' chars';
+}
+
+// ---------------------------------------------------------------------------
+// The list as something to work from
+// ---------------------------------------------------------------------------
+//
+// The graph above is the model's memory of a plan. These are the rules the panel
+// and the turn contract are built on, kept pure so the panel, the prompt and the
+// tests cannot disagree about what "still open" means.
+
+// Display order: what is being worked on, then what is next, then what is
+// deliberately parked, then what is finished. Sorting by status rather than by
+// id is the difference between a plan and an archive -- the thing you are doing
+// right now must not be item nine because it was added last.
+const TODO_STATUS_ORDER = ['doing', 'todo', 'blocked', 'done'];
+
+function orderTodos(graph) {
+  const current = normalizeTaskGraph(graph);
+  const rank = (task) => {
+    const at = TODO_STATUS_ORDER.indexOf(task.status);
+    return at === -1 ? TODO_STATUS_ORDER.length : at;
+  };
+  return [...current.tasks].sort((a, b) => (rank(a) - rank(b)) || a.id.localeCompare(b.id, 'en', { numeric: true }));
+}
+
+function todoProgress(graph) {
+  const current = normalizeTaskGraph(graph);
+  const count = (status) => current.tasks.filter((task) => task.status === status).length;
+  const done = count('done');
+  return {
+    total: current.tasks.length,
+    done,
+    doing: count('doing'),
+    todo: count('todo'),
+    blocked: count('blocked'),
+    open: current.tasks.length - done,
+  };
+}
+
+// The checkbox on a row. One click completes, one click reopens: a person is the
+// authority on their own work, so 'doing' and 'blocked' both complete. A
+// finished task reopens as 'todo' rather than back into a state the model set,
+// which would otherwise leave the row looking mid-flight with nothing running.
+function toggleTodoStatus(status) {
+  return String(status) === 'done' ? 'todo' : 'done';
+}
+
+// The one line above the rows. Empty and silent when there is nothing to say.
+function renderTodoSummary(graph) {
+  const progress = todoProgress(graph);
+  if (!progress.total) return '';
+  const parts = [progress.done + ' of ' + progress.total + ' done'];
+  if (progress.doing) parts.push(progress.doing + ' in progress');
+  if (progress.blocked) parts.push(progress.blocked + ' blocked');
+  return parts.join(' · ');
+}
+
+// What is still open, as the model reads it. The nudge exists because recording
+// a plan and finishing one are different habits: a reply that arrives carrying
+// three silent open todos reads as complete when it is not, and the list is the
+// only place that gap is visible.
+//
+// `touched` is what keeps this from being noise. A model that never wrote to the
+// list this turn is not working from it, so an old task left open from an
+// earlier conversation is not something to interrupt an answer about.
+function todoReportNudge(graph, { touched = false } = {}) {
+  if (!touched) return '';
+  const current = normalizeTaskGraph(graph);
+  const open = orderTodos(current).filter((task) => task.status !== 'done');
+  if (!open.length) return '';
+  return [
+    'TODO LIST — ' + open.length + ' of ' + current.tasks.length + ' still open:',
+    ...open.map((task) => '- [' + task.status + '] ' + task.id + ' ' + task.title),
+    'Finish them, or say plainly in your reply which are still open and why. ' +
+      'Do not report the work as complete while they are open.',
   ].join('\n');
 }
 
@@ -2960,6 +3075,14 @@ if (typeof module !== 'undefined' && module.exports) {
     TASK_TOOLS,
     TASK_TOOL_NAMES,
     TASK_STATUSES,
+    TODO_STATUS_ORDER,
+    describeReasoning,
+    reasoningTailLine,
+    orderTodos,
+    todoProgress,
+    todoReportNudge,
+    toggleTodoStatus,
+    renderTodoSummary,
     isTaskTool,
     isTaskWriteTool,
     newTaskGraph,

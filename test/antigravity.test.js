@@ -150,6 +150,41 @@ test('ANTIGRAVITY_MODELS replaces the pinned list for a proxy whose ids differ',
   });
 });
 
+test('a blank ANTIGRAVITY_MODELS falls back to the pinned list instead of emptying the picker', async () => {
+  // The variable exists to override the list. Set to an empty Railway field, a
+  // stray space or a commented-out line, the list it produces is empty -- and an
+  // empty list is served as "this provider has no models", which reads as the
+  // provider being broken and is the one thing that cannot be recovered from in
+  // the UI. Something is better than nothing here, always.
+  for (const blank of ['', '   ', ',', ' , ']) {
+    await withProxy({ baseUrl: 'http://127.0.0.1:PORT/v1', models: blank }, async ({ base, hits }) => {
+      const res = await fetch(modelsUrl(base));
+      const models = await res.json();
+      assert.equal(res.status, 200, 'a blank declaration is not an error');
+      assert.ok(models.length > 0, 'the pinned list is served instead of nothing: ' + JSON.stringify(models));
+      assert.ok(models.some((m) => m.id === OPUS), 'including the reason this provider is wired up at all');
+      assert.equal(hits.length, 0, 'and nothing was fetched from a proxy that publishes no catalogue');
+    });
+  }
+});
+
+test('ids that cannot address a model are dropped, not served as unclickable rows', async () => {
+  // A paste from a word processor leaves a zero-width space or a smart quote in
+  // the list. Such an id can never resolve -- the provider answers 404 and the
+  // picker offers a row that cannot work. Dropping the entry, and falling back
+  // to the pinned list when that leaves nothing, is the only answer that ends in
+  // a usable picker.
+  await withProxy({ baseUrl: 'http://127.0.0.1:PORT/v1', models: '\u200b' }, async ({ base }) => {
+    const models = await (await fetch(modelsUrl(base))).json();
+    assert.ok(models.some((m) => m.id === OPUS), 'the pinned list is served: ' + JSON.stringify(models));
+  });
+  // A good id beside a broken one keeps the good one and loses only the bad.
+  await withProxy({ baseUrl: 'http://127.0.0.1:PORT/v1', models: 'antigravity-gemini-4-pro,\u201cquoted\u201d' }, async ({ base }) => {
+    const models = await (await fetch(modelsUrl(base))).json();
+    assert.deepEqual(models.map((m) => m.id), ['antigravity-gemini-4-pro']);
+  });
+});
+
 test('a chat call reaches the proxy on the OpenAI path, with the model asked for', async () => {
   await withProxy({ baseUrl: 'http://127.0.0.1:PORT/v1' }, async ({ base, hits }) => {
     const res = await chat(base, { model: OPUS, messages: [{ role: 'user', content: 'hi' }] });
