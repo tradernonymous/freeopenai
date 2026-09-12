@@ -35,6 +35,18 @@
             --glow: 0 0 0 3px var(--accent-bg), 0 0 22px rgba(255,255,255,.07);
             --glass: rgba(10,10,10,.72);
             --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            /* One control system for the toolbar, the composer and the icon
+               buttons. Every chip used to carry its own height, radius and
+               hover colour, so the row read as three apps stitched together --
+               999px pills beside 8px rectangles, 4px padding beside 6px. These
+               are now the only values that decide how a control looks, and a
+               new control inherits the look by using them instead of by
+               copying whichever neighbour was closest. */
+            --ctl-h: 30px;
+            --ctl-r: 9px;
+            --ctl-bg: rgba(255,255,255,.05);
+            --ctl-bg-hover: rgba(255,255,255,.1);
+            --ctl-edge: rgba(255,255,255,.08);
         }
         /* Light theme: same tokens, inverted monochrome. Code blocks stay
            dark on purpose -- a dark well reads as code in either theme. */
@@ -55,6 +67,9 @@
             --lift-lg: inset 0 1px 0 rgba(255,255,255,.9), 0 8px 28px rgba(0,0,0,.12);
             --glow: 0 0 0 3px rgba(0,0,0,.08);
             --glass: rgba(255,255,255,.78);
+            --ctl-bg: rgba(0,0,0,.04);
+            --ctl-bg-hover: rgba(0,0,0,.08);
+            --ctl-edge: rgba(0,0,0,.06);
         }
         html[data-theme="light"] .message-text pre { background: #111111; border-color: #333333; }
         html[data-theme="light"] .message-text pre code { color: #eeeeee; }
@@ -246,6 +261,172 @@
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
         .history-scrim { display: none; }
 
+        /* Todo panel: the plan, beside the work rather than behind a settings
+           dialog. A list you have to go and open is a list nobody keeps current,
+           and the only reason to show it at all is that it is visible while the
+           work happens. Mirrors .history-sidebar -- a column on a laptop, an
+           off-canvas drawer on a phone, which is the only shape 375px allows. */
+        .todo-sidebar {
+            width: 288px; flex-shrink: 0;
+            display: flex; flex-direction: column;
+            /* A floating card laid beside the chat, not a column of the layout
+               and not something opened like a tab: inset from the shell edge,
+               rounded, raised, scrolling inside itself. It still takes width
+               from the transcript rather than covering it -- a list of what is
+               left to do is useless if reading it hides the work. */
+            margin: 10px 10px 10px 0;
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            background: var(--surface);
+            box-shadow: var(--lift-lg);
+            overflow: hidden;
+            transition: width 160ms ease, margin 160ms ease, opacity 120ms ease;
+        }
+        .chat-shell.todos-hidden .todo-sidebar {
+            width: 0; min-width: 0; margin: 0; border-width: 0; opacity: 0;
+        }
+
+        /* Which skills are answering, and where each came from: pinned by hand
+           or chosen by the router. The same card as the todo panel, on the
+           other side, so the conversation sits between the plan for the work
+           and the method being used on it. */
+        .skill-rail {
+            width: 212px; flex-shrink: 0;
+            display: flex; flex-direction: column;
+            margin: 10px 0 10px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            background: var(--surface);
+            box-shadow: var(--lift-lg);
+            overflow: hidden;
+            transition: width 160ms ease, margin 160ms ease, opacity 120ms ease;
+        }
+        .chat-shell.skills-hidden .skill-rail {
+            width: 0; min-width: 0; margin: 0; border-width: 0; opacity: 0;
+        }
+        .rail-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+        .rail-empty { padding: 10px 8px; font-size: 11.5px; line-height: 1.7; color: var(--text-muted); }
+        .skill-row {
+            display: flex; flex-direction: column; gap: 3px;
+            padding: 7px 8px; border-radius: var(--r-sm);
+            border: 1px solid transparent; cursor: pointer;
+            transition: var(--transition);
+        }
+        .skill-row:hover { background: var(--surface-2); border-color: var(--border); }
+        .skill-row-top { display: flex; align-items: center; gap: 6px; }
+        .skill-row-name {
+            flex: 1; min-width: 0; font-size: 11.5px; color: var(--text);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .skill-row-meta { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+        .skill-tag {
+            flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
+            padding: 1px 5px; border-radius: 999px;
+            border: 1px solid var(--border); color: var(--text-muted);
+        }
+        .skill-tag.pinned { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+        .rail-foot {
+            flex-shrink: 0; border-top: 1px solid var(--border);
+            padding: 7px 10px; font-size: 10.5px; color: var(--text-muted); line-height: 1.6;
+        }
+
+        .todo-head, .rail-head {
+            display: flex; align-items: center; gap: 6px;
+            padding: 8px 10px 8px 12px; height: 44px; flex-shrink: 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px; font-weight: 600; color: var(--text-dim);
+            white-space: nowrap;
+        }
+        .todo-head .todo-count { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+        .todo-head .icon-btn, .rail-head .icon-btn { width: 24px; height: 24px; }
+        .rail-head .rail-count { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+        /* A hairline that fills as tasks finish. The number in the header says
+           the same thing, but a bar is what tells you at a glance whether the
+           plan is nearly there or barely started. */
+        .todo-progress { height: 3px; flex-shrink: 0; background: var(--border); }
+        .todo-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width 220ms ease; }
+        .todo-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 3px; }
+        .todo-empty { padding: 10px 6px; font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+        .todo-row {
+            display: flex; align-items: flex-start; gap: 8px;
+            padding: 7px 8px; border-radius: var(--r-sm);
+            border: 1px solid transparent;
+            transition: var(--transition);
+        }
+        .todo-row:hover { background: var(--surface-2); border-color: var(--border); }
+        /* The status control is a real button with a real hit area, because
+           ticking a task off is the one thing a person does here. */
+        .todo-check {
+            flex-shrink: 0; width: 18px; height: 18px; margin-top: 1px;
+            display: grid; place-items: center; padding: 0;
+            border: 1px solid var(--border-strong); border-radius: 50%;
+            background: transparent; color: transparent;
+            font-size: 10px; line-height: 1; cursor: pointer;
+            transition: var(--transition);
+        }
+        .todo-check:hover { border-color: var(--accent); color: var(--text-muted); }
+        .todo-row.doing .todo-check { border-color: var(--accent); color: var(--accent); }
+        .todo-row.done .todo-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .todo-row.blocked .todo-check { border-color: var(--danger); color: var(--danger); }
+        .todo-body { flex: 1; min-width: 0; }
+        .todo-title {
+            font-size: 12px; line-height: 1.5; color: var(--text);
+            overflow-wrap: anywhere;
+        }
+        .todo-row.done .todo-title { color: var(--text-muted); text-decoration: line-through; }
+        .todo-row.blocked .todo-title { color: var(--text-dim); }
+        .todo-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; font-size: 10px; color: var(--text-muted); }
+        .todo-id { font-variant-numeric: tabular-nums; }
+        .todo-after { border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; }
+        .todo-detail {
+            margin-top: 4px; font-size: 11px; line-height: 1.6; color: var(--text-muted);
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+            overflow: hidden; overflow-wrap: anywhere;
+        }
+        .todo-row.open-detail .todo-detail { -webkit-line-clamp: unset; display: block; }
+        .todo-remove {
+            flex-shrink: 0; background: none; border: none; padding: 0 2px;
+            color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1;
+            opacity: 0; transition: var(--transition);
+        }
+        .todo-row:hover .todo-remove { opacity: 1; }
+        .todo-remove:hover { color: var(--danger); }
+        .todo-foot {
+            flex-shrink: 0; border-top: 1px solid var(--border);
+            padding: 7px 10px; display: flex; align-items: center; gap: 8px;
+        }
+        .todo-foot button {
+            background: none; border: none; padding: 0; cursor: pointer;
+            font: inherit; font-size: 11px; color: var(--text-muted);
+        }
+        .todo-foot button:hover { color: var(--text-dim); }
+        .todo-foot button.danger:hover { color: var(--danger); }
+
+        /* The reasoning strip: what the model is doing, in one line, while it
+           does it. opencode's habit -- a long scratchpad is only useful to
+           someone watching, so while it streams you get the live tail and
+           nothing else, and the full text stays behind the summary. */
+        .reasoning-strip {
+            display: flex; align-items: baseline; gap: 8px;
+            padding: 5px 9px; margin-bottom: 8px;
+            border: 1px solid var(--border); border-radius: var(--r-sm);
+            background: var(--surface);
+            font-size: 11px; color: var(--text-muted);
+            overflow: hidden;
+        }
+        .reasoning-label { flex-shrink: 0; color: var(--text-dim); font-weight: 500; }
+        .reasoning-label::before {
+            content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
+            border-radius: 50%; background: var(--accent);
+            animation: reasoning-pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes reasoning-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .reasoning-label::before { animation: none; opacity: .8; } }
+        .reasoning-tail {
+            flex: 1; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+
         /* Views */
         .view { display: none; flex: 1; flex-direction: column; overflow: hidden; min-height: 0; }
         .view.active { display: flex; }
@@ -316,17 +497,18 @@
         .model-trigger {
             position: relative;
             display: flex; align-items: center; gap: 6px;
-            padding: 6px 10px;
-            border-radius: var(--r-sm);
-            background: var(--surface-2);
+            height: var(--ctl-h); padding: 0 10px;
+            border-radius: var(--ctl-r);
+            background: var(--ctl-bg);
             border: 1px solid var(--border);
             color: var(--text);
-            font-size: 12px;
+            font: inherit; font-size: 12px;
             font-weight: 500;
             cursor: pointer;
             transition: var(--transition);
             white-space: nowrap;
         }
+        .model-trigger:hover { background: var(--ctl-bg-hover); border-color: var(--border-strong); }
         .model-trigger, .effort-select { box-shadow: var(--lift); }
         .model-trigger:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--lift-lg); }
         .effort-select:focus { outline: none; border-color: var(--border-strong); box-shadow: var(--glow); }
@@ -391,6 +573,14 @@
         .chat-messages {
             flex: 1;
             overflow-y: auto;
+            /* Every word of the conversation lives in this one scroll region, so
+               the horizontal axis is closed. One axis auto and the other visible
+               computes to auto on both, which let a wide child be scrolled to
+               instead of wrapped -- and because the column is centred, the left
+               half of that overflow sat at a negative offset nothing could
+               reach. Content wraps now; only a code block scrolls, on purpose. */
+            overflow-x: hidden;
+            overscroll-behavior: contain;
             padding: 16px 20px;
             display: flex;
             flex-direction: column;
@@ -623,10 +813,28 @@
         .modal-wide { max-width: 560px; }
         .mask-canvas { width: 100%; border-radius: var(--r-sm); border: 1px solid var(--border); background: #000; touch-action: none; cursor: crosshair; display: block; }
         .mask-prompt { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font: inherit; font-size: 13px; outline: none; margin-top: 10px; }
-        .effort-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
-        /* Mode chip (Chat / Plan / Build) — mirrors the effort chip's shape so
-           the composer stays one visual row. */
-        .mode-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+        /* One shape for every chip in the toolbar: same height, same radius,
+           same fill, same hover. `.model-trigger` and `.skills-toggle` are
+           declared elsewhere and join in by using the same tokens. */
+        .effort-chip, .mode-chip, .skills-toggle {
+            height: var(--ctl-h); padding: 0 10px;
+            border-radius: var(--ctl-r);
+            background: var(--ctl-bg);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            font: inherit; font-size: 11px; font-weight: 500;
+            display: inline-flex; align-items: center; gap: 6px;
+            cursor: pointer; white-space: nowrap;
+            transition: var(--transition);
+        }
+        .effort-chip:hover, .mode-chip:hover, .skills-toggle:hover {
+            background: var(--ctl-bg-hover); color: var(--text); border-color: var(--border-strong);
+        }
+        .effort-chip:focus-visible, .mode-chip:focus-visible, .skills-toggle:focus-visible,
+        .composer-attach:focus-visible, .composer-send:focus-visible, .icon-btn:focus-visible {
+            outline: none; box-shadow: var(--glow); border-color: var(--accent);
+        }
+        .mode-chip { font-size: 11px; }
         .mode-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
         .mode-chip[data-mode="plan"] { color: var(--accent); border-color: var(--accent-bg); }
         .mode-chip[data-mode="plan"]::before { background: var(--accent); }
@@ -758,9 +966,10 @@
         .composer-controls > * { flex-shrink: 0; }
         .composer-controls .model-trigger { max-width: 220px; }
         .composer-controls .model-trigger #modelLabel { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
-        .skills-toggle { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        /* Shape comes from the shared chip rule above; only the selected state
+           is its own. */
         .skills-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
-        .skills-toggle[aria-pressed="false"] { opacity: .7; }
+        .skills-toggle[aria-pressed="false"] { opacity: .65; }
 
         /* Skills pinned to this chat, above the composer. Hidden when there are
            none: a permanent empty row is worse than no row. */
@@ -806,9 +1015,12 @@
         .composer:hover { border-color: var(--border-strong); }
         .composer:focus-within { border-color: var(--accent); box-shadow: var(--glow), var(--lift); }
         .composer-attach, .composer-send {
-            width: 36px; height: 36px; flex-shrink: 0;
-            border-radius: 50%;
-            border: none;
+            width: 34px; height: 34px; flex-shrink: 0;
+            /* The same radius as every other control in the row: circles beside
+               rounded rectangles was most of what made the toolbar look
+               assembled rather than designed. */
+            border-radius: var(--ctl-r);
+            border: 1px solid transparent;
             cursor: pointer;
             display: grid; place-items: center;
             transition: var(--transition);
@@ -816,8 +1028,8 @@
         .composer-send { box-shadow: var(--lift); }
         .composer-send:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--lift-lg); }
         .composer-send:active:not(:disabled) { transform: translateY(0); }
-        .composer-attach { background: transparent; color: var(--text-dim); }
-        .composer-attach:hover { background: var(--surface-2); color: var(--text); }
+        .composer-attach { background: var(--ctl-bg); border-color: var(--border); color: var(--text-dim); }
+        .composer-attach:hover { background: var(--ctl-bg-hover); color: var(--text); border-color: var(--border-strong); }
         .composer-attach.active { background: var(--accent-bg); color: var(--accent); }
         .composer-attach svg { width: 18px; height: 18px; }
         .composer-input {
@@ -1070,6 +1282,31 @@
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
+            /* The todo card takes the same treatment from the other edge: 375px
+               has room for the chat or the plan, never both. Flush and square
+               here -- a floating card floating over the whole screen is just a
+               screen with a border on it. */
+            .todo-sidebar {
+                position: absolute; top: 0; bottom: 0; right: 0; z-index: 40;
+                width: 84%; max-width: 320px; margin: 0;
+                border-radius: 0; border-width: 0 0 0 1px;
+                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
+                transform: translateX(0); transition: transform 180ms ease;
+            }
+            .chat-shell.todos-hidden .todo-sidebar {
+                width: 84%; opacity: 1; transform: translateX(102%);
+                border-left-color: var(--border);
+            }
+            .todo-scrim {
+                display: block; position: absolute; inset: 0; z-index: 39;
+                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
+            }
+            .chat-shell.todos-hidden .todo-scrim { opacity: 0; pointer-events: none; }
+            /* A phone row is a finger target, so it grows and the delete button
+               stops being hover-only -- there is no hover to reveal it with. */
+            .todo-row { padding: 12px 10px; }
+            .todo-check { width: 22px; height: 22px; }
+            .todo-remove { opacity: 1; }
             /* Touch targets. Both Apple and Google ask for ~44px, and the icon
                buttons here are 24-32px. Growing them for real would push the
                header past 375px, so the hit area is extended with a pseudo
@@ -1166,6 +1403,13 @@
         /* A phone that has no hover state never reveals the delete affordances
            that rely on it, so the sidebar's per-chat delete stays hidden for
            every chat except the active one. Make it always visible. */
+        /* The skills card is information rather than a control, so it is the
+           first thing to go when there is no room: below this, the same facts
+           are a tap away in the skill picker, and the chat keeps its width. */
+        @media (max-width: 1100px) {
+            .skill-rail, #skillRailToggle { display: none; }
+        }
+
         @media (hover: none) {
             .history-item .history-delete { opacity: 1; }
         }
@@ -1198,12 +1442,31 @@
                 width: 34%; opacity: 1; transform: translateX(-102%);
                 border-right-color: var(--border);
             }
+            /* Landscape has width to spare and height to lose, so the panel is
+               narrower here and starts closed: a transcript is what a short
+               viewport needs most. */
+            .todo-sidebar {
+                position: absolute; top: 0; bottom: 0; right: 0; z-index: 40;
+                width: 32%; max-width: 300px; margin: 0;
+                border-radius: 0; border-width: 0 0 0 1px;
+                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
+                transform: translateX(0); transition: transform 180ms ease;
+            }
+            .chat-shell.todos-hidden .todo-sidebar {
+                width: 32%; opacity: 1; transform: translateX(102%);
+                border-left-color: var(--border);
+            }
             .chat-shell { position: relative; }
             .history-scrim {
                 display: block; position: absolute; inset: 0; z-index: 39;
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
+            .todo-scrim {
+                display: block; position: absolute; inset: 0; z-index: 39;
+                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
+            }
+            .chat-shell.todos-hidden .todo-scrim { opacity: 0; pointer-events: none; }
         }
     </style>
 </head>
@@ -1232,6 +1495,17 @@
                         <div class="history-list" id="historyList"></div>
                     </aside>
                     <div class="history-scrim" id="historyScrim" onclick="toggleHistory(false)"></div>
+                    <aside class="skill-rail" id="skillRail" aria-label="Skills used in this chat">
+                        <div class="rail-head">
+                            <span>Skills</span>
+                            <span class="rail-count" id="skillRailCount">none</span>
+                            <button class="icon-btn" type="button" onclick="toggleSkillRail(false)" aria-label="Hide the skills card" title="Hide">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>
+                            </button>
+                        </div>
+                        <div class="rail-list" id="skillRailList" aria-live="polite"></div>
+                        <div class="rail-foot" id="skillRailFoot">Tap one to pin it to this chat, or a pinned one to let it go.</div>
+                    </aside>
                 <div class="chat-card">
                     <div class="chat-tabs" id="chatTabs" hidden></div>
                     <div class="chat-bar">
@@ -1243,6 +1517,14 @@
                             <span>FreeAi4U</span>
                         </div>
                         <div class="chat-bar-actions">
+                            <button class="icon-btn" id="skillRailToggle" title="Skills used in this chat" aria-label="Toggle the skills card" aria-pressed="true" onclick="toggleSkillRail()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/></svg>
+                                <span class="signed-in-dot" id="skillRailBadge"></span>
+                            </button>
+                            <button class="icon-btn" id="todoToggle" title="Todo list" aria-label="Toggle the todo list" aria-pressed="true" onclick="toggleTodos()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><polyline points="3 6 4.5 7.5 7 5"/><polyline points="3 12 4.5 13.5 7 11"/><polyline points="3 18 4.5 19.5 7 17"/></svg>
+                                <span class="signed-in-dot" id="todoBadge"></span>
+                            </button>
                             <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
                             </button>
@@ -1360,6 +1642,23 @@
                         <span id="usageText" style="display:none;">0 requests</span>
                     </div>
                 </div>
+
+                    <aside class="todo-sidebar" id="todoSidebar" aria-label="Todo list">
+                        <div class="todo-head">
+                            <span>Todos</span>
+                            <span class="todo-count" id="todoCount">empty</span>
+                            <button class="icon-btn" type="button" onclick="toggleTodos(false)" aria-label="Hide the todo list" title="Hide">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+                            </button>
+                        </div>
+                        <div class="todo-progress" id="todoProgress" role="progressbar" aria-label="Todos finished" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="todo-progress-fill" id="todoProgressFill"></div></div>
+                        <div class="todo-list" id="todoList" aria-live="polite"></div>
+                        <div class="todo-foot">
+                            <button type="button" onclick="clearTaskList()" title="Remove every finished task">Clear finished</button>
+                            <button type="button" class="danger" onclick="clearTaskList(true)" title="Remove every task">Clear all</button>
+                        </div>
+                    </aside>
+                    <div class="todo-scrim" id="todoScrim" onclick="toggleTodos(false)"></div>
                 </div>
             </div>
 
@@ -1424,7 +1723,8 @@
                         </div>
                         <div class="workspace-list" id="taskListRows" aria-label="Recorded tasks"></div>
                         <div style="margin-top: 8px;">
-                            <button class="icon-btn-text danger" onclick="clearTaskList()">Clear the task list</button>
+                            <button class="icon-btn-text" onclick="toggleTodos(true)">Show the panel</button>
+                            <button class="icon-btn-text danger" onclick="clearTaskList(true)">Clear the task list</button>
                         </div>
                     </div>
                     <div class="settings-row">
@@ -1433,6 +1733,13 @@
                             <p class="settings-hint">One extra try after a short wait when a provider answers 429, a server error, or goes silent.</p>
                         </div>
                         <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on a rate limit or server error">
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Reasoning summary</strong>
+                            <p class="settings-hint">Show what a reasoning model is thinking: one moving line while it works, folded away behind a summary when the answer arrives.</p>
+                        </div>
+                        <input type="checkbox" id="reasoningCheck" checked onchange="setReasoningVisible(this.checked)" aria-label="Show the reasoning summary">
                     </div>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
@@ -1704,7 +2011,22 @@
         // conversation, so it is not put to the user each time -- the list is
         // visible and removable in Settings instead.
         const TASK_KEY = 'freeopenaiTasks';
+        const TODOS_HIDDEN_KEY = 'freeopenaiTodosHidden';
         let taskGraph = loadTaskGraph();
+
+        // Which skills have answered in each conversation, so the card beside the
+        // chat can say what this chat is actually running on. Per conversation
+        // and not global: "the router picked ponytail here" is a fact about this
+        // chat, and a shared counter would show a stranger's habits as yours.
+        const SKILL_USE_KEY = 'freeopenaiSkillUse';
+        const SKILLS_HIDDEN_KEY = 'freeopenaiSkillsHidden';
+        let skillUseLog = loadSkillUseLog();
+
+        // Whether the reasoning summary is shown at all. On by default, because
+        // seeing what a reasoning model is doing is the reason to use one; off is
+        // for people who want the answer and nothing else.
+        const REASONING_KEY = 'freeopenaiReasoningHidden';
+        let reasoningVisible = localStorage.getItem(REASONING_KEY) !== '1';
 
         // --- Modes & skills (opencode-style) ---
         let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
@@ -1755,6 +2077,9 @@
                 if (!res.ok) throw new Error(data.error || 'failed');
                 skillsCatalog = Array.isArray(data) ? data : [];
                 renderSkillsList();
+                // Redrawn now that the catalogue can supply real names and
+                // sources: the rail is rendered before the library loads.
+                renderSkillRail();
             } catch {
                 renderSkillsList('Skill library unreachable — continuing without skills');
             }
@@ -1857,6 +2182,10 @@
             const convo = conversations.find((c) => c.id === activeConversationId);
             activeSkillNames = convo && Array.isArray(convo.skills) ? convo.skills.filter(Boolean).map(String) : [];
             renderSkillBar();
+            // The skills card is per conversation, so every path that changes
+            // which chat is open -- a switch, a new chat, a reload -- redraws it
+            // here rather than in four call sites that would drift apart.
+            renderSkillRail();
         }
 
         // A declined offer belongs to the chat that declined it, and an offer
@@ -2303,6 +2632,10 @@
         refreshLoginRequirement();
         renderWorkspaceFiles();
         renderTaskList();
+        restoreTodosVisibility();
+        restoreSkillRailVisibility();
+        renderSkillRail();
+        document.getElementById('reasoningCheck').checked = reasoningVisible;
 
         function initializeApp() {
             if (typeof puter === 'undefined') {
@@ -3060,34 +3393,359 @@
             return 'Error: unknown tool ' + name;
         }
 
+        // The mark on a row's status button. It reads as a checkbox because
+        // that is what it is; the three states a checkbox cannot express --
+        // being worked on, parked, finished -- are shown by the row it sits in.
+        function todoMark(status) {
+            if (status === 'done') return '✓';
+            if (status === 'doing') return '◐';
+            if (status === 'blocked') return '!';
+            return '';
+        }
+
         function renderTaskList() {
-            const list = document.getElementById('taskListRows');
+            const list = document.getElementById('todoList');
+            const count = document.getElementById('todoCount');
             const status = document.getElementById('taskStatus');
-            if (!list || !status) return;
+            const progress = document.getElementById('todoProgress');
+            const fill = document.getElementById('todoProgressFill');
+            const badge = document.getElementById('todoBadge');
+            const tasks = orderTodos(taskGraph);
+            const totals = todoProgress(taskGraph);
+
+            if (count) count.textContent = totals.total ? totals.done + '/' + totals.total : 'empty';
+            if (badge) badge.style.display = totals.open ? '' : 'none';
+            if (progress && fill) {
+                progress.setAttribute('aria-valuemax', String(totals.total));
+                progress.setAttribute('aria-valuenow', String(totals.done));
+                fill.style.width = totals.total ? (totals.done / totals.total) * 100 + '%' : '0%';
+            }
+            // The settings row keeps the count and points at the panel rather
+            // than repeating the list: two renderings of one list is two places
+            // for it to be wrong, and the panel is the one you can act on.
+            if (status) {
+                status.textContent = totals.total
+                    ? renderTodoSummary(taskGraph) + ' — kept in this browser only, and carried between chats.'
+                    : 'Empty. The plan the model records shows up beside the chat as it works.';
+            }
+
+            if (!list) return;
             list.innerHTML = '';
-            const tasks = taskGraph.tasks;
             if (!tasks.length) {
-                status.textContent = 'Empty. Tasks the model records are kept in this browser and carried between chats.';
+                const empty = document.createElement('div');
+                empty.className = 'todo-empty';
+                empty.textContent = 'No todos yet. In Plan and Build mode the model records its plan here before starting, and updates it as the work moves — so a later turn can pick the work up where it stopped. Tick a row to finish it, × to drop it.';
+                list.append(empty);
                 return;
             }
-            const open = tasks.filter((t) => t.status !== 'done').length;
-            status.textContent = tasks.length + ' task(s), ' + open + ' still open. Kept in this browser only.';
             for (const task of tasks) {
                 const row = document.createElement('div');
-                row.className = 'workspace-row';
-                const name = document.createElement('span');
-                name.className = 'workspace-name';
-                name.textContent = '[' + task.status + '] ' + task.id + ' ' + task.title;
-                const after = document.createElement('span');
-                after.className = 'workspace-size';
-                after.textContent = task.dependsOn.length ? 'after ' + task.dependsOn.join(', ') : '';
+                row.className = 'todo-row ' + task.status;
+                row.dataset.id = task.id;
+
+                const check = document.createElement('button');
+                check.type = 'button';
+                check.className = 'todo-check';
+                check.textContent = todoMark(task.status);
+                check.setAttribute('aria-label', task.status === 'done'
+                    ? 'Reopen ' + task.title
+                    : 'Mark done: ' + task.title);
+                check.title = task.status === 'done' ? 'Reopen' : 'Mark done';
+                check.onclick = () => uiSetTaskStatus(task.id, toggleTodoStatus(task.status));
+
+                const body = document.createElement('div');
+                body.className = 'todo-body';
+                const title = document.createElement('div');
+                title.className = 'todo-title';
+                title.textContent = task.title;
+                body.append(title);
+
+                const meta = document.createElement('div');
+                meta.className = 'todo-meta';
+                const id = document.createElement('span');
+                id.className = 'todo-id';
+                id.textContent = task.id;
+                meta.append(id);
+                if (task.status === 'doing' || task.status === 'blocked') {
+                    const state = document.createElement('span');
+                    state.textContent = task.status === 'doing' ? 'in progress' : 'blocked';
+                    meta.append(state);
+                }
+                if (task.dependsOn.length) {
+                    const after = document.createElement('span');
+                    after.className = 'todo-after';
+                    after.textContent = 'after ' + task.dependsOn.join(', ');
+                    meta.append(after);
+                }
+                body.append(meta);
+
+                if (task.detail) {
+                    const detail = document.createElement('div');
+                    detail.className = 'todo-detail';
+                    detail.textContent = task.detail;
+                    // The reason to record a detail is to pick the work up
+                    // later, so the row has to be able to show all of it.
+                    body.style.cursor = 'pointer';
+                    body.onclick = () => row.classList.toggle('open-detail');
+                    body.title = 'Show the full note';
+                    body.append(detail);
+                }
+
                 const remove = document.createElement('button');
-                remove.className = 'icon-btn-text danger';
-                remove.textContent = 'Delete';
+                remove.type = 'button';
+                remove.className = 'todo-remove';
+                remove.textContent = '×';
+                remove.title = 'Drop this todo';
+                remove.setAttribute('aria-label', 'Drop ' + task.title);
                 remove.onclick = () => deleteTask(task.id);
-                row.append(name, after, remove);
+
+                row.append(check, body, remove);
                 list.append(row);
             }
+        }
+
+        // force true shows, false hides, undefined toggles. persist false is for
+        // restoring a stored choice, which must not be written back.
+        function toggleTodos(force, persist = true) {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            if (!shell) return;
+            const hidden = force === undefined ? !shell.classList.contains('todos-hidden') : !force;
+            shell.classList.toggle('todos-hidden', hidden);
+            const btn = document.getElementById('todoToggle');
+            if (btn) btn.setAttribute('aria-pressed', String(!hidden));
+            if (!persist) return;
+            try {
+                localStorage.setItem(TODOS_HIDDEN_KEY, hidden ? '1' : '');
+            } catch {
+                // A browser refusing storage shouldn't break the toggle itself.
+            }
+        }
+
+        function restoreTodosVisibility() {
+            let stored = null;
+            try {
+                stored = localStorage.getItem(TODOS_HIDDEN_KEY);
+            } catch {
+                stored = null;
+            }
+            // Same rule as the history sidebar: a phone starts it closed,
+            // because there it covers the chat -- but once the user has chosen,
+            // that choice is honoured on every screen size.
+            const hidden = stored === null || stored === undefined ? isNarrowScreen() : stored === '1';
+            toggleTodos(!hidden, false);
+        }
+
+        // --- The skills card, on the other side of the chat ---
+        //
+        // The router's choices are invisible by design: a skill rides along as
+        // extra context and leaves no trace in the reply. Which is exactly why
+        // the card exists -- "it answered my question oddly" should be traceable
+        // to a method somebody, or something, switched on.
+        function loadSkillUseLog() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(SKILL_USE_KEY) || 'null');
+                if (!raw || typeof raw !== 'object') return {};
+                const out = {};
+                for (const [conversation, bucket] of Object.entries(raw)) {
+                    if (!bucket || typeof bucket !== 'object') continue;
+                    const clean = {};
+                    for (const [name, entry] of Object.entries(bucket)) {
+                        if (!name || !entry || typeof entry !== 'object') continue;
+                        clean[name] = {
+                            turns: Math.max(0, Number(entry.turns) || 0),
+                            pinned: !!entry.pinned,
+                            lastAt: Number(entry.lastAt) || 0,
+                        };
+                    }
+                    if (Object.keys(clean).length) out[conversation] = clean;
+                }
+                return out;
+            } catch (e) {
+                console.error('Failed to read the saved skill use:', e);
+                return {};
+            }
+        }
+
+        function persistSkillUseLog() {
+            try {
+                // Bounded by recency: this is a browser that may have years of
+                // conversations in it, and the card only ever asks about one.
+                const kept = Object.entries(skillUseLog)
+                    .sort((a, b) => Math.max(0, ...Object.values(b[1]).map((s) => s.lastAt)) - Math.max(0, ...Object.values(a[1]).map((s) => s.lastAt)))
+                    .slice(0, 20);
+                skillUseLog = Object.fromEntries(kept);
+                localStorage.setItem(SKILL_USE_KEY, JSON.stringify(skillUseLog));
+            } catch (e) {
+                // A browser refusing storage must not break the turn that
+                // recorded it.
+            }
+        }
+
+        // Called once per turn, with what actually rode along. Pinned skills are
+        // marked so the card can say which of them a person asked for and which
+        // one the router chose -- the distinction matters when deciding whether
+        // to switch the router off.
+        function logSkillsUsed(conversationId, skills) {
+            const id = String(conversationId == null || conversationId === '' ? 'unsaved' : conversationId);
+            const bucket = Object.assign({}, skillUseLog[id]);
+            const now = Date.now();
+            for (const skill of Array.isArray(skills) ? skills : []) {
+                const name = String((skill && skill.name) || '').trim().toLowerCase();
+                if (!name) continue;
+                const prev = bucket[name] || { turns: 0, pinned: false, lastAt: 0 };
+                bucket[name] = { turns: prev.turns + 1, pinned: !!skill.pinned, lastAt: now };
+            }
+            skillUseLog[id] = bucket;
+            persistSkillUseLog();
+            renderSkillRail();
+        }
+
+        function renderSkillRail() {
+            const list = document.getElementById('skillRailList');
+            const count = document.getElementById('skillRailCount');
+            const badge = document.getElementById('skillRailBadge');
+            if (!list) return;
+            const id = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            const bucket = skillUseLog[id] || {};
+            const rows = Object.entries(bucket).sort((a, b) =>
+                (Number(b[1].pinned) - Number(a[1].pinned)) || (b[1].turns - a[1].turns) || a[0].localeCompare(b[0]));
+            if (count) count.textContent = rows.length ? rows.length + ' skill' + (rows.length === 1 ? '' : 's') : 'none';
+            if (badge) badge.style.display = rows.length ? '' : 'none';
+            list.innerHTML = '';
+            if (!rows.length) {
+                const empty = document.createElement('div');
+                empty.className = 'rail-empty';
+                empty.textContent = 'Nothing yet. In Plan and Build mode the router picks skills per request and they show up here, marked automatic — so an odd answer can be traced to a method rather than guessed at.';
+                list.append(empty);
+                return;
+            }
+            for (const [name, entry] of rows) {
+                const row = document.createElement('div');
+                row.className = 'skill-row';
+                const top = document.createElement('div');
+                top.className = 'skill-row-top';
+                const label = document.createElement('span');
+                label.className = 'skill-row-name';
+                // The catalogue's own capitalisation when it is loaded, so this
+                // list and the picker agree about what the skill is called.
+                const installed = skillsCatalog.find((s) => String(s.name).toLowerCase() === name);
+                label.textContent = (installed && installed.name) || name;
+                const tag = document.createElement('span');
+                tag.className = 'skill-tag ' + (entry.pinned ? 'pinned' : 'auto');
+                tag.textContent = entry.pinned ? 'pinned' : 'auto';
+                top.append(label, tag);
+                const meta = document.createElement('div');
+                meta.className = 'skill-row-meta';
+                meta.textContent = 'applied to ' + entry.turns + ' request' + (entry.turns === 1 ? '' : 's');
+                row.append(top, meta);
+                if (installed) {
+                    row.title = (installed.source ? installed.source + ' — ' : '') +
+                        (entry.pinned ? 'pinned to this chat; tap to let it go' : 'picked automatically; tap to pin it to this chat');
+                } else if (!skillsCatalog.length) {
+                    // The library has not been fetched yet in this session -- the
+                    // card is drawn from what a turn recorded, which does not
+                    // need the catalogue. Claiming the skill is gone would be a
+                    // guess dressed as a fact.
+                    row.title = (entry.pinned ? 'Pinned to this chat' : 'Applied in this chat') + '; tap to pin it';
+                } else {
+                    row.title = 'Not in the installed library any more; tap to remove it';
+                }
+                row.onclick = () => toggleSkillFromRail(name, entry.pinned);
+                list.append(row);
+            }
+        }
+
+        // Drops a row from the card. Only reachable once the catalogue is known:
+        // a skill that is no longer installed cannot be pinned, and leaving the
+        // row there would offer something that cannot work.
+        function dropSkillUseRow(name) {
+            const key = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            const bucket = Object.assign({}, skillUseLog[key]);
+            delete bucket[String(name).toLowerCase()];
+            skillUseLog[key] = bucket;
+            persistSkillUseLog();
+            renderSkillRail();
+            showStatus('info', 'Removed ' + name + ' — it is no longer installed');
+        }
+
+        function toggleSkillFromRail(name, isPinned) {
+            if (isPinned) { removePinnedSkill(name); return; }
+            const wanted = String(name).toLowerCase();
+            if (skillsCatalog.some((s) => String(s.name).toLowerCase() === wanted)) { pinSkillForChat(name); return; }
+            // An empty catalogue is not a missing skill: this session may simply
+            // not have fetched the library yet, because a chat that never needed
+            // a skill never asks for one. Fetch it, then decide.
+            if (!skillsCatalog.length) {
+                ensureSkillsLoaded().then(() => {
+                    if (skillsCatalog.some((s) => String(s.name).toLowerCase() === wanted)) pinSkillForChat(name);
+                    else dropSkillUseRow(name);
+                });
+                return;
+            }
+            dropSkillUseRow(name);
+        }
+
+        function toggleSkillRail(force, persist = true) {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            if (!shell) return;
+            const hidden = force === undefined ? !shell.classList.contains('skills-hidden') : !force;
+            shell.classList.toggle('skills-hidden', hidden);
+            const btn = document.getElementById('skillRailToggle');
+            if (btn) btn.setAttribute('aria-pressed', String(!hidden));
+            if (!persist) return;
+            try {
+                localStorage.setItem(SKILLS_HIDDEN_KEY, hidden ? '1' : '');
+            } catch {
+                // As with the other panels: storage refusing must not break the
+                // toggle itself.
+            }
+        }
+
+        function restoreSkillRailVisibility() {
+            let stored = null;
+            try {
+                stored = localStorage.getItem(SKILLS_HIDDEN_KEY);
+            } catch {
+                stored = null;
+            }
+            const hidden = stored === null || stored === undefined ? isNarrowScreen() : stored === '1';
+            toggleSkillRail(!hidden, false);
+        }
+
+        // --- The reasoning summary, on or off ---
+        function setReasoningVisible(on) {
+            reasoningVisible = !!on;
+            try {
+                localStorage.setItem(REASONING_KEY, reasoningVisible ? '' : '1');
+            } catch {
+                // Storage refusing must not break the setting itself.
+            }
+            // The control is made to agree with the state whoever changed it, so
+            // it can never claim the summary is on while it is off.
+            const box = document.getElementById('reasoningCheck');
+            if (box) box.checked = reasoningVisible;
+            // Applied to what is already on screen, not only to what comes next.
+            // A setting that appears to do nothing until the next reply reads as
+            // broken, and the text is still on the element either way.
+            for (const bubble of chatMessages.querySelectorAll('.message.bot')) {
+                const text = bubble.dataset.rawReasoning || '';
+                if (text) setReasoningContent(bubble, reasoningVisible ? text : '');
+            }
+            showStatus('info', reasoningVisible ? 'Reasoning summary on' : 'Reasoning summary off');
+        }
+
+        // Ticking a row goes through the same rule the model's task_update uses,
+        // so a task that is not ready yet cannot be marked done from the panel
+        // either -- the list would otherwise show a finished plan that is not.
+        function uiSetTaskStatus(id, status) {
+            const updated = setTaskStatus(taskGraph, id, status);
+            if (updated.error) {
+                showStatus('error', updated.error);
+                return false;
+            }
+            taskGraph = updated.graph;
+            saveTaskGraph();
+            return true;
         }
 
         function deleteTask(id) {
@@ -3102,8 +3760,13 @@
             saveTaskGraph();
         }
 
-        function clearTaskList() {
-            taskGraph = newTaskGraph();
+        // clearTaskList() drops what is finished; clearTaskList(true) drops
+        // everything. Clearing a plan that is half done is the destructive one,
+        // so it is not the behaviour of the plain call.
+        function clearTaskList(all) {
+            const next = normalizeTaskGraph(taskGraph);
+            next.tasks = all ? [] : next.tasks.filter((task) => task.status !== 'done');
+            taskGraph = next;
             saveTaskGraph();
         }
 
@@ -3390,8 +4053,19 @@
                 const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(selectedProvider));
                 const data = await safeJson(res);
                 if (!res.ok) throw new Error(data.error || 'Could not list models');
-                providerModels = usableChatModels(data)
-                    .filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
+                const listed = usableChatModels(data);
+                providerModels = listed.filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
+                // Every single model ruled out is not a catalogue problem, it is
+                // a session that met an outage. Offering them again is the only
+                // honest answer: the memory exists to stop repeating one
+                // failure, not to hold a provider hostage to a bad ten minutes,
+                // and an empty picker here says "this provider has no models",
+                // which is untrue and leaves a page reload as the only way out.
+                if (!providerModels.length && listed.length) {
+                    for (const m of listed) modelsRefusedBy.delete(selectedProvider + ':' + m.id);
+                    providerModels = listed;
+                    showStatus('info', 'Offering ' + listed.length + ' model(s) again that this session had ruled out');
+                }
                 if (!providerModels.length) throw new Error(noChatModelsReason());
                 const remembered = localStorage.getItem('provider:' + selectedProvider + ':model');
                 // providerModels is already sorted free-and-capable first, so
@@ -3828,6 +4502,16 @@
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
+            // Only one todo nudge per message too. The list is the plan of
+            // record, so a reply that arrives with tasks still open is not
+            // finished work -- but a model that refuses to reconcile twice is
+            // not going to on the third ask, and the user is waiting.
+            let todoNudged = false;
+            // Whether this turn wrote to the list at all. A model that never
+            // touched it is not working from it, so an old task left open from
+            // an earlier conversation must not interrupt an answer about
+            // something else.
+            let todosTouched = false;
             // Counted across the whole turn, not per round: a model that repeats
             // one call round after round only ever shows one repeat per round, so
             // a per-round count could never reach the threshold.
@@ -3861,7 +4545,23 @@
                         convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
                         continue;
                     }
+                    // A final answer with its own plan still open. Recording a
+                    // plan and finishing one are different habits, and the gap
+                    // is invisible in prose: "done, all sorted" reads as
+                    // complete while three todos sit unticked beside it.
+                    const openTodos = todoReportNudge(taskGraph, { touched: todosTouched });
+                    if (openTodos && !todoNudged && extractMessageText(message)) {
+                        todoNudged = true;
+                        convo.push(toConversationMessage(message));
+                        convo.push({ role: 'user', content: openTodos });
+                        continue;
+                    }
                     return { message, response, finishReason: response && response.finishReason };
+                }
+                // A status change is the model saying it is working from the
+                // list rather than prose, which is what arms the check above.
+                if (calls.some((call) => isTaskWriteTool(((call && call.function) || {}).name))) {
+                    todosTouched = true;
                 }
 
                 // Only role/content/tool_calls may go back; the rest of the
@@ -4109,14 +4809,14 @@
                 renderTimer = setTimeout(() => {
                     renderTimer = null;
                     setMessageContent(bubble, full);
-                    if (reasoning) setReasoningContent(bubble, reasoning);
+                    if (reasoning) setReasoningStrip(bubble, reasoning);
                     chatMessages.scrollTop = chatMessages.scrollHeight;
                 }, 40);
             }
             return {
                 appendText(chunk) { if (chunk) { full += chunk; scheduleFlush(); } },
                 appendReasoning(chunk) { if (chunk) { reasoning += chunk; scheduleFlush(); } },
-                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningContent(bubble, reasoning); chatMessages.scrollTop = chatMessages.scrollHeight; },
+                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningStrip(bubble, reasoning); chatMessages.scrollTop = chatMessages.scrollHeight; },
                 abort() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } },
                 get full() { return full; },
                 get reasoning() { return reasoning; },
@@ -4215,7 +4915,10 @@
                             active: activeSkillNames,
                             catalog,
                         });
-                        if (activeSkills.length) tools.push(USE_SKILL_TOOL);
+                        if (activeSkills.length) {
+                            tools.push(USE_SKILL_TOOL);
+                            logSkillsUsed(activeConversationId, activeSkills);
+                        }
                     }
                     // A turn that stopped part-way can be picked back up: the
                     // question is the same, so the lookups already paid for are
@@ -5004,24 +5707,63 @@
         // return their scratchpad separately from the answer. Show it in a
         // collapsed <details> above the reply so it's there when wanted and out
         // of the way otherwise. Text goes in via textContent, never innerHTML.
-        function setReasoningContent(el, text) {
-            let box = el.querySelector('.message-reasoning');
-            if (!text) {
-                if (box) box.remove();
+        // While the model is still thinking: one line, the tail of it, moving.
+        // A scratchpad is only useful to someone watching, and what a watcher
+        // wants is the current thought, not the first one.
+        function setReasoningStrip(el, text) {
+            let strip = el.querySelector('.reasoning-strip');
+            // The text is recorded whether or not it is shown, so switching the
+            // summary on later reveals the reasoning of replies that already
+            // happened instead of only the next one.
+            if (text) el.dataset.rawReasoning = text;
+            if (!text || !reasoningVisible) {
+                if (strip) strip.remove();
                 return;
             }
+            if (!el.dataset.reasoningStartedAt) el.dataset.reasoningStartedAt = String(Date.now());
+            if (!strip) {
+                strip = document.createElement('div');
+                strip.className = 'reasoning-strip';
+                const label = document.createElement('span');
+                label.className = 'reasoning-label';
+                label.textContent = 'Thinking';
+                const tail = document.createElement('span');
+                tail.className = 'reasoning-tail';
+                strip.append(label, tail);
+                el.insertBefore(strip, el.firstChild);
+            }
+            strip.querySelector('.reasoning-tail').textContent = reasoningTailLine(text);
+            el.dataset.rawReasoning = text;
+        }
+
+        // When the answer arrives the strip becomes the full scratchpad, folded
+        // away behind a summary that says how long it took and how much of it
+        // there is -- which is the part you need to decide whether to open it.
+        function setReasoningContent(el, text) {
+            const strip = el.querySelector('.reasoning-strip');
+            if (strip) strip.remove();
+            if (text) el.dataset.rawReasoning = text;
+            let box = el.querySelector('.message-reasoning');
+            if (!text || !reasoningVisible) {
+                if (box) box.remove();
+                el.dataset.reasoningSummary = '';
+                return;
+            }
+            const startedAt = Number(el.dataset.reasoningStartedAt || 0);
             if (!box) {
                 box = document.createElement('details');
                 box.className = 'message-reasoning';
                 const summary = document.createElement('summary');
-                summary.textContent = 'Reasoning';
                 const body = document.createElement('div');
                 body.className = 'reasoning-text';
                 box.appendChild(summary);
                 box.appendChild(body);
                 el.insertBefore(box, el.firstChild);
             }
+            const line = describeReasoning(text, { startedAt: startedAt, now: Date.now() });
+            box.querySelector('summary').textContent = line;
             box.querySelector('.reasoning-text').textContent = text;
+            el.dataset.reasoningSummary = line;
             el.dataset.rawReasoning = text;
         }
 

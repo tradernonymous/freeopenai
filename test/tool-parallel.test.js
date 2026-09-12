@@ -19,6 +19,11 @@ const {
   toolMemoFromConversation,
   RESUME_CONTINUATION_PROMPT,
   createReadMemory,
+  isTaskWriteTool,
+  todoReportNudge,
+  newTaskGraph,
+  addTask,
+  setTaskStatus,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -74,7 +79,7 @@ test('a long round is sent in waves rather than all at once', () => {
   assert.ok(MAX_CONCURRENT_TOOLS > 0);
 });
 
-function harness({ toolCalls, rounds = null, webResult = null }) {
+function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null }) {
   const events = [];
   const conversation = [];
   const runs = [];
@@ -120,6 +125,14 @@ function harness({ toolCalls, rounds = null, webResult = null }) {
     // Same again for the task tools, which added their own branch.
     isTaskTool: (n) => n.startsWith('task_'),
     runTaskTool: async () => 'task',
+    // The real rule and the real nudge, not stubs: the loop arms its
+    // "you still have todos open" check off this pair, and a stub would let the
+    // test pass while the shipped pairing did nothing.
+    isTaskWriteTool,
+    todoReportNudge,
+    // Empty by default, so an unrelated test is not nudged about a plan it never
+    // made. The tests that care set their own.
+    taskGraph: taskGraph || newTaskGraph(),
     // Each runner marks itself busy, waits a tick, then marks itself done. Two
     // overlapping calls therefore appear interleaved, which is the whole point.
     githubTool: 'github',
@@ -355,6 +368,46 @@ test('a write is still only run once when the model asks twice', async () => {
   // Forgetting what a write touched must not forget the write: this is the guard
   // that keeps a duplicate commit from becoming a second commit.
   assert.deepEqual(h.runs.map((r) => r.phase), ['start', 'end']);
+});
+
+test('a report that arrives with its own plan still open is sent back once', async () => {
+  // A turn that wrote to the list and left one task open behind it.
+  let graph = addTask(newTaskGraph(), { title: 'Ship the panel' }).graph;
+  graph = addTask(graph, { title: 'Verify it in a browser' }).graph;
+  graph = setTaskStatus(graph, 't1', 'doing').graph;
+  graph = setTaskStatus(graph, 't2', 'done').graph;
+  const h = harness({
+    rounds: [[call('task_update', 'a', { id: 't1', status: 'doing' })], [], []],
+    taskGraph: graph,
+  });
+  const result = await h.runChatWithTools(h.conversation, 'model', [], null);
+  const said = h.conversation.filter((m) => m.role === 'user');
+  // Once, not once per round: a model that will not reconcile on the first ask
+  // will not on the second, and the user is waiting.
+  assert.equal(said.length, 1, 'nudged once: ' + JSON.stringify(said.map((m) => m.content)));
+  assert.match(said[0].content, /TODO LIST — 1 of 2 still open/);
+  assert.match(said[0].content, /\[doing\] t1 Ship the panel/);
+  assert.match(said[0].content, /Do not report the work as complete while they are open/);
+  // And the turn still ends with the model's own answer: the nudge is one more
+  // chance to be honest, not a loop that holds the reply hostage.
+  assert.equal(result.message.content, 'done');
+});
+
+test('an old open todo does not interrupt a turn that never touched the list', async () => {
+  // The list is carried between conversations on purpose, so an unfinished task
+  // from last week is normal. A turn that never wrote to it was not working from
+  // it, and interrupting an unrelated answer would make the list a nuisance.
+  const graph = addTask(newTaskGraph(), { title: 'From an earlier conversation' }).graph;
+  const h = harness({ rounds: [[call('web_search', 'a', { query: 'something else' })], []], taskGraph: graph });
+  await h.runChatWithTools(h.conversation, 'model', [], null);
+  assert.deepEqual(h.conversation.filter((m) => m.role === 'user'), []);
+});
+
+test('a turn that wrote to the list and closed everything is not nagged', async () => {
+  const graph = setTaskStatus(addTask(newTaskGraph(), { title: 'Only one' }).graph, 't1', 'done').graph;
+  const h = harness({ rounds: [[call('task_update', 'a', { id: 't1', status: 'done' })], []], taskGraph: graph });
+  await h.runChatWithTools(h.conversation, 'model', [], null);
+  assert.deepEqual(h.conversation.filter((m) => m.role === 'user'), []);
 });
 
 test('the shipped call site hands the loop a memory to remember reads in', () => {

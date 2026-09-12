@@ -82,7 +82,7 @@
     </td>
     <td valign="top">
       <h3>🧠 Reasoning summaries</h3>
-      Reasoning-capable models return their thinking separately. It appears as a collapsed <b>Reasoning</b> strip above the reply — click to show or hide it.
+      Reasoning-capable models return their thinking separately. While it works, one moving line above the reply shows the tail of what it is thinking; when the answer arrives it folds away behind a <b>Reasoning</b> summary you can click open. Switch the whole thing off in <b>Settings → Reasoning summary</b>.
     </td>
     <td valign="top">
       <h3>🔒 Private deployments</h3>
@@ -359,6 +359,8 @@ How auto-application works: each request's text is scored against every skill's 
 
 **Offers, learned from what you pin.** Pinning the same skill in two *different* chats is a habit, and once a skill is one the app offers it while you type — a dashed `Try ponytail?` chip with **Add** and `×`, scored against the text being written so accepting applies to *that* request. Declining is remembered for the chat. Four things keep it from becoming a suggestion engine with opinions: habit is counted by **chat** rather than by click (un-pinning and re-pinning in one conversation is one intention), **only deliberate pins count** (a skill the model loaded for itself with `use_skill` is the app's doing, not a preference), the offer is **a question and never an action** — a skill that switched itself on would spend prompt budget on every request of a chat that never asked for it — and the habit store is bounded to the most recent 60 skills. It is browser-local (`freeopenaiSkillUsage`), so it does not travel between devices and carries nothing identifying about the requests themselves.
 
+**Which skills are answering, on the left.** The card beside the chat lists every skill that has applied to this conversation, tagged `pinned` or `auto` and showing how many requests each rode along with. It exists because the router's choices are invisible by design — a skill leaves no trace in the reply — so an answer that came out oddly should be traceable to a method rather than guessed at. Tap an `auto` row to pin it, a `pinned` row to let it go. It folds away with the button in the header and is hidden entirely below 1100px, where the chat needs the width more. The record is per conversation and lives in your browser (`freeopenaiSkillUse`); a new chat starts it empty.
+
 **Commands.** Typed into the composer: `/help`, `/skill <name>`, `/skill off <name>`, `/skills`, `/mode chat|plan|build`, `/clear`. Or skip the verb: `/ponytail` and `/caveman` are the shorthand, since typing the name is how people actually reach for a skill. Anything else that starts with a slash — `/usr/bin is missing` — is sent to the model as the ordinary message it is; the app never swallows text it did not understand. Commands are answered locally, so opening the skill picker costs nothing.
 
 - `GET /api/skills` — the installed catalogue (source, name, description)
@@ -411,7 +413,11 @@ The model can also keep a **task list**: the plan for work that spans several tu
 
 A task that still waits on unfinished work cannot be marked `done` — the one status change that can make a plan look finished when it isn't. A dependency must name a task that already exists, and ids are handed out in order, so a cycle cannot be expressed in the first place.
 
-The list is kept in the browser like the workspace, rides in the system prompt when it isn't empty, and is visible and editable in **Settings → Tasks**. No approval is asked for a change: it alters nothing outside the conversation, and a dialog in front of every status change would make planning unusable.
+The list sits **beside the chat**: a floating card on the right rather than a tab or a settings dialog, because a plan you have to go and open is a plan nobody keeps current. Each row carries its id and what it still waits on, its note opens in place, and a hairline in the header fills as tasks finish. Rows order themselves — in progress, then to do, then blocked, then done — so the next thing to pick up is the first thing you read. Tick the circle to finish a row, `×` to drop it. The card folds away with the button in the header, becomes a drawer over the chat on a phone, and its choice is remembered per browser.
+
+It is kept in the browser like the workspace and rides in the system prompt when it isn't empty, so a later turn — or a different chat — can pick the work up where it stopped. **When a reply arrives while the list it touched this turn still has items open, the app hands it back to the model once and asks it to finish them or say plainly which are open**, because "done, all sorted" reads as complete while three unticked rows sit beside it. The check is armed only by a turn that actually wrote to the list, so an old open task from another conversation never interrupts an answer about something else.
+
+No approval is asked for a change: it alters nothing outside the conversation, and a dialog in front of every status change would make planning unusable. **Settings → Tasks** shows the count and points at the panel rather than repeating the list, since two renderings of one list is two places for it to be wrong.
 
 <a name="antigravity"></a>
 
@@ -449,6 +455,8 @@ Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not ap
 **Read this before you use it.** Using Antigravity through a proxy runs against Google's Terms of Service, and the projects' own documentation reports account suspensions, bans and shadow-bans. Those accounts are yours. The risk is yours too — this app simply speaks to whatever gateway you point it at.
 
 One implementation note: the proxy publishes no model catalogue, so this provider is declared `catalogue: false` and serves its pinned list directly rather than asking for `/v1/models`. A proxy that never implemented that endpoint would otherwise produce a fetch error and an empty picker. `ANTIGRAVITY_MODELS` is the escape hatch when a proxy release renames things.
+
+**If the picker says "this provider returned no chat models".** That message means the model list resolved to nothing, which is a configuration mistake rather than the proxy failing — and the likeliest spelling of it is a **stray space** in `ANTIGRAVITY_MODELS`, which is truthy, splits to an empty id and filters away. A declared list that resolves to nothing now falls back to the pinned list instead of publishing nothing, and an entry that could not address a model at all (a zero-width space or a smart quote left by a paste) is dropped rather than served as a row that cannot work. If the effective list is *still* empty — a provider with no pinned list of its own and nothing usable declared — the route answers with an error naming the variable and the character position that spoiled it, so the fix is readable from the message instead of looking like the provider is down. The same fallback applies to every provider with a declared list.
 
 ### 💸 What keeps a turn affordable
 
