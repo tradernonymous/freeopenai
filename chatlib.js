@@ -323,10 +323,10 @@ function detectsImageIntent(text) {
   return IMAGE_INTENT_PATTERN.test(String(text).trim());
 }
 
-// Applies **bold**, *italic*, `inline code`, fenced code blocks, and -/1. lists
-// to already-HTML-escaped text. Only ever emits a small fixed set of tags
-// (strong/em/code/pre/ul/ol/li) around text that was escaped up front, so
-// markdown syntax can never smuggle in a live tag.
+// Applies **bold**, *italic*, `inline code`, fenced code blocks, -/1. lists and
+// [title](url) links to already-HTML-escaped text. Only ever emits a small
+// fixed set of tags (strong/em/code/pre/ul/ol/li/a) around text that was
+// escaped up front, so markdown syntax can never smuggle in a live tag.
 function inlineFormat(s) {
   return s
     .replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>')
@@ -337,6 +337,23 @@ function inlineFormat(s) {
 
 const CODE_BLOCK_TOKEN = 'CODEBLOCKTOKEN';
 const CODE_SPAN_TOKEN = 'CODESPANTOKEN';
+const LINK_TOKEN = 'LINKTOKEN';
+
+// A link only ever becomes an anchor when it is http(s). Everything else --
+// javascript:, data:, vbscript:, a relative path -- stays visible as text.
+// The web tools tell the model to cite sources as [title](url), and that text
+// comes from pages it read, so the scheme check is what stops a hostile page
+// from getting a clickable sink that runs script in our own document.
+function safeLinkHref(url) {
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+// Matches [label](url). The url may contain balanced parentheses so that
+// ordinary Wikipedia-style links (…/Foo_(bar)) stay whole, but never
+// whitespace -- which is also why the href needs no attribute escaping of its
+// own: a quote in the url was already turned into &quot; by escapeHtml, and a
+// space (the only way to open a new attribute) cannot appear at all.
+const MARKDOWN_LINK_PATTERN = /\[([^\]\n]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
 
 function renderMarkdownLite(rawText) {
   const escaped = escapeHtml(rawText);
@@ -353,6 +370,20 @@ function renderMarkdownLite(rawText) {
     const idx = codeSpans.length;
     codeSpans.push(`<code>${code}</code>`);
     return `@@${CODE_SPAN_TOKEN}${idx}@@`;
+  });
+
+  // Links are held behind a token for the same reason code spans are, and it
+  // matters more here: elsewhere in the line the emphasis passes would run
+  // straight over the finished anchor and corrupt it. A url containing _x_ or
+  // a*b*c is enough -- those become <em> inside the href. Running after the
+  // code passes also means a link inside `code` or a fence stays literal.
+  const links = [];
+  text = text.replace(MARKDOWN_LINK_PATTERN, (match, label, url) => {
+    const href = safeLinkHref(url);
+    if (!href) return match;
+    const idx = links.length;
+    links.push(`<a href="${href}" target="_blank" rel="noopener noreferrer">${inlineFormat(label)}</a>`);
+    return `@@${LINK_TOKEN}${idx}@@`;
   });
 
   const htmlParts = [];
@@ -397,9 +428,14 @@ function renderMarkdownLite(rawText) {
 
   const blockTokenPattern = new RegExp(`@@${CODE_BLOCK_TOKEN}(\\d+)@@`, 'g');
   const spanTokenPattern = new RegExp(`@@${CODE_SPAN_TOKEN}(\\d+)@@`, 'g');
+  const linkTokenPattern = new RegExp(`@@${LINK_TOKEN}(\\d+)@@`, 'g');
 
+  // Links go back in first: an anchor built from a label like [`code`](url)
+  // still holds a code-span token, and that has to be resolved before the
+  // final string leaves this function.
   return htmlParts
     .join('')
+    .replace(linkTokenPattern, (_m, i) => links[Number(i)])
     .replace(spanTokenPattern, (_m, i) => codeSpans[Number(i)])
     .replace(blockTokenPattern, (_m, i) => codeBlocks[Number(i)]);
 }
