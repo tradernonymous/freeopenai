@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing, clearModelCache, LLM_PROVIDERS } = require('../server.js');
+const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS } = require('../server.js');
 const { isFreeModel, isFreeModelId, emitsText, usableChatModels } = require('../chatlib.js');
 
 // The OpenRouter allowlist is a free-tier commitment: paid ids only ever
@@ -859,6 +859,49 @@ test('Ollama appears on a base URL alone and sends no auth header', async () => 
     delete process.env.OLLAMA_BASE_URL;
     clearModelCache();
   }
+});
+
+test('Ollama accepts a Railway root URL and falls back to native /api/tags', async () => {
+  clearModelCache();
+  const seen = [];
+  const upstream = http.createServer((req, res) => {
+    seen.push(req.url);
+    if (req.url === '/v1/models') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'qwen3:8b' }, { model: 'deepseek-r1:8b' }] }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  delete process.env.OLLAMA_API_KEY;
+  process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=ollama`)).json();
+    assert.deepEqual(body.map((m) => m.id).sort(), ['qwen3:8b', 'deepseek-r1:8b'].sort());
+    assert.deepEqual(seen, ['/v1/models', '/api/tags']);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.OLLAMA_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('Ollama base URLs normalize to the OpenAI-compatible route only once', () => {
+  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com'), 'https://ollama.example.com/v1');
+  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com/'), 'https://ollama.example.com/v1');
+  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com/v1'), 'https://ollama.example.com/v1');
+  assert.equal(normalizeProviderBaseUrl('nara', 'https://router.example.com'), 'https://router.example.com');
 });
 
 test('Ollama sends Bearer when a key is set', async () => {

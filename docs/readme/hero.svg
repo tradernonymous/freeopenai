@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="FreeOpenAI. Free access to OpenAI models, no key required.">
-  <title>FreeOpenAI</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="FreeAi4U. Free access to OpenAI models, no key required.">
+  <title>FreeAi4U</title>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#050816"/>
@@ -108,7 +108,7 @@
   </g>
 
   <!-- wordmark -->
-  <text x="72" y="178" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="92" font-weight="800" letter-spacing="-2" fill="url(#neon)" filter="url(#glow)">FreeOpenAI</text>
+  <text x="72" y="178" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="92" font-weight="800" letter-spacing="-2" fill="url(#neon)" filter="url(#glow)">FreeAi4U</text>
   <text x="76" y="226" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="28" font-weight="500" fill="#e2e8f0">Chat with OpenAI models. No key, no backend, no bill in your name.</text>
   <text x="76" y="266" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#94a3b8" letter-spacing="3">PUTER.JS  ·  STREAMING  ·  ZERO CONFIG  ·  NO API KEYS</text>
   <rect x="76" y="290" width="360" height="3" rx="1.5" fill="url(#neon)"/>

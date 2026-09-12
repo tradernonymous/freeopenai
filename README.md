@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/readme/hero.svg" alt="FreeOpenAI. Free access to OpenAI models, no key required." width="100%">
+  <img src="docs/readme/hero.svg" alt="FreeAi4U. Free access to OpenAI models, no key required." width="100%">
 </p>
 
 <p align="center">
@@ -116,6 +116,8 @@
       <h3>📱 Built for a phone</h3>
       A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, a Send key on soft keyboards, no double-tap delay, a layout that resizes with the keyboard instead of hiding behind it, wrapped links, capped image heights, and controls that shrink rather than shove each other off a 375px screen.
     </td>
+  </tr>
+  <tr>
     <td valign="top">
       <h3>⚡ SSE streaming</h3>
       Direct-provider replies arrive token-by-token via Server-Sent Events — no waiting for the full answer before text appears.
@@ -124,8 +126,6 @@
       <h3>🛑 Stop / cancel</h3>
       Hit the red stop button or press Escape mid-reply to abort a generation instantly. The upstream fetch is cancelled server-side too.
     </td>
-  </tr>
-  <tr>
     <td valign="top">
       <h3>⏱️ Model-catalog cache</h3>
       Provider model lists are cached in memory with a configurable TTL, so switching providers or reloading the page doesn't re-fetch the catalogue every time.
@@ -244,7 +244,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
 | `AI_GATEWAY_API_KEY` | *(unset)* | Adds Vercel AI Gateway — one Bearer key across providers (Laguna S 2.1, Ling 3.0 Flash Sante/Fin, Fish Audio S2.1 Pro among them). |
-| `OLLAMA_API_KEY` | *(unset)* | Optional key for Ollama. Set it or `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. |
+| `OLLAMA_API_KEY` | *(unset)* | Optional key for Ollama. Set it or `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. The app also accepts a Railway root URL and falls back from OpenAI-compatible `/v1/models` to native `/api/tags`. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
@@ -294,17 +294,17 @@ Your app is live at `https://<project>.up.railway.app` a few seconds later.
 <br />
 
 1. Railway project → **+ New → Docker Image** → `ollama/ollama`, or **+ New → GitHub Repo** with a Dockerfile based on `ollama/ollama`.
-2. On the Ollama service → **Settings → Networking → Generate Domain** (this is the public URL for `OLLAMA_BASE_URL`) and set the variable `OLLAMA_HOST=0.0.0.0:11434`.
+2. On the Ollama service → **Settings → Networking → Generate Domain** and set `OLLAMA_HOST=0.0.0.0:11434`. You may use either the generated public URL or the private service name from the app service.
 3. On the Ollama service → **Storage → + New Volume**, mount path `/root/.ollama`, so pulled models survive deploys.
-4. Add a start command that seeds a small model before serving: `sh -c "ollama serve & sleep 8 && ollama pull qwen3:8b && ollama pull gemma3:4b && wait"`. Verify with `curl https://<ollama-service>.up.railway.app/api/tags` — you should see the pulled models listed.
-5. On the **freeopenai** service, set:
+4. Add a start command that seeds a small model before serving: `sh -c "ollama serve & sleep 8 && ollama pull qwen3:8b && ollama pull gemma3:4b && wait"`. Verify the service itself with `curl https://<ollama-service>.up.railway.app/api/tags` — you should see the pulled models listed.
+5. On the **freeopenai** service, set **the app's** variable (not the Ollama service's):
 
 | Variable | Value |
 | --- | --- |
-| `OLLAMA_BASE_URL` | `https://<ollama-service>.up.railway.app/v1` (or `http://ollama.railway.internal:11434/v1`) |
+| `OLLAMA_BASE_URL` | `https://<ollama-service>.up.railway.app` **or** `https://<ollama-service>.up.railway.app/v1` |
 | `OLLAMA_API_KEY` | *(leave unset — keyless is fine, the URL alone enables the provider)* |
 
-6. Open the app → provider picker → **Ollama**. The dropdown fills from the live `/v1/models`; anything missing there is a model Ollama hasn't pulled, not an app error.
+6. Redeploy freeopenai, open the provider picker, and choose **Ollama**. It first tries `/v1/models`; if that route is missing, it automatically reads native `/api/tags`. If both fail, the status now reports the upstream reachability error rather than pretending a model is available. The model selector only lists chat-capable models that the service actually returned.
 
 </details>
 
@@ -400,7 +400,7 @@ test/           node --test suite for server.js, chatlib.js, auth.js, github.js,
 
 ## ⚠️ Disclaimer
 
-FreeOpenAI is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser's `localStorage` — the last 50, each capped at 200 messages. Clearing site data or switching browsers loses them; there is no server-side copy to restore from.
+FreeAi4U is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser's `localStorage` — the last 50, each capped at 200 messages. Clearing site data or switching browsers loses them; there is no server-side copy to restore from.
 
 <p align="center">
   <sub>MIT licensed · Built on <a href="https://puter.com">Puter.js</a> · <a href="#contents">Back to top ↑</a></sub>
