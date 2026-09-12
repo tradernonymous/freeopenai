@@ -209,7 +209,22 @@ const SKILL_STOP = new Set(['free', 'new', 'latest', 'preview', 'instruct', 'the
   'after', 'between', 'through', 'where', 'while', 'more', 'most', 'other', 'some', 'such',
   'only', 'same', 'than', 'too', 'very', 'just', 'also', 'then', 'they', 'them', 'its',
   'need', 'needs', 'want', 'wants', 'per', 'via', 'your', 'you', 'our', 'their', 'these',
-  'those', 'been', 'being', 'does', 'doing', 'did', 'done', 'like', 'well', 'way', 'new']);
+  'those', 'been', 'being', 'does', 'doing', 'did', 'done', 'like', 'well', 'way', 'new',
+  // Questions and bare auxiliaries. These were the single biggest source of
+  // wrong picks: every library writes "Use when the user asks why...", so a
+  // plain JavaScript question was being answered with SEO skills, all of them
+  // matching on the word "why". A word that appears inside a sentence *about*
+  // the trigger is not itself a trigger.
+  'what', 'why', 'who', 'whom', 'whose', 'which', 'how', 'won', 'then', 'there',
+  'here', 'should', 'would', 'could', 'may', 'might', 'must', 'shall', 'will',
+  'say', 'says', 'said', 'please', 'thanks', 'thank', 'hello', 'sure', 'yeah',
+  'explain', 'tell', 'ask', 'asks', 'asked', 'asking', 'my', 'me', 'our', 'us',
+  'thing', 'things', 'stuff', 'anything', 'something', 'everything', 'nothing',
+  // Two-letter words are kept as tokens now, so every ordinary one has to be
+  // stopped or "ad", "ai" and "ui" would drown in them. The point of keeping
+  // short tokens at all is that they are real names for real things.
+  'am', 'an', 'as', 'at', 'be', 'by', 'do', 'go', 'if', 'in', 'is', 'it', 'no',
+  'of', 'on', 'or', 'so', 'to', 'up', 'we', 'ok', 'id', 'vs', 'eg', 'ie', 'th']);
 
 function stemSkillToken(t) {
   // Bounded light stemmer: strip common suffixes and a doubled final
@@ -224,15 +239,21 @@ function stemSkillToken(t) {
   return t;
 }
 
+// Two letters and up, not three: "ad", "ui", "js", "ci" and "pr" are the
+// names of real things, and "ad variations" has to be able to reach ad-creative.
+// The cost of keeping them is that every ordinary two-letter word has to be
+// stopped, which is why the stop list ends with a block of them.
+const MIN_SKILL_TOKEN = 2;
+
 function skillTokens(s) {
   return String(s || '').toLowerCase().split(/[^a-z0-9.]+/)
     // A full stop at the edge belongs to the sentence, not the word. Without
     // this, the last word of every description is unmatchable -- "abstractions."
     // never meets "abstractions" -- which quietly costs every skill that ends a
     // sentence with the word it is really about. Dots *inside* a token stay, so
-    // ids like gpt-5.4 survive.
+    // a version like "5.4" is one token rather than "5" and "4".
     .map((t) => t.replace(/^\.+|\.+$/g, ''))
-    .filter((t) => t.length > 2 && !SKILL_STOP.has(t))
+    .filter((t) => t.length >= MIN_SKILL_TOKEN && !SKILL_STOP.has(t))
     .map(stemSkillToken);
 }
 
@@ -247,6 +268,44 @@ function skillTriggerScore(requestText, skill) {
   let descHits = 0;
   for (const t of want) if (desc.has(t)) descHits += 1;
   return nameHits * 3 + descHits;
+}
+
+// How many distinct words of the request a skill answers. The minimum is
+// applied to this count rather than to the score, because "one shared word" is
+// the unit the rule is about: a threshold on the score would move the moment a
+// word was weighted, and this has to stay checkable from the outside.
+function skillHitCount(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return 0;
+  const name = new Set(skillTokens(skill && skill.name));
+  const desc = new Set(skillTokens(skill && skill.description));
+  let hits = 0;
+  for (const t of want) if (name.has(t) || desc.has(t)) hits += 1;
+  return hits;
+}
+
+// The fewest shared words a skill may be picked on. One shared word is a
+// coincidence: the library's long trigger lists contain every ordinary word
+// somewhere, and a router that acts on one of those answers a JavaScript
+// question with a marketing skill. Two shared words, or one that is part of the
+// skill's own name, is evidence. Kept as the unweighted count deliberately --
+// see skillHitCount.
+const MIN_SKILL_HITS = 2;
+
+// How many words a description is, used only to break ties. Between two skills
+// that matched equally, the one that says less is the stronger evidence: a
+// focused description sharing a word means more than a keyword list sharing it.
+function skillDescriptionWeight(skill) {
+  return skillTokens(skill && skill.description).length;
+}
+
+// Whether any word of the skill's own name appears in the request. A name hit
+// is the one thing a single shared word can be.
+function skillNamesMatchesRequest(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return false;
+  for (const t of new Set(skillTokens(skill && skill.name))) if (want.has(t)) return true;
+  return false;
 }
 
 // The auto-pick router. Given the user's request, the current mode, and the
@@ -265,9 +324,23 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   const pool = skills.filter((s) => s && s.name && s.description)
     .filter((s) => !processOnly || PROCESS_HINT.test(s.description));
   const scored = pool
-    .map((s) => ({ s, score: skillTriggerScore(requestText, s) }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score);
+    .map((s) => ({
+      s,
+      score: skillTriggerScore(requestText, s),
+      hits: skillHitCount(requestText, s),
+      named: skillNamesMatchesRequest(requestText, s),
+      weight: skillDescriptionWeight(s),
+    }))
+    // Worth >= 2 points is the same rule as "two shared words, or one that is
+    // part of the skill's own name" -- but stated as the rule, because the old
+    // `score >= 2` was a number nobody could check without re-deriving it.
+    .filter(({ hits, named }) => hits >= MIN_SKILL_HITS || named)
+    // Score first, then the tighter description, then the name. The last two are
+    // only ever tie-breaks -- but without them the winner of a tie was whichever
+    // library happened to be listed first, which is how "draft three ad
+    // variations" was answered by a general-purpose nudge rather than by the
+    // skill actually called ad-creative.
+    .sort((a, b) => (b.score - a.score) || (a.weight - b.weight) || String(a.s.name).localeCompare(String(b.s.name)));
   const picked = [];
   const seen = new Set();
   const push = (name) => {
@@ -279,7 +352,11 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   // which only fills the slots left over. A UI request therefore gets
   // frontend-design alongside the core, not instead of it.
   for (const { s } of scored) push(s.name);
-  if (mode === 'build') for (const name of BUILD_CORE_SKILLS) push(name);
+  // The methodology core watches over real work. Seeding it into a request that
+  // matched nothing at all is how "thanks, that worked" came back carrying
+  // test-driven-development: nothing had been recognised, so three disciplines
+  // were handed over instead of none.
+  if (mode === 'build' && scored.length) for (const name of BUILD_CORE_SKILLS) push(name);
   return picked;
 }
 
@@ -2825,8 +2902,15 @@ if (typeof module !== 'undefined' && module.exports) {
     resolveChatCommand,
     renderCommandsHelp,
     renderSkillsCommandReply,
+    MIN_SKILL_HITS,
+    MIN_SKILL_TOKEN,
+    skillDescriptionWeight,
+    skillHitCount,
+    skillNamesMatchesRequest,
     skillsAllowedForMode,
     skillTriggerScore,
+    skillTokens,
+    stemSkillToken,
     pickSkills,
     renderSkillsPrompt,
     USE_SKILL_TOOL,
