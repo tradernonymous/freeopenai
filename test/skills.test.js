@@ -92,10 +92,15 @@ test('chat mode never picks skills', () => {
   assert.deepEqual(pickSkills('write tests and a beautiful redesign plan for the pdf importer', 'chat', CATALOG), []);
 });
 
-test('a request matching nothing picks only the build core', () => {
-  const picked = pickSkills('say hello', 'build', CATALOG, 3);
-  const names = picked.map((s) => s.name);
-  assert.ok(names.every((n) => BUILD_CORE_SKILLS.includes(n)), 'only core seeded: ' + names.join(','));
+test('a request matching nothing picks nothing, core included', () => {
+  // The methodology core rides along with recognised work, not with silence.
+  // Seeding it here once meant "thanks, that worked" arrived carrying
+  // test-driven-development -- nothing had been recognised, so three
+  // disciplines were handed over instead of none.
+  assert.deepEqual(pickSkills('say hello', 'build', CATALOG, 3), []);
+  // A recognised request still gets it, which is the half that must not change.
+  const real = pickSkills('write tests for the importer', 'build', CATALOG, 3).map((s) => s.name);
+  assert.ok(real.includes('test-driven-development'), 'core watches real work: ' + real.join(','));
 });
 
 test('core skills not present in the catalogue are skipped silently', () => {
