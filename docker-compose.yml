@@ -1,0 +1,18 @@
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    ports: ["20128:20128"]
+    env_file: .env
+    volumes: ["omniroute-data:/app/data"]
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    environment:
+      TUNNEL_TOKEN: ""
+    depends_on: [omniroute]
+    restart: unless-stopped
+
+volumes:
+  omniroute-data:
