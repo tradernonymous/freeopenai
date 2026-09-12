@@ -480,6 +480,149 @@ test('unrelated failures are not treated as billing problems', () => {
   assert.ok(!isAccountLevelFailure(null, 'x'));
 });
 
+// Verbatim from Ollama Cloud, on a free-tier key meeting a paid model. The
+// message never names the model id, so the model-name rule alone classified
+// it account-wide -- and one paid model suspended the whole provider.
+test("Ollama's per-model paywall 402 is model-scoped, not account-wide", () => {
+  const real = '402: this model requires a subscription or usage credits, upgrade for access at https://ollama.com/upgrade or add usage credits at https://ollama.com/settings (ref: c40221b2)';
+  assert.ok(!isAccountLevelFailure(real, 'glm-5.3-flash'), 'one paid model must not suspend the provider');
+  const { isModelScopedRefusal } = require('../chatlib.js');
+  assert.ok(isModelScopedRefusal(402, real, 'glm-5.3-flash'), 'so it is routed around like any other model refusal');
+  // A genuine account-wide billing refusal still reads as one.
+  assert.ok(!isModelScopedRefusal(402, '402: A payment method is required. Add one on the billing page.', 'glm-5.3-flash'));
+});
+
+const { isQuotaExhausted, unsafeHeaderChar } = require('../chatlib.js');
+
+test('a spent allowance is recognised in both providers\' wordings', () => {
+  // Verbatim from Ollama Cloud's monthly cap.
+  assert.ok(isQuotaExhausted('429: you (printezyusd) have reached your monthly usage limit, upgrade for higher limits: https://ollama.com/upgrade or add usage credits: https://ollama.com/settings'));
+  // Verbatim from the antigravity proxy with no accounts loaded.
+  assert.ok(isQuotaExhausted('429: Quota Exhausted: All accounts failed or are exhausted for this model.'));
+  // An ordinary rate limit is still a rate limit.
+  assert.ok(!isQuotaExhausted('429: rate limit exceeded, retry in 5s'));
+  assert.ok(!isQuotaExhausted(''));
+  assert.ok(!isQuotaExhausted(null));
+});
+
+test('a 429 that says the quota is spent is reported, not retried', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  try {
+    let calls = 0;
+    const result = await fetchProviderWithRetry('ollama', async () => {
+      calls += 1;
+      return { ok: false, status: 429, data: { error: 'you have reached your monthly usage limit, upgrade for higher limits' } };
+    });
+    assert.equal(calls, 1, 'a spent month is not coming back on any wait');
+    assert.equal(result.status, 429);
+  } finally {
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('the streaming path also reports a spent allowance instead of retrying', async () => {
+  process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  process.env.NARA_API_KEY = 'k';
+  let calls = 0;
+  const upstream = http.createServer((req, res) => {
+    calls += 1;
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'you have reached your monthly usage limit' }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  try {
+    const { fetchStreamWithRetry } = require('../server.js');
+    const res = await fetchStreamWithRetry('nara', () =>
+      fetch(`http://127.0.0.1:${upstream.address().port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    );
+    assert.equal(calls, 1, 'no retry after the quota message');
+    assert.equal(res.status, 429);
+    assert.ok(res.__quotaExhausted, 'the packet is marked so callers can describe it');
+    const body = await res.json();
+    assert.match(body.error, /monthly usage limit/);
+  } finally {
+    upstream.close();
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_BASE_URL;
+    delete process.env.RATE_LIMIT_BASE_DELAY_MS;
+  }
+});
+
+test('a key with a non-ASCII character is named, with position and code point', () => {
+  const em = unsafeHeaderChar('Bearer key\u2014with dash');
+  assert.ok(em, 'an em dash is caught');
+  assert.equal(em.code, 0x2014);
+  assert.equal(em.index, 10);
+  assert.ok(!unsafeHeaderChar('plain-key-123_456'), 'ASCII passes');
+  assert.ok(!unsafeHeaderChar(''), 'empty passes');
+  assert.ok(!unsafeHeaderChar(null));
+  const tab = unsafeHeaderChar('key\tvalue');
+  assert.ok(tab, 'a control character is caught too');
+  assert.equal(tab.code, 0x09);
+});
+
+test('a corrupt provider key fails fast with a readable message, on chat and models', async () => {
+  clearModelCache();
+  // The exact failure that shipped: a pasted placeholder carried an em dash,
+  // and undici answered "Cannot convert argument to a ByteString ... value of
+  // 8212" -- naming neither the variable nor the fix.
+  process.env.ANTIGRAVITY_API_KEY = 'Bearer <paste from clipboard \u2014 same value the gate checks>';
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  try {
+    const chat = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=antigravity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'antigravity-claude-opus-4-6-thinking-high', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(chat.status, 400);
+    const body = await chat.json();
+    assert.match(body.error, /ANTIGRAVITY_API_KEY/);
+    assert.match(body.error, /U\+2014/);
+    assert.match(body.error, /position 29/);
+    assert.match(body.error, /plain ASCII/);
+
+    const models = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=antigravity`);
+    assert.equal(models.status, 400, 'the picker must not list models a corrupt key can never reach');
+    assert.match((await models.json()).error, /ANTIGRAVITY_API_KEY/);
+  } finally {
+    app.close();
+    delete process.env.ANTIGRAVITY_API_KEY;
+    clearModelCache();
+  }
+});
+
+test('an ASCII key is unaffected by the key check', async () => {
+  clearModelCache();
+  let sawAuth = '';
+  const upstream = http.createServer((req, res) => {
+    sawAuth = req.headers.authorization || '';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'test-model' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.NARA_API_KEY = 'sk-clean-key-123';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  try {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`);
+    assert.equal(res.status, 200);
+    assert.equal(sawAuth, 'Bearer sk-clean-key-123');
+    app.close();
+  } finally {
+    upstream.close();
+    delete process.env.NARA_API_KEY;
+    delete process.env.NARA_BASE_URL;
+    clearModelCache();
+  }
+});
+
 test('the model name check wins even when billing words appear', () => {
   // A message that names the model is model-specific however it is worded.
   const mixed = '402: model-x requires a payment method on your plan';

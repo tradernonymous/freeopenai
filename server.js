@@ -14,7 +14,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -132,6 +132,11 @@ async function retryProviderRequest(providerId, attempt) {
     // A timeout we imposed (providerFetch's own deadline) is a budget spent,
     // not a transient refusal to retry through.
     if (result.selfTimeout) return result;
+    // A spent allowance is not a transient refusal — retrying it re-spends the
+    // same wait for the same answer. Ollama Cloud's monthly cap and the
+    // Antigravity proxy's "Quota Exhausted" both 429 with a body that says so.
+    if (result && result.__quotaExhausted) return result;
+    if (isQuotaExhausted(packetErrorMessage(result))) return result;
     if (!isRetryableStatus(status)) return result;
     if (tryNum >= maxAttempts - 1) break;
     const retryAfterMs =
@@ -164,6 +169,15 @@ async function fetchStreamWithRetry(providerId, fetchRaw) {
   return retryProviderRequest(providerId, async () => {
     const response = await fetchRaw();
     if (!response || typeof response.status !== 'number' || !isRetryableStatus(response.status)) return response;
+    // Read the refusal so a spent allowance can be reported instead of
+    // retried. The body is small (an error message), and the caller only
+    // ever reads it on the non-ok path anyway.
+    const text = await response.text().catch(() => '');
+    if (isQuotaExhausted(text)) {
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { /* keep null */ }
+      return { ok: false, status: response.status, __quotaExhausted: true, json: async () => parsed };
+    }
     // Drain the body so the socket is reusable before we retry. The raw
     // Response stays raw: its Retry-After is read from the headers by the
     // shared shell, and the caller needs the real `.ok`/`.json()`/`.body`.
@@ -852,7 +866,7 @@ function providerConfig(id) {
   const provider = LLM_PROVIDERS[id];
   if (!provider) return null;
   if (!providerIsConfigured(provider)) return null;
-  const key = process.env[provider.envVar] || '';
+  const key = (process.env[provider.envVar] || '').trim();
   // A base URL override lets the same adapter reach a self-hosted NIM or a
   // proxy, and lets the tests point at a local stand-in. Without one, a
   // key-less/local provider keeps its default address — except a provider
@@ -868,7 +882,30 @@ function providerConfig(id) {
   const models = declared
     ? declared.split(',').map((id) => id.trim()).filter(Boolean)
     : provider.models;
-  return { ...provider, key, baseUrl, models };
+  const configured = { ...provider, key, baseUrl, models };
+  // A key travels in an HTTP header, so a non-ASCII character in it (an em
+  // dash from a word processor, a smart quote from autocorrect) makes the
+  // fetch throw "Cannot convert argument to a ByteString" — a crash that
+  // names neither the key nor the provider. Name both, before any fetch.
+  const bad = unsafeHeaderChar(key);
+  if (bad) {
+    configured.keyError =
+      `${provider.envVar} contains a non-ASCII character '${bad.char}' (U+${bad.code.toString(16).toUpperCase()}) at position ${bad.index}. ` +
+      `Keys must be plain ASCII — this usually means placeholder text or a word processor's dash got pasted in. ` +
+      `Re-copy the key from its source.`;
+  }
+  return configured;
+}
+
+// The error text of a retry packet, for the quota-exhaustion check: the body
+// is `{ error: string }` or `{ error: { message } }` depending on the provider.
+function packetErrorMessage(result) {
+  const data = result && result.data;
+  if (!data) return '';
+  const error = data.error;
+  if (typeof error === 'string') return error;
+  if (error && typeof error.message === 'string') return error.message;
+  return '';
 }
 
 // Deploy verification, deliberately public: it exists so a merge can be
@@ -1405,6 +1442,9 @@ async function llmModels(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  // A corrupt key would let the picker list models that can only fail on
+  // send. Say why instead: the error names the variable and the character.
+  if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
   // A provider that publishes no catalogue serves its declared list as-is. It
   // is not a fallback for a failed fetch: nothing is fetched at all, so a
   // working proxy cannot be reported as broken by an endpoint it never had.
@@ -1623,6 +1663,7 @@ function llmChat(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
   readJsonBody(req, 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     if (!body || !body.model || !Array.isArray(body.messages)) {

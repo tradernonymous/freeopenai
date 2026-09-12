@@ -2891,7 +2891,12 @@
                     err.providerId = selectedProvider;
                     throw err;
                 }
-                if (autoRetryEnabled && isRetryableStatus(res.status)) {
+                // A spent allowance (Ollama Cloud's monthly cap, the Antigravity
+                // proxy's Quota Exhausted) answers 429 but no wait ever fixes
+                // it — retrying re-spends the time for the same answer.
+                const quotaSpent = isQuotaExhausted(
+                    typeof data.error === 'string' ? data.error : (data.error && data.error.message) || '');
+                if (autoRetryEnabled && isRetryableStatus(res.status) && !quotaSpent) {
                     showStatus('info', isRateLimitError(data.error)
                         ? 'The provider is rate limiting — waiting a moment, then retrying'
                         : 'The provider answered with a server error — waiting a moment, then retrying');
@@ -2903,7 +2908,7 @@
                 // 404 belongs here too: NVIDIA lists models an account may not
                 // have access to and answers "Not found for account" for them,
                 // which is a refusal of that model rather than a broken request.
-                const detail = data.error || 'Request failed';
+                const detail = data.error || 'Request failed (' + res.status + ')';
                 if (isModelScopedRefusal(res.status, detail, modelId)) {
                     // Drop it from the picker and move to one that answers.
                     const next = forgetRefusedModel(modelId);
@@ -2946,7 +2951,17 @@
                 // here the page gives a transient answer exactly one more try
                 // before settling for the report below.
                 if (!res.ok && autoRetryEnabled && isRetryableStatus(res.status)) {
-                    showStatus('info', isRateLimitError(await res.text().catch(() => ''))
+                    const probe = await res.text().catch(() => '');
+                    // A spent allowance is not coming back on any wait: report
+                    // it now rather than re-sending the same dying request.
+                    if (isQuotaExhausted(probe)) {
+                        const err = new Error(errorDetailFromBody(probe) || 'Request failed (' + res.status + ')');
+                        err.statusCode = res.status;
+                        err.modelId = modelId;
+                        err.providerId = selectedProvider;
+                        throw err;
+                    }
+                    showStatus('info', isRateLimitError(probe)
                         ? 'The provider is rate limiting — waiting a moment, then retrying'
                         : 'The provider answered with a server error — waiting a moment, then retrying');
                     await new Promise((resolve, reject) => {
