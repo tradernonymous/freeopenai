@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
 const {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
@@ -12,7 +13,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { selectAllowedModels } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -40,6 +41,91 @@ let sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) {
   sessionSecret = crypto.randomBytes(32).toString('hex');
   console.warn('SESSION_SECRET not set — using an ephemeral secret; sessions will not survive a restart.');
+}
+
+// A 429 from a provider means the request arrived before the free tier was
+// ready for it, so it is worth waiting and trying again rather than surfacing
+// an error the user has to act on. Retries are bounded and back off, and a
+// short cooldown stops a burst of tool calls from hammering the same provider.
+// The base delay reads at call time so tests can shrink it via env.
+// The attempt cap does too, clamped to a sane range so a typo can't turn a
+// chat call into an unbounded loop.
+function rateLimitMaxAttempts() {
+  const n = Number(process.env.RATE_LIMIT_MAX_ATTEMPTS);
+  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : 4;
+}
+const providerCooldownUntil = new Map();
+
+function retryBaseDelayMs() {
+  return Number(process.env.RATE_LIMIT_BASE_DELAY_MS) || 2500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function providerCooldownRemaining(providerId) {
+  const until = providerCooldownUntil.get(providerId) || 0;
+  return Math.max(0, until - Date.now());
+}
+
+function markProviderCooldown(providerId, durationMs) {
+  providerCooldownUntil.set(providerId, Date.now() + durationMs);
+}
+
+// The shared retry shell behind both the JSON and streaming chat paths. It
+// calls `attempt()` (which makes one provider request and returns either a
+// `{ ok, status, data }` packet or a raw `Response`), retrying only on 429.
+async function retryProviderRequest(providerId, attempt) {
+  const maxAttempts = rateLimitMaxAttempts();
+  let result;
+  for (let tryNum = 0; tryNum < maxAttempts; tryNum += 1) {
+    const wait = providerCooldownRemaining(providerId);
+    if (wait > 0) await sleep(wait);
+    result = await attempt();
+    let status = result && typeof result.status === 'number' ? result.status : 0;
+    if (result && typeof result.status !== 'number') status = result.ok ? 200 : 599;
+    if (status !== 429) return result;
+    const backoff = retryBaseDelayMs() * 2 ** tryNum;
+    markProviderCooldown(providerId, Math.min(backoff * 2, 15000) + retryBaseDelayMs());
+    if (tryNum < maxAttempts - 1) await sleep(backoff);
+  }
+  return result;
+}
+
+// Retries an idempotent provider call (chat completions) only on 429. Anything
+// else is final and returned as-is, and if the provider keeps refusing the
+// last 429 is returned too, so the caller can describe it normally.
+async function fetchProviderWithRetry(providerId, fetchOnce) {
+  return retryProviderRequest(providerId, fetchOnce);
+}
+
+// The streaming sibling: each attempt resolves to a raw Response so the caller
+// can pipe the upstream body through. The 429 arrives as the initial status,
+// before any body is read, so the same retry/cooldown logic applies. When the
+// client cancels, `onAbort` aborts the in-flight upstream read immediately.
+async function fetchStreamWithRetry(providerId, fetchRaw) {
+  return retryProviderRequest(providerId, async () => {
+    const response = await fetchRaw();
+    if (!response || typeof response.status !== 'number' || response.status !== 429) return response;
+    // Drain 429 bodies so the socket is reusable before we retry.
+    try { await response.body?.cancel(); } catch { /* ignore */ }
+    return response;
+  });
+}
+
+// Model catalogues are read from each provider at runtime so they can't go
+// stale, but re-fetching them on every page load and provider switch multiplies
+// upstream load and can edge a free tier into its rate limit. Cache the last
+// good list per provider for a short window instead.
+const modelCache = new Map();
+
+function modelsCacheTtlMs() {
+  return Number(process.env.MODELS_CACHE_TTL_MS) || 20 * 60 * 1000;
+}
+
+function clearModelCache() {
+  modelCache.clear();
 }
 
 function readJsonBody(req, maxBytes, cb) {
@@ -447,21 +533,79 @@ function githubPutFile(req, res) {
 }
 
 // Direct provider access, as an alternative to Puter. Each of these is
-// OpenAI-compatible, so one adapter covers all three: only the base URL, the
+// OpenAI-compatible, so one adapter covers all of them: only the base URL, the
 // key and a couple of headers differ.
 //
 // Keys live here, never in the browser. The whole API surface already sits
 // behind the login gate, so a key can't be read by anyone who isn't signed in.
 const LLM_PROVIDERS = {
-  cerebras: {
-    label: 'Cerebras',
-    baseUrl: 'https://api.cerebras.ai/v1',
-    envVar: 'CEREBRAS_API_KEY',
+  aigateway: {
+    label: 'AI Gateway',
+    baseUrl: 'https://ai-gateway.vercel.sh/v1',
+    envVar: 'AI_GATEWAY_API_KEY',
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'poolside/laguna-s-2.1',
+      'ling-3.0-flash-sante-free',
+      'ling-3.0-flash-fin-free',
+      'fish-audio/s2.1-pro-free',
+    ],
+  },
+  nara: {
+    label: 'Nara',
+    baseUrl: 'https://router.bynara.id/v1',
+    envVar: 'NARA_API_KEY',
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'agnes-2.5-flash',
+      'laguna-s-2.1',
+      'ling-3.0-flash-fin-free',
+      'nemotron-3.5-lightning-free',
+      'stepfun-3.7-flash',
+    ],
   },
   openrouter: {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     envVar: 'OPENROUTER_API_KEY',
+    // Free-tier only. Every id below carries the ":free" suffix and was
+    // verified against the live catalogue (https://openrouter.ai/api/v1/models)
+    // on 2026-09-12: 443 models total, 19 of them free. Paid ids were pulled —
+    // they only ever produced 402/403 errors on a free key. The allowlist is
+    // intersected with the live catalogue, so when one of these is retired the
+    // picker silently drops it instead of failing at send time.
+    models: [
+      // Long-context reasoning: the 1M-context trio.
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'thinkingmachines/inkling:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'thinkingmachines/inkling-small:free',
+      // General chat.
+      'google/gemma-4-31b-it:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'inclusionai/ling-3.0-flash-vl:free',
+      'nex-agi/nex-n2.5-pro:free',
+      'nex-agi/nex-n2.5-mini:free',
+      'poolside/laguna-s-2.1:free',
+      'poolside/laguna-xs-2.1:free',
+      // Code.
+      'cohere/north-mini-code:free',
+      // Long-form / niche variants.
+      'dots-studio/dots-3-note-preview:free',
+      'liquid/lfm-2.5-2.6b:free',
+      'inclusionai/ling-3.0-flash-sante:free',
+      'inclusionai/ling-3.0-flash-fin:free',
+      // Omni (text+audio) — still emits text.
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      // Content-safety classifier; excluded from the picker by the chat filter.
+      'nvidia/nemotron-3.5-content-safety:free',
+    ],
+    // Keep the picker on the free tier even when the allowlist above is
+    // edited or a paid id sneaks back in. Set OPENROUTER_FREE_ONLY=0 to let
+    // paid models through.
+    freeOnly: process.env.OPENROUTER_FREE_ONLY !== '0',
     // Optional attribution headers OpenRouter documents for its leaderboards.
     headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeOpenAI' }),
   },
@@ -469,31 +613,71 @@ const LLM_PROVIDERS = {
     label: 'NVIDIA',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
-  },
-  // opencode.ai/zen, not api.opencode.ai -- the latter answers 200 to every
-  // path including nonsense, which is a catch-all rather than an API.
-  opencode: {
-    label: 'OpenCode Zen',
-    baseUrl: 'https://opencode.ai/zen/v1',
-    envVar: 'OPENCODE_API_KEY',
-    // Publishes no prices but mixes free and paid models, marking the free ones
-    // in the id. Without this the whole catalogue would read as free.
-    pricedByName: true,
-    // 70 models, most of them paid. Keep every free one and nothing else, so
-    // no entry in the picker can come back with a permission error. Muse
-    // collapses to its newest release rather than listing four near-identical
-    // variants, and picks up a future 1.4 without a code change.
-    models: { freeOnly: true, newestOf: ['muse-spark'] },
+    // The allowed set, in picker order. Anything else the key can reach stays
+    // out of the list rather than appearing and failing on use. Declared as
+    // rules rather than a bare array so a repeated id here cannot put the same
+    // model in the picker twice -- mistral-medium was listed twice before this.
+    models: {
+      exact: [
+        'z-ai/glm-5.3',
+        'deepseek-ai/deepseek-v4-flash',
+        'deepseek-ai/deepseek-v4-pro',
+        'moonshotai/kimi-k3',
+        'minimaxai/minimax-m3',
+        'z-ai/glm-5.2',
+        'minimaxai/minimax-m2.7',
+        'mistralai/mistral-medium-3.5-128b',
+        'qwen/qwen3-coder-480b-a35b-instruct',
+        'nvidia/nemotron-3.5-lightning',
+        'google/gemma-4-31b-it',
+        'qwen/qwen2.5-coder-32b-instruct',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'nvidia/nemotron-3-ultra-550b-a55b',
+      ],
+    },
   },
   mistral: {
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
     envVar: 'MISTRAL_API_KEY',
   },
-  sambanova: {
-    label: 'SambaNova',
-    baseUrl: 'https://api.sambanova.ai/v1',
-    envVar: 'SAMBANOVA_API_KEY',
+  ollama: {
+    label: 'Ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    envVar: 'OLLAMA_API_KEY',
+    // Local servers usually take no key. Appearing is opt-in: a key or an
+    // explicit base URL puts it in the picker, and an empty key sends no
+    // auth header at all rather than a bare "Bearer ".
+    needsKey: false,
+    // Pinned to the allowed set, in picker order. Anything else the key can
+    // reach stays out of the list rather than appearing and failing on use.
+    models: [
+      'hf.co/unsloth/GLM-5.3-GGUF:latest',
+      'deepseek-r1:8b',
+      'deepseek-r1:70b',
+      'hf.co/unsloth/kimi-k2.7-code-7b-GGUF:latest',
+      'qwen3:8b',
+      'qwen3:4b',
+      'minimax/m3-20b',
+      'minimax/m2.7-9b',
+      'z-ai/glm-5.2',
+      'hf.co/unsloth/glm-5.1-GGUF:latest',
+      'devstral:24b',
+      'devstral:7b',
+      'qwen3-coder:32b',
+      'qwen3-coder:7b',
+      'nvidia/nemotron-3.5-lightning',
+      'mistralai/mistral-medium-3.5-128b',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'hf.co/unsloth/muse-glimmer-30b-GGUF:latest',
+      'qwen2.5-coder:32b',
+      'ibm/granite-4.2b-instruct:latest',
+      'rnj-1:latest',
+      'hf.co/unsloth/north-mini-code-1.0-GGUF:latest',
+      'deepseek-r1:14b',
+    ],
   },
   // The three below are speech and search services. Probing them directly:
   //
@@ -533,11 +717,17 @@ const LLM_PROVIDERS = {
   },
 };
 
+function providerIsConfigured(provider) {
+  if (process.env[provider.envVar]) return true;
+  // Key-optional providers (local servers) opt in with an explicit base URL.
+  return provider.needsKey === false && !!process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
+}
+
 function providerConfig(id) {
   const provider = LLM_PROVIDERS[id];
   if (!provider) return null;
-  const key = process.env[provider.envVar];
-  if (!key) return null;
+  if (!providerIsConfigured(provider)) return null;
+  const key = process.env[provider.envVar] || '';
   // A base URL override lets the same adapter reach a self-hosted NIM or a
   // proxy, and lets the tests point at a local stand-in.
   const baseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
@@ -550,7 +740,7 @@ function llmProviders(req, res) {
   sendJson(res, 200, Object.entries(LLM_PROVIDERS).map(([id, provider]) => ({
     id,
     label: provider.label,
-    configured: !!process.env[provider.envVar],
+    configured: providerIsConfigured(provider),
     // 'speech' and 'search' services have no chat models. Saying so beats an
     // empty dropdown that looks like a bug.
     kind: provider.kind || 'chat',
@@ -558,9 +748,280 @@ function llmProviders(req, res) {
   })));
 }
 
+// The effective response knobs, so Settings can show what the server is
+// actually enforcing instead of hardcoding the same numbers twice.
+function llmLimits(req, res) {
+  const t = providerTimeoutMs();
+  sendJson(res, 200, {
+    timeouts: { models: t.models, chat: t.chat, headers: t.headers, stall: t.stall },
+    retries: { maxAttempts: rateLimitMaxAttempts(), baseDelayMs: retryBaseDelayMs() },
+  });
+}
+
+// Web research for the chat: search without a key (DuckDuckGo instant
+// answers plus Wikipedia), and read pages as plain text. Both are
+// curiosity-driven GETs sharing one small fetch helper with a hard timeout;
+// nothing here posts data anywhere.
+const WEB_FETCH_TIMEOUT_MS = 15000;
+const WEB_FETCH_MAX_BYTES = 600 * 1024;
+
+async function fetchText(url, acceptHtml = true) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'FreeOpenAI/1.0 (+https://github.com/tradernonymous/freeopenai)',
+        Accept: acceptHtml ? 'text/html,*/*' : 'application/json',
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// SSRF guard: the fetch endpoint reads user-supplied URLs, so loopback,
+// private ranges and link-local never resolve. Hostnames resolve first
+// because a name can point at a private address behind our back.
+function isPrivateIp(addr) {
+  if (!addr) return true;
+  if (addr === '::1' || addr === '::ffff:127.0.0.1') return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+  if (!v4) return false;
+  const a = Number(v4[1]);
+  const b = Number(v4[2]);
+  return a === 10 || a === 127 || a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254);
+}
+
+function lookupHost(hostname) {
+  return new Promise((resolve, reject) => {
+    dns.lookup(hostname, (err, address) => (err ? reject(err) : resolve(address)));
+  });
+}
+
+// Strip a page to readable text: drop scripts, styles, nav and comments,
+// decode the common entities, collapse whitespace. Crude next to
+// Readability, but dependency-free and honest about what it is.
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;/gi, "'");
+}
+
+function extractPageText(html) {
+  if (!html) return { title: '', text: '' };
+  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(String(html));
+  const text = String(html)
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  return {
+    title: decodeEntities(titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : ''),
+    text: decodeEntities(text).replace(/\s+/g, ' ').trim(),
+  };
+}
+
+function normalizeDdG(data) {
+  const out = [];
+  const push = (title, url, snippet) => {
+    if (title && url && /^https?:/i.test(url)) out.push({ title: String(title), url: String(url), snippet: String(snippet || '') });
+  };
+  if (!data || typeof data !== 'object') return out;
+  if (data.AbstractText && data.AbstractURL) {
+    push(data.AbstractText.slice(0, 200), data.AbstractURL, data.AbstractSource ? `Source: ${data.AbstractSource}` : '');
+  }
+  for (const t of [...(data.RelatedTopics || []), ...(data.Results || [])]) {
+    if (!t || typeof t !== 'object') continue;
+    if (Array.isArray(t.Topics)) {
+      t.Topics.forEach((s) => push(s.Text && s.Text.slice(0, 200), s.FirstURL, ''));
+    } else {
+      push(t.Text && t.Text.slice(0, 200), t.FirstURL, '');
+    }
+    if (out.length >= 8) break;
+  }
+  return out.slice(0, 8);
+}
+
+function normalizeWiki(data) {
+  // Opensearch shape: [query, [titles], [descs], [urls]].
+  if (!Array.isArray(data) || !Array.isArray(data[1])) return [];
+  return data[1].slice(0, 5).map((title, i) => ({
+    title: String(title),
+    url: String(((data[3] || [])[i]) || ''),
+    snippet: String(((data[2] || [])[i]) || ''),
+  })).filter((r) => r.url);
+}
+
+function normalizeWikiFull(data) {
+  // Full-text search: almost any query returns titled hits with snippets.
+  const list = data && data.query && Array.isArray(data.query.search) ? data.query.search : [];
+  return list.slice(0, 5).map((s) => ({
+    title: String((s && s.title) || ''),
+    url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(String((s && s.title) || '').replace(/ /g, '_')),
+    snippet: String((s && s.snippet) || '').replace(/<[^>]+>/g, ''),
+  })).filter((r) => r.title);
+}
+
+async function llmWebsearch(req, res) {
+  const q = new URL(req.url, 'http://x').searchParams.get('q');
+  if (!q || !q.trim()) return sendJson(res, 400, { error: 'q is required' });
+  const query = q.trim().slice(0, 300);
+  const [ddg, wiki, full] = await Promise.all([
+    fetchText(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, false)
+      .then((t) => { try { return normalizeDdG(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+    fetchText(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=5&format=json`, false)
+      .then((t) => { try { return normalizeWiki(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+    fetchText(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=5&format=json`, false)
+      .then((t) => { try { return normalizeWikiFull(JSON.parse(t)); } catch { return []; } })
+      .catch(() => []),
+  ]);
+  const seen = new Set();
+  const results = [...ddg, ...wiki, ...full].filter((r) => {
+    if (!r.url || seen.has(r.url)) return false;
+    seen.add(r.url);
+    return true;
+  }).slice(0, 10);
+  if (!results.length) return sendJson(res, 502, { error: 'Search is unreachable right now — try again, or paste a link to read directly.' });
+  sendJson(res, 200, { query, results });
+}
+
+async function llmFetch(req, res) {
+  const raw = new URL(req.url, 'http://x').searchParams.get('url');
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch {
+    return sendJson(res, 400, { error: 'A valid http(s) url is required' });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return sendJson(res, 400, { error: 'Only http(s) pages can be read' });
+  }
+  let address;
+  try {
+    address = await lookupHost(parsed.hostname);
+  } catch {
+    return sendJson(res, 502, { error: 'Could not resolve that host' });
+  }
+  if (isPrivateIp(address)) return sendJson(res, 403, { error: 'That address is not readable from here' });
+  let html;
+  try {
+    html = await fetchText(parsed.href);
+  } catch (e) {
+    return sendJson(res, 502, { error: e.name === 'AbortError' ? 'The page took too long to answer' : 'Could not read that page: ' + e.message });
+  }
+  if (html.length > WEB_FETCH_MAX_BYTES) {
+    return sendJson(res, 400, { error: 'That page is too large to read here' });
+  }
+  const { title, text } = extractPageText(html);
+  if (!text) return sendJson(res, 502, { error: 'Nothing readable on that page' });
+  sendJson(res, 200, { url: parsed.href, title, text: text.slice(0, 8000) });
+}
+
+// Image generation and edits live on Nara's separate images host. Keys stay
+// server-side: the browser sends prompt + image data, never credentials.
+// Generations take a plain JSON body; edits need multipart with the source
+// image (and optional mask) as data URLs, rebuilt here into file parts.
+function naraImagesBase() {
+  return process.env.NARA_IMAGES_BASE_URL || 'https://api-images.bynara.id';
+}
+
+async function llmImage(req, res, kind) {
+  const key = process.env.NARA_API_KEY;
+  if (!key) return sendJson(res, 400, { error: 'Image editing needs a Nara key (NARA_API_KEY).' });
+  readJsonBody(req, 12 * 1024 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    try {
+      const headers = { Authorization: `Bearer ${key}` };
+      let upstream;
+      if (kind === 'edits') {
+        const model = body.model || process.env.NARA_IMAGE_MODEL;
+        if (!model) {
+          return sendJson(res, 400, { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' });
+        }
+        if (!body.image) return sendJson(res, 400, { error: 'image is required' });
+        const boundary = '----freeopenai' + Date.now().toString(36);
+        const parts = [];
+        const filePart = (name, filename, dataUrl) => {
+          const m = /^data:(.+?);base64,([\s\S]+)$/.exec(String(dataUrl || ''));
+          if (!m) throw new Error(`Invalid image data for "${name}" — expected a data URL.`);
+          parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${m[1]}\r\n\r\n`));
+          parts.push(Buffer.from(m[2], 'base64'));
+          parts.push(Buffer.from('\r\n'));
+        };
+        const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+        filePart('image', 'image.png', body.image);
+        if (body.mask) filePart('mask', 'mask.png', body.mask);
+        field('prompt', prompt);
+        field('model', model);
+        if (body.size) field('size', body.size);
+        parts.push(Buffer.from(`--${boundary}--\r\n`));
+        upstream = await fetch(naraImagesBase() + '/v1/images/edits', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+          body: Buffer.concat(parts),
+        });
+      } else {
+        upstream = await fetch(naraImagesBase() + '/v1/images/generations', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            ...(body.model ? { model: body.model } : {}),
+            ...(body.size ? { size: body.size } : {}),
+          }),
+        });
+      }
+      const data = await upstream.json().catch(() => null);
+      if (!upstream.ok || !data) {
+        return sendJson(res, upstream.status || 502, { error: describeProviderError(upstream.status || 502, data, { label: 'Nara' }) });
+      }
+      sendJson(res, 200, data);
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 // Providers disagree on error shape: some nest a message under error, some
 // return a bare string, some return nothing but a status. Dig out whatever is
 // there and keep the status code, which is often the most informative part.
+// A 404 means different things depending on what the service is. Speech and
+// search products have no chat endpoint at all, so the whole provider is the
+// wrong shape. A chat provider returning 404 is saying this particular model
+// isn't reachable -- NVIDIA lists models its accounts don't all have access to,
+// and answers "Not found for account" for the rest.
+function notFoundHint(provider) {
+  if (provider && provider.kind && provider.kind !== 'chat') {
+    return ' — this service has no chat API at all; it sells ' + provider.kind;
+  }
+  return " — that model isn't available to your key, even though the provider lists it";
+}
+
+// A message that carries a link, or is long enough to be a real sentence rather
+// than a status echo, is already telling the user what to do.
+function isSelfExplanatory(message) {
+  if (!message) return false;
+  if (/https?:\/\//.test(message)) return true;
+  return message.length >= 60;
+}
+
 function describeProviderError(status, data, provider) {
   const who = provider && provider.label ? provider.label : 'The provider';
   const raw = data && (data.error || data.message || data.detail);
@@ -573,11 +1034,17 @@ function describeProviderError(status, data, provider) {
   // which of several configured providers had stalled.
   if (!message && status >= 500) message = `${who} returned a gateway error with no detail`;
 
+  // A hint is for a bare status with nothing behind it. When the provider has
+  // already explained itself -- "only available on agentic harnesses", with a
+  // link -- appending "usually an empty balance" actively contradicts it and
+  // sends the user to check the wrong thing.
+  if (isSelfExplanatory(message)) return `${status}: ${message}`;
+
   const hint =
     status === 401 ? ' — check the API key for this provider'
       : status === 402 ? ' — this model is not free on your plan'
         : status === 403 ? ' — the key is valid but not permitted here; usually an empty balance or a model your plan does not include'
-        : status === 404 ? ' — no such endpoint or model. Some services (speech, search) have no chat API at all'
+        : status === 404 ? notFoundHint(provider)
           : status === 429 ? ' — rate limited, wait a moment'
             : status === 504 || status === 502 ? ' — the provider is slow or unreachable; this is on their side, not your key'
               : status >= 500 ? ' — the provider had an internal error; try again or pick another'
@@ -592,25 +1059,45 @@ function describeProviderError(status, data, provider) {
 // Kept under the hosting platform's own request ceiling on purpose. If the
 // edge times out first it returns its own HTML 504, which parses to nothing
 // and produces exactly the bare "504: request failed" this replaced.
-const PROVIDER_TIMEOUT_MS = { models: 20000, chat: 55000 };
+// Every knob reads at call time so deploys tune without a code change:
+// total per-request budgets, a headers deadline for streams (so 429 backoff
+// between attempts never trips it, each attempt gets its own), and a stall
+// deadline that fires when a stream goes quiet mid-reply.
+function providerTimeoutMs() {
+  const num = (v, d) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : d;
+  };
+  return {
+    models: num(process.env.PROVIDER_TIMEOUT_MODELS_MS, 20000),
+    chat: num(process.env.PROVIDER_TIMEOUT_CHAT_MS, 55000),
+    headers: num(process.env.PROVIDER_TIMEOUT_HEADERS_MS, 25000),
+    stall: num(process.env.PROVIDER_STALL_MS, 60000),
+  };
+}
 
-async function providerFetch(req, provider, path, init = {}) {
+// Most use "Authorization: Bearer <key>", but not all: Deepgram wants
+// "Token", AssemblyAI wants the bare key, You.com wants its own header,
+// and keyless local servers (Ollama) send no auth header at all rather
+// than a bare "Bearer ".
+function providerAuthHeaders(provider, req) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
-  const budget = path.includes('chat') ? PROVIDER_TIMEOUT_MS.chat : PROVIDER_TIMEOUT_MS.models;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), budget);
-  // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
-  // "Token", AssemblyAI wants the bare key, You.com wants its own header.
   const headerName = provider.authHeader || 'Authorization';
   const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
+  const auth = provider.key ? { [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key } : {};
+  return { ...auth, 'Content-Type': 'application/json', ...extra };
+}
+
+async function providerFetch(req, provider, path, init = {}) {
+  const budget = path.includes('chat') ? providerTimeoutMs().chat : providerTimeoutMs().models;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budget);
   try {
     const res = await fetch(provider.baseUrl + path, {
       ...init,
       signal: controller.signal,
       headers: {
-        [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key,
-        'Content-Type': 'application/json',
-        ...extra,
+        ...providerAuthHeaders(provider, req),
         ...(init.headers || {}),
       },
     });
@@ -644,13 +1131,43 @@ async function llmModels(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
+  const ttl = modelsCacheTtlMs();
+  const cached = modelCache.get(id);
+  if (cached && Date.now() - cached.fetchedAt < ttl) {
+    return sendJson(res, 200, cached.models);
+  }
   try {
     const { ok, status, data } = await providerFetch(req, provider, '/models');
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
-      .map((m) => normalizeProviderModel(m, provider));
-    sendJson(res, 200, selectAllowedModels(models, provider.models));
+      .map(normalizeProviderModel);
+    // A curated allowlist pins the picker to exactly those ids, in that
+    // order. Either form works: an array of ids, or a rule object
+    // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
+    // rather than listing -- see selectAllowedModels. Without one the whole
+    // catalogue goes through untouched.
+    let listed = Array.isArray(provider.models)
+      ? provider.models.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
+      : provider.models && typeof provider.models === 'object'
+        ? selectAllowedModels(models, provider.models)
+        : models;
+    if (provider.freeOnly) listed = listed.filter((m) => isFreeModelId(m.id));
+    // An allowlist that intersects the live catalogue at zero rows means every
+    // pinned id was retired upstream — the empty picker that follows reads as
+    // a bug ("no model" + a fetch error on the user's side). Serve the live
+    // catalogue instead and let the client's free-first ranking sort it out;
+    // that degrades to "wrong order", never to "nothing to pick".
+    if (Array.isArray(provider.models) && listed.length === 0) {
+      if (provider.freeOnly) {
+        const free = models.filter((m) => isFreeModelId(m.id));
+        if (free.length) listed = free;
+      }
+      if (!listed.length) listed = models;
+    }
+    // Only a successful catalogue is worth caching; errors rust nothing.
+    modelCache.set(id, { fetchedAt: Date.now(), models: listed });
+    sendJson(res, 200, listed);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
@@ -659,7 +1176,7 @@ async function llmModels(req, res) {
 // Every provider is OpenAI-compatible for chat, but each invents its own
 // metadata around it. OpenRouter nests modalities under architecture and
 // prices per token as strings; ZenMux puts modalities at the top level and
-// prices per million tokens as arrays of objects; Cerebras and NVIDIA send
+// prices per million tokens as arrays of objects; Nara and NVIDIA send
 // neither. Flatten all of it into one shape so the client has a single set of
 // rules to rank by.
 function firstPriceValue(entry) {
@@ -684,10 +1201,124 @@ function normalizePricing(model) {
   return { prompt: prompt === undefined ? 0 : prompt, completion: completion === undefined ? 0 : completion };
 }
 
-function normalizeProviderModel(m, provider) {
+// --- Agent skills ---
+//
+// The catalogues of the installed skill repos (anthropics/skills,
+// obra/superpowers, caveman-lite), fetched from raw.githubusercontent at
+// runtime with a TTL cache and a last-good fallback: GitHub being down must
+// degrade to "stale skills", never to a broken chat.
+const SKILLS_TTL_MS = 6 * 60 * 60 * 1000; // 6h: skills change on human timescales
+let skillsCache = { fetchedAt: 0, skills: [] };
+let skillsFetch = null;
+
+function skillsTtlMs() {
+  const n = Number(process.env.SKILLS_CACHE_TTL_MS);
+  return Number.isFinite(n) && n >= 0 ? n : SKILLS_TTL_MS;
+}
+
+function clearSkillsCache() {
+  skillsCache = { fetchedAt: 0, skills: [] };
+  skillsFetch = null;
+}
+
+async function fetchSkillText(source, skillPath) {
+  const url = `https://raw.githubusercontent.com/${source.repo}/${source.branch}/${skillPath}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return '';
+    return await res.text();
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Lists one repo's skill names from its git tree, honoring `pick` (an explicit
+// name list = lite) or 'all'. Trees fail closed: an error means no names from
+// this source, not a crash.
+async function fetchSkillNames(source) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${source.repo}/git/trees/${source.branch}?recursive=1`, {
+      headers: { 'User-Agent': 'freeopenai-app', Accept: 'application/vnd.github+json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data.tree)) return [];
+    const all = data.tree
+      .filter((t) => t.type === 'blob' && t.path.endsWith('/SKILL.md') && t.path.startsWith(source.dir + '/'))
+      .map((t) => t.path.split('/')[1])
+      .filter(Boolean);
+    const names = [...new Set(all)];
+    return Array.isArray(source.pick) ? names.filter((n) => source.pick.includes(n)) : names;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadSkills(force = false) {
+  const fresh = skillsCache.fetchedAt && Date.now() - skillsCache.fetchedAt < skillsTtlMs();
+  if (fresh && !force) return skillsCache.skills;
+  if (skillsFetch) return skillsFetch;
+  skillsFetch = (async () => {
+    const perSource = await Promise.all(SKILL_SOURCES.map(async (source) => {
+      const names = await fetchSkillNames(source);
+      // Bounded parallelism per repo; a huge repo shouldn't open 50 sockets.
+      const rows = [];
+      for (let i = 0; i < names.length; i += 8) {
+        const slice = names.slice(i, i + 8);
+        const texts = await Promise.all(slice.map((name) =>
+          fetchSkillText(source, `${source.dir}/${name}/SKILL.md`)
+        ));
+        slice.forEach((name, j) => {
+          const body = texts[j] || '';
+          const meta = parseSkillFrontmatter(body);
+          if (body && meta.description) {
+            rows.push({ source: source.repo, name, description: meta.description, body });
+          }
+        });
+      }
+      return rows;
+    }));
+    const skills = perSource.flat();
+    // Last-good wins over nothing: GitHub unreachable mid-TTL keeps the old
+    // catalogue serving.
+    if (skills.length) skillsCache = { fetchedAt: Date.now(), skills };
+    else if (skillsCache.skills.length) skillsCache.fetchedAt = Date.now();
+    return skillsCache.skills;
+  })().finally(() => { skillsFetch = null; });
+  return skillsFetch;
+}
+
+// GET /api/skills — the id catalogue for the picker.
+function llmSkills(req, res) {
+  loadSkills().then((skills) => {
+    sendJson(res, 200, skills.map((s) => ({ source: s.source, name: s.name, description: s.description })));
+  }).catch((err) => sendJson(res, 502, { error: err.message }));
+}
+
+// GET /api/skills/content?name= — one skill's full SKILL.md, for use_skill.
+async function llmSkillContent(req, res) {
+  const name = new URL(req.url, 'http://x').searchParams.get('name');
+  if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+    return sendJson(res, 400, { error: 'name is required' });
+  }
+  const skills = await loadSkills();
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) return sendJson(res, 404, { error: `No installed skill named "${name}"` });
+  sendJson(res, 200, skill);
+}
+
+function normalizeProviderModel(m) {
   const architecture = m.architecture || {};
   return {
-    pricedByName: !!(provider && provider.pricedByName),
     id: m.id,
     name: m.name || m.display_name,
     ownedBy: m.owned_by,
@@ -707,18 +1338,119 @@ function llmChat(req, res) {
     if (!body || !body.model || !Array.isArray(body.messages)) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
+    const upstreamBody = JSON.stringify({
+      model: body.model,
+      messages: body.messages,
+      ...(body.tools ? { tools: body.tools } : {}),
+      ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+      ...(body.stream ? { stream: true } : {}),
+    });
+    const headers = providerAuthHeaders(provider, req);
+    if (body.stream) {
+      const t = providerTimeoutMs();
+      const controller = new AbortController();
+      // failKind separates our own timeouts (explained, 504) from a client
+      // disconnect (quiet 499). Set just before aborting so the catch below
+      // knows which wait expired.
+      let failKind = '';
+      const fail = (kind) => { failKind = kind; controller.abort(); };
+      const totalTimer = setTimeout(() => fail('total'), t.chat);
+      const onClientClose = () => {
+        if (!res.writableEnded) controller.abort();
+      };
+      // Use the socket close event rather than req.on('close'), because
+      // req (IncomingMessage/Readable) emits 'close' when the request body
+      // is fully consumed — which happens before we start streaming.
+      req.socket.on('close', onClientClose);
+      let upstreamConsumed = false;
+      let headersSent = false;
+      try {
+        const upstream = await fetchStreamWithRetry(id, async () => {
+          const headerTimer = setTimeout(() => fail('headers'), t.headers);
+          try {
+            return await fetch(provider.baseUrl + '/chat/completions', {
+              method: 'POST',
+              signal: controller.signal,
+              headers,
+              body: upstreamBody,
+            });
+          } finally {
+            clearTimeout(headerTimer);
+          }
+        });
+        res.writeHead(upstream.status, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          // Some reverse proxies (Railway, nginx, Cloudflare) buffer SSE by
+          // default. This header tells them to flush the data through.
+          'X-Accel-Buffering': 'no',
+        });
+        headersSent = true;
+        // Non-retryable or non-streamable failures still get a readable body.
+        if (!upstream.ok) {
+          const data = await upstream.json().catch(() => null);
+          res.write(`data: ${JSON.stringify({ error: describeProviderError(upstream.status, data, provider) })}\n\n`);
+        } else {
+          // A stream that goes quiet is hung, not slow: poke a deadline on
+          // every chunk so silence aborts instead of spinning forever.
+          let stallTimer;
+          const poke = () => {
+            clearTimeout(stallTimer);
+            stallTimer = setTimeout(() => fail('stall'), t.stall);
+          };
+          try {
+            poke();
+            for await (const chunk of upstream.body) {
+              poke();
+              res.write(chunk);
+            }
+            upstreamConsumed = true;
+          } finally {
+            clearTimeout(stallTimer);
+          }
+        }
+      } catch (e) {
+        // Once streaming has started the status is already on the wire, so a
+        // mid-body failure travels as an SSE error event, not a new status.
+        let status = 502;
+        let message = e.message;
+        if (e.name === 'AbortError' && !failKind) {
+          status = 499;
+          message = 'Request aborted';
+        } else if (failKind) {
+          const secs = Math.round((failKind === 'headers' ? t.headers : failKind === 'stall' ? t.stall : t.chat) / 1000);
+          status = 504;
+          message = failKind === 'headers'
+            ? `${provider.label} sent no response headers within ${secs}s`
+            : failKind === 'stall'
+              ? `${provider.label} stalled mid-reply (no data for ${secs}s)`
+              : `${provider.label} did not finish within ${secs}s`;
+        }
+        if (!headersSent) res.writeHead(status, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+      } finally {
+        clearTimeout(totalTimer);
+        req.socket.removeListener('close', onClientClose);
+        if (!res.writableEnded) {
+          // Providers already send a [DONE] sentinel at the end of a
+          // successful stream; only add one when the body was consumed
+          // partially or an error was sent instead.
+          if (!upstreamConsumed) res.write('data: [DONE]\n\n');
+          res.end();
+        }
+      }
+      return;
+    }
     try {
-      const { ok, status, data } = await providerFetch(req, provider, '/chat/completions', {
-        method: 'POST',
-        // Passed through rather than rebuilt: these are OpenAI-shaped already,
-        // and rebuilding would quietly drop anything new the caller sends.
-        body: JSON.stringify({
-          model: body.model,
-          messages: body.messages,
-          ...(body.tools ? { tools: body.tools } : {}),
-          ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
-        }),
-      });
+      const { ok, status, data } = await fetchProviderWithRetry(id, () =>
+        providerFetch(req, provider, '/chat/completions', {
+          method: 'POST',
+          // Passed through rather than rebuilt: these are OpenAI-shaped already,
+          // and rebuilding would quietly drop anything new the caller sends.
+          body: upstreamBody,
+        })
+      );
       if (!ok) {
         // Collapsing every upstream failure into one string made it impossible
         // to tell a missing model from an empty balance from a bad key. Report
@@ -791,8 +1523,15 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
+    if (urlPath === '/api/skills' && req.method === 'GET') return llmSkills(req, res);
+    if (urlPath === '/api/skills/content' && req.method === 'GET') return llmSkillContent(req, res);
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
+    if (urlPath === '/api/llm/limits' && req.method === 'GET') return llmLimits(req, res);
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
+    if (urlPath === '/api/llm/images/generations' && req.method === 'POST') return llmImage(req, res, 'generations');
+    if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
+    if (urlPath === '/api/llm/websearch' && req.method === 'GET') return llmWebsearch(req, res);
+    if (urlPath === '/api/llm/fetch' && req.method === 'GET') return llmFetch(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
@@ -824,12 +1563,14 @@ function createRequestHandler(root) {
             res.end('Not found');
             return;
           }
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
           res.end(req.method === 'HEAD' ? undefined : html);
         });
         return;
       }
-      res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream' });
+      // Static files never cache: the whole UI ships in index.html, so a
+      // cached copy silently runs yesterday's code after a deploy.
+      res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
   };
@@ -839,4 +1580,26 @@ if (require.main === module) {
   http.createServer(createRequestHandler(rootDir)).listen(port, () => console.log(`Serving on port ${port}`));
 }
 
-module.exports = { resolveSafePath, isAssetPath, createRequestHandler, normalizeProviderModel, normalizePricing };
+module.exports = {
+  resolveSafePath,
+  isAssetPath,
+  LLM_PROVIDERS,
+  createRequestHandler,
+  normalizeProviderModel,
+  normalizePricing,
+  describeProviderError,
+  fetchProviderWithRetry,
+  fetchStreamWithRetry,
+  clearModelCache,
+  clearSkillsCache,
+  loadSkills,
+  modelsCacheTtlMs,
+  providerTimeoutMs,
+  rateLimitMaxAttempts,
+  retryBaseDelayMs,
+  extractPageText,
+  normalizeDdG,
+  normalizeWiki,
+  normalizeWikiFull,
+  isPrivateIp,
+};

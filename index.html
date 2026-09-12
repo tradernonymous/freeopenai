@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -36,16 +36,93 @@
             --glass: rgba(10,10,10,.72);
             --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
         }
+        /* Light theme: same tokens, inverted monochrome. Code blocks stay
+           dark on purpose -- a dark well reads as code in either theme. */
+        html[data-theme="light"] {
+            --bg: #ffffff;
+            --bg-elevated: #f7f7f7;
+            --surface: #f4f4f4;
+            --surface-2: #e9e9e9;
+            --border: #d6d6d6;
+            --border-strong: #a8a8a8;
+            --text: #111111;
+            --text-dim: #444444;
+            --text-muted: #6e6e6e;
+            --accent: #000000;
+            --accent-bg: rgba(0,0,0,.07);
+            --danger: #d92d20;
+            --lift: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(0,0,0,.08);
+            --lift-lg: inset 0 1px 0 rgba(255,255,255,.9), 0 8px 28px rgba(0,0,0,.12);
+            --glow: 0 0 0 3px rgba(0,0,0,.08);
+            --glass: rgba(255,255,255,.78);
+        }
+        html[data-theme="light"] .message-text pre { background: #111111; border-color: #333333; }
+        html[data-theme="light"] .message-text pre code { color: #eeeeee; }
+        html[data-theme="light"] .load-error-banner { background: #fdecec; color: #7a1f1f; }
+        html[data-theme="light"] .load-error-banner button { color: #ffffff; }
+        html[data-theme="light"] .icon-moon { display: none; }
+        html[data-theme="light"] .icon-sun { display: block; }
+        .icon-sun { display: none; }
+        /* Theme packs, OpenCode-style: same tokens, new palettes. */
+        html[data-theme="tokyonight"] {
+            --bg: #1a1b26;
+            --bg-elevated: #16161e;
+            --surface: #24283b;
+            --surface-2: #292e42;
+            --border: #3b4261;
+            --border-strong: #565f89;
+            --text: #c0caf5;
+            --text-dim: #a9b1d6;
+            --text-muted: #737aa2;
+            --accent: #7aa2f7;
+            --accent-bg: rgba(122,162,247,.14);
+            --danger: #f7768e;
+            --glass: rgba(26,27,38,.78);
+        }
+        html[data-theme="gruvbox"] {
+            --bg: #282828;
+            --bg-elevated: #1d2021;
+            --surface: #3c3836;
+            --surface-2: #504945;
+            --border: #665c54;
+            --border-strong: #7c6f64;
+            --text: #ebdbb2;
+            --text-dim: #d5c4a1;
+            --text-muted: #928374;
+            --accent: #fabd2f;
+            --accent-bg: rgba(250,189,47,.12);
+            --danger: #fb4934;
+            --glass: rgba(40,40,40,.78);
+        }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
         html, body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; overflow: hidden; height: 100%; }
+        /* iOS inflates text when you switch to landscape; this pins the size. */
+        html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         body {
+            /* 100vh first for browsers without dynamic viewport units, then
+               the live value so 100dvh owners track the collapsing URL bar
+               and on-screen keyboard. */
+            height: 100vh;
             height: 100dvh;
             display: flex; flex-direction: column;
             padding-top: env(safe-area-inset-top);
             padding-bottom: env(safe-area-inset-bottom);
             -webkit-tap-highlight-color: transparent;
+        }
+        /* Without this, every tap on a phone waits on the browser's double-tap
+           zoom detector before the handler runs. */
+        button, select, input, textarea,
+        .model-option, .history-item, .model-card, .drawer-nav-btn,
+        .attach-menu-item, .msg-action-btn, .code-copy-btn, .message-image {
+            touch-action: manipulation;
+        }
+        /* Interior scrollers must not chain into the browser's pull-to-refresh
+           or overscroll glow when they hit their top or bottom edge. */
+        .chat-messages, .history-list, .model-dropdown-list,
+        .settings-body, .reasoning-text, .modal, .github-file-content {
+            overscroll-behavior-y: contain;
         }
         a { color: inherit; text-decoration: none; }
 
@@ -111,7 +188,7 @@
            has no room to give a permanent column. */
         .chat-shell { flex: 1; display: flex; min-height: 0; overflow: hidden; }
         .history-sidebar {
-            width: 240px; flex-shrink: 0;
+            width: 224px; flex-shrink: 0;
             display: flex; flex-direction: column;
             background: var(--bg-elevated);
             border-right: 1px solid var(--border);
@@ -125,7 +202,7 @@
         }
         .history-head {
             display: flex; align-items: center; justify-content: space-between;
-            gap: 8px; padding: 10px 12px; height: 48px; flex-shrink: 0;
+            gap: 8px; padding: 8px 12px; height: 44px; flex-shrink: 0;
             border-bottom: 1px solid var(--border);
             font-size: 13px; font-weight: 600; color: var(--text-dim);
             white-space: nowrap;
@@ -133,7 +210,7 @@
         .history-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
         .history-item {
             display: flex; align-items: center; gap: 6px;
-            padding: 8px 10px; border-radius: var(--r-sm);
+            padding: 7px 9px; border-radius: var(--r-sm);
             cursor: pointer; color: var(--text-dim); font-size: 12px;
             border: 1px solid transparent; transition: var(--transition);
         }
@@ -147,6 +224,21 @@
         }
         .history-item:hover .history-delete, .history-item.active .history-delete { opacity: 1; }
         .history-item .history-delete:hover { color: var(--danger); }
+        .history-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); flex-shrink: 0; }
+        .history-item.active .history-dot { background: var(--accent); }
+        /* Compact notices (/details parity): tool and system chatter hides,
+           the conversation stays. */
+        .hide-system .message.system { display: none; }
+        input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+        /* Command palette (Ctrl+P): model and action search over everything. */
+        .palette-overlay { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; background: rgba(0,0,0,.55); }
+        .palette-overlay[hidden] { display: none; }
+        .palette { width: 100%; max-width: 520px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--lift-lg); overflow: hidden; }
+        .palette input { width: 100%; background: transparent; color: var(--text); border: none; border-bottom: 1px solid var(--border); padding: 12px 14px; font: inherit; font-size: 14px; outline: none; }
+        .palette-list { max-height: min(46vh, 340px); overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+        .palette-item { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 9px 10px; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+        .palette-item.selected { background: var(--accent-bg); color: var(--accent); }
+        .palette-item .k { margin-left: auto; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
         .history-scrim { display: none; }
 
@@ -174,16 +266,16 @@
             -webkit-backdrop-filter: blur(14px) saturate(140%);
             box-shadow: inset 0 -1px 0 rgba(255,255,255,.04);
             position: relative; z-index: 20;
-            height: 48px;
+            height: 44px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 16px;
+            padding: 0 14px;
             border-bottom: 1px solid var(--border);
             background: var(--bg-elevated);
             gap: 12px;
         }
-        .chat-bar-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+        .chat-bar-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
         .chat-bar-title .dot {
             width: 8px; height: 8px; border-radius: 50%;
             background: var(--accent);
@@ -281,15 +373,16 @@
         .chat-messages {
             flex: 1;
             overflow-y: auto;
-            padding: 20px;
+            padding: 16px 20px;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            align-items: center;
+            gap: 14px;
             width: 100%;
         }
         .message {
             max-width: 85%;
-            font-size: 13px;
+            font-size: 12.5px;
             line-height: 1.6;
             word-wrap: break-word;
             animation: slideIn 150ms ease;
@@ -299,17 +392,21 @@
             align-self: flex-end;
             background: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.07));
             color: var(--text);
-            padding: 12px 16px;
+            padding: 10px 14px;
             border: 1px solid rgba(255,255,255,.09);
             border-radius: 18px;
             border-bottom-right-radius: 4px;
             box-shadow: var(--lift);
+            /* Right edge tracks the centered 768px column instead of the viewport. */
+            max-width: min(88%, 640px);
+            margin-left: auto;
+            margin-right: max(12px, calc((100% - 768px) / 2));
         }
-        .message.bot { align-self: stretch; max-width: 100%; padding: 2px 0; }
+        .message.bot { align-self: center; width: 100%; max-width: 768px; padding: 2px 0; }
         .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; text-align: center; }
         .message.system.error { color: var(--danger); }
 
-        .message-actions { display: flex; gap: 2px; margin-top: 10px; margin-left: -6px; }
+        .message-actions { display: flex; gap: 2px; margin-top: 8px; margin-left: -6px; }
         /* User bubbles sit on the right, so their actions do too. */
         .message.user .message-actions { justify-content: flex-end; margin-left: 0; margin-right: -6px; }
         .msg-action-btn.copied, .code-copy-btn.copied { color: var(--accent); border-color: var(--accent); }
@@ -365,6 +462,9 @@
             font-size: 0.9em;
             font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
+        /* A bare URL or token in prose is one long word; without this it
+           shoves its bubble past the screen edge. Code blocks already scroll. */
+        .message-text { overflow-wrap: anywhere; }
         .message-text pre {
             position: relative;
             box-shadow: inset 0 1px 3px rgba(0,0,0,.6);
@@ -400,6 +500,124 @@
 
         /* Generated images */
         .message-image-wrap { margin-top: 6px; }
+        /* ChatGPT-style shimmer while an image generates: a wavy gradient
+           sweep. The global reduced-motion rule stills it for those users. */
+        .img-shimmer { aspect-ratio: 1 / 1; width: 100%; min-height: 240px; display: flex; align-items: center; justify-content: center; border-radius: var(--r); border: 1px solid var(--border); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 45%, var(--surface) 60%); background-size: 200% 100%; animation: shimmer-wave 1.6s linear infinite; }
+        .img-shimmer span { font-size: 13px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; }
+        @keyframes shimmer-wave { from { background-position: 180% 0; } to { background-position: -80% 0; } }
+
+        /* FreeOpenAI "holo-forge": the futuristic generation overlay. A
+           warp-speed starfield streams inward while a materializing scan
+           grid hums and a progress ring counts the elapsed budget — pure
+           CSS, zero dependencies, stills under prefers-reduced-motion. */
+        .holo-forge {
+            aspect-ratio: 1 / 1; width: 100%; min-height: 240px;
+            position: relative; overflow: hidden; border-radius: var(--r);
+            border: 1px solid var(--border); background:
+                radial-gradient(ellipse at 50% 55%, var(--surface-2) 0%, var(--surface) 62%, var(--bg-elevated) 100%);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .holo-forge__stars, .holo-forge__stars::after {
+            content: ''; position: absolute; inset: -50%;
+            background-image:
+                radial-gradient(1.4px 1.4px at 22% 31%, var(--accent) 45%, transparent 55%),
+                radial-gradient(1px 1px at 68% 12%, var(--accent) 40%, transparent 55%),
+                radial-gradient(1.2px 1.2px at 84% 57%, var(--accent) 45%, transparent 55%),
+                radial-gradient(0.8px 0.8px at 41% 76%, var(--accent) 40%, transparent 55%),
+                radial-gradient(1.6px 1.6px at 57% 44%, var(--accent) 45%, transparent 55%),
+                radial-gradient(1px 1px at 12% 62%, var(--accent) 40%, transparent 55%),
+                radial-gradient(1.3px 1.3px at 77% 86%, var(--accent) 45%, transparent 55%),
+                radial-gradient(0.9px 0.9px at 33% 8%, var(--accent) 40%, transparent 55%),
+                radial-gradient(1.1px 1.1px at 92% 28%, var(--accent) 40%, transparent 55%),
+                radial-gradient(1.5px 1.5px at 8% 15%, var(--accent) 45%, transparent 55%);
+            opacity: .5;
+            animation: holo-warp 2.8s linear infinite;
+        }
+        .holo-forge__stars::after { animation-delay: -1.4s; }
+        @keyframes holo-warp {
+            from { transform: scale(.14); opacity: .9; }
+            70% { opacity: .35; }
+            to { transform: scale(1.6); opacity: 0; }
+        }
+        /* Materializing scan grid: faint cells flicker in as the "print"
+           sweeps up the frame, like a hologram resolving. */
+        .holo-forge__grid {
+            position: absolute; inset: 12%; border-radius: 12px;
+            background:
+                linear-gradient(var(--accent-bg) 1px, transparent 1px) 0 0 / 100% 14px,
+                linear-gradient(90deg, var(--accent-bg) 1px, transparent 1px) 0 0 / 14px 100%;
+            mask-image: linear-gradient(180deg, transparent 12%, #000 38%, #000 78%, transparent 96%);
+            -webkit-mask-image: linear-gradient(180deg, transparent 12%, #000 38%, #000 78%, transparent 96%);
+            animation: holo-scan 2.2s ease-in-out infinite alternate, holo-flicker 3.4s steps(6) infinite;
+            opacity: .85;
+        }
+        @keyframes holo-scan { from { transform: translateY(9%); } to { transform: translateY(-9%); } }
+        @keyframes holo-flicker { 0%, 100% { opacity: .85; } 37% { opacity: .5; } 62% { opacity: 1; } 81% { opacity: .6; } }
+        .holo-forge__core {
+            position: relative; z-index: 2; width: 34%; max-width: 132px; aspect-ratio: 1;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 50%;
+            background: radial-gradient(circle at 50% 42%, var(--accent-bg) 0%, transparent 70%);
+            box-shadow: 0 0 34px var(--accent-bg), inset 0 0 22px var(--accent-bg);
+        }
+        /* Progress ring: conic sweep around the core, driven by
+           --holo-progress (0→1) from the elapsed-time updater. */
+        .holo-forge__ring {
+            position: absolute; inset: 0; border-radius: 50%;
+            background: conic-gradient(var(--accent) calc(var(--holo-progress, 0) * 360deg), transparent 0);
+            mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+        }
+        .holo-forge__core::after {
+            content: ''; width: 26%; aspect-ratio: 1; border-radius: 50%; background: var(--accent);
+            opacity: .9; animation: holo-pulse 1.1s ease-in-out infinite;
+        }
+        @keyframes holo-pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.15); opacity: 1; } }
+        .holo-forge__label {
+            position: absolute; z-index: 2; bottom: 9%; left: 50%; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 7px;
+            font-size: 13px; color: var(--text-muted); white-space: nowrap;
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: 999px; padding: 6px 14px;
+        }
+        .holo-forge__label b { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 2.4em; text-align: right; }
+        .holo-forge__caret { display: inline-block; animation: holo-caret .9s steps(2) infinite; }
+        @keyframes holo-caret { 50% { opacity: 0; } }
+        .image-caption { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+        .image-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+        .caption-copy { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-dim); font-size: 11px; padding: 3px 8px; cursor: pointer; flex-shrink: 0; }
+        .caption-copy:hover { background: var(--surface-2); color: var(--text); }
+        /* Showcase gallery: uniform tiles, prompt on hover. */
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+        .gallery-tile { position: relative; aspect-ratio: 1 / 1; border-radius: var(--r); overflow: hidden; border: 1px solid var(--border); background: var(--surface); cursor: zoom-in; padding: 0; }
+        .gallery-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gallery-tile figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 8px; font-size: 11px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.75)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gallery-expired { aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px; font-size: 12px; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: var(--r); }
+        /* Tab strip for pinned + active chats, desktop-session style. */
+        .chat-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px 0; flex-shrink: 0; }
+        .chat-tabs[hidden] { display: none; }
+        .chat-tab { flex-shrink: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface); border: 1px solid var(--border); border-bottom: none; border-radius: var(--r-sm) var(--r-sm) 0 0; color: var(--text-dim); font-size: 12px; padding: 6px 10px; cursor: pointer; }
+        .chat-tab.active { background: var(--surface-2); color: var(--text); }
+        .history-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 4px; flex-shrink: 0; }
+        .history-pin.on { color: var(--accent); }
+        /* Mask editor for image edits. touch-action none so a finger paints
+           instead of scrolling. */
+        .modal-wide { max-width: 560px; }
+        .mask-canvas { width: 100%; border-radius: var(--r-sm); border: 1px solid var(--border); background: #000; touch-action: none; cursor: crosshair; display: block; }
+        .mask-prompt { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font: inherit; font-size: 13px; outline: none; margin-top: 10px; }
+        .effort-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        /* Mode chip (Chat / Plan / Build) — mirrors the effort chip's shape so
+           the composer stays one visual row. */
+        .mode-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+        .mode-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+        .mode-chip[data-mode="plan"] { color: var(--accent); border-color: var(--accent-bg); }
+        .mode-chip[data-mode="plan"]::before { background: var(--accent); }
+        .mode-chip[data-mode="build"] { color: var(--text); background: var(--accent-bg); border-color: var(--accent); }
+        .mode-chip[data-mode="build"]::before { background: var(--accent); animation: holo-pulse 1.6s ease-in-out infinite; }
+        .skills-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .skill-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 3px 10px; cursor: default; max-width: 100%; }
+        .skill-chip b { color: var(--text); font-weight: 600; }
+        .skill-chip .skill-src { color: var(--text-muted); font-size: 10px; }
         .message-image {
             display: block;
             max-width: 100%;
@@ -412,7 +630,11 @@
         .lightbox-actions { display: flex; gap: 8px; }
 
         /* Typing indicator */
-        .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 8px 16px; align-self: flex-start; color: var(--text-muted); font-size: 12px; }
+        /* Lives in the bot column, not pinned to the viewport edge: same
+           center track and 768px width as .message.bot, so the dots sit
+           exactly where the reply will start instead of floating outside
+           the conversation. */
+        .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 10px 16px; align-self: center; width: 100%; max-width: 768px; color: var(--text-muted); font-size: 12px; }
         .typing-dots { display: flex; gap: 3px; }
         .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: typing 1.2s infinite ease-in-out; }
         .typing-dots span:nth-child(2) { animation-delay: .15s; }
@@ -423,10 +645,25 @@
         .empty-state {
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
             text-align: center; color: var(--text-muted); padding: 40px 20px;
+            /* Flex items refuse to shrink below content size by default, which
+               let the hero grid push this box wider than a phone screen. */
+            min-width: 0; max-width: 100%;
         }
         .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.3; }
         .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
         .empty-state p { font-size: 13px; max-width: 280px; line-height: 1.5; }
+        /* Prompt hero: headline plus suggestion cards, task-form style. The
+           grid collapses to one column on its own, no breakpoint needed. */
+        .hero-greet { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); margin-bottom: 6px; }
+        .empty-state .hero-sub { max-width: 340px; margin-bottom: 20px; }
+        /* min(200px, 100%) is the anti-blowout form: a bare 200px minimum
+           forced two columns onto every screen and clipped the right column
+           on phones. */
+        .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; width: 100%; max-width: 560px; }
+        .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
+        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift); }
+        .hero-card strong { font-size: 13px; color: var(--text); }
+        .hero-card span { font-size: 12px; color: var(--text-muted); }
 
         /* Input area - unified pill composer */
         .chat-input-area {
@@ -435,7 +672,7 @@
             padding: 12px 16px;
         }
         .attachment-chip {
-            display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 8px;
+            display: flex; align-items: center; gap: 8px; width: 100%; max-width: 768px; margin: 0 auto 8px;
             padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
             background: var(--surface); font-size: 12px; color: var(--text-dim);
         }
@@ -472,6 +709,8 @@
         .composer {
             display: flex; align-items: flex-end; gap: 4px;
             width: 100%;
+            max-width: 768px;
+            margin-inline: auto;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 26px;
@@ -513,6 +752,8 @@
         }
         .composer-send:hover:not(:disabled) { transform: scale(1.05); }
         .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
+        /* Red stop square while a reply is in flight. */
+        .composer-send.stop { background: var(--danger); font-size: 20px; }
 
         /* Status bar - minimal */
         .status-bar {
@@ -640,11 +881,11 @@
         .drawer-title { font-size: 15px; font-weight: 600; }
         .drawer-nav { display: flex; flex-direction: column; gap: 4px; padding: 12px; }
         .drawer-nav-btn {
-            display: flex; align-items: center; gap: 12px;
-            width: 100%; padding: 12px 14px;
+            display: flex; align-items: center; gap: 10px;
+            width: 100%; padding: 10px 12px;
             border-radius: var(--r);
             background: transparent; border: 1px solid transparent;
-            color: var(--text-dim); font-size: 14px; font-weight: 500;
+            color: var(--text-dim); font-size: 13px; font-weight: 500;
             cursor: pointer; text-align: left; transition: var(--transition);
         }
         .drawer-nav-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
@@ -695,7 +936,15 @@
         /* Responsive */
         @media (max-width: 640px) {
             .drawer-footer .auth-name { max-width: 120px; }
-            .chat-bar { padding: 0 10px; height: 52px; gap: 6px; }
+            .chat-bar { padding: 0 8px; height: 52px; gap: 4px; }
+            .chat-bar-actions { gap: 2px; }
+            /* Icon buttons keep their 44px finger target via the ::after rule
+               below, so the visible glyph can shrink to fit 375px. */
+            .chat-bar-actions .icon-btn { width: 30px; height: 30px; }
+            /* The refresh icon is the least-used control on a phone, and with
+               the model trigger + provider select it is what pushes the header
+               past a 375px screen. The browser's own reload still covers it. */
+            #refreshBtn { display: none; }
             #viewChat .chat-bar-title span:last-child { display: none; }
             .model-trigger span#modelLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .chat-messages { padding: 14px 12px; gap: 22px; }
@@ -713,7 +962,7 @@
                for real rather than padded out like the buttons. */
             .effort-select, #providerSelect { min-height: 44px; }
             .effort-select option { font-size: 14px; }
-            .model-trigger { padding: 6px 8px; }
+            .model-trigger { padding: 6px 6px; }
             .history-sidebar {
                 position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
                 width: 78%; max-width: 300px;
@@ -742,9 +991,9 @@
                dropped it into the flow, on top of the first line of code. An
                absolutely positioned element hosts ::after perfectly well. */
             .msg-action-btn, .history-delete,
-            .icon-btn, .menu-trigger-btn, .model-trigger { position: relative; }
+            .icon-btn, .menu-trigger-btn, .model-trigger, .mode-chip { position: relative; }
             .msg-action-btn::after, .history-delete::after, .code-copy-btn::after,
-            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after {
+            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after, .mode-chip::after {
                 content: ''; position: absolute;
                 top: 50%; left: 50%; transform: translate(-50%, -50%);
                 width: max(100%, 44px); height: max(100%, 44px);
@@ -782,6 +1031,26 @@
             .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
             .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
             .empty-state p { font-size: 14px; }
+            /* 13px is fine with a mouse, but iOS zooms any focused input
+               under 16px -- and a zoomed dropdown is a broken dropdown. */
+            .model-dropdown-search { font-size: 16px; }
+            /* Phone reading distance wants a touch more size and air. */
+            .message-text { font-size: 15px; line-height: 1.65; }
+            /* A generated image must not swallow the whole transcript. Both
+               constraints hold at once, so the aspect ratio survives. */
+            .message-image { max-height: 52vh; margin-inline: auto; }
+            /* iOS zooms any focused input under 16px. The model search was
+               fixed earlier; these stragglers zoomed the same way. */
+            .palette input { font-size: 16px; }
+            .mask-prompt { font-size: 16px; }
+            #githubPathInput, #githubCommitMessage { font-size: 16px; }
+            /* Turn stats can be long ("nvidia/nemotron-3-ultra… · 12s"); on a
+               phone the status bar must clip, not push the layout sideways. */
+            .status-left { min-width: 0; flex-shrink: 1; }
+            #statusMessage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #usageText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 44vw; flex-shrink: 0; }
+            /* Wide dialogs (mask editor) must fit a 360px viewport. */
+            .modal-wide { width: calc(100vw - 32px); }
         }
 
         @media (max-width: 380px) {
@@ -792,6 +1061,32 @@
             #viewChat .chat-bar-title span { display: none; }
             .effort-select { max-width: 76px; }
             .model-trigger span#modelLabel { max-width: 68px; }
+            /* The mode chip joined the composer row; on a 360px screen its
+               desktop padding is what pushes the input too small. */
+            .mode-chip { padding: 4px 8px; font-size: 10px; }
+            /* Six header controls don't fit 360px even icon-sized; the theme
+               stays one Ctrl+P away, so it yields first. */
+            #themeToggle { display: none; }
+        }
+
+        /* A phone that has no hover state never reveals the delete affordances
+           that rely on it, so the sidebar's per-chat delete stays hidden for
+           every chat except the active one. Make it always visible. */
+        @media (hover: none) {
+            .history-item .history-delete { opacity: 1; }
+        }
+
+        /* A landscape phone trades height for width, so every fixed strip
+           steals a big slice of the transcript. Tighten them. */
+        @media (max-height: 520px) and (orientation: landscape) {
+            .chat-bar { height: 44px; }
+            .chat-input-area { padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); }
+            .chat-messages { padding: 12px; gap: 16px; }
+            .composer { padding: 4px 4px 4px 6px; border-radius: 22px; }
+            .composer-input { min-height: 32px; }
+            .composer-send, .composer-attach { width: 38px; height: 38px; }
+            .status-bar { height: 22px; }
+            .modal { max-height: 90vh; }
         }
     </style>
 </head>
@@ -821,6 +1116,7 @@
                     </aside>
                     <div class="history-scrim" id="historyScrim" onclick="toggleHistory(false)"></div>
                 <div class="chat-card">
+                    <div class="chat-tabs" id="chatTabs" hidden></div>
                     <div class="chat-bar">
                         <div class="chat-bar-title">
                             <button class="menu-trigger-btn" type="button" id="historyToggle" onclick="toggleHistory()" aria-label="Toggle chat history" aria-expanded="true" title="Chat history">
@@ -841,13 +1137,18 @@
                                     <div class="model-dropdown-list" id="modelDropdownList" role="listbox" aria-label="Available models"></div>
                                 </div>
                             </div>
+                            <button class="effort-chip" id="effortChip" hidden title="Reasoning effort" aria-label="Reasoning effort" onclick="focusEffort()">auto</button>
                             <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
                             <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
-                            <button class="icon-btn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
+                            <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
                             </button>
                             <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            </button>
+                            <button class="icon-btn" id="themeToggle" title="Toggle light and dark theme" aria-label="Toggle light and dark theme" onclick="toggleTheme()">
+                                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
                             </button>
                             <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -858,9 +1159,14 @@
 
                     <div class="chat-messages" id="chatMessages" aria-live="polite" aria-relevant="additions">
                         <div class="empty-state" id="emptyState">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 14v1c0 1.1.9 2 2 2v2.93zm6.9-2.54L7.77 6.87A7.93 7.93 0 0 1 12 5c4.97 0 9 4.03 9 9 0 2.29-.77 4.4-2.1 6.39z"/></svg>
-                            <h3>Start a conversation</h3>
-                            <p>Sign in, pick a model, and send a message to begin. Ask to "generate an image of..." and I'll draw one instead of chatting.</p>
+                            <h2 class="hero-greet">What should we build?</h2>
+                            <p class="hero-sub">Pick a model, then describe the task — or start from a card.</p>
+                            <div class="hero-cards">
+                                <button type="button" class="hero-card" onclick="sendPrompt('Write unit tests for an untested function')"><strong>Write tests</strong><span>Cover an untested function</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Explain this error message and how to fix it: ')"><strong>Debug an error</strong><span>Paste it after the colon</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Draft documentation for this API: ')"><strong>Draft docs</strong><span>Name the API after the colon</span></button>
+                                <button type="button" class="hero-card" onclick="sendPrompt('Review this code for bugs and suggest fixes: ')"><strong>Review code</strong><span>Paste it after the colon</span></button>
+                            </div>
                         </div>
                     </div>
 
@@ -906,8 +1212,11 @@
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
-                            <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
-                            <button class="composer-send" type="button" id="sendButton" disabled onclick="sendMessage()" aria-label="Send message">→</button>
+                            <button class="mode-chip" type="button" id="modeChip" onclick="cycleMode()" aria-label="Build mode" title="Mode: Chat / Plan / Build — opencode-style modes. Plan reasons without changing anything; Build executes with the skill library active.">
+                                <span id="modeChipLabel">Chat</span>
+                            </button>
+                            <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                            <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                         </div>
                     </div>
 
@@ -969,6 +1278,33 @@
                         </div>
                         <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
                     </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Auto-retry on rate limit</strong>
+                            <p class="settings-hint">One extra try after a short wait when a provider answers 429.</p>
+                        </div>
+                        <input type="checkbox" id="autoRetryCheck" checked onchange="setAutoRetry(this.checked)" aria-label="Retry once on rate limit">
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Agent skills</strong>
+                            <p class="settings-hint" id="skillsStatus">Loading the skill library…</p>
+                        </div>
+                        <div class="skills-list" id="skillsList" aria-label="Installed agent skills"></div>
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Server response limits</strong>
+                            <p class="settings-hint" id="limitsHint">Loading…</p>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Compact notices</strong>
+                            <p class="settings-hint">Hide tool and system notices, keeping only the conversation.</p>
+                        </div>
+                        <input type="checkbox" id="compactNoticesCheck" onchange="setCompactNotices(this.checked)" aria-label="Hide tool and system notices">
+                    </div>
                     <div class="settings-row" id="githubDisconnectedRow">
                         <div>
                             <strong>GitHub</strong>
@@ -1001,6 +1337,21 @@
                             <p class="settings-hint" id="githubActionStatus"></p>
                         </div>
                     </div>
+                </div>
+            </div>
+            <div class="view" id="viewGallery">
+                <div class="chat-bar">
+                    <div class="chat-bar-title"><span>Gallery</span></div>
+                    <div class="chat-bar-actions">
+                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span class="signed-in-dot"></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-body">
+                    <p class="settings-hint" id="galleryEmpty">Images you generate appear here, newest first.</p>
+                    <div class="gallery-grid" id="galleryGrid"></div>
                 </div>
             </div>
         </div>
@@ -1038,6 +1389,10 @@
                     <li><strong>OpenAI models</strong> — GPT-6 Astra, the GPT-5.6 and GPT-4o families via Puter.js</li>
                     <li><strong>Image generation</strong> — Toggle the image icon next to the input to generate one instead of chatting</li>
                     <li><strong>Free tier</strong> — Generous free usage limits</li>
+                    <li><strong>Palette</strong> — Ctrl+P jumps to any model or action; Enter runs, Esc closes</li>
+                    <li><strong>Interrupt</strong> — Esc stops a running reply; Enter sends</li>
+                    <li><strong>Editing</strong> — Ctrl+A/E move, Ctrl+K/U/W delete, Alt+letter words, Ctrl+G stops</li>
+                    <li><strong>Gallery</strong> — Every generated image lands in the Gallery view, newest first</li>
                 </ul>
             </div>
         </div>
@@ -1046,10 +1401,59 @@
     <div class="modal-overlay" id="imageLightbox" onclick="closeImageLightbox();">
         <div class="lightbox-content" role="dialog" aria-modal="true" aria-label="Generated image" onclick="event.stopPropagation();">
             <img id="lightboxImg" src="" alt="">
-            <div class="lightbox-actions">
-                <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
-                <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
+                            <div class="lightbox-actions">
+                                <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
+                                <button class="icon-btn-text" type="button" onclick="copyLightboxImage()">Copy</button>
+                                <button class="icon-btn-text" type="button" onclick="openImageEdit(lightboxImg.src, lightboxImg.alt)">Edit</button>
+                                <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
+                            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="imageConfirmOverlay" onclick="closeImageConfirm(false);">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="imageConfirmTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="imageConfirmTitle">Generate variations?</h3>
             </div>
+            <div class="modal-body">
+                <p id="imageConfirmText"></p>
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" type="button" onclick="closeImageConfirm(true)">Continue</button>
+                <button class="icon-btn-text danger" type="button" onclick="closeImageConfirm(false)">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="imageEditOverlay" onclick="closeImageEdit();">
+        <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="imageEditTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="imageEditTitle">Edit image</h3>
+                <button class="modal-close" onclick="closeImageEdit();" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="settings-hint">Paint over the area to change, describe the edit, then submit. Unpainted areas stay as they are.</p>
+                <canvas id="maskCanvas" class="mask-canvas"></canvas>
+                <div class="github-browser-row" style="margin-top: 10px;">
+                    <button class="icon-btn-text" type="button" onclick="setMaskBrush(12)">Small brush</button>
+                    <button class="icon-btn-text" type="button" onclick="setMaskBrush(32)">Large brush</button>
+                    <button class="icon-btn-text danger" type="button" onclick="clearMask()">Clear mask</button>
+                </div>
+                <input type="text" id="imageEditPrompt" class="mask-prompt" placeholder="Describe the edit…" aria-label="Edit prompt">
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" type="button" onclick="submitImageEdit()">Apply edit</button>
+                <button class="icon-btn-text danger" type="button" onclick="closeImageEdit()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="palette-overlay" id="paletteOverlay" hidden onclick="if (event.target === this) closePalette();">
+        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+            <input type="text" id="paletteInput" placeholder="Type a model or command…" aria-label="Command palette" autocomplete="off" oninput="renderPalette(this.value)">
+            <div class="palette-list" id="paletteList" role="listbox" aria-label="Results"></div>
         </div>
     </div>
 
@@ -1071,8 +1475,12 @@
                     Models
                 </button>
                 <button class="drawer-nav-btn" type="button" data-view="settings" onclick="switchViewFromDrawer('settings')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     Settings
+                </button>
+                <button class="drawer-nav-btn" type="button" data-view="gallery" onclick="switchViewFromDrawer('gallery')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    Gallery
                 </button>
                 <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -1114,6 +1522,10 @@
         // doesn't become a refusal on every message. Declared up here because
         // updateEffortPicker reads it during initializeApp().
         const effortRejectedBy = new Set();
+        // Models a provider refused for this key. OpenRouter gates some of its
+        // free models to approved agentic apps, and nothing in the catalogue
+        // says which -- only trying finds out, so remember the answer.
+        const modelsRefusedBy = new Set();
 
         // Which service answers. 'puter' needs no key; the others go through our
         // own server, which holds the key.
@@ -1124,6 +1536,86 @@
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
         let githubConnected = false;
+
+        // --- Modes & skills (opencode-style) ---
+        let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
+            ? localStorage.getItem('freeopenaiMode')
+            : DEFAULT_MODE;
+        let skillsCatalog = []; // { source, name, description } rows
+
+        function updateModeChip() {
+            const chip = document.getElementById('modeChip');
+            const label = document.getElementById('modeChipLabel');
+            if (!chip || !label) return;
+            const meta = MODES.find((m) => m.id === selectedMode) || MODES[0];
+            chip.dataset.mode = meta.id;
+            label.textContent = meta.label;
+            chip.title = meta.desc;
+        }
+
+        function cycleMode() {
+            const idx = MODES.findIndex((m) => m.id === selectedMode);
+            selectedMode = MODES[(idx + 1) % MODES.length].id;
+            localStorage.setItem('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
+            if (selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        async function ensureSkillsLoaded() {
+            if (skillsCatalog.length) return skillsCatalog;
+            try {
+                const res = await fetch('/api/skills');
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'failed');
+                skillsCatalog = Array.isArray(data) ? data : [];
+                renderSkillsList();
+            } catch {
+                renderSkillsList('Skill library unreachable — continuing without skills');
+            }
+            return skillsCatalog;
+        }
+
+        function renderSkillsList(errText) {
+            const status = document.getElementById('skillsStatus');
+            const list = document.getElementById('skillsList');
+            if (!status || !list) return;
+            if (errText) { status.textContent = errText; return; }
+            const bySrc = {};
+            for (const s of skillsCatalog) (bySrc[s.source] = bySrc[s.source] || []).push(s.name);
+            status.textContent = skillsCatalog.length
+                ? skillsCatalog.length + ' skills installed across ' + Object.keys(bySrc).length + ' libraries — auto-applied in Plan & Build modes.'
+                : 'Skill library empty (GitHub unreachable at load).';
+            list.innerHTML = '';
+            for (const [src, names] of Object.entries(bySrc)) {
+                for (const name of names) {
+                    const chip = document.createElement('span');
+                    chip.className = 'skill-chip';
+                    const b = document.createElement('b');
+                    b.textContent = name;
+                    const srcSpan = document.createElement('span');
+                    srcSpan.className = 'skill-src';
+                    srcSpan.textContent = ' · ' + src.split('/')[0];
+                    chip.appendChild(b);
+                    chip.appendChild(srcSpan);
+                    chip.title = (skillsCatalog.find((s) => s.name === name) || {}).description || '';
+                    list.appendChild(chip);
+                }
+            }
+        }
+
+        async function runUseSkillTool(args) {
+            const name = String(args.name || '').trim();
+            if (!name) return 'Error: skill name is required';
+            try {
+                const res = await fetch('/api/skills/content?name=' + encodeURIComponent(name));
+                const data = await safeJson(res);
+                if (!res.ok) return 'Error: ' + (data.error || res.status);
+                return String(data.body || '').slice(0, 12000);
+            } catch (e) {
+                return 'Error loading skill: ' + e.message;
+            }
+        }
         // Set when GitHub handed back an account that was already connected.
         let githubSameAccountNotice = '';
         let messages = [];
@@ -1133,11 +1625,32 @@
         let puterReady = false;
         let lastFocusedBeforeModal = null;
         let imageMode = false;
+        let currentAbort = null;
+        let autoRetryEnabled = true;
+        let compactNotices = false;
+        let turnStartedAt = 0;
+        // Theme tables live with the other state, not beside the functions
+        // that use them: applyTheme() runs during initializeApp(), so these
+        // must be initialized before that call or the whole init throws and
+        // setupEventListeners() never runs (dead picker, dead composer keys).
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'auto'];
+        const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
+        // Some on-screen keyboards shrink the visual viewport without moving
+        // the layout viewport, which can strand the newest message under the
+        // keyboard. If the reader was pinned to the bottom, stay pinned.
+        // Guarded: the boot-test stub DOM has no visualViewport, so this is
+        // a no-op there.
+        if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+            window.visualViewport.addEventListener('resize', () => {
+                const nearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 120;
+                if (nearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
+        }
         const chatInput = document.getElementById('chatInput');
         const sendButton = document.getElementById('sendButton');
         const modelTrigger = document.getElementById('modelTrigger');
@@ -1174,6 +1687,7 @@
             chat: document.getElementById('viewChat'),
             models: document.getElementById('viewModels'),
             settings: document.getElementById('viewSettings'),
+            gallery: document.getElementById('viewGallery'),
         };
 
         // Initialize
@@ -1208,7 +1722,9 @@
             renderModelOptions();
             restoreHistoryVisibility();
             loadUserPreferences();
+            loadLimitsHint();
             updateModelLabel();
+            updateModeChip();
             updateAuthUI();
             // Learn up front whether the GitHub tools should be offered to the
             // model, rather than waiting for the user to open Settings.
@@ -1326,6 +1842,7 @@
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
             document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
             if (name === 'settings') refreshGithubStatus();
+            if (name === 'gallery') renderGallery();
         }
 
         function switchViewFromDrawer(name) {
@@ -1442,6 +1959,18 @@
                 });
             }
             select.value = selectedEffort;
+            const chip = document.getElementById('effortChip');
+            if (chip) {
+                chip.hidden = !capable;
+                const level = EFFORT_LEVELS.find((l) => l.id === selectedEffort);
+                chip.textContent = selectedEffort && level ? level.name : 'auto';
+            }
+        }
+
+        function focusEffort() {
+            const select = document.getElementById('effortSelect');
+            if (select && !select.hidden && typeof select.focus === 'function') select.focus();
+            else showStatus('info', 'Effort applies to reasoning-capable Puter models');
         }
 
         function updateModelLabel() {
@@ -1507,7 +2036,7 @@
         async function refreshGithubStatus() {
             try {
                 const res = await fetch('/api/github/status');
-                const data = await res.json();
+                const data = await safeJson(res);
                 githubConnected = !!data.connected;
                 const accounts = Array.isArray(data.accounts) ? data.accounts : [];
                 document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
@@ -1564,7 +2093,7 @@
             const select = document.getElementById('githubRepoSelect');
             try {
                 const res = await fetch('/api/github/repos');
-                const repos = await res.json();
+                const repos = await safeJson(res);
                 select.innerHTML = '';
                 const list = Array.isArray(repos) ? repos : [];
                 const multiAccount = new Set(list.map((r) => r.account)).size > 1;
@@ -1604,7 +2133,7 @@
             try {
                 const account = selectedRepoAccount();
                 const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}` + (account ? '&account=' + encodeURIComponent(account) : ''));
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) { statusEl.textContent = data.error || 'Could not load file'; return; }
                 contentEl.value = data.content;
                 contentEl.dataset.sha = data.sha;
@@ -1632,7 +2161,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha, account: selectedRepoAccount() }),
                 });
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) { statusEl.textContent = data.error || 'Commit failed'; return; }
                 content.dataset.sha = data.sha;
                 statusEl.textContent = 'Committed ' + path;
@@ -1649,7 +2178,7 @@
             try {
                 if (name === 'github_list_repos') {
                     const res = await fetch('/api/github/repos');
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list repos');
                     return JSON.stringify(data);
                 }
@@ -1658,7 +2187,7 @@
                     if (!args.repo) return 'Error: repo is required.';
                     const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}${accountParam(args)}`;
                     const res = await fetch(url);
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
                     return JSON.stringify(data);
                 }
@@ -1667,7 +2196,7 @@
                     if (!args.repo || !args.path) return 'Error: repo and path are required.';
                     const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}${accountParam(args)}`;
                     const res = await fetch(url);
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
                     // Remember the blob sha so a later commit to the same path
                     // updates that exact version instead of being rejected.
@@ -1693,12 +2222,34 @@
                             account: args.account,
                         }),
                     });
-                    const data = await res.json();
+                    const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
                     githubShaCache[shaKey(args)] = data.sha;
                     return `Committed as ${data.account}. ${data.commitUrl}`;
                 }
 
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
+        async function runWebTool(name, args) {
+            try {
+                if (name === 'web_search') {
+                    if (!args.query || !String(args.query).trim()) return 'Error: query is required.';
+                    const res = await fetch('/api/llm/websearch?q=' + encodeURIComponent(String(args.query).trim().slice(0, 300)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'search failed');
+                    return JSON.stringify(data);
+                }
+                if (name === 'web_fetch') {
+                    if (!args.url) return 'Error: url is required.';
+                    const res = await fetch('/api/llm/fetch?url=' + encodeURIComponent(String(args.url)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'fetch failed');
+                    return `Title: ${data.title || '(untitled)'}\nURL: ${data.url}\n\n${data.text}`;
+                }
                 return 'Error: unknown tool ' + name;
             } catch (err) {
                 return 'Error: ' + err.message;
@@ -1725,7 +2276,7 @@
         async function loadProviders() {
             const select = document.getElementById('providerSelect');
             try {
-                const all = await (await fetch('/api/llm/providers')).json();
+                const all = await safeJson(await fetch('/api/llm/providers'));
                 providerInfo = Object.fromEntries(all.map((p) => [p.id, p]));
                 const available = all.filter((p) => p.configured);
                 if (!available.length) {
@@ -1766,13 +2317,43 @@
             showStatus('success', 'Provider: ' + id);
         }
 
+        // Providers whose account was refused outright. Kept for the session so
+        // one billing error doesn't become one per model.
+        const providersSuspended = new Set();
+
+        function suspendProvider(detail) {
+            if (providersSuspended.has(selectedProvider)) return;
+            providersSuspended.add(selectedProvider);
+            const label = (providerInfo[selectedProvider] && providerInfo[selectedProvider].label) || selectedProvider;
+            addMessage('system', `${label} refused the whole account, not just this model — every model there will fail until it's resolved. Switching back to Puter.`, { error: true });
+            selectProvider(PUTER_PROVIDER);
+            const select = document.getElementById('providerSelect');
+            if (select) select.value = PUTER_PROVIDER;
+        }
+
+        // Takes a refused model out of circulation for the session and moves to
+        // one that works, so the next message doesn't repeat the failure.
+        function forgetRefusedModel(modelId) {
+            if (!modelId || modelsRefusedBy.has(selectedProvider + ':' + modelId)) return;
+            modelsRefusedBy.add(selectedProvider + ':' + modelId);
+            providerModels = providerModels.filter((m) => m.id !== modelId);
+            if (providerModels.length) {
+                selectedModel = providerModels[0].id;
+                localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
+                showStatus('info', 'Switched to ' + selectedModel);
+            }
+            renderModelOptions();
+            updateModelLabel();
+        }
+
         // The catalogue comes from the provider itself, so it can't go stale.
         async function loadProviderModels() {
             try {
                 const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(selectedProvider));
-                const data = await res.json();
+                const data = await safeJson(res);
                 if (!res.ok) throw new Error(data.error || 'Could not list models');
-                providerModels = usableChatModels(data);
+                providerModels = usableChatModels(data)
+                    .filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
                 if (!providerModels.length) throw new Error(noChatModelsReason());
                 const remembered = localStorage.getItem('provider:' + selectedProvider + ':model');
                 // providerModels is already sorted free-and-capable first, so
@@ -1815,22 +2396,104 @@
                 delete payload.tools;
                 showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
             }
-            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+            // A 429 means the provider's free tier wants a moment before the
+            // next call. The server already retried with backoff, so we only
+            // give it one more gentle try here before showing the rate-limit
+            // message instead of a raw error the user has to decode.
+            const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Request failed');
+            let res = await send();
+            let data = await safeJson(res);
+            if (data.parseFailed) {
+                const err = new Error(data.error);
+                err.parseFailed = true;
+                err.statusCode = res.status;
+                throw err;
+            }
+            if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
+                showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
+                await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2));
+                res = await send();
+                data = await safeJson(res);
+            }
+            if (!res.ok) {
+                // A refusal is about this model, not the request, so drop it
+                // from the picker rather than let it be chosen again.
+                const detail = data.error || 'Request failed';
+                // 404 belongs here too: NVIDIA lists models an account may not
+                // have access to and answers "Not found for account" for them,
+                // which is a refusal of that model rather than a broken request.
+                if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    // Account-level refusals apply to every model, so removing
+                    // them one at a time would spend a failed request per model.
+                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
+                    else forgetRefusedModel(selectedModel);
+                }
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                throw err;
+            }
             return normalizeProviderReply(data);
+        }
+
+        // Stream a direct-provider reply as SSE, rendering each chunk into a
+        // bubble as it arrives. Returns { text, reasoning } when complete.
+        async function streamProviderChat(convo, renderer, signal) {
+            const chosen = providerModels.find((m) => m.id === selectedModel);
+            const payload = { model: selectedModel, messages: convo, stream: true };
+            if (payload.tools && chosen && chosen.tools === false) delete payload.tools;
+            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal,
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({ error: 'Request failed' }));
+                const detail = data.error || 'Request failed';
+                if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    if (isAccountLevelFailure(detail, selectedModel)) suspendProvider(detail);
+                    else forgetRefusedModel(selectedModel);
+                }
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                throw err;
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const part of parseSseChunk(lines.join('\n'))) {
+                    if (part === '[DONE]') break;
+                    if (part && part.error) throw new Error(part.error);
+                    const delta = part?.choices?.[0]?.delta;
+                    if (delta) {
+                        renderer.appendReasoning(delta.reasoning_content || delta.reasoning || delta.thinking || '');
+                        renderer.appendText(delta.content || '');
+                    }
+                    const usage = part && part.usage;
+                    if (usage) renderer.usage = (renderer.usage || 0) + (usage.completion_tokens || usage.total_tokens || 0);
+                }
+            }
+            renderer.flush();
         }
 
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
-        function buildConversation(outgoing) {
+        function buildConversation(outgoing, activeSkills = null) {
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
+            const skillsBlock = activeSkills && activeSkills.length ? '\n\n' + renderSkillsPrompt(activeSkills) : '';
             return [
-                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'system', content: system + skillsBlock },
                 ...buildChatHistory(messages.slice(0, -1)),
                 { role: 'user', content: outgoing },
             ];
@@ -1860,12 +2523,39 @@
             }
         }
 
-        async function runChatWithTools(convo, chatModel) {
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS) {
+            // Only one nudge per message: if asking plainly doesn't produce an
+            // answer, asking again won't either.
+            let nudged = false;
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                const response = await callModel(convo, { tools: GITHUB_TOOLS });
+                let response;
+                try {
+                    response = await callModel(convo, { tools });
+                } catch (err) {
+                    // Some endpoints reject the tools shape outright or answer
+                    // non-JSON. A plain call still answers; tools were a bonus,
+                    // not the request.
+                    if (round === 0 && tools.length && isToolsRejection(err)) {
+                        showStatus('info', 'This model takes no tools — answering directly');
+                        tools = [];
+                        response = await callModel(convo);
+                    } else throw err;
+                }
                 const message = (response && response.message) || null;
                 const calls = extractToolCalls(message);
-                if (!calls.length) return { message, response };
+                if (!calls.length) {
+                    // A model that ran its tools and then said nothing has the
+                    // answer in hand and simply stopped short. One more call,
+                    // tools withheld, usually produces it -- and reporting an
+                    // empty reply instead wastes everything already paid for.
+                    if (!extractMessageText(message) && !extractMessageReasoning(message) && !nudged) {
+                        nudged = true;
+                        convo.push(toConversationMessage(message));
+                        convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
+                        continue;
+                    }
+                    return { message, response, finishReason: response && response.finishReason };
+                }
 
                 // Only role/content/tool_calls may go back; the rest of the
                 // reply object is metadata the provider rejects.
@@ -1876,7 +2566,11 @@
                     addMessage('system', describeToolCall(fn.name, args));
                     const result = isGithubTool(fn.name)
                         ? await runGithubTool(fn.name, args)
-                        : 'Error: unknown tool ' + fn.name;
+                        : isWebTool(fn.name)
+                          ? await runWebTool(fn.name, args)
+                          : isUseSkillTool(fn.name)
+                            ? await runUseSkillTool(args)
+                            : 'Error: unknown tool ' + fn.name;
                     convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
                 }
             }
@@ -1886,7 +2580,12 @@
             // discarding it.
             convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
             const summary = await callModel(convo);
-            return { message: (summary && summary.message) || null, response: summary, exhausted: true };
+            return {
+                message: (summary && summary.message) || null,
+                response: summary,
+                finishReason: summary && summary.finishReason,
+                exhausted: true,
+            };
         }
 
         // No PDF library: every browser already writes one from a print, and on
@@ -1949,6 +2648,50 @@
             chatInput.placeholder = imageMode ? 'Describe an image to generate...' : 'Ask anything...';
         }
 
+        function setComposerBusy(busy) {
+            isTyping = busy;
+            sendButton.disabled = busy;
+            if (busy) {
+                sendButton.textContent = '■';
+                sendButton.classList.add('stop');
+                sendButton.setAttribute('aria-label', 'Stop generation');
+            } else {
+                sendButton.textContent = '→';
+                sendButton.classList.remove('stop');
+                sendButton.setAttribute('aria-label', 'Send message');
+            }
+        }
+
+        function stopGeneration() {
+            if (!isTyping) return;
+            currentAbort?.abort();
+            removeTypingIndicator();
+            setComposerBusy(false);
+        }
+
+        function createStreamRenderer(bubble) {
+            let full = '';
+            let reasoning = '';
+            let renderTimer = null;
+            function scheduleFlush() {
+                if (renderTimer) return;
+                renderTimer = setTimeout(() => {
+                    renderTimer = null;
+                    setMessageContent(bubble, full);
+                    if (reasoning) setReasoningContent(bubble, reasoning);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }, 40);
+            }
+            return {
+                appendText(chunk) { if (chunk) { full += chunk; scheduleFlush(); } },
+                appendReasoning(chunk) { if (chunk) { reasoning += chunk; scheduleFlush(); } },
+                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningContent(bubble, reasoning); chatMessages.scrollTop = chatMessages.scrollHeight; },
+                abort() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } },
+                get full() { return full; },
+                get reasoning() { return reasoning; },
+            };
+        }
+
         async function sendMessage() {
             const raw = chatInput.value.trim();
             if (!raw || isTyping) return;
@@ -1972,8 +2715,8 @@
             clearAttachment();
             chatInput.value = '';
             chatInput.style.height = '36px';
-            sendButton.disabled = true;
-            isTyping = true;
+            setComposerBusy(true);
+            currentAbort = new AbortController();
             showTypingIndicator();
 
             if (generateImage) {
@@ -1982,88 +2725,140 @@
             }
 
             try {
-                usageCount++;
-                updateUsageDisplay();
-                maybeWarnAboutCost();
+            usageCount++;
+            updateUsageDisplay();
+            turnStartedAt = Date.now();
+            maybeWarnAboutCost();
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
 
-                // With GitHub connected the model gets repo tools, which needs a
-                // message array to carry tool results back. That path is
-                // non-streaming; an image attachment keeps the plain path since
-                // the image argument has no place in a message array.
-                if (githubConnected && !attachedImageFile) {
-                    const { message, exhausted } = await runChatWithTools(
-                        buildConversation(outgoing),
-                        chatModel
+                // Tool calls need a message array to carry results back, so any
+                // turn with tools goes through the loop (non-streaming). Web
+                // research rides every turn with no account; repo tools join
+                // when GitHub is connected. An image attachment keeps the plain
+                // path since the image argument has no place in a message array.
+                if (!attachedImageFile) {
+                    const tools = [...WEB_TOOLS];
+                    if (githubConnected) tools.push(...GITHUB_TOOLS);
+                    // Skills ride along in Plan & Build: the auto-picked set
+                    // enters the system prompt, and use_skill lets the model
+                    // pull any full skill mid-turn.
+                    let activeSkills = null;
+                    if (selectedMode !== 'chat') {
+                        const catalog = await ensureSkillsLoaded();
+                        activeSkills = pickSkills(outgoing, selectedMode, catalog);
+                        tools.push(USE_SKILL_TOOL);
+                    }
+                    const { message, exhausted, finishReason } = await runChatWithTools(
+                        buildConversation(outgoing, activeSkills),
+                        chatModel,
+                        tools
                     );
+                    if (activeSkills && activeSkills.length) {
+                        addMessage('system', 'Skills applied: ' + activeSkills.map((s) => s.name).join(', '));
+                    }
                     removeTypingIndicator();
                     if (exhausted) {
-                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} GitHub steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
+                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
                     }
-                    const text = extractMessageText(message) || '(no reply)';
+                    const reasoning = extractMessageReasoning(message);
+                    let text = extractMessageText(message);
+                    if (!text) {
+                        // Some reasoning models put everything in the thinking
+                        // field and leave content empty. That is an answer, so
+                        // show it rather than reporting nothing.
+                        text = reasoning || explainEmptyReply(message, finishReason);
+                    }
                     addMessage('bot', text, {
                         retryText: raw,
                         attachmentLost: hadAttachment,
-                        reasoning: extractMessageReasoning(message),
+                        reasoning: text === reasoning ? '' : reasoning,
                     });
+                    noteTurnStats(text.length);
                     showStatus('success', 'Sent');
                     return;
                 }
 
-                // Streaming is Puter-only for now; a direct provider answers in
-                // one piece, which the non-streaming branch below handles.
-                const response = selectedProvider !== PUTER_PROVIDER
-                    ? await callModel(buildConversation(outgoing))
-                    : await chatWithEffortFallback(chatModel, (opts) =>
-                        attachedImageFile
-                            // An image rides as its own argument, which has no
-                            // place in a message array, so that stays single.
-                            ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
-                            : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
-                    );
+                // Direct providers stream via SSE so the user sees text arrive
+                // token-by-token rather than waiting for the full reply.
+                if (selectedProvider !== PUTER_PROVIDER) {
+                    const bubble = createBotBubble();
+                    const renderer = createStreamRenderer(bubble);
+                    try {
+                        await streamProviderChat(buildConversation(outgoing), renderer, currentAbort.signal);
+                        removeTypingIndicator();
+                        finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                        noteTurnStats(renderer.full.length, renderer.usage || 0);
+                        showStatus('success', 'Sent');
+                    } catch (e) {
+                        removeTypingIndicator();
+                        renderer.abort();
+                        // Aborted or failed with no content — discard the empty bubble.
+                        if (!renderer.full && bubble.parentNode) bubble.remove();
+                        if (e.name === 'AbortError') {
+                            showStatus('info', 'Generation stopped');
+                            return;
+                        }
+                        throw e;
+                    }
+                    return;
+                }
+
+                // Puter streaming path.
+                const response = await chatWithEffortFallback(chatModel, (opts) =>
+                    attachedImageFile
+                        // An image rides as its own argument, which has no
+                        // place in a message array, so that stays single.
+                        ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
+                        : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
+                );
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
                     const bubble = createBotBubble();
-                    let full = '';
-                    let reasoning = '';
+                    const renderer = createStreamRenderer(bubble);
                     for await (const part of response) {
+                        if (currentAbort?.signal.aborted) break;
                         const think = extractReasoning(part);
-                        if (think) {
-                            reasoning += think;
-                            setReasoningContent(bubble, reasoning);
-                        }
+                        renderer.appendReasoning(think);
                         const isReasoningPart = part && typeof part !== 'string' && (part.type === 'reasoning' || part.type === 'thinking');
                         const chunk = typeof part === 'string' ? part : (!isReasoningPart && part && part.text) || '';
-                        if (chunk) {
-                            full += chunk;
-                            setMessageContent(bubble, full);
-                        }
+                        renderer.appendText(chunk);
                     }
-                    finalizeMessage(bubble, full, raw, hadAttachment, reasoning);
+                    renderer.flush();
+                    finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length);
                 } else {
                     const text = typeof response === 'string'
                         ? response
-                        : extractMessageText(response.message) || response.text || JSON.stringify(response);
+                        : extractMessageText(response.message)
+                          || response.text
+                          || extractMessageReasoning(response.message)
+                          || explainEmptyReply(response.message, response.finishReason);
                     const reasoning = extractMessageReasoning(response && response.message);
                     addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
+                    noteTurnStats(text.length);
                 }
 
                 showStatus('success', 'Sent');
             } catch (error) {
                 removeTypingIndicator();
                 console.error('Chat request failed:', error);
-                if (isOutOfCreditsError(error)) {
+                // The credit advice is about Puter's allowance specifically. Shown
+                // for a Nara or OpenRouter failure it sends the user to the
+                // wrong dashboard entirely, which is what it did.
+                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
                     showStatus('error', 'Out of Puter credits');
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else {
+                    // Name the provider and model: a bare message is
+                    // undebuggable once several providers are configured.
                     showStatus('error', 'Failed: ' + error.message);
-                    addMessage('system', 'Error: ' + error.message, { error: true });
+                    addMessage('system', `Error (${selectedProvider}/${selectedModel}): ` + error.message, { error: true });
                 }
             } finally {
-                sendButton.disabled = false;
-                isTyping = false;
+                currentAbort = null;
+                setComposerBusy(false);
             }
         }
 
@@ -2095,10 +2890,14 @@
         const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
 
         async function sendImageGeneration(promptText) {
+            let bubble = null;
+            let filled = false;
+            const startedAt = Date.now();
             try {
                 usageCount++;
                 updateUsageDisplay();
 
+                bubble = createImageBubble();
                 let imgEl;
                 let lastError;
                 for (const model of IMAGE_MODELS) {
@@ -2112,44 +2911,428 @@
                 if (!imgEl) throw lastError;
 
                 removeTypingIndicator();
-                addImageMessage(promptText, imgEl);
+                fillImageBubble(bubble, promptText, imgEl.src);
+                filled = true;
                 showStatus('success', 'Image ready');
             } catch (error) {
                 removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
                 console.error('Image generation failed:', error);
-                showStatus('error', 'Failed: ' + error.message);
-                addMessage('system', 'Error generating image: ' + error.message, { error: true });
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                // A failure inside two seconds never showed work — say so, so
+                // "no animation" reads as "instant refusal" (usually credits).
+                const instant = Date.now() - startedAt < 2000 ? 'The request failed instantly (often credits or access): ' : '';
+                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                    addMessage('system', outOfCreditsAdvice(), { error: true });
+                } else if (isAccountLevelFailure(msg, '')) {
+                    addMessage('system', 'Image billing refused the account: ' + msg, { error: true });
+                } else {
+                    showStatus('error', 'Failed: ' + msg);
+                    addMessage('system', 'Error generating image: ' + instant + msg, { error: true });
+                }
             } finally {
-                sendButton.disabled = false;
-                isTyping = false;
+                currentAbort = null;
+                setComposerBusy(false);
             }
         }
 
-        function addImageMessage(promptText, imgEl) {
-            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
+        // A bot bubble that starts as a holo-forge overlay and is filled when
+        // the image arrives, ChatGPT style. Nothing persists until the fill
+        // lands. The forge animates on its own (warp starfield, scan grid,
+        // pulsing core); a small timer advances the progress ring and elapsed
+        // counter until the caller swaps the overlay out — cleared in
+        // clearHoloForge, which every removal path goes through.
+        function createHoloForge(ariaLabel) {
+            const forge = document.createElement('div');
+            forge.className = 'holo-forge';
+            forge.setAttribute('role', 'status');
+            forge.setAttribute('aria-label', ariaLabel || 'Generating image…');
+            const stars = document.createElement('div');
+            stars.className = 'holo-forge__stars';
+            const grid = document.createElement('div');
+            grid.className = 'holo-forge__grid';
+            const core = document.createElement('div');
+            core.className = 'holo-forge__core';
+            const ring = document.createElement('div');
+            ring.className = 'holo-forge__ring';
+            core.appendChild(ring);
+            const label = document.createElement('div');
+            label.className = 'holo-forge__label';
+            const secs = document.createElement('b');
+            secs.textContent = '0s';
+            const text = document.createElement('span');
+            text.innerHTML = 'Forging <span class="holo-forge__caret">▊</span>';
+            label.appendChild(text);
+            label.appendChild(secs);
+            forge.appendChild(stars);
+            forge.appendChild(grid);
+            forge.appendChild(core);
+            forge.appendChild(label);
+            // The generation budget is ~55s server-side; the ring paces to
+            // that and stops at 90% rather than claiming completion it can't
+            // know about. Stepped every 2.5s: conic-gradient re-renders per
+            // step, no custom-property transition needed.
+            let elapsed = 0;
+            const timer = setInterval(() => {
+                elapsed += 2.5;
+                secs.textContent = elapsed + 's';
+                const progress = Math.min(0.9, elapsed / 55);
+                forge.style.setProperty('--holo-progress', progress.toFixed(3));
+            }, 2500);
+            forge.dataset.holoTimer = String(timer);
+            return forge;
+        }
 
+        function clearHoloForge(scope) {
+            (scope || document).querySelectorAll('.holo-forge').forEach((f) => {
+                const t = Number(f.dataset.holoTimer);
+                if (t) clearInterval(t);
+                f.remove();
+            });
+        }
+
+        function createImageBubble() {
+            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
             const el = document.createElement('div');
             el.className = 'message bot';
-            el.dataset.rawContent = `[Generated image: ${promptText}]`;
-
-            const wrap = document.createElement('div');
-            wrap.className = 'message-image-wrap';
-            imgEl.className = 'message-image';
-            imgEl.alt = promptText;
-            imgEl.loading = 'lazy';
-            imgEl.addEventListener('click', () => openImageLightbox(imgEl.src, promptText));
-            imgEl.addEventListener('load', () => { chatMessages.scrollTop = chatMessages.scrollHeight; });
-            wrap.appendChild(imgEl);
-            el.appendChild(wrap);
-            el.appendChild(buildMessageActions(promptText, true));
-
+            el.appendChild(createHoloForge('Generating image…'));
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
-
-            messages.push({ type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() });
-            persistMessages();
-
             return el;
+        }
+
+        function buildImageWrap(src, promptText) {
+            const wrap = document.createElement('div');
+            wrap.className = 'message-image-wrap';
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'message-image';
+            img.alt = promptText;
+            img.loading = 'lazy';
+            img.addEventListener('click', () => openImageLightbox(src, promptText));
+            img.addEventListener('load', () => { chatMessages.scrollTop = chatMessages.scrollHeight; });
+            wrap.appendChild(img);
+            return wrap;
+        }
+
+        function persistableImageUrl(url) {
+            // Blob URLs die with the page; only remote URLs survive a reload,
+            // so only those enter history and the gallery.
+            return typeof url === 'string' && /^https?:/i.test(url) ? url : '';
+        }
+
+        function finishImageContent(el, promptText, urls) {
+            clearHoloForge(el);
+            el.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+            el.dataset.rawContent = `[Generated image: ${promptText}]`;
+            const good = urls.filter((u) => typeof u === 'string' && u);
+            good.forEach((u) => el.appendChild(buildImageWrap(u, promptText)));
+            const caption = document.createElement('div');
+            caption.className = 'image-caption';
+            const label = document.createElement('span');
+            label.textContent = promptText;
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.className = 'caption-copy';
+            cp.textContent = 'Copy prompt';
+            cp.setAttribute('aria-label', 'Copy image prompt');
+            cp.addEventListener('click', () => copyText(promptText, null));
+            caption.appendChild(label);
+            caption.appendChild(cp);
+            el.appendChild(caption);
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, good[0] || '', promptText);
+            const stored = good.filter((u) => persistableImageUrl(u)).map((url) => ({ url, prompt: promptText }));
+            const entry = { type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() };
+            if (stored.length) entry.images = stored;
+            messages.push(entry);
+            persistMessages();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function fillImageBubble(el, promptText, src) {
+            finishImageContent(el, promptText, [src]);
+        }
+
+        function appendImageTools(el, src, promptText) {
+            const bar = document.createElement('div');
+            bar.className = 'message-actions';
+            const vary = document.createElement('button');
+            vary.type = 'button';
+            vary.className = 'icon-btn-text';
+            vary.textContent = 'Vary';
+            vary.setAttribute('aria-label', 'Generate 2 variations');
+            vary.addEventListener('click', () => sendImageVariations(promptText));
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'icon-btn-text';
+            edit.textContent = 'Edit';
+            edit.setAttribute('aria-label', 'Edit this image');
+            edit.addEventListener('click', () => openImageEdit(src, promptText));
+            bar.appendChild(vary);
+            bar.appendChild(edit);
+            el.appendChild(bar);
+        }
+
+        let imageConfirmResolver = null;
+        function askImageConfirm(title, text) {
+            document.getElementById('imageConfirmTitle').textContent = title;
+            document.getElementById('imageConfirmText').textContent = text;
+            document.getElementById('imageConfirmOverlay').classList.add('open');
+            return new Promise((resolve) => { imageConfirmResolver = resolve; });
+        }
+        function closeImageConfirm(choice) {
+            document.getElementById('imageConfirmOverlay').classList.remove('open');
+            if (imageConfirmResolver) imageConfirmResolver(choice === true);
+            imageConfirmResolver = null;
+        }
+
+        async function sendImageVariations(promptText) {
+            const ok = await askImageConfirm('Generate 2 variations?', `"${promptText}" — two extra image generations will run.`);
+            if (!ok) return;
+            setComposerBusy(true);
+            currentAbort = new AbortController();
+            showTypingIndicator();
+            let bubble = null;
+            const made = [];
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const second = createHoloForge('Generating variation…');
+                bubble.appendChild(second);
+                for (let i = 0; i < 2; i++) {
+                    let imgEl = null;
+                    let lastError = null;
+                    for (const model of IMAGE_MODELS) {
+                        try {
+                            imgEl = await puter.ai.txt2img(promptText, { model });
+                            break;
+                        } catch (error) {
+                            lastError = error;
+                        }
+                    }
+                    if (!imgEl) throw lastError;
+                    made.push(imgEl.src);
+                    const shimmers = bubble.querySelectorAll('.holo-forge');
+                    const wrap = buildImageWrap(imgEl.src, promptText);
+                    if (shimmers[i]) {
+                        const t = Number(shimmers[i].dataset.holoTimer);
+                        if (t) clearInterval(t);
+                        shimmers[i].replaceWith(wrap);
+                    }
+                    else bubble.appendChild(wrap);
+                }
+                removeTypingIndicator();
+                finishImageContent(bubble, promptText + ' (variations)', made);
+                bubble.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+                showStatus('success', 'Variations ready');
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble) {
+                    if (made.length) {
+                        finishImageContent(bubble, promptText + ' (variations)', made);
+                    } else {
+                        clearHoloForge(bubble);
+                        if (bubble.parentNode) bubble.remove();
+                    }
+                }
+                console.error('Image variations failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error generating variations: ' + msg, { error: true });
+            } finally {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
+        }
+
+        function imageUrlFrom(data) {
+            const first = data && Array.isArray(data.data) && data.data[0];
+            if (!first) return '';
+            if (first.url) return first.url;
+            if (first.b64_json) return 'data:image/png;base64,' + first.b64_json;
+            return '';
+        }
+
+        async function copyLightboxImage() {
+            const src = lightboxImg.src;
+            try {
+                const res = await fetch(src);
+                const blob = await res.blob();
+                await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+                showStatus('success', 'Image copied');
+            } catch {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(src)
+                        .then(() => showStatus('success', 'Image URL copied'))
+                        .catch(() => showStatus('error', 'Copy failed'));
+                } else {
+                    showStatus('error', 'Copy failed');
+                }
+            }
+        }
+
+        // Mask editor state. editState.mask is black with the painted region
+        // in white; editState.img keeps the source element for clearing.
+        let editState = null;
+        let maskBrush = 24;
+
+        function openImageEdit(src, promptText) {
+            closeImageLightbox();
+            editState = null;
+            const canvas = document.getElementById('maskCanvas');
+            const promptInput = document.getElementById('imageEditPrompt');
+            promptInput.value = '';
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                try {
+                    const scale = Math.min(1, 640 / img.naturalWidth);
+                    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    const mask = document.createElement('canvas');
+                    mask.width = w;
+                    mask.height = h;
+                    const mctx = mask.getContext('2d');
+                    mctx.fillStyle = '#000';
+                    mctx.fillRect(0, 0, w, h);
+                    editState = { img, mask, painted: false, prompt: promptText || '' };
+                    attachMaskPainting(canvas);
+                    document.getElementById('imageEditOverlay').classList.add('open');
+                    promptInput.focus();
+                } catch (e) {
+                    showStatus('error', 'Cannot prepare that image for editing: ' + e.message);
+                }
+            };
+            img.onerror = () => showStatus('error', 'Cannot load that image for editing (external hosts may block it).');
+            img.src = src;
+        }
+
+        function attachMaskPainting(canvas) {
+            if (canvas.dataset.paintWired) return;
+            canvas.dataset.paintWired = '1';
+            const pos = (e) => {
+                const r = canvas.getBoundingClientRect();
+                const p = (e.touches && e.touches[0]) || e;
+                return [(p.clientX - r.left) * (canvas.width / r.width), (p.clientY - r.top) * (canvas.height / r.height)];
+            };
+            const paint = (e) => {
+                if (!editState) return;
+                e.preventDefault();
+                const [x, y] = pos(e);
+                const dctx = canvas.getContext('2d');
+                dctx.fillStyle = 'rgba(244,63,94,.55)';
+                dctx.beginPath();
+                dctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                dctx.fill();
+                const mctx = editState.mask.getContext('2d');
+                mctx.fillStyle = '#fff';
+                mctx.beginPath();
+                mctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                mctx.fill();
+                editState.painted = true;
+            };
+            let down = false;
+            canvas.addEventListener('pointerdown', (e) => { down = true; paint(e); });
+            canvas.addEventListener('pointermove', (e) => { if (down) paint(e); });
+            canvas.addEventListener('pointerup', () => { down = false; });
+            canvas.addEventListener('pointerleave', () => { down = false; });
+        }
+
+        function setMaskBrush(px) {
+            maskBrush = px;
+            showStatus('info', 'Brush: ' + px + 'px');
+        }
+
+        function clearMask() {
+            const canvas = document.getElementById('maskCanvas');
+            if (!canvas || !editState) return;
+            canvas.getContext('2d').drawImage(editState.img, 0, 0, canvas.width, canvas.height);
+            const mctx = editState.mask.getContext('2d');
+            mctx.fillStyle = '#000';
+            mctx.fillRect(0, 0, canvas.width, canvas.height);
+            editState.painted = false;
+        }
+
+        function closeImageEdit() {
+            document.getElementById('imageEditOverlay').classList.remove('open');
+            editState = null;
+        }
+
+        function editImageDataUrl() {
+            if (!editState) return '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = editState.img.naturalWidth;
+                c.height = editState.img.naturalHeight;
+                c.getContext('2d').drawImage(editState.img, 0, 0);
+                return c.toDataURL('image/png');
+            } catch {
+                return '';
+            }
+        }
+
+        async function submitImageEdit() {
+            const prompt = document.getElementById('imageEditPrompt').value.trim();
+            if (!prompt) { showStatus('error', 'Describe the edit first'); return; }
+            if (!editState) { showStatus('error', 'Image is not ready yet'); return; }
+            const srcData = editImageDataUrl();
+            if (!srcData) { showStatus('error', 'That image host blocks editing (canvas is locked).'); return; }
+            let maskData = '';
+            try {
+                if (editState.painted) maskData = editState.mask.toDataURL('image/png');
+            } catch {
+                maskData = '';
+            }
+            closeImageEdit();
+            setComposerBusy(true);
+            currentAbort = new AbortController();
+            showTypingIndicator();
+            let bubble = null;
+            let filled = false;
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const res = await fetch('/api/llm/images/edits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt,
+                        image: srcData,
+                        ...(maskData ? { mask: maskData } : {}),
+                    }),
+                    signal: currentAbort.signal,
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || 'Edit failed');
+                const url = imageUrlFrom(data);
+                if (!url) throw new Error('Edit returned no image');
+                removeTypingIndicator();
+                fillImageBubble(bubble, prompt + ' (edit)', url);
+                filled = true;
+                showStatus('success', 'Edit ready');
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && error.name === 'AbortError') {
+                    showStatus('info', 'Edit stopped');
+                    return;
+                }
+                console.error('Image edit failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error editing image: ' + msg, { error: true });
+            } finally {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
         }
 
         function openImageLightbox(src, altText) {
@@ -2345,6 +3528,8 @@
             const el = document.createElement('div');
             el.className = 'typing-indicator';
             el.id = 'typingIndicator';
+            el.setAttribute('role', 'status');
+            el.setAttribute('aria-label', 'Assistant is thinking');
             el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -2357,11 +3542,70 @@
 
         function autoResize(ta) {
             ta.style.height = '36px';
-            ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+            // A fixed 140px cap eats the whole transcript on a landscape
+            // phone once the keyboard is up; cap against the live viewport
+            // instead. Guarded: the boot-test stub has no innerHeight.
+            const cap = (typeof window !== 'undefined' && window.innerHeight) ? Math.max(80, Math.floor(window.innerHeight * 0.35)) : 140;
+            ta.style.height = Math.min(ta.scrollHeight, cap) + 'px';
             sendButton.disabled = !ta.value.trim();
         }
 
         function handleKeyDown(e) {
+            if (e.key === 'Escape' && isTyping) { stopGeneration(); return; }
+            if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'g') {
+                e.preventDefault();
+                if (isTyping) stopGeneration();
+                return;
+            }
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                // Readline editing, desktop-prompt style.
+                const ta = e.target;
+                const k = String(e.key || '').toLowerCase();
+                const pos = (p) => { try { ta.setSelectionRange(p, p); } catch { /* ignore */ } };
+                if (k === 'a') { e.preventDefault(); pos(0); return; }
+                if (k === 'e') { e.preventDefault(); pos(ta.value.length); return; }
+                if (k === 'k') { e.preventDefault(); ta.value = ta.value.slice(0, ta.selectionStart); autoResize(ta); return; }
+                if (k === 'u') { e.preventDefault(); ta.value = ta.value.slice(ta.selectionEnd); autoResize(ta); pos(0); return; }
+                if (k === 'w') {
+                    e.preventDefault();
+                    const s = ta.selectionStart;
+                    const cut = ta.value.slice(0, s).replace(/\S+\s*$/, '');
+                    ta.value = cut + ta.value.slice(s);
+                    autoResize(ta);
+                    pos(cut.length);
+                    return;
+                }
+            }
+            if (e.altKey && !e.ctrlKey && !e.metaKey) {
+                const ta = e.target;
+                const k = String(e.key || '').toLowerCase();
+                const word = (dir) => {
+                    const v = ta.value;
+                    let p = ta.selectionStart;
+                    if (dir < 0) {
+                        while (p > 0 && /\s/.test(v[p - 1])) p--;
+                        while (p > 0 && !/\s/.test(v[p - 1])) p--;
+                    } else {
+                        while (p < v.length && /\s/.test(v[p])) p++;
+                        while (p < v.length && !/\s/.test(v[p])) p++;
+                    }
+                    try { ta.setSelectionRange(p, p); } catch { /* ignore */ }
+                };
+                if (k === 'b') { e.preventDefault(); word(-1); return; }
+                if (k === 'f') { e.preventDefault(); word(1); return; }
+                if (k === 'd') {
+                    e.preventDefault();
+                    const s = ta.selectionStart;
+                    const v = ta.value;
+                    let p = s;
+                    while (p < v.length && /\s/.test(v[p])) p++;
+                    while (p < v.length && !/\s/.test(v[p])) p++;
+                    ta.value = v.slice(0, s) + v.slice(p);
+                    autoResize(ta);
+                    try { ta.setSelectionRange(s, s); } catch { /* ignore */ }
+                    return;
+                }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
@@ -2549,8 +3793,193 @@
             selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
             const savedEffort = localStorage.getItem('puterChatEffort');
             selectedEffort = isValidEffort(savedEffort) ? savedEffort : DEFAULT_EFFORT;
+            autoRetryEnabled = localStorage.getItem('puterChatAutoRetry') !== '0';
+            const arc = document.getElementById('autoRetryCheck');
+            if (arc) arc.checked = autoRetryEnabled;
+            compactNotices = localStorage.getItem('puterChatCompactNotices') === '1';
+            const cnc = document.getElementById('compactNoticesCheck');
+            if (cnc) cnc.checked = compactNotices;
+            if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
+            applyTheme(localStorage.getItem('puterChatTheme') || 'dark');
             updateModelLabel();
             updateEffortPicker();
+        }
+
+        function setAutoRetry(on) {
+            autoRetryEnabled = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatAutoRetry', autoRetryEnabled ? '1' : '0'); } catch { /* private mode */ }
+        }
+
+        function setCompactNotices(on) {
+            compactNotices = !!on;
+            try {
+                if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatCompactNotices', compactNotices ? '1' : '0');
+                if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
+            } catch { /* stub DOM */ }
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactNoticesCheck');
+            if (box) box.checked = compactNotices;
+        }
+
+        // Server limits, shown in Settings so the enforced numbers live in one
+        // place instead of being hardcoded twice.
+        async function loadLimitsHint() {
+            const el = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('limitsHint');
+            if (!el) return;
+            try {
+                const data = await (await fetch('/api/llm/limits')).json();
+                const t = data.timeouts, r = data.retries;
+                el.textContent = `Chat ${Math.round(t.chat / 1000)}s · headers ${Math.round(t.headers / 1000)}s · stall ${Math.round(t.stall / 1000)}s · up to ${r.maxAttempts} tries`;
+            } catch {
+                el.textContent = 'Server limits unavailable.';
+            }
+        }
+
+        // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
+        // throughout: the boot-test stub DOM has no theme machinery, so every
+        // DOM touch checks first. (THEMES/THEME_META live up with the state.)
+        // 'auto' follows the OS; anything unknown falls back to dark.
+        function resolveTheme(stored) {
+            if (stored === 'auto') {
+                try {
+                    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                    }
+                } catch { /* ignore */ }
+                return 'dark';
+            }
+            return THEMES.includes(stored) ? stored : 'dark';
+        }
+
+        function applyTheme(theme) {
+            const stored = theme === 'auto' || THEMES.includes(theme) ? theme : 'dark';
+            const name = resolveTheme(stored);
+            try {
+                if (document && document.documentElement && typeof document.documentElement.setAttribute === 'function') {
+                    document.documentElement.setAttribute('data-theme', name);
+                }
+                const meta = document && typeof document.querySelector === 'function' && document.querySelector('meta[name="theme-color"]');
+                if (meta && typeof meta.setAttribute === 'function') meta.setAttribute('content', THEME_META[name]);
+            } catch { /* stub DOM in tests */ }
+            try {
+                if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+                    localStorage.setItem('puterChatTheme', stored);
+                }
+            } catch { /* private mode */ }
+        }
+
+        function toggleTheme() {
+            const current = (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('puterChatTheme')) || 'dark';
+            const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
+            applyTheme(next);
+            showStatus('success', 'Theme: ' + next);
+        }
+
+        // Follow the OS while 'auto' is stored. Attached once, guarded for
+        // the stub DOM, which answers matchMedia with a no-op object.
+        try {
+            if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                const mq = window.matchMedia('(prefers-color-scheme: light)');
+                const follow = () => {
+                    try {
+                        if (typeof localStorage !== 'undefined' && localStorage.getItem('puterChatTheme') === 'auto') applyTheme('auto');
+                    } catch { /* ignore */ }
+                };
+                if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', follow);
+                else if (mq && typeof mq.addListener === 'function') mq.addListener(follow);
+            }
+        } catch { /* stub DOM */ }
+
+        // Command palette (Ctrl+P): models plus actions, filtered as you type.
+        // OpenCode's command_list parity. Lookups happen on open, so the
+        // boot-test stub never trips over missing nodes at load.
+        let paletteIndex = 0;
+        let paletteItems = [];
+        function paletteActions() {
+            const actions = [
+                { label: 'New chat', hint: 'session', run: () => startNewConversation() },
+                { label: 'Toggle theme', hint: 'theme', run: () => toggleTheme() },
+                { label: 'Toggle compact notices', hint: 'details', run: () => setCompactNotices(!compactNotices) },
+                { label: 'Go to Settings', hint: 'view', run: () => switchView('settings') },
+                { label: 'Go to Models', hint: 'view', run: () => switchView('models') },
+                { label: 'Go to Chat', hint: 'view', run: () => switchView('chat') },
+            ];
+            if (isTyping) actions.unshift({ label: 'Stop generation', hint: 'interrupt', run: () => stopGeneration() });
+            return actions;
+        }
+        function openPalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            const input = document.getElementById('paletteInput');
+            if (!overlay || !input) return;
+            overlay.hidden = false;
+            input.value = '';
+            renderPalette('');
+            input.focus();
+        }
+        function closePalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            if (overlay) overlay.hidden = true;
+            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
+        }
+        function renderPalette(filter) {
+            const list = document.getElementById('paletteList');
+            if (!list) return;
+            const q = (filter || '').trim().toLowerCase();
+            const models = (providerModels || []).map((m) => ({
+                label: 'Model: ' + m.id,
+                hint: (function () { try { return describeProviderModel(m) || m.id; } catch { return m.id; } })(),
+                run: () => selectModel(m.id),
+            }));
+            const items = [...models, ...paletteActions()].filter((it) => !q || (it.label + ' ' + it.hint).toLowerCase().includes(q));
+            paletteItems = items;
+            paletteIndex = 0;
+            list.innerHTML = '';
+            items.slice(0, 30).forEach((it, i) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'palette-item' + (i === 0 ? ' selected' : '');
+                b.setAttribute('role', 'option');
+                const name = document.createElement('span');
+                name.textContent = it.label;
+                const hint = document.createElement('span');
+                hint.className = 'k';
+                hint.textContent = it.hint;
+                b.appendChild(name);
+                b.appendChild(hint);
+                b.addEventListener('click', () => { closePalette(); it.run(); });
+                list.appendChild(b);
+            });
+        }
+        function movePalette(dir) {
+            const list = document.getElementById('paletteList');
+            if (!list || !paletteItems.length) return;
+            paletteIndex = (paletteIndex + dir + paletteItems.length) % paletteItems.length;
+            [...list.children].forEach((el, i) => el.classList.toggle('selected', i === paletteIndex));
+            const sel = list.children[paletteIndex];
+            if (sel && typeof sel.scrollIntoView === 'function') sel.scrollIntoView({ block: 'nearest' });
+        }
+        function runPalette() {
+            const it = paletteItems[paletteIndex];
+            closePalette();
+            if (it) it.run();
+        }
+        function handleGlobalKeys(e) {
+            if (!e) return;
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'k')) {
+                e.preventDefault();
+                const overlay = document.getElementById('paletteOverlay');
+                if (overlay && !overlay.hidden) closePalette();
+                else openPalette();
+                return;
+            }
+            const overlay = document.getElementById('paletteOverlay');
+            if (!overlay || overlay.hidden) return;
+            if (e.key === 'Escape') closePalette();
+            else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
+            else if (e.key === 'Enter') { e.preventDefault(); runPalette(); }
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('keydown', handleGlobalKeys);
         }
 
         function saveUserPreferences() {
@@ -2562,6 +3991,21 @@
                 usageText.textContent = `${usageCount} request${usageCount !== 1 ? 's' : ''}`;
                 usageText.style.display = usageCount ? 'inline' : 'none';
             }
+        }
+
+        // TUI status parity: after each reply the status bar shows what
+        // answered, how long it took, how much text came back, and token
+        // usage when the provider reports it.
+        function noteTurnStats(chars, tokens = 0) {
+            if (!turnStartedAt) return;
+            const secs = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
+            const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+            const tok = tokens > 0 ? ` · ${(tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : tokens)} tok` : '';
+            if (usageText) {
+                usageText.textContent = `${selectedModel} · ${secs}s · ${size} chars${tok}`;
+                usageText.style.display = 'inline';
+            }
+            turnStartedAt = 0;
         }
 
         function newConversationId() {
@@ -2652,11 +4096,28 @@
                 row.tabIndex = 0;
                 row.setAttribute('role', 'button');
 
+                const dot = document.createElement('span');
+                dot.className = 'history-dot';
+                dot.setAttribute('aria-hidden', 'true');
+                row.appendChild(dot);
+
                 const title = document.createElement('span');
                 title.className = 'history-title';
                 title.textContent = convo.title || 'New chat';
                 title.title = convo.title || 'New chat';
                 row.appendChild(title);
+
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'history-pin' + (convo.pinned ? ' on' : '');
+                pin.textContent = convo.pinned ? '★' : '☆';
+                pin.title = convo.pinned ? 'Unpin this chat' : 'Pin this chat';
+                pin.setAttribute('aria-label', (convo.pinned ? 'Unpin chat: ' : 'Pin chat: ') + (convo.title || 'New chat'));
+                pin.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePin(convo.id);
+                });
+                row.appendChild(pin);
 
                 const del = document.createElement('button');
                 del.type = 'button';
@@ -2676,6 +4137,39 @@
                     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
                 });
                 list.appendChild(row);
+            });
+            renderTabs();
+        }
+
+        function togglePin(id) {
+            const convo = conversations.find((c) => c.id === id);
+            if (!convo) return;
+            convo.pinned = !convo.pinned;
+            writeConversations();
+            renderHistoryList();
+        }
+
+        // Tab strip: the active chat first, then pinned ones. Hidden when
+        // there is nothing worth switching between.
+        function renderTabs() {
+            const strip = document.getElementById('chatTabs');
+            if (!strip) return;
+            strip.innerHTML = '';
+            const active = conversations.find((c) => c.id === activeConversationId);
+            const list = [];
+            if (active) list.push(active);
+            conversations.filter((c) => c.pinned && (!active || c.id !== active.id)).forEach((c) => list.push(c));
+            strip.hidden = list.length < 2 && !list.some((c) => c.pinned);
+            if (strip.hidden) return;
+            list.forEach((c) => {
+                const tab = document.createElement('button');
+                tab.type = 'button';
+                tab.className = 'chat-tab' + (c.id === activeConversationId ? ' active' : '');
+                tab.textContent = (c.pinned ? '★ ' : '') + (c.title || 'New chat');
+                tab.title = c.title || 'New chat';
+                tab.setAttribute('aria-label', 'Open chat: ' + (c.title || 'New chat'));
+                tab.addEventListener('click', () => openConversation(c.id));
+                strip.appendChild(tab);
             });
         }
 
@@ -2778,10 +4272,95 @@
             messages = [];
             if (saved.length) emptyState.style.display = 'none';
             saved.forEach((msg, i) => {
+                if (msg.type === 'bot' && Array.isArray(msg.images) && msg.images.length) {
+                    renderSavedImageMessage(msg);
+                    return;
+                }
+                if (msg.type === 'bot' && typeof msg.content === 'string' && msg.content.startsWith('[Generated image:')) {
+                    renderExpiredImageMessage(msg.content);
+                    return;
+                }
                 const retryText = (msg.type === 'bot' && saved[i - 1] && saved[i - 1].type === 'user')
                     ? saved[i - 1].content
                     : undefined;
                 addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
+            });
+        }
+
+        function renderSavedImageMessage(msg) {
+            const promptText = (msg.images[0] && msg.images[0].prompt) || '';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            el.dataset.rawContent = msg.content || `[Generated image: ${promptText}]`;
+            msg.images.forEach((im) => {
+                if (im && im.url) el.appendChild(buildImageWrap(im.url, im.prompt || promptText));
+            });
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, (msg.images[0] && msg.images[0].url) || '', promptText);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content: el.dataset.rawContent, images: msg.images, timestamp: msg.timestamp || Date.now() });
+        }
+
+        function renderExpiredImageMessage(content) {
+            const m = /^\[Generated image: ([\s\S]*)\]$/.exec(content || '');
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            const card = document.createElement('div');
+            card.className = 'gallery-expired';
+            card.textContent = 'Image unavailable — only "' + (m ? m[1] : 'an earlier image') + '" was kept, not the file. Generate it again to see it here.';
+            el.appendChild(card);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content, timestamp: Date.now() });
+        }
+
+        function collectGalleryImages() {
+            const out = [];
+            const seen = new Set();
+            const all = [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            all.forEach((c) => {
+                (c.messages || []).forEach((m) => {
+                    (m.images || []).forEach((im) => {
+                        if (im && im.url && !seen.has(im.url)) {
+                            seen.add(im.url);
+                            out.push({ url: im.url, prompt: im.prompt || '', convo: c.title || 'Chat' });
+                        }
+                    });
+                    if (m.type === 'bot' && typeof m.content === 'string') {
+                        const mm = /^\[Generated image: ([\s\S]*)\]$/.exec(m.content);
+                        if (mm && !(m.images && m.images.length)) out.push({ url: '', prompt: mm[1], convo: c.title || 'Chat' });
+                    }
+                });
+            });
+            return out;
+        }
+
+        function renderGallery() {
+            const grid = document.getElementById('galleryGrid');
+            const empty = document.getElementById('galleryEmpty');
+            if (!grid) return;
+            grid.innerHTML = '';
+            const items = collectGalleryImages();
+            if (empty) empty.hidden = items.length > 0;
+            items.forEach((it) => {
+                if (!it.url) {
+                    const card = document.createElement('div');
+                    card.className = 'gallery-expired';
+                    card.textContent = '"' + it.prompt + '" — image no longer stored.';
+                    grid.appendChild(card);
+                    return;
+                }
+                const fig = document.createElement('figure');
+                fig.className = 'gallery-tile';
+                const img = document.createElement('img');
+                img.src = it.url;
+                img.alt = it.prompt;
+                img.loading = 'lazy';
+                img.addEventListener('click', () => openImageLightbox(it.url, it.prompt));
+                const cap = document.createElement('figcaption');
+                cap.textContent = it.prompt;
+                fig.appendChild(img);
+                fig.appendChild(cap);
+                grid.appendChild(fig);
             });
         }
 
@@ -2821,6 +4400,8 @@
             if (overlay === helpOverlay) return closeHelp;
             if (overlay === drawerOverlay) return closeDrawer;
             if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
+            if (overlay && overlay.id === 'imageConfirmOverlay') return () => closeImageConfirm(false);
+            if (overlay && overlay.id === 'imageEditOverlay') return closeImageEdit;
             return closeImageLightbox;
         }
 

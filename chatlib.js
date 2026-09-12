@@ -4,6 +4,245 @@
 // Curated subset of the models Puter.js supports for puter.ai.chat(); see
 // https://developer.puter.com/tutorials/free-unlimited-openai-api/#list-of-supported-text-generation-models
 // for the full list (several dozen ids across the GPT-5.x/4.1/o-series/Codex lines).
+// Build modes, opencode-style. Chat is the default assistant; Plan reasons
+// about an implementation before anything changes; Build executes with the
+// full skill library riding along. The mode shapes the system prompt and
+// which auto-skills are allowed to trigger — never the tool surface, which
+// stays capability-based (GitHub connected, model supports tools).
+const MODES = [
+  { id: 'chat', label: 'Chat', desc: 'Ask anything — default assistant' },
+  { id: 'plan', label: 'Plan', desc: 'Design first: read-only thinking, no changes' },
+  { id: 'build', label: 'Build', desc: 'Execute with the skill library active' },
+];
+
+const DEFAULT_MODE = 'chat';
+
+function isValidMode(id) {
+  return MODES.some((m) => m.id === id);
+}
+
+// Per-mode instructions appended to the base system prompt. Plan is the
+// opencode /plan contract: investigate, propose, wait — never edit. Build
+// is its /build: carry out an agreed approach with the discipline skills
+// (TDD, verification, lean scope) watching over every step.
+const MODE_PROMPTS = {
+  chat: '',
+  plan: [
+    'MODE: PLAN. The user wants an implementation plan, not changes.',
+    'Investigate first (read files via the GitHub tools, search the web for unknowns), then answer with:',
+    'a short goal statement, what you found in the code (file paths), a numbered step-by-step plan, risks, and open decisions.',
+    'Do not write or commit code in this mode. End by asking the user to switch to Build mode to execute.',
+  ].join('\n'),
+  build: [
+    'MODE: BUILD. You are executing agreed work. Be disciplined about it:',
+    '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
+    '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
+    '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
+    '- Summarize what changed, what you verified, and what you deliberately did not do.',
+    '- Commits still require the user\'s explicit approval through the app\'s commit confirmation.',
+  ].join('\n'),
+};
+
+function modePrompt(mode) {
+  return MODE_PROMPTS[mode] || MODE_PROMPTS.chat;
+}
+
+// --- Agent skills (SKILL.md catalogues) ---
+//
+// Skills are markdown files with a YAML-ish frontmatter (name, description).
+// The description's "Use when ..." clause is what the auto-router matches
+// against the user's request, the same trigger language Claude Code uses.
+
+// Parses the `--- ... ---` frontmatter block of a SKILL.md into an object.
+// Tolerates CRLF, blank values and missing blocks; never throws.
+function parseSkillFrontmatter(markdown) {
+  const text = String(markdown || '');
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!match) return { name: '', description: '' };
+  const out = { name: '', description: '' };
+  const lines = match[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(name|description):\s*(.*)$/.exec(lines[i].trim());
+    if (!m) continue;
+    let value = m[2].trim();
+    // YAML block scalars ("description: >" / "|") put the real text on the
+    // following indented lines — fold them into one string, or the router
+    // would score a bare ">" and never match the skill.
+    if (/^[>|][+-]?\d*$/.test(value)) {
+      const chunk = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const line = lines[j];
+        if (!line.trim()) { chunk.push(' '); j++; continue; }
+        if (/^\s/.test(line)) { chunk.push(line.trim()); j++; continue; }
+        break;
+      }
+      value = chunk.join(' ').replace(/\s+/g, ' ').trim();
+      i = j - 1;
+    }
+    out[m[1]] = value.replace(/^"|"$/g, '');
+  }
+  return out;
+}
+
+// Curated sources. anthropics/skills is the full official library,
+// obra/superpowers is the development-methodology set, and caveman is
+// included lite: five of its skills that earn their tokens on top of the
+// other two (its compress/engine machinery is a separate product).
+const SKILL_SOURCES = [
+  { repo: 'anthropics/skills', branch: 'main', dir: 'skills', pick: 'all' },
+  { repo: 'obra/superpowers', branch: 'main', dir: 'skills', pick: 'all' },
+  {
+    repo: 'JuliusBrussee/caveman',
+    branch: 'main',
+    dir: 'skills',
+    pick: ['caveman', 'lean-build', 'surgical-patch', 'verify-and-stop', 'caveman-commit'],
+  },
+];
+
+// Skill names whose whole job is process discipline during Build mode. The
+// router seeds these into every build turn so the methodology applies even
+// when the request text doesn't name it.
+const BUILD_CORE_SKILLS = ['test-driven-development', 'verification-before-completion', 'lean-build'];
+
+// Mode → which auto-skill sets may fire.
+//   chat: none (skills are noise for plain questions)
+//   plan: planning/process skills (writing-plans, brainstorming, lean-build…)
+//   build: everything — methodology plus the capability library
+function skillsAllowedForMode(mode) {
+  if (mode === 'plan') return 'process';
+  if (mode === 'build') return 'all';
+  return 'none';
+}
+
+// Token overlap between the request and a skill's name + description.
+// Deliberately shallow: the descriptions are written as triggers ("Use when
+// implementing any feature"), so word overlap is the signal, not semantics.
+// The name counts too — "write tests" triggers test-driven-development
+// through its name, whose description alone never says "test". Filler words
+// are stopped and a trailing 's' is stemmed, so "and"-heavy descriptions
+// can't outscore real matches and "tests" meets "test".
+const SKILL_STOP = new Set(['free', 'new', 'latest', 'preview', 'instruct', 'the',
+  'use', 'using', 'used', 'when', 'writing', 'write', 'writes', 'create', 'creates',
+  'creating', 'created', 'add', 'adds', 'adding', 'build', 'builds', 'building', 'make',
+  'making', 'help', 'helps', 'helping', 'guide', 'guides', 'guidance', 'set', 'sets',
+  'edit', 'edits', 'editing', 'update', 'updating', 'change', 'changing', 'run', 'runs',
+  'running', 'get', 'gets', 'getting', 'let', 'lets', 'one', 'two', 'also', 'based',
+  'skill', 'skills', 'claude', 'agent', 'agents', 'model', 'models', 'resource', 'resources',
+  'use', 'using', 'used', 'when', 'writing',
+  'creating', 'helps', 'help', 'guidance', 'skill', 'claude', 'user', 'code', 'works', 'work',
+  'working', 'worked', 'and', 'with', 'for', 'from', 'this', 'that', 'are', 'was', 'were',
+  'has', 'have', 'had', 'not', 'but', 'all', 'can', 'will', 'into', 'over', 'any', 'before',
+  'after', 'between', 'through', 'where', 'while', 'more', 'most', 'other', 'some', 'such',
+  'only', 'same', 'than', 'too', 'very', 'just', 'also', 'then', 'they', 'them', 'its',
+  'need', 'needs', 'want', 'wants', 'per', 'via', 'your', 'you', 'our', 'their', 'these',
+  'those', 'been', 'being', 'does', 'doing', 'did', 'done', 'like', 'well', 'way', 'new']);
+
+function stemSkillToken(t) {
+  // Bounded light stemmer: strip common suffixes and a doubled final
+  // consonant (debugging → debug, planning → plan, tests → test). Two passes
+  // max, never below 3 chars — enough for trigger matching, not a linguistics
+  // project.
+  for (let i = 0; i < 2 && t.length > 3; i++) {
+    const next = t.replace(/(ing|ed|es|s)$/, '');
+    if (next === t) break;
+    t = /(.)\1$/.test(next) ? next.slice(0, -1) : next;
+  }
+  return t;
+}
+
+function skillTokens(s) {
+  return String(s || '').toLowerCase().split(/[^a-z0-9.]+/)
+    .filter((t) => t.length > 2 && !SKILL_STOP.has(t))
+    .map(stemSkillToken);
+}
+
+function skillTriggerScore(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return 0;
+  // Name hits count triple: a skill's own name is its strongest signal
+  // ("write tests" → test-driven-development; "make a poster" → canvas-design).
+  // Description-only overlap is the weak signal and cannot outrank it.
+  const nameHits = new Set([...skillTokens(skill && skill.name)].filter((t) => want.has(t))).size;
+  const desc = new Set(skillTokens(skill && skill.description));
+  let descHits = 0;
+  for (const t of want) if (desc.has(t)) descHits += 1;
+  return nameHits * 3 + descHits;
+}
+
+// The auto-pick router. Given the user's request, the current mode, and the
+// loaded catalogue ({ source, name, description } rows), returns the skills
+// to inject, best match first:
+//   - core build skills seed every build turn (when present in the catalogue)
+//   - process skills fire in plan mode on trigger-word overlap
+//   - everything fires in build mode on trigger-word overlap
+//   - always capped, so a vague request can't stuff the prompt with ten skills
+function pickSkills(requestText, mode, skills, limit = 3) {
+  if (skillsAllowedForMode(mode) === 'none' || !Array.isArray(skills) || !skills.length) return [];
+  const processOnly = skillsAllowedForMode(mode) === 'process';
+  // Superpowers' process skills — the ones about how to work rather than
+  // what to make. In plan mode only these may trigger.
+  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif/i;
+  const pool = skills.filter((s) => s && s.name && s.description)
+    .filter((s) => !processOnly || PROCESS_HINT.test(s.description));
+  const scored = pool
+    .map((s) => ({ s, score: skillTriggerScore(requestText, s) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+  const picked = [];
+  const seen = new Set();
+  const push = (name) => {
+    if (seen.has(name) || picked.length >= limit) return;
+    const row = pool.find((s) => s.name === name);
+    if (row) { seen.add(name); picked.push(row); }
+  };
+  // Strongest signal first: actual matches outrank the seeded methodology,
+  // which only fills the slots left over. A UI request therefore gets
+  // frontend-design alongside the core, not instead of it.
+  for (const { s } of scored) push(s.name);
+  if (mode === 'build') for (const name of BUILD_CORE_SKILLS) push(name);
+  return picked;
+}
+
+// Renders picked skills as extra system context. Bounded excerpts: the
+// overview carries the method; the model can ask for the full text via
+// use_skill if it needs the detailed sections.
+function renderSkillsPrompt(picked, excerptLength = 1200) {
+  if (!Array.isArray(picked) || !picked.length) return '';
+  const parts = picked.map((s) =>
+    `### Skill: ${s.name} (from ${s.source})\n${(s.description || '').trim()}\n\n${String(s.body || '').slice(0, excerptLength).trim()}`
+  );
+  return [
+    'ACTIVE SKILLS — follow these methods for this request:',
+    '(If a skill references scripts or files that are not available here, apply its approach manually.)',
+    '',
+    parts.join('\n\n---\n\n'),
+  ].join('\n');
+}
+
+// The use_skill tool spec the model can call to pull a skill's full text
+// mid-turn (OpenAI function schema, same shape as the GitHub/web tools).
+const USE_SKILL_TOOL = {
+  type: 'function',
+  function: {
+    name: 'use_skill',
+    description: 'Load the complete instructions of an installed skill by name. Use it when the active skill excerpts are not detailed enough to follow the method precisely.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The skill name, e.g. "test-driven-development".' },
+      },
+      required: ['name'],
+    },
+  },
+};
+
+// The catalogue lives server-side; the client asks once per session (and on
+// entering Build mode) for the id list, then fetches full text on demand.
+function isUseSkillTool(name) {
+  return name === 'use_skill';
+}
+
 const MODELS = [
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', desc: 'Newest, most capable' },
   { id: 'gpt-6-astra-pro', name: 'GPT-6 Astra Pro', desc: 'Astra, pro reasoning' },
@@ -240,6 +479,13 @@ const MAX_TOOL_ROUNDS = 12;
 
 // Asked of the model when the ceiling is reached, so an expensive run ends with
 // an answer about what it found rather than being thrown away.
+// Sent when a model finishes its tool work and then returns nothing. Some
+// models stop after the last tool result without writing the answer; asking
+// plainly recovers it, which beats reporting an empty reply to the user.
+const EMPTY_REPLY_NUDGE =
+  'You did not write an answer. Using what you found above, answer the original ' +
+  'question now in plain text. Do not call any more tools.';
+
 const TOOL_ROUNDS_EXHAUSTED_PROMPT =
   'Stop using tools now and answer directly. Summarise what you found, what you ' +
   'changed if anything, and what is still left to do. Be specific about file ' +
@@ -249,6 +495,100 @@ const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
 
 function isGithubTool(name) {
   return GITHUB_TOOL_NAMES.includes(name);
+}
+
+// Web research, available in every chat with no account needed. The model
+// otherwise answers from training data or, with GitHub connected, only what
+// the repos contain -- so a question about the outside world gets searched,
+// not guessed.
+const WEB_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web for current or external facts: docs, releases, prices, news, anything past training. Returns titles, URLs and snippets. Use it instead of guessing, then cite the sources as [title](url) in the answer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query, specific rather than conversational.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Read one page as plain text: a search result, docs URL, or any link the user pasted. Returns the title and up to ~8000 characters. Prefer it over quoting a URL blind.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full http(s) URL to read.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+];
+
+const WEB_TOOL_NAMES = WEB_TOOLS.map((t) => t.function.name);
+
+function isWebTool(name) {
+  return WEB_TOOL_NAMES.includes(name);
+}
+
+// Response bodies are JSON until a proxy, edge, or gateway hands back an
+// HTML/text error page instead (mid-restart deploys do this routinely).
+// Parsing that raw throws SyntaxError, which reads as gibberish to the user,
+// so normalize it here into a retryable message at every call site. A parse
+// failure is marked so callers can tell it apart from a real error body.
+async function safeJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return {
+      error: 'The server answered with something unreadable (often a proxy page while redeploying) — wait a moment and retry.',
+      parseFailed: true,
+    };
+  }
+}
+
+// Allowlist matching for provider pickers. An entry is either a plain string
+// (exact model id, e.g. "nvidia/nemotron-3.5-lightning") or { label } for
+// human names ("Nemotron 3.5 Lightning"), matched token-wise against both the
+// model id and its display name. Provider catalogues rename models often
+// enough that exact strings alone go stale; token matching survives the
+// renames without letting lookalikes in.
+const LIST_NOISE = new Set(['free', 'new', 'latest', 'preview', 'instruct', 'the']);
+
+function modelTokens(s) {
+  return String(s || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[^a-z0-9.]+/i)
+    .map((t) => t.toLowerCase())
+    .filter((t) => t && !LIST_NOISE.has(t));
+}
+
+function matchListEntry(model, entry) {
+  if (!model || !model.id) return false;
+  if (typeof entry === 'string') return model.id === entry;
+  if (!entry || typeof entry.label !== 'string') return false;
+  const wanted = modelTokens(entry.label);
+  if (!wanted.length) return false;
+  const have = new Set([...modelTokens(model.id), ...modelTokens(model.name)]);
+  return wanted.every((t) => have.has(t));
+}
+
+// Decides whether a failed tools call deserves one plain retry. Parse
+// failures and shape rejections (400/422, tool-worded messages) mean the
+// endpoint can't do tools; anything else (auth, billing, missing model,
+// rate limits, aborts) must keep its original handling.
+function isToolsRejection(err) {
+  if (!err || err.name === 'AbortError') return false;
+  if (err.parseFailed) return true;
+  if (typeof err.statusCode === 'number') return err.statusCode === 400 || err.statusCode === 422;
+  return /tool|function|unknown field/i.test(err.message || '');
 }
 
 // Tool arguments arrive as a JSON string from the model, and a model can emit
@@ -283,6 +623,10 @@ function describeToolCall(name, args = {}) {
       const owner = args.account || String(args.repo || '').split('/')[0];
       return `Committing "${args.path || '?'}" to ${repo}${owner ? ` as ${owner}` : ''}`;
     }
+    case 'web_search':
+      return `Searching the web for "${args.query || '?'}"`;
+    case 'web_fetch':
+      return `Reading ${args.url || 'a page'}`;
     default:
       return `Running ${name}`;
   }
@@ -452,6 +796,17 @@ function toConversationMessage(message) {
   return turn;
 }
 
+// A 429 from the provider means the request was too fast, not that something
+// is broken. Both the server and the client use this to retry with a delay
+// instead of showing an error the user has to act on.
+const RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 2000;
+
+function isRateLimitError(error) {
+  const message = String((error && (error.message || error.error || error)) || '');
+  return /\b429\b|too many requests|rate.?limit/i.test(message);
+}
+
 // Puter runs a "User-Pays" model: free for whoever builds the app, billed to
 // whoever is signed in. On the free plan that's a fixed credit allowance, and
 // running out surfaces as a bare "No usage left for request", which reads like
@@ -537,6 +892,11 @@ const SYSTEM_PROMPT = [
   '- Committing is the only step that needs approval, and the app already asks the user itself.',
   '- Read a file before rewriting it, and send the complete new contents.',
   '',
+  'When web tools are available:',
+  '- If the question needs facts outside training or the repos -- current events, releases, prices, docs -- search first, never guess.',
+  '- Read the most promising results before answering, and cite every factual claim as [title](url).',
+  '- Fetching and searching are safe and cheap. Just do them.',
+  '',
   'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
 ].join('\n');
 
@@ -552,12 +912,30 @@ function normalizeProviderReply(data) {
   if (!data || typeof data !== 'object') return null;
   if (data.message) return data;
   const choice = Array.isArray(data.choices) ? data.choices[0] : null;
-  return choice && choice.message ? { message: choice.message, raw: data } : null;
+  if (!choice || !choice.message) return null;
+  // finish_reason explains an empty answer -- a token limit, a filter -- and
+  // is the difference between "the model said nothing" and knowing why.
+  return { message: choice.message, finishReason: choice.finish_reason, raw: data };
+}
+
+// A reply can arrive with nothing in it. Rather than print "(no reply)" and
+// leave the user to guess, work out what happened from what did arrive.
+function explainEmptyReply(message, finishReason) {
+  if (finishReason === 'length') {
+    return 'The model hit its output limit before writing an answer. Ask for something shorter, or split the request.';
+  }
+  if (finishReason === 'content_filter') {
+    return 'The provider filtered this response.';
+  }
+  if (message && Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    return 'The model asked for another tool step but sent no answer with it. Ask it to continue.';
+  }
+  return 'The model returned an empty response. This usually clears on a retry; if it repeats, try another model.';
 }
 
 // OpenRouter publishes real prices, so cost is a fact rather than a guess at
 // the name. Only 21 of its ~430 models are actually free, and the ":free"
-// suffix alone was not a reliable signal. Cerebras and NVIDIA return no
+// suffix alone was not a reliable signal. Nara and NVIDIA return no
 // pricing: their free tier is an account-level allowance, so everything they
 // list is free within it, which is why a missing price counts as free.
 function isFreeModel(model) {
@@ -566,27 +944,20 @@ function isFreeModel(model) {
   if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
     return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
   }
-  // No published price. Two different situations look identical here, so the
-  // id decides between them. Cerebras and NVIDIA meter an account-level
-  // allowance and charge nothing per model, so an unmarked id is free. OpenCode
-  // Zen mixes free and paid in one unpriced catalogue and marks the free ones
-  // by name -- treating its 70 models as uniformly free would rank paid ones
-  // like claude-fable-5 above the free tier the user actually has.
-  return model.pricedByName ? isFreeModelId(model.id) : true;
+  // No published price. This is an assumption, not a fact: a provider that
+  // publishes nothing might meter an account allowance, or might simply
+  // require billing before any call succeeds -- one answers "Payment
+  // required to access this resource" on a key without one. Treating an
+  // unpriced model as free keeps it visible so the provider can say which,
+  // rather than hiding a catalogue the user may well have access to. The
+  // error, when it comes, is now reported accurately.
+  return true;
 }
 
-// Providers mark a free model in the id itself when they publish no prices.
-// OpenRouter uses a ":free" suffix; OpenCode Zen uses "-free", and leaves its
-// two headline free models unmarked entirely. These are documented provider
-// conventions read off their live catalogues, not inferences from the name.
-const NAMED_FREE_MODEL_IDS = ['big-pickle'];
-const NAMED_FREE_MODEL_PREFIXES = ['muse-spark'];
-
+// Providers mark a free model in the id when they publish no prices. OpenRouter
+// uses a ":free" suffix; others use "-free".
 function isFreeModelId(id) {
-  const name = String(id || '').toLowerCase();
-  if (/[:-]free$/i.test(name)) return true;
-  if (NAMED_FREE_MODEL_IDS.includes(name)) return true;
-  return NAMED_FREE_MODEL_PREFIXES.some((prefix) => name.startsWith(prefix));
+  return /[:-]free$/i.test(String(id || ''));
 }
 
 // The GitHub tools only work on a model that accepts them. Sending tools to
@@ -655,13 +1026,63 @@ function describeProviderModel(model) {
   return parts.slice(0, 3).join(' · ');
 }
 
-// Some providers list far more than is worth offering. OpenCode Zen shows 70
-// models, most of them paid, when the useful set is two. A provider can declare
-// exactly which to keep: named ids, and families where only the newest release
-// should appear.
+// A 402 or 403 can mean two very different things, and the difference decides
+// what to do about it.
+//
+//   "thinkingmachines/inkling:free is only available on agentic harnesses"
+//       -- one model is off limits; drop it and pick another.
+//
+//   "A payment method is required. Add one at .../billing"
+//       -- the whole account is off limits; dropping models one at a time just
+//          burns a failed request per model until the list is empty.
+//
+// A message that names the model is about that model. One that talks about
+// payment, billing or the plan without naming a model is about the account.
+function isAccountLevelFailure(message, modelId) {
+  const text = String(message || '');
+  if (!text) return false;
+  if (modelId && text.includes(modelId)) return false;
+  // Matched on the concepts rather than a word order: providers phrase this as
+  // "payment required", "a payment method is required" and "requires a payment
+  // method", and all three mean the same thing.
+  return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
+}
+
+// Server-Sent Events arrive as newline-delimited `data:` lines. A single
+// provider chunk may contain several events, or a half-finished event that
+// the next chunk completes. This parser does not maintain state (that is the
+// caller's job), so it expects to be fed decoded chunks that each start and
+// end on event boundaries. In practice that holds: the browser's text decoder
+// and the Node stream reader both emit line-aligned chunks for SSE.
+// Returns an array of parsed payloads: a JSON object when the line carried
+// data, the string "[DONE]" for a final sentinel, or null for comments.
+function parseSseChunk(decoded) {
+  if (!decoded) return [];
+  return decoded.split('\n').reduce((out, line) => {
+    if (line.startsWith(':') || line.trim() === '') return out;
+    if (line.startsWith('data: ')) {
+      const payload = line.slice(6).trim();
+      if (payload === '[DONE]') { out.push('[DONE]'); return out; }
+      try { out.push(JSON.parse(payload)); } catch { /* partial/unknown line */ }
+    }
+    return out;
+  }, []);
+}
+
+// Some providers list far more than is worth offering -- hundreds of ids, most
+// of them paid or near-duplicate releases, where the useful set is a handful.
+// A provider can declare the subset as rules instead of a literal array:
+//
+//   models: { exact: ['a', 'b'] }                 named ids, in this order
+//   models: { newestOf: ['family'] }              only the newest in a family
+//   models: { freeOnly: true, newestOf: ['x'] }   free ids, families collapsed
+//
+// Declaration order is preserved and ids are deduplicated, so a catalogue that
+// lists the same id twice cannot put it in the picker twice.
 function versionOf(id) {
   const match = String(id).match(/(\d+(?:\.\d+)*)/g);
   if (!match) return [0];
+  // The last number in an id is the release: "muse-spark-1.3" is 1.3.
   return match[match.length - 1].split('.').map(Number);
 }
 
@@ -699,8 +1120,7 @@ function selectAllowedModels(models, rules) {
 
   // freeOnly leans on isFreeModelId rather than repeating the naming rules, so
   // "free" has one definition across the app. Families named in newestOf still
-  // collapse to their newest member, which is what keeps muse-spark from
-  // contributing four near-identical entries.
+  // collapse to their newest member.
   if (rules.freeOnly) {
     const families = rules.newestOf || [];
     (models || [])
@@ -715,12 +1135,27 @@ function selectAllowedModels(models, rules) {
     (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
   }
 
-  (rules.exact || []).forEach((id) => take((models || []).find((m) => m && m.id === id)));
+  // exact goes through matchListEntry so an id matches exactly the way it would
+  // in a plain array allowlist -- by id, or by label-based token match.
+  (rules.exact || []).forEach((wanted) => take((models || []).find((m) => m && matchListEntry(m, wanted))));
   return chosen.length ? chosen : models || [];
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    MODES,
+    DEFAULT_MODE,
+    isValidMode,
+    modePrompt,
+    SKILL_SOURCES,
+    BUILD_CORE_SKILLS,
+    skillsAllowedForMode,
+    skillTriggerScore,
+    pickSkills,
+    renderSkillsPrompt,
+    USE_SKILL_TOOL,
+    isUseSkillTool,
+    parseSkillFrontmatter,
     MODELS,
     DEFAULT_MODEL,
     isValidModel,
@@ -736,9 +1171,17 @@ if (typeof module !== 'undefined' && module.exports) {
     isDocumentFile,
     GITHUB_TOOLS,
     GITHUB_TOOL_NAMES,
+    WEB_TOOLS,
+    WEB_TOOL_NAMES,
     MAX_TOOL_ROUNDS,
     TOOL_ROUNDS_EXHAUSTED_PROMPT,
+    EMPTY_REPLY_NUDGE,
     isGithubTool,
+    isWebTool,
+    safeJson,
+    isToolsRejection,
+    modelTokens,
+    matchListEntry,
     parseToolArgs,
     describeToolCall,
     extractMessageText,
@@ -751,6 +1194,9 @@ if (typeof module !== 'undefined' && module.exports) {
     supportsEffort,
     isValidEffort,
     isEffortUnsupportedError,
+    isRateLimitError,
+    RATE_LIMIT_RETRIES,
+    RATE_LIMIT_BASE_DELAY_MS,
     isOutOfCreditsError,
     HEAVY_MODEL_IDS,
     isHeavyModel,
@@ -764,11 +1210,10 @@ if (typeof module !== 'undefined' && module.exports) {
     SYSTEM_PROMPT,
     PUTER_PROVIDER,
     normalizeProviderReply,
+    explainEmptyReply,
+    isAccountLevelFailure,
     usableChatModels,
-    selectAllowedModels,
-    newestInFamily,
     isFreeModelId,
-    NAMED_FREE_MODEL_IDS,
     isFreeModel,
     supportsTools,
     emitsText,
@@ -778,5 +1223,9 @@ if (typeof module !== 'undefined' && module.exports) {
     sortConversations,
     upsertConversation,
     migrateLegacyMessages,
+    parseSseChunk,
+    selectAllowedModels,
+    newestInFamily,
+    compareVersions,
   };
 }

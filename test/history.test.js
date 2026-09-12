@@ -144,7 +144,7 @@ test('coding and reasoning families are recognised', () => {
 });
 
 test('on a provider with no pricing, ranking falls to capability', () => {
-  // Cerebras and NVIDIA return the bare OpenAI shape, so every model is free
+  // Nara and NVIDIA return the bare OpenAI shape, so every model is free
   // within the account allowance and cost can't separate them.
   const sorted = usableChatModels([
     { id: 'some-tiny-chat-model' },
@@ -190,7 +190,7 @@ test('cost is read from published pricing, not guessed from the name', () => {
 });
 
 test('a provider that publishes no pricing falls back to the id', () => {
-  // Cerebras and NVIDIA return the bare OpenAI shape; their free tier is an
+  // Nara and NVIDIA return the bare OpenAI shape; their free tier is an
   // account allowance, so an absent price is not a paid model.
   assert.ok(isFreeModel({ id: 'llama-3.3-70b' }));
   assert.ok(isFreeModel({ id: 'qwen-3-32b', pricing: undefined }));
@@ -238,4 +238,31 @@ test('a model without tool support is labelled so, not silently broken', () => {
   ])[0];
   assert.equal(model.tools, false);
   assert.match(describeProviderModel(model), /no tools/);
+});
+
+const { explainEmptyReply } = require('../chatlib.js');
+
+test('finish_reason turns an empty answer into an explanation', () => {
+  // Reported as a bare "(no reply)", which told the user nothing about why.
+  assert.match(explainEmptyReply({}, 'length'), /output limit/);
+  assert.match(explainEmptyReply({}, 'content_filter'), /filtered/);
+});
+
+test('an empty answer alongside tool calls says so', () => {
+  const message = { content: '', tool_calls: [{ id: 'c1', function: { name: 'github_read_file' } }] };
+  assert.match(explainEmptyReply(message, 'tool_calls'), /another tool step/);
+});
+
+test('an unexplained empty answer suggests what to do', () => {
+  const advice = explainEmptyReply({ content: '' }, 'stop');
+  assert.match(advice, /empty response/);
+  assert.match(advice, /retry|another model/);
+});
+
+test('finish_reason is carried out of an OpenAI-shaped reply', () => {
+  const normalized = normalizeProviderReply({
+    choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }],
+  });
+  assert.equal(normalized.finishReason, 'length');
+  assert.match(explainEmptyReply(normalized.message, normalized.finishReason), /output limit/);
 });
