@@ -1998,6 +1998,14 @@ const MODEL_MENU_GAP = 6;
 const MODEL_MENU_MARGIN = 8;
 const MODEL_MENU_WIDTH = 380;
 
+// The attach menu is three items, so it is narrower and never as tall as the
+// model list. It hangs from the paperclip at the start of the controls row,
+// which is why it is placed from that trigger's own rect rather than the
+// composer's.
+const ATTACH_MENU_MIN_HEIGHT = 120;
+const ATTACH_MENU_MAX_HEIGHT = 320;
+const ATTACH_MENU_WIDTH = 240;
+
 // Where the model menu should go, given the trigger's rect and the viewport.
 // Pure geometry, so the clamping can be tested without a browser: the caller
 // only applies the numbers.
@@ -2424,6 +2432,9 @@ if (typeof module !== 'undefined' && module.exports) {
     describeProviderModel,
     placeDropdown,
     MODEL_MENU_MAX_HEIGHT,
+    ATTACH_MENU_MIN_HEIGHT,
+    ATTACH_MENU_MAX_HEIGHT,
+    ATTACH_MENU_WIDTH,
     newConversation,
     sortConversations,
     upsertConversation,

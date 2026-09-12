@@ -103,5 +103,11 @@ test('opening the menu computes its placement rather than relying on CSS alone',
   const open = HTML.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
   assert.ok(open, 'index.html no longer defines openModelDropdown() -- re-point this test');
   assert.match(open[1], /positionModelDropdown\(\)/, 'openModelDropdown must position the menu it opens');
-  assert.match(HTML, /window\.addEventListener\('resize', positionModelDropdown\)/, 'and re-place it when the window changes');
+  // Both popups share the one resize listener, so a rotated phone re-places
+  // whichever of them is open.
+  assert.match(
+    HTML,
+    /window\.addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);/,
+    'and re-place it when the window changes',
+  );
 });
