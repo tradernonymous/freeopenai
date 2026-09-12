@@ -2705,6 +2705,18 @@
             }
         }
 
+        // One place that maps a tool name to its runner, so the loop can decide
+        // what to run together without repeating the dispatch three times.
+        // Every runner answers with a string -- its own failures included -- so a
+        // wave of them can be awaited together without one rejection losing the
+        // rest.
+        function runToolCall(name, args) {
+            if (isGithubTool(name)) return runGithubTool(name, args);
+            if (isWebTool(name)) return runWebTool(name, args);
+            if (isUseSkillTool(name)) return runUseSkillTool(args);
+            return Promise.resolve('Error: unknown tool ' + name);
+        }
+
         async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
@@ -2744,20 +2756,38 @@
                 // Only role/content/tool_calls may go back; the rest of the
                 // reply object is metadata the provider rejects.
                 convo.push(toConversationMessage(message));
+                // Everything this round will do is listed before any of it runs,
+                // so a wave of lookups reads as one step rather than three that
+                // queued up behind each other.
                 for (const call of calls) {
-                    if (signal?.aborted) throw abortError();
                     const fn = (call && call.function) || {};
-                    const args = parseToolArgs(fn.arguments);
-                    addMessage('system', describeToolCall(fn.name, args));
-                    const result = isGithubTool(fn.name)
-                        ? await runGithubTool(fn.name, args)
-                        : isWebTool(fn.name)
-                          ? await runWebTool(fn.name, args)
-                          : isUseSkillTool(fn.name)
-                            ? await runUseSkillTool(args)
-                            : 'Error: unknown tool ' + fn.name;
-                    convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
+                    addMessage('system', describeToolCall(fn.name, parseToolArgs(fn.arguments)));
+                }
+                const plan = planToolCalls(calls);
+                const results = new Array(calls.length);
+                // Reads that do not depend on each other go out together: three
+                // files used to cost three round trips. Anything that writes is
+                // left to run in turn, because two writes at once is a race and
+                // one of them would silently win.
+                for (const batch of batchIndices(plan.concurrent)) {
                     if (signal?.aborted) throw abortError();
+                    if (batch.length > 1) showStatus('info', 'Looking up ' + batch.length + ' things at once');
+                    const done = await Promise.all(batch.map(async (index) => {
+                        const fn = calls[index].function || {};
+                        return [index, await runToolCall(fn.name, parseToolArgs(fn.arguments))];
+                    }));
+                    for (const [index, result] of done) results[index] = result;
+                }
+                for (const index of plan.serial) {
+                    if (signal?.aborted) throw abortError();
+                    const fn = calls[index].function || {};
+                    results[index] = await runToolCall(fn.name, parseToolArgs(fn.arguments));
+                }
+                // Recorded in the order the model asked for, not the order they
+                // finished, so every tool_call_id still has its own result.
+                for (let i = 0; i < calls.length; i++) {
+                    if (signal?.aborted) throw abortError();
+                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: String(results[i]) });
                 }
             }
             // Out of rounds. Everything read so far is still in `convo` and was
