@@ -1862,9 +1862,13 @@ function llmChat(req, res) {
       // disconnect (quiet 499). Set just before aborting so the catch below
       // knows which wait expired.
       let failKind = '';
+      // A client that vanished mid-stream must not get a partial-notice frame
+      // written to a dead socket; the error path checks this.
+      let clientGone = false;
       const fail = (kind) => { failKind = kind; controller.abort(); };
       const totalTimer = setTimeout(() => fail('total'), t.chat);
       const onClientClose = () => {
+        clientGone = true;
         if (!res.writableEnded) controller.abort();
       };
       // Use the socket close event rather than req.on('close'), because
@@ -1872,6 +1876,10 @@ function llmChat(req, res) {
       // is fully consumed — which happens before we start streaming.
       req.socket.on('close', onClientClose);
       let upstreamConsumed = false;
+      // Distinct from upstreamConsumed (full success): any chunk that reached
+      // the page counts, because those tokens were paid for whether or not the
+      // stream finishes.
+      let deliveredAny = false;
       let headersSent = false;
       try {
         const upstream = await fetchStreamWithRetry(id, async () => {
@@ -1913,6 +1921,7 @@ function llmChat(req, res) {
             for await (const chunk of upstream.body) {
               poke();
               res.write(chunk);
+              deliveredAny = true;
             }
             upstreamConsumed = true;
           } finally {
@@ -1937,7 +1946,19 @@ function llmChat(req, res) {
               : `${provider.label} did not finish within ${secs}s`;
         }
         if (!headersSent) res.writeHead(status, { 'Content-Type': 'text/event-stream' });
-        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+        // A failure with nothing sent yet is a plain error. But when tokens
+        // already reached the page before the deadline hit, that partial text
+        // is spend the user already paid for — the upstream may well have kept
+        // generating after we gave up. Sending the error alone threw the
+        // delivered words away and invited a resend that re-spends them; the
+        // partial content rides first (the renderer has it on screen as it
+        // arrives), then the error names what went wrong. The page's
+        // finalizePartial() decides keep/discard below.
+        if (deliveredAny && !clientGone) {
+          res.write(`data: ${JSON.stringify({ partial: true, notice: message })}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+        }
       } finally {
         clearTimeout(totalTimer);
         req.socket.removeListener('close', onClientClose);
