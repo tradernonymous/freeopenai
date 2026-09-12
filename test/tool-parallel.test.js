@@ -14,6 +14,8 @@ const {
   clipToolResult,
   REPEATED_TOOL_CALL_NOTICE,
   MAX_REPEATED_TOOL_CALLS,
+  toolMemoFromConversation,
+  RESUME_CONTINUATION_PROMPT,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -265,6 +267,26 @@ test('a question that repeats itself is told plainly to stop', async () => {
   const said = h.conversation.filter((m) => m.role === 'user');
   assert.equal(said.length, 1);
   assert.match(said[0].content, /already called that tool/i);
+});
+
+test('a turn picked back up does not buy its lookups a second time', async () => {
+  const args = { repo: 'o/r', path: 'README.md' };
+  // What a stopped turn looks like on the way back in: the model's own calls,
+  // the results recorded against them, and the line that tells it to carry on.
+  const restored = [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: 'read my readme and fix the typos' },
+    { role: 'assistant', content: '', tool_calls: [call('github_read_file', 'a', args)] },
+    { role: 'tool', tool_call_id: 'a', content: 'ran:github_read_file' },
+    { role: 'user', content: RESUME_CONTINUATION_PROMPT },
+  ];
+  // Continuing, the model asks for the very file it already read.
+  const h = harness({ rounds: [[call('github_read_file', 'b', args)], []] });
+  await h.runChatWithTools(restored, 'model', [], null, toolMemoFromConversation(restored));
+  assert.deepEqual(h.runs, [], 'the read was already paid for');
+  const toolMessages = restored.filter((m) => m.role === 'tool');
+  assert.equal(toolMessages.length, 2);
+  assert.equal(toolMessages[1].content, 'ran:github_read_file', 'the answer is the stored one');
 });
 
 test('a huge tool result is clipped before every later round re-sends it', async () => {

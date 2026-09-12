@@ -1372,6 +1372,20 @@ function sortConversations(list) {
   return [...(list || [])].sort((a, b) => (b.updatedAt - a.updatedAt) || String(a.id).localeCompare(String(b.id)));
 }
 
+// What a message's Retry button should resend, if it has one at all.
+//
+// A bot reply's target is the user turn above it, so the saved transcript does
+// not need a second copy of the prompt. A notice with no reply under it -- the
+// "Kept N completed tool step(s)" line from an interrupted turn -- has to carry
+// its own, or the button it shows would have nothing to send.
+function retryTargetFor(message, previous) {
+  if (!message || typeof message !== 'object') return undefined;
+  if (typeof message.retryText === 'string' && message.retryText) return message.retryText;
+  if (message.type !== 'bot') return undefined;
+  if (!previous || previous.type !== 'user') return undefined;
+  return typeof previous.content === 'string' ? previous.content : undefined;
+}
+
 // Replaces the matching conversation, or adds it, then trims to the cap.
 // Always returns a new array rather than mutating the caller's.
 function upsertConversation(list, convo) {
@@ -1607,6 +1621,101 @@ const REPEATED_TOOL_CALL_NOTICE =
 // How many times one identical call may come back from the memo before the model
 // is told plainly that repeating it will not help.
 const MAX_REPEATED_TOOL_CALLS = 2;
+
+// Rebuilds the "already answered" memo from a conversation that was stored
+// part-way through its tool loop: every call the model made, paired back to the
+// result recorded against it.
+//
+// This is the other half of resuming. Handing a model its own tool results and
+// nothing else makes it ask for the same tools again, because from where it sits
+// there is no record that they were paid for -- which costs exactly what never
+// having saved the turn would have.
+function toolMemoFromConversation(messages, parseArgs = parseToolArgs) {
+  const memo = new Map();
+  let issued = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!message || typeof message !== 'object') continue;
+    // A batch of calls opens a new set for the results that follow it.
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      issued = message.tool_calls.map((call) => {
+        const fn = (call && call.function) || {};
+        return { id: call && call.id, key: toolCallKey(fn.name, parseArgs(fn.arguments)) };
+      });
+      continue;
+    }
+    if (message.role !== 'tool' || !message.tool_call_id) continue;
+    const match = issued.find((entry) => entry.id === message.tool_call_id);
+    if (match && match.key) {
+      memo.set(match.key, String(message.content == null ? '' : message.content));
+    }
+  }
+  return memo;
+}
+
+// How much of a stopped turn is already done, in tool steps. Shown to the user
+// so a resume reads as carrying on rather than as starting over.
+function pendingTurnStepCount(convo) {
+  const list = Array.isArray(convo) ? convo : [];
+  return list.filter((message) => message && message.role === 'tool').length;
+}
+
+// Only a turn that got somewhere is worth keeping. A failure before the first
+// tool call left nothing that costs anything to redo.
+function hasToolWork(convo) {
+  return pendingTurnStepCount(convo) > 0;
+}
+
+// Said to the model when a stored turn is picked back up. Without it a model
+// looking at its own tool results may simply repeat the calls that produced
+// them, which is the cost this exists to avoid.
+const RESUME_CONTINUATION_PROMPT =
+  'Your previous attempt at this request was interrupted after the tool steps ' +
+  'above. Those results are already paid for and are still valid. Continue from ' +
+  'where you stopped: do not repeat a step that already has a result, and finish ' +
+  'the original request.';
+
+// The store is shared with every saved conversation, so a turn too large to fit
+// is not stored at all: resuming is a courtesy, and losing the conversation list
+// to it is not.
+const MAX_PENDING_TURN_CHARS = 400000;
+
+// A stored turn as JSON, or null when there is nothing worth keeping or no room
+// for it. Never half-written: a truncated turn would be replayed as a broken
+// request rather than rejected.
+function serializePendingTurn(turn, limit = MAX_PENDING_TURN_CHARS) {
+  if (!turn || typeof turn.question !== 'string' || !Array.isArray(turn.convo) || !turn.convo.length) {
+    return null;
+  }
+  const max = Number(limit) > 0 ? Number(limit) : MAX_PENDING_TURN_CHARS;
+  let json;
+  try {
+    json = JSON.stringify(turn);
+  } catch {
+    return null;
+  }
+  return json.length <= max ? json : null;
+}
+
+// The inverse, and deliberately strict: anything that does not look like a turn
+// this app wrote is treated as nothing at all rather than trusted into a request.
+function parsePendingTurn(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed.question !== 'string' || !Array.isArray(parsed.convo) || !parsed.convo.length) {
+    return null;
+  }
+  return {
+    question: parsed.question,
+    convo: parsed.convo,
+    steps: Number(parsed.steps) || 0,
+    at: Number(parsed.at) || 0,
+  };
+}
 
 // How many input tokens the provider served from its prompt cache. Every vendor
 // spells it differently -- OpenAI and OpenRouter nest it under the prompt-token
@@ -2231,5 +2340,13 @@ if (typeof module !== 'undefined' && module.exports) {
     REPEATED_TOOL_CALL_NOTICE,
     MAX_REPEATED_TOOL_CALLS,
     cachedTokensFromUsage,
+    toolMemoFromConversation,
+    pendingTurnStepCount,
+    hasToolWork,
+    RESUME_CONTINUATION_PROMPT,
+    MAX_PENDING_TURN_CHARS,
+    serializePendingTurn,
+    parsePendingTurn,
+    retryTargetFor,
   };
 }

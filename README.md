@@ -449,6 +449,12 @@ Every call is billed again with the whole conversation in front of it, so what a
 
 When a question fails part-way through a tool loop, the answers it already collected are kept — so retrying replays those lookups instead of buying them a second time, while a genuinely new question starts from nothing. The status bar reports what the provider cached, so the saving is visible: `gpt-5.4-nano · 3s · 812 chars · 120 tok · 12.4k cached`. A provider that caches nothing reports nothing.
 
+### ⏸️ Continuing a turn that stopped
+
+A tool loop that stops part-way — a provider 5xx, a timeout, or you pressing **Stop** — keeps everything it had already collected: the file it read, the search it ran, the listing it fetched. The transcript says so (`Kept 3 completed tool step(s)`), and the **Retry** button on that notice continues from where it stopped instead of asking the same question from the beginning, reusing every result already paid for. Stopping is deliberately treated the same as failing: a long tool loop you interrupt is usually one you want to steer, not one you want thrown away.
+
+Three things bound that promise. A kept turn expires thirty minutes after it stopped, because a file read half an hour ago may have changed since. A turn too large to store alongside your saved chats is not kept at all — resuming is a courtesy, and losing the conversation list to it is not. And typing a *different* question drops it: the memo is keyed by the question, so nothing stale can leak into a new request.
+
 <br>
 
 ### 🩹 Provider quirks the app works around
