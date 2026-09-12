@@ -97,6 +97,21 @@ test('/api/health reports the version, provider ids and uptime, and is never cac
   });
 });
 
+test('/api/health says whether this deployment asks for a login of its own', async () => {
+  // The page uses this to decide whether a direct provider needs a Puter
+  // account. It is not a secret: an unauthenticated visitor already learns it
+  // from the redirect to /login.html.
+  await withEnv({ AUTH_USER_1: undefined, AUTH_PASS_1: undefined }, () => withServer(async (port) => {
+    assert.equal(JSON.parse((await request(port, '/api/health')).body).loginRequired, false);
+  }));
+  await withLoginGate(() => withServer(async (port) => {
+    // Still public with the gate on — that is the point of the endpoint.
+    const res = await request(port, '/api/health');
+    assert.equal(res.status, 200);
+    assert.equal(JSON.parse(res.body).loginRequired, true);
+  }));
+});
+
 test('/api/health reports the Railway commit when there is one, and null when there is not', async () => {
   await withEnv({ RAILWAY_GIT_COMMIT_SHA: undefined, RAILWAY_GIT_BRANCH: undefined }, () => withServer(async (port) => {
     const local = JSON.parse((await request(port, '/api/health')).body);
