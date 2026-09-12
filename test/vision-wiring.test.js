@@ -110,6 +110,7 @@ function baseDeps(overrides = {}) {
     // sandbox honest about it rather than letting a ReferenceError hide in a
     // path this file does not exercise.
     forgetRefusedModel: () => null,
+    finalizePartial: () => {},
     localStorage: { setItem: (k, v) => writes.push([k, v]) },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
     renderModelOptions() {},

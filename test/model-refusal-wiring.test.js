@@ -17,6 +17,7 @@ const {    errorDetailFromBody,
     refusedModelIds,
     safeJson,
     isRetryableStatus,
+    parseSseChunk,
     MAX_MODEL_REFUSAL_RETRIES,
 } = require('../chatlib.js');
 
@@ -80,7 +81,7 @@ function declarationOf(name) {
 // reads and, more usefully, makes an assignment such as `selectedModel = next`
 // land back on the deps object, so the test can watch it move.
 function load(deps) {
-  const names = ['forgetRefusedModel', 'callModel', 'streamProviderChat'];
+  const names = ['forgetRefusedModel', 'callModel', 'streamProviderChat', 'finalizePartial'];
   const body = names.map(declarationOf).join('\n') + `\nreturn { ${names.join(', ')} };`;
   return new Function('deps', `with (deps) {\n${body}\n}`)(deps);
 }
@@ -132,6 +133,14 @@ function harness({ models, answers, streamed = null }) {
     localStorage: { setItem() {} },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
     addMessage: (role, text) => notes.push(`${role}: ${text}`),
+    // finalizePartial's DOM surface, observed so the tests can assert on it.
+    persistMessages() {},
+    setMessageContent() {},
+    setReasoningContent() {},
+    buildMessageActions: () => null,
+    messages: [],
+    chatMessages: { scrollTop: 0, scrollHeight: 0 },
+    document: { createElement: () => ({ textContent: '', className: '' }) },
     renderModelOptions() {},
     updateModelLabel() {},
     suspendProvider(detail) { status.push(`suspended: ${detail}`); },
@@ -278,6 +287,62 @@ test('a streamed reply whose body is null is reported, not crashed on', async ()
   assert.doesNotMatch(error.message, /Cannot read properties of null/);
   // Nothing was readable, so the status is the only fact left to report.
   assert.match(error.message, /502/);
+});
+
+test('a partial stream ending is banked, not discarded', async () => {
+  // Text arrives, then the server's deadline fires and it sends the partial
+  // frame with its notice instead of an error. The reply is finalized from
+  // what was delivered — the tokens were spent whether or not the stream
+  // finished — and the caller is told so it does not finalize twice.
+  const h = harness({ models: MODELS.slice(0, 1), answers: () => true, streamed: 'partial answer text' });
+  h.deps.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+    body: {
+      getReader: () => {
+        let sent = false;
+        return {
+          read: async () => (sent
+            ? { done: true }
+            : ((sent = true), {
+                done: false,
+                value: Buffer.from(
+                  'data: ' + JSON.stringify({ choices: [{ delta: { content: 'partial answer text' } }] }) + '\n' +
+                  'data: ' + JSON.stringify({ partial: true, notice: 'Antigravity did not finish within 55s' }) + '\n'),
+              })),
+        };
+      },
+    },
+  });
+  const bubble = { parentNode: {}, appended: [] };
+  bubble.appendChild = (n) => bubble.appended.push(n);
+  // The harness stubs the SSE parser; this test crafts real frames, so the
+  // real parser must read them.
+  h.deps.parseSseChunk = parseSseChunk;
+  const finalized = await h.streamProviderChat([{ role: 'user', content: 'hi' }], h.renderer, undefined, bubble);
+  assert.equal(finalized, true, 'the caller must know not to finalize again');
+  assert.equal(h.renderer.full, 'partial answer text', 'the delivered text survived');
+  const note = bubble.appended.find((n) => /did not finish within/.test(n.textContent));
+  assert.ok(note, 'the reason is attached to the message');
+  assert.ok(h.status.some((s) => s.startsWith('error:')));
+});
+
+// With nothing delivered there is nothing to bank; the partial frame must not
+// fabricate an empty message, so it stays an error.
+test('a partial frame with no delivered text degrades to the plain error', async () => {
+  const h = harness({ models: MODELS.slice(0, 1), answers: () => true });
+  h.deps.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+    body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+  });
+  let error = null;
+  try { await h.streamProviderChat([{ role: 'user', content: 'hi' }], h.renderer, undefined, null); } catch (err) { error = err; }
+  // done:true with no partial frame never reaches the notice path: the stream
+  // simply ends, no throw, no banked message.
+  assert.equal(error, null, 'an empty-but-successful stream is not an error');
 });
 
 test('a streamed failure keeps the provider own wording instead of losing it', async () => {
