@@ -2405,6 +2405,64 @@
             return next;
         }
 
+        // An attached image rides inside the message array for the direct
+        // providers, so the turn has to go to a model that can read it. Moving
+        // the picker is the same move the app already makes when a model
+        // refuses. Returns the model to use, or null when this provider has
+        // none -- which the caller reports rather than sending the picture to
+        // be ignored.
+        function insistOnImageModel() {
+            const capable = modelForImage(providerModels, selectedModel);
+            if (!capable) return null;
+            if (capable !== selectedModel) {
+                selectedModel = capable;
+                localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
+                showStatus('info', 'Switched to ' + selectedModel + ' — it can read images');
+                renderModelOptions();
+                updateModelLabel();
+            }
+            return capable;
+        }
+
+        // The chat endpoint refuses bodies over 1MB and the attach menu allows
+        // images up to 8MB, so the picture is re-encoded at the largest size
+        // that still fits. Shrinking a step at a time beats guessing one
+        // setting that suits both a screenshot and a photo.
+        async function imageDataUrlForRequest(file) {
+            let bitmap;
+            try {
+                bitmap = await createImageBitmap(file);
+            } catch (error) {
+                console.error('Could not read the image:', error);
+                return null;
+            }
+            try {
+                let edge = MAX_IMAGE_EDGE;
+                let quality = 0.85;
+                for (let attempt = 0; attempt < 5; attempt++) {
+                    const url = renderScaledImage(bitmap, edge, quality);
+                    if (isSendableImageUrl(url) && url.length <= MAX_IMAGE_DATA_URL_CHARS) return url;
+                    edge = Math.round(edge * 0.75);
+                    quality = Math.max(0.5, quality - 0.1);
+                }
+                return null;
+            } catch (error) {
+                console.error('Could not resize the image:', error);
+                return null;
+            } finally {
+                if (bitmap.close) bitmap.close();
+            }
+        }
+
+        function renderScaledImage(bitmap, maxEdge, quality) {
+            const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', quality);
+        }
+
         // The catalogue comes from the provider itself, so it can't go stale.
         async function loadProviderModels() {
             try {
@@ -2904,10 +2962,27 @@
                 // Direct providers stream via SSE so the user sees text arrive
                 // token-by-token rather than waiting for the full reply.
                 if (selectedProvider !== PUTER_PROVIDER) {
+                    // An image has to be carried in the message array here, and
+                    // only a model that can read it should get the turn.
+                    let convo = buildConversation(outgoing);
+                    if (attachedImageFile) {
+                        const imageUrl = await imageDataUrlForRequest(attachedImageFile);
+                        if (!imageUrl) {
+                            removeTypingIndicator();
+                            addMessage('system', 'That image could not be sent here — try a smaller one.', { error: true });
+                            return;
+                        }
+                        if (!insistOnImageModel()) {
+                            removeTypingIndicator();
+                            addMessage('system', `No model on ${selectedProvider} can read images. Remove the picture, or switch provider.`, { error: true });
+                            return;
+                        }
+                        convo = withImageTurn(convo, imageUrl, outgoing);
+                    }
                     const bubble = createBotBubble();
                     const renderer = createStreamRenderer(bubble);
                     try {
-                        await streamProviderChat(buildConversation(outgoing), renderer, controller.signal);
+                        await streamProviderChat(convo, renderer, controller.signal);
                         if (!isActiveRun(runId, controller)) {
                             renderer.abort();
                             if (bubble.parentNode) bubble.remove();
