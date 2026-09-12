@@ -1492,11 +1492,47 @@ function conversationToMarkdown(messages, title) {
 // already was.
 const MAX_HISTORY_MESSAGES = 12;
 
+// Roughly how many tokens a piece of text costs. Four characters to a token is
+// an estimate, not a tokenizer -- but it is close enough to decide what *fits*,
+// and being 15% wrong changes which one message gets dropped, never whether the
+// request works. Shipping a real tokenizer to the browser for a budgeting
+// decision would cost more than it saves.
+function estimateTokens(value) {
+  const text = typeof value === 'string' ? value : String(value == null ? '' : value);
+  return text ? Math.ceil(text.length / 4) : 0;
+}
+
+// How much history is worth sending. The message cap above bounds the *number*
+// of turns; this bounds their weight, which is what actually overflows a model's
+// window: twelve turns of chat are cheap, twelve turns carrying a pasted file
+// are not. Newest first, because the current thread is what the next answer
+// depends on -- a rename twenty messages ago is worth less than the file just
+// read.
+const HISTORY_TOKEN_BUDGET = 24000;
+
+// Keeps the newest turns whose combined weight fits the budget. The newest turn
+// always travels however large it is: a request that arrives without it is a
+// different question than the one that was asked, and a provider's "context
+// length exceeded" is a failed turn rather than a cheaper one.
+function budgetChatHistory(turns, budget = HISTORY_TOKEN_BUDGET) {
+  const list = Array.isArray(turns) ? turns : [];
+  const limit = Number(budget) > 0 ? Number(budget) : HISTORY_TOKEN_BUDGET;
+  const kept = [];
+  let spent = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const cost = estimateTokens(list[i] && list[i].content);
+    if (kept.length && spent + cost > limit) break;
+    kept.unshift(list[i]);
+    spent += cost;
+  }
+  return kept;
+}
+
 // Rebuilds the exchange as chat turns. System lines are the app narrating
 // itself -- tool activity, error notices -- and are left out; feeding them back
 // invites the model to comment on them. Trailing user messages are dropped
 // because the caller appends the live one itself.
-function buildChatHistory(messages, limit = MAX_HISTORY_MESSAGES) {
+function buildChatHistory(messages, limit = MAX_HISTORY_MESSAGES, budget = HISTORY_TOKEN_BUDGET) {
   const turns = [];
   for (const message of messages || []) {
     if (!message || (message.type !== 'user' && message.type !== 'bot')) continue;
@@ -1504,10 +1540,91 @@ function buildChatHistory(messages, limit = MAX_HISTORY_MESSAGES) {
     if (!text) continue;
     turns.push({ role: message.type === 'user' ? 'user' : 'assistant', content: text });
   }
-  const recent = turns.slice(-limit);
+  const recent = budgetChatHistory(turns.slice(-limit), budget);
   // A history that opens on an assistant turn reads as a reply to nothing.
   while (recent.length && recent[0].role === 'assistant') recent.shift();
   return recent;
+}
+
+// A tool result that comes back enormous -- a generated bundle, a long page, a
+// CSV -- is paid for again on every remaining round of the turn, because each
+// round re-sends the conversation. Clipping it once, with the loss stated, tells
+// the model there is more without buying the same bytes a dozen times over.
+//
+// The limit is deliberately generous rather than tight: it has to be generous
+// enough that reading an ordinary source file still delivers the whole file, or
+// the clip would quietly break the one tool a coding task depends on most. What
+// it bounds is the pathological case -- the file nobody meant to open -- not
+// normal work.
+const MAX_TOOL_RESULT_CHARS = 20000;
+
+function clipToolResult(value, limit = MAX_TOOL_RESULT_CHARS) {
+  const text = typeof value === 'string' ? value : String(value == null ? '' : value);
+  const max = Number(limit) > 0 ? Number(limit) : MAX_TOOL_RESULT_CHARS;
+  if (text.length <= max) return text;
+  const dropped = text.length - max;
+  return (
+    text.slice(0, max) +
+    '\n\n[... ' + dropped + ' more characters clipped to keep this turn affordable; ' +
+    'ask for a narrower range if you need the rest]'
+  );
+}
+
+// Argument objects are compared by meaning, not by the order the model happened
+// to write them in -- otherwise the same call with re-ordered arguments would
+// read as new work and be paid for twice.
+function canonicalToolArgs(args) {
+  if (args == null) return '';
+  if (typeof args !== 'object') return String(args);
+  if (Array.isArray(args)) return '[' + args.map(canonicalToolArgs).join(',') + ']';
+  return (
+    '{' +
+    Object.keys(args)
+      .sort()
+      .map((key) => JSON.stringify(key) + ':' + canonicalToolArgs(args[key]))
+      .join(',') +
+    '}'
+  );
+}
+
+// What identifies one tool call for the purpose of not running it twice. Empty
+// when there is no tool name to identify it by, so a malformed call is never
+// mistaken for a repeat of an earlier one.
+function toolCallKey(name, args) {
+  const tool = typeof name === 'string' ? name.trim() : '';
+  if (!tool) return '';
+  return tool + ':' + canonicalToolArgs(args);
+}
+
+// Said to the model when it asks for a call it has already made. The call is not
+// re-run -- the answer is already in the conversation -- but the model has to be
+// told that, or it reads the repeat as a failure and asks a third time.
+const REPEATED_TOOL_CALL_NOTICE =
+  'You have already called that tool with those exact arguments in this turn. ' +
+  'Its result is in the conversation above and has not changed. Do not call it ' +
+  'again: either use what you have, or change the arguments to make progress.';
+
+// How many times one identical call may come back from the memo before the model
+// is told plainly that repeating it will not help.
+const MAX_REPEATED_TOOL_CALLS = 2;
+
+// How many input tokens the provider served from its prompt cache. Every vendor
+// spells it differently -- OpenAI and OpenRouter nest it under the prompt-token
+// details, Anthropic and DeepSeek put it at the top level -- and a miss is zero.
+function cachedTokensFromUsage(usage) {
+  if (!usage || typeof usage !== 'object') return 0;
+  const details = usage.prompt_tokens_details || usage.input_tokens_details || {};
+  const candidates = [
+    details.cached_tokens,
+    details.cache_read,
+    usage.cache_read_input_tokens,
+    usage.prompt_cache_hit_tokens,
+  ];
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return 0;
 }
 
 // Answer-first instructions, in the spirit of the i-have-adhd skill
@@ -2105,5 +2222,14 @@ if (typeof module !== 'undefined' && module.exports) {
     selectAllowedModels,
     newestInFamily,
     compareVersions,
+    estimateTokens,
+    HISTORY_TOKEN_BUDGET,
+    budgetChatHistory,
+    MAX_TOOL_RESULT_CHARS,
+    clipToolResult,
+    toolCallKey,
+    REPEATED_TOOL_CALL_NOTICE,
+    MAX_REPEATED_TOOL_CALLS,
+    cachedTokensFromUsage,
   };
 }

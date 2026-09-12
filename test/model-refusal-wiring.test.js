@@ -19,6 +19,7 @@ const {    errorDetailFromBody,
     isRetryableStatus,
     parseSseChunk,
     MAX_MODEL_REFUSAL_RETRIES,
+    cachedTokensFromUsage,
 } = require('../chatlib.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -150,6 +151,7 @@ function harness({ models, answers, streamed = null }) {
     normalizeProviderReply: (data) => ({ reply: data.answer }),
     isRateLimitError: () => false,
     isRetryableStatus,
+    cachedTokensFromUsage,
     abortError: () => new Error('aborted'),
     parseSseChunk: () => (streamed ? [{ choices: [{ delta: { content: streamed } }] }] : []),
     fetch: async (url, init) => {
