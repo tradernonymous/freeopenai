@@ -4,6 +4,8 @@ const http = require('node:http');
 const {
   isModelScopedRefusal,
   nextUsableModel,
+  nearestUsableModel,
+  modelFamily,
   refusedModelIds,
   MAX_MODEL_REFUSAL_RETRIES,
   usableChatModels,
@@ -181,4 +183,46 @@ test('a repeatedly refusing provider is walked once and then reported', () => {
 test('the retry bound is a usable positive integer', () => {
   assert.ok(Number.isInteger(MAX_MODEL_REFUSAL_RETRIES));
   assert.ok(MAX_MODEL_REFUSAL_RETRIES > 0);
+});
+
+// The Antigravity report: choosing Sonnet and being answered by Opus thinking
+// high read as the app ignoring the pick. The walker used to jump to the head
+// of the sorted list, which across families is a different vendor line.
+test('modelFamily groups vendor lines so a refusal can stay inside one', () => {
+  assert.equal(modelFamily('antigravity-claude-sonnet-4-6'), 'claude');
+  assert.equal(modelFamily('antigravity-claude-opus-4-6-thinking-high'), 'claude');
+  assert.equal(modelFamily('antigravity-gemini-3.1-pro-high'), 'gemini');
+  // The family word wins over the namespace: it is the more specific line.
+  assert.equal(modelFamily('meta-llama/Llama-3.1-8B-Instruct'), 'llama');
+  assert.equal(modelFamily('zai-org/GLM-5.3'), 'glm');
+  assert.equal(modelFamily(''), null);
+  assert.equal(modelFamily(null), null);
+});
+
+test('nearestUsableModel prefers a sibling in the refused model\'s family', () => {
+  const models = [
+    { id: 'antigravity-claude-opus-4-6-thinking-high' },
+    { id: 'antigravity-claude-sonnet-4-5' },
+    { id: 'antigravity-gemini-3.1-pro-high' },
+  ];
+  const none = new Set();
+  // Sonnet refused: the next Claude is chosen, not the list head (Opus).
+  assert.equal(nearestUsableModel(models, none, 'antigravity-claude-sonnet-4-6'), 'antigravity-claude-sonnet-4-5');
+  // Opus refused: another Claude again, not Gemini.
+  assert.equal(nearestUsableModel(models, none, 'antigravity-claude-opus-4-6-thinking-high'), 'antigravity-claude-sonnet-4-5');
+  // Gemini refused: the only Gemini.
+  assert.equal(nearestUsableModel(models, none, 'antigravity-gemini-3.1-pro-low'), 'antigravity-gemini-3.1-pro-high');
+});
+
+test('nearestUsableModel falls back to the old head-of-list when the family is gone', () => {
+  const models = [
+    { id: 'antigravity-claude-opus-4-6-thinking-high' },
+    { id: 'antigravity-gemini-3.1-pro-high' },
+  ];
+  const claudesGone = new Set(['antigravity-claude-opus-4-6-thinking-high']);
+  // Both Claudes refused: falling back to the best remaining model is the
+  // designed recovery, not the bug.
+  assert.equal(nearestUsableModel(models, claudesGone, 'antigravity-claude-sonnet-4-6'), 'antigravity-gemini-3.1-pro-high');
+  assert.equal(nearestUsableModel([], new Set(), 'x'), null);
+  assert.equal(nearestUsableModel([{ id: 'a' }], new Set(['a']), 'a'), null);
 });
