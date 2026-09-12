@@ -1069,6 +1069,78 @@ function parseSseChunk(decoded) {
   }, []);
 }
 
+// Some providers list far more than is worth offering -- hundreds of ids, most
+// of them paid or near-duplicate releases, where the useful set is a handful.
+// A provider can declare the subset as rules instead of a literal array:
+//
+//   models: { exact: ['a', 'b'] }                 named ids, in this order
+//   models: { newestOf: ['family'] }              only the newest in a family
+//   models: { freeOnly: true, newestOf: ['x'] }   free ids, families collapsed
+//
+// Declaration order is preserved and ids are deduplicated, so a catalogue that
+// lists the same id twice cannot put it in the picker twice.
+function versionOf(id) {
+  const match = String(id).match(/(\d+(?:\.\d+)*)/g);
+  if (!match) return [0];
+  // The last number in an id is the release: "muse-spark-1.3" is 1.3.
+  return match[match.length - 1].split('.').map(Number);
+}
+
+function compareVersions(a, b) {
+  const left = versionOf(a);
+  const right = versionOf(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff) return diff;
+  }
+  // Same version: prefer the plain id over a longer variant, so
+  // "muse-spark-1.3" wins over "muse-spark-1.3-contributor-free".
+  return String(b).length - String(a).length;
+}
+
+function newestInFamily(models, prefix) {
+  const family = (models || []).filter((m) => m && String(m.id).startsWith(prefix));
+  if (!family.length) return null;
+  return family.reduce((best, m) => (compareVersions(m.id, best.id) > 0 ? m : best));
+}
+
+// Returns the declared subset, or everything when nothing is declared. Falling
+// back to the full list matters: a provider that renames a model shouldn't
+// leave the picker empty.
+function selectAllowedModels(models, rules) {
+  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly)) return models || [];
+  const chosen = [];
+  const seen = new Set();
+  const take = (model) => {
+    if (model && !seen.has(model.id)) {
+      seen.add(model.id);
+      chosen.push(model);
+    }
+  };
+
+  // freeOnly leans on isFreeModelId rather than repeating the naming rules, so
+  // "free" has one definition across the app. Families named in newestOf still
+  // collapse to their newest member.
+  if (rules.freeOnly) {
+    const families = rules.newestOf || [];
+    (models || [])
+      .filter((m) => m && isFreeModelId(m.id))
+      .filter((m) => !families.some((prefix) => String(m.id).startsWith(prefix)))
+      .forEach(take);
+    families.forEach((prefix) => {
+      const family = (models || []).filter((m) => m && isFreeModelId(m.id) && String(m.id).startsWith(prefix));
+      take(newestInFamily(family, prefix));
+    });
+  } else {
+    (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
+  }
+
+  // exact goes through matchListEntry so an id matches exactly the way it would
+  // in a plain array allowlist -- by id, or by label-based token match.
+  (rules.exact || []).forEach((wanted) => take((models || []).find((m) => m && matchListEntry(m, wanted))));
+  return chosen.length ? chosen : models || [];
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MODES,
@@ -1152,5 +1224,8 @@ if (typeof module !== 'undefined' && module.exports) {
     upsertConversation,
     migrateLegacyMessages,
     parseSseChunk,
+    selectAllowedModels,
+    newestInFamily,
+    compareVersions,
   };
 }

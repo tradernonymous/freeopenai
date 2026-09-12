@@ -13,7 +13,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -613,26 +613,29 @@ const LLM_PROVIDERS = {
     label: 'NVIDIA',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
-    // Pinned to the allowed set, in picker order. Anything else the key can
-    // reach stays out of the list rather than appearing and failing on use.
-    models: [
-      'z-ai/glm-5.3',
-      'deepseek-ai/deepseek-v4-flash',
-      'deepseek-ai/deepseek-v4-pro',
-      'moonshotai/kimi-k3',
-      'minimaxai/minimax-m3',
-      'z-ai/glm-5.2',
-      'minimaxai/minimax-m2.7',
-      'mistralai/mistral-medium-3.5-128b',
-      'qwen/qwen3-coder-480b-a35b-instruct',
-      'nvidia/nemotron-3.5-lightning',
-      'google/gemma-4-31b-it',
-      'mistralai/mistral-medium-3.5-128b',
-      'qwen/qwen2.5-coder-32b-instruct',
-      'openai/gpt-oss-120b',
-      'openai/gpt-oss-20b',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-    ],
+    // The allowed set, in picker order. Anything else the key can reach stays
+    // out of the list rather than appearing and failing on use. Declared as
+    // rules rather than a bare array so a repeated id here cannot put the same
+    // model in the picker twice -- mistral-medium was listed twice before this.
+    models: {
+      exact: [
+        'z-ai/glm-5.3',
+        'deepseek-ai/deepseek-v4-flash',
+        'deepseek-ai/deepseek-v4-pro',
+        'moonshotai/kimi-k3',
+        'minimaxai/minimax-m3',
+        'z-ai/glm-5.2',
+        'minimaxai/minimax-m2.7',
+        'mistralai/mistral-medium-3.5-128b',
+        'qwen/qwen3-coder-480b-a35b-instruct',
+        'nvidia/nemotron-3.5-lightning',
+        'google/gemma-4-31b-it',
+        'qwen/qwen2.5-coder-32b-instruct',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'nvidia/nemotron-3-ultra-550b-a55b',
+      ],
+    },
   },
   mistral: {
     label: 'Mistral',
@@ -1140,10 +1143,15 @@ async function llmModels(req, res) {
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
     // A curated allowlist pins the picker to exactly those ids, in that
-    // order. Without one the whole catalogue goes through untouched.
+    // order. Either form works: an array of ids, or a rule object
+    // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
+    // rather than listing -- see selectAllowedModels. Without one the whole
+    // catalogue goes through untouched.
     let listed = Array.isArray(provider.models)
       ? provider.models.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
-      : models;
+      : provider.models && typeof provider.models === 'object'
+        ? selectAllowedModels(models, provider.models)
+        : models;
     if (provider.freeOnly) listed = listed.filter((m) => isFreeModelId(m.id));
     // An allowlist that intersects the live catalogue at zero rows means every
     // pinned id was retired upstream — the empty picker that follows reads as
