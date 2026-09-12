@@ -284,6 +284,53 @@ function isVisionCapable(id) {
   return VISION_MODEL_IDS.includes(id);
 }
 
+// Tools that only read. Independent lookups can run together, which is the
+// difference between one round trip and three for a question that needs three
+// files read.
+const CONCURRENT_SAFE_TOOLS = new Set([
+  'web_search',
+  'web_fetch',
+  'github_list_repos',
+  'github_list_files',
+  'github_read_file',
+  'use_skill',
+]);
+
+// A ceiling on how many go at once. A model can ask for a dozen lookups in one
+// round, and firing them all at a free tier is how a 429 gets earned -- the app
+// already backs off for them elsewhere.
+const MAX_CONCURRENT_TOOLS = 4;
+
+function isConcurrentSafeTool(name) {
+  return CONCURRENT_SAFE_TOOLS.has(String(name || ''));
+}
+
+// Which of one round's calls may run together, given as positions rather than
+// objects: the caller pairs results back to the calls the model actually asked
+// for, so nothing depends on the order they finish in. Anything not known to be
+// a read is serial, so a new or misspelled tool runs alone rather than being
+// guessed at as safe to parallelise.
+function planToolCalls(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const concurrent = [];
+  const serial = [];
+  list.forEach((call, index) => {
+    const name = (call && call.function && call.function.name) || '';
+    (isConcurrentSafeTool(name) ? concurrent : serial).push(index);
+  });
+  return { concurrent, serial };
+}
+
+// Positions cut into groups of at most `size`, in order, so a long round is sent
+// in waves rather than all at once. An empty list yields no batches at all.
+function batchIndices(indices, size = MAX_CONCURRENT_TOOLS) {
+  const list = Array.isArray(indices) ? indices : [];
+  const width = Math.max(1, Number(size) || 1);
+  const batches = [];
+  for (let i = 0; i < list.length; i += width) batches.push(list.slice(i, i + width));
+  return batches;
+}
+
 // The browser re-encodes an attached image before it is sent, because the chat
 // endpoint refuses bodies over 1MB while the attach menu allows images up to
 // 8MB. The cap sits below the server's with room for the prompt and history
@@ -1434,6 +1481,11 @@ if (typeof module !== 'undefined' && module.exports) {
     isWebTool,
     safeJson,
     errorDetailFromBody,
+    CONCURRENT_SAFE_TOOLS,
+    MAX_CONCURRENT_TOOLS,
+    isConcurrentSafeTool,
+    planToolCalls,
+    batchIndices,
     isToolsRejection,
     modelTokens,
     matchListEntry,
