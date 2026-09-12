@@ -4,6 +4,8 @@ const http = require('node:http');
 const {
   isModelScopedRefusal,
   nextUsableModel,
+  refusedModelIds,
+  MAX_MODEL_REFUSAL_RETRIES,
   usableChatModels,
 } = require('../chatlib.js');
 const { createRequestHandler, LLM_PROVIDERS, clearModelCache } = require('../server.js');
@@ -130,4 +132,53 @@ test('the served OpenRouter picker omits the gated model but keeps its siblings'
     // what the old error message wrongly printed as the model that failed.
     assert.equal(usableChatModels(served)[0].id, 'nvidia/nemotron-3-ultra-550b-a55b:free');
   });
+});
+
+// The app stores refusals as 'provider:model' keys, but nextUsableModel compares
+// bare ids. Without this translation a refusal reads as no refusal at all, and
+// the retry re-sends the model that just failed.
+test('refusedModelIds recovers bare ids from the provider-prefixed keys', () => {
+  const keys = new Set(['openrouter:a', 'openrouter:b', 'nvidia:a']);
+  assert.deepEqual(refusedModelIds(keys, 'openrouter').sort(), ['a', 'b']);
+  // A shared id on another provider stays offered: OpenRouter refusing a name
+  // says nothing about NVIDIA's copy of it.
+  assert.deepEqual(refusedModelIds(keys, 'nvidia'), ['a']);
+  assert.deepEqual(refusedModelIds(keys, 'mistral'), []);
+});
+
+test('refusedModelIds survives junk and a missing provider', () => {
+  assert.deepEqual(refusedModelIds(null, 'openrouter'), []);
+  assert.deepEqual(refusedModelIds([null, 7, 'openrouter:a'], 'openrouter'), ['a']);
+  // A missing provider id yields nothing rather than everything.
+  assert.deepEqual(refusedModelIds(['openrouter:a'], undefined), []);
+});
+
+// How the app walks a provider after refusals, using the same two functions it
+// calls: drop the refused id, ask which one is left, stop at null.
+test('a repeatedly refusing provider is walked once and then reported', () => {
+  const offered = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const refusedKeys = new Set();
+  // The full list on purpose: the decision has to consult the refusal set
+  // itself, not lean on the picker list already having dropped those ids. Were
+  // the prefix left on, nothing here would match and 'a' would be returned
+  // again after it had already refused.
+  const pick = () => nextUsableModel(offered, refusedModelIds(refusedKeys, 'openrouter'));
+
+  assert.equal(pick(), 'a');
+  refusedKeys.add('openrouter:a');
+  assert.equal(pick(), 'b');
+  refusedKeys.add('openrouter:b');
+  assert.equal(pick(), 'c');
+  refusedKeys.add('openrouter:c');
+  // null is what makes the caller report the failure instead of retrying.
+  assert.equal(pick(), null);
+  // A refusal recorded against another provider never hides a model here.
+  assert.equal(nextUsableModel(offered, refusedModelIds(new Set(['nvidia:a']), 'openrouter')), 'a');
+});
+
+// Guards a silent failure mode: `attempt <= undefined` is false, so a missing
+// bound would skip the request loop entirely and answer nothing.
+test('the retry bound is a usable positive integer', () => {
+  assert.ok(Number.isInteger(MAX_MODEL_REFUSAL_RETRIES));
+  assert.ok(MAX_MODEL_REFUSAL_RETRIES > 0);
 });
