@@ -4,6 +4,8 @@
 // write alongside another tool is a race, not a speed-up.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   batchIndices,
   isConcurrentSafeTool,
@@ -16,6 +18,7 @@ const {
   MAX_REPEATED_TOOL_CALLS,
   toolMemoFromConversation,
   RESUME_CONTINUATION_PROMPT,
+  createReadMemory,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -108,7 +111,12 @@ function harness({ toolCalls, rounds = null, webResult = null }) {
     // it even though this file never calls one, or the loop's dependency guard
     // has no way to tell a new branch from a typo.
     isWorkspaceTool: (n) => n.startsWith('workspace_'),
-    runWorkspaceTool: async () => 'workspace',
+    runWorkspaceTool: async (name) => {
+      runs.push({ name, phase: 'start' });
+      await new Promise((r) => setTimeout(r, 1));
+      runs.push({ name, phase: 'end' });
+      return 'workspace:' + name;
+    },
     // Same again for the task tools, which added their own branch.
     isTaskTool: (n) => n.startsWith('task_'),
     runTaskTool: async () => 'task',
@@ -300,4 +308,61 @@ test('a huge tool result is clipped before every later round re-sends it', async
   assert.ok(content.length < huge.length);
   assert.equal(content.startsWith('y'.repeat(MAX_TOOL_RESULT_CHARS)), true);
   assert.match(content, /clipped/);
+});
+
+test('a read paid for in an earlier question is not bought again by the next one', async () => {
+  const args = { repo: 'o/r', path: 'README.md' };
+  const memory = createReadMemory();
+  const ask = (id) => harness({ rounds: [[call('github_read_file', id, args)], []] });
+
+  const first = ask('a');
+  await first.runChatWithTools(first.conversation, 'model', [], null, new Map(), memory);
+  assert.deepEqual(first.runs.map((r) => r.phase), ['start', 'end']);
+
+  // The second question gets its own -- empty -- question memo, which is exactly
+  // the state in which this read used to be paid for all over again.
+  const second = ask('b');
+  await second.runChatWithTools(second.conversation, 'model', [], null, new Map(), memory);
+  assert.deepEqual(second.runs, [], 'the second question did not read it again');
+  const content = second.conversation.find((m) => m.role === 'tool').content;
+  assert.equal(content, '[remembered from a moment ago] ran:github_read_file');
+  assert.ok(second.events.some((e) => /earlier in this conversation/.test(e)));
+});
+
+test('a file written is not read back from the answer that came before the write', async () => {
+  const read = (id) => call('workspace_read_file', id, { path: 'notes/a.md' });
+  const write = (id) => call('workspace_write_file', id, { path: 'notes/a.md', content: 'new' });
+  const h = harness({ rounds: [[read('a')], [write('b')], [read('c')], []] });
+  await h.runChatWithTools(h.conversation, 'model', [], null, new Map(), createReadMemory());
+  // Read, write, read: the second read has to be a real one. Serving it from the
+  // memo would hand the model the text from before its own write, and it would
+  // conclude the write had failed.
+  assert.deepEqual(
+    h.runs.filter((r) => r.phase === 'start').map((r) => r.name),
+    ['workspace_read_file', 'workspace_write_file', 'workspace_read_file']
+  );
+  assert.equal(
+    h.conversation.some((m) => m.role === 'tool' && /remembered from/.test(m.content)),
+    false,
+    'and nothing about that file is remembered across the write'
+  );
+});
+
+test('a write is still only run once when the model asks twice', async () => {
+  const write = (id) => call('workspace_write_file', id, { path: 'notes/a.md', content: 'same' });
+  const h = harness({ rounds: [[write('a')], [write('b')], []] });
+  await h.runChatWithTools(h.conversation, 'model', [], null, new Map(), createReadMemory());
+  // Forgetting what a write touched must not forget the write: this is the guard
+  // that keeps a duplicate commit from becoming a second commit.
+  assert.deepEqual(h.runs.map((r) => r.phase), ['start', 'end']);
+});
+
+test('the shipped call site hands the loop a memory to remember reads in', () => {
+  const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(HTML, /readMemoryFor\(activeConversationId\)/, 'the page keeps a per-conversation read memory');
+  assert.match(
+    HTML,
+    /runChatWithTools\(turnConvo, selectedModel, tools, controller\.signal, memo, remembered\)/,
+    'and passes it in, or the memory is written and never read'
+  );
 });
