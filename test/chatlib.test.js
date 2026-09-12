@@ -89,6 +89,76 @@ test('renderMarkdownLite never lets markdown syntax smuggle in a live tag', () =
   assert.equal(out, '<strong>&lt;img src=x onerror=alert(1)&gt;</strong>');
 });
 
+test('renderMarkdownLite renders [title](url) as a link', () => {
+  const out = renderMarkdownLite('See [the docs](https://example.com/docs).');
+  assert.equal(
+    out,
+    'See <a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">the docs</a>.',
+  );
+});
+
+test('renderMarkdownLite renders a link inside a list item', () => {
+  const out = renderMarkdownLite('- [Docs](https://example.com)');
+  assert.equal(
+    out,
+    '<ul><li><a href="https://example.com" target="_blank" rel="noopener noreferrer">Docs</a></li></ul>',
+  );
+});
+
+test('renderMarkdownLite formats a link label with the other inline rules', () => {
+  const out = renderMarkdownLite('[**Bold** and `code`](https://example.com)');
+  assert.equal(
+    out,
+    '<a href="https://example.com" target="_blank" rel="noopener noreferrer">' +
+      '<strong>Bold</strong> and <code>code</code></a>',
+  );
+});
+
+test('renderMarkdownLite refuses link schemes that could execute script', () => {
+  for (const url of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/plain,hi', 'vbscript:msgbox(1)']) {
+    const source = `[click](${url})`;
+    const out = renderMarkdownLite(source);
+    assert.equal(out.includes('<a '), false, `${url} must not become an anchor`);
+    assert.equal(out, source);
+  }
+});
+
+test('renderMarkdownLite does not let a url break out of the href attribute', () => {
+  const out = renderMarkdownLite('[x](https://example.com " onmouseover=alert(1) x=")');
+  assert.equal(out.includes('<a '), false);
+  assert.equal(out, '[x](https://example.com &quot; onmouseover=alert(1) x=&quot;)');
+});
+
+test('renderMarkdownLite keeps a url intact when it contains markdown characters', () => {
+  // Regression, and the reason links are held behind a token: if the emphasis
+  // passes ran over the finished anchor, _x_ and *b* inside the url would be
+  // rewritten as <em> and corrupt the href.
+  assert.equal(
+    renderMarkdownLite('[x](https://example.com/_x_)'),
+    '<a href="https://example.com/_x_" target="_blank" rel="noopener noreferrer">x</a>',
+  );
+  assert.equal(
+    renderMarkdownLite('[x](https://example.com/a*b*c)'),
+    '<a href="https://example.com/a*b*c" target="_blank" rel="noopener noreferrer">x</a>',
+  );
+});
+
+test('renderMarkdownLite keeps balanced parentheses in a url', () => {
+  const out = renderMarkdownLite('[W](https://en.wikipedia.org/wiki/Foo_(bar))');
+  assert.match(out, /href="https:\/\/en\.wikipedia\.org\/wiki\/Foo_\(bar\)"/);
+});
+
+test('renderMarkdownLite leaves a link inside code alone', () => {
+  assert.equal(
+    renderMarkdownLite('`[x](https://example.com)`'),
+    '<code>[x](https://example.com)</code>',
+  );
+  assert.equal(
+    renderMarkdownLite('```\n[x](https://example.com)\n```'),
+    '<pre><code>[x](https://example.com)</code></pre>',
+  );
+});
+
 test('renderMarkdownLite still escapes raw HTML with no markdown involved', () => {
   const out = renderMarkdownLite('<script>alert(1)</script>');
   assert.ok(!out.includes('<script>'));

@@ -323,10 +323,10 @@ function detectsImageIntent(text) {
   return IMAGE_INTENT_PATTERN.test(String(text).trim());
 }
 
-// Applies **bold**, *italic*, `inline code`, fenced code blocks, and -/1. lists
-// to already-HTML-escaped text. Only ever emits a small fixed set of tags
-// (strong/em/code/pre/ul/ol/li) around text that was escaped up front, so
-// markdown syntax can never smuggle in a live tag.
+// Applies **bold**, *italic*, `inline code`, fenced code blocks, -/1. lists and
+// [title](url) links to already-HTML-escaped text. Only ever emits a small
+// fixed set of tags (strong/em/code/pre/ul/ol/li/a) around text that was
+// escaped up front, so markdown syntax can never smuggle in a live tag.
 function inlineFormat(s) {
   return s
     .replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>')
@@ -337,6 +337,23 @@ function inlineFormat(s) {
 
 const CODE_BLOCK_TOKEN = 'CODEBLOCKTOKEN';
 const CODE_SPAN_TOKEN = 'CODESPANTOKEN';
+const LINK_TOKEN = 'LINKTOKEN';
+
+// A link only ever becomes an anchor when it is http(s). Everything else --
+// javascript:, data:, vbscript:, a relative path -- stays visible as text.
+// The web tools tell the model to cite sources as [title](url), and that text
+// comes from pages it read, so the scheme check is what stops a hostile page
+// from getting a clickable sink that runs script in our own document.
+function safeLinkHref(url) {
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+// Matches [label](url). The url may contain balanced parentheses so that
+// ordinary Wikipedia-style links (…/Foo_(bar)) stay whole, but never
+// whitespace -- which is also why the href needs no attribute escaping of its
+// own: a quote in the url was already turned into &quot; by escapeHtml, and a
+// space (the only way to open a new attribute) cannot appear at all.
+const MARKDOWN_LINK_PATTERN = /\[([^\]\n]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
 
 function renderMarkdownLite(rawText) {
   const escaped = escapeHtml(rawText);
@@ -353,6 +370,20 @@ function renderMarkdownLite(rawText) {
     const idx = codeSpans.length;
     codeSpans.push(`<code>${code}</code>`);
     return `@@${CODE_SPAN_TOKEN}${idx}@@`;
+  });
+
+  // Links are held behind a token for the same reason code spans are, and it
+  // matters more here: elsewhere in the line the emphasis passes would run
+  // straight over the finished anchor and corrupt it. A url containing _x_ or
+  // a*b*c is enough -- those become <em> inside the href. Running after the
+  // code passes also means a link inside `code` or a fence stays literal.
+  const links = [];
+  text = text.replace(MARKDOWN_LINK_PATTERN, (match, label, url) => {
+    const href = safeLinkHref(url);
+    if (!href) return match;
+    const idx = links.length;
+    links.push(`<a href="${href}" target="_blank" rel="noopener noreferrer">${inlineFormat(label)}</a>`);
+    return `@@${LINK_TOKEN}${idx}@@`;
   });
 
   const htmlParts = [];
@@ -397,9 +428,14 @@ function renderMarkdownLite(rawText) {
 
   const blockTokenPattern = new RegExp(`@@${CODE_BLOCK_TOKEN}(\\d+)@@`, 'g');
   const spanTokenPattern = new RegExp(`@@${CODE_SPAN_TOKEN}(\\d+)@@`, 'g');
+  const linkTokenPattern = new RegExp(`@@${LINK_TOKEN}(\\d+)@@`, 'g');
 
+  // Links go back in first: an anchor built from a label like [`code`](url)
+  // still holds a code-span token, and that has to be resolved before the
+  // final string leaves this function.
   return htmlParts
     .join('')
+    .replace(linkTokenPattern, (_m, i) => links[Number(i)])
     .replace(spanTokenPattern, (_m, i) => codeSpans[Number(i)])
     .replace(blockTokenPattern, (_m, i) => codeBlocks[Number(i)]);
 }
@@ -1048,6 +1084,38 @@ function isAccountLevelFailure(message, modelId) {
   return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
 }
 
+// Whether a refusal is about this one model, and so can be routed around by
+// answering with a different one.
+//
+// The status codes are the three providers actually use for it: OpenRouter
+// answers 403 for an app-gated model ("…:free is only available on agentic
+// harnesses"), NVIDIA answers 404 for an id an account cannot reach, and a
+// free key meeting a paid id answers 402.
+//
+// Deliberately false for 429 and 5xx. Those are transient or provider-wide, and
+// retrying them against another model buries a real outage behind a slow crawl
+// through the whole list. An account-level refusal is false for the same
+// reason: every candidate would fail the same way.
+function isModelScopedRefusal(status, message, modelId) {
+  if (status !== 402 && status !== 403 && status !== 404) return false;
+  return !isAccountLevelFailure(message, modelId);
+}
+
+// The id worth trying next, given the models already refused here, or null when
+// nothing is left -- which is the caller's signal to stop retrying and report
+// the failure instead of looping. Returning the id rather than the model keeps
+// the caller's assignment to one line.
+function nextUsableModel(models, refusedIds) {
+  const list = Array.isArray(models) ? models : [];
+  const refused = refusedIds instanceof Set
+    ? (id) => refusedIds.has(id)
+    : Array.isArray(refusedIds)
+      ? (id) => refusedIds.includes(id)
+      : () => false;
+  const candidate = list.find((m) => m && m.id && !refused(m.id));
+  return candidate ? candidate.id : null;
+}
+
 // Server-Sent Events arrive as newline-delimited `data:` lines. A single
 // provider chunk may contain several events, or a half-finished event that
 // the next chunk completes. This parser does not maintain state (that is the
@@ -1067,6 +1135,78 @@ function parseSseChunk(decoded) {
     }
     return out;
   }, []);
+}
+
+// Some providers list far more than is worth offering -- hundreds of ids, most
+// of them paid or near-duplicate releases, where the useful set is a handful.
+// A provider can declare the subset as rules instead of a literal array:
+//
+//   models: { exact: ['a', 'b'] }                 named ids, in this order
+//   models: { newestOf: ['family'] }              only the newest in a family
+//   models: { freeOnly: true, newestOf: ['x'] }   free ids, families collapsed
+//
+// Declaration order is preserved and ids are deduplicated, so a catalogue that
+// lists the same id twice cannot put it in the picker twice.
+function versionOf(id) {
+  const match = String(id).match(/(\d+(?:\.\d+)*)/g);
+  if (!match) return [0];
+  // The last number in an id is the release: "muse-spark-1.3" is 1.3.
+  return match[match.length - 1].split('.').map(Number);
+}
+
+function compareVersions(a, b) {
+  const left = versionOf(a);
+  const right = versionOf(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff) return diff;
+  }
+  // Same version: prefer the plain id over a longer variant, so
+  // "muse-spark-1.3" wins over "muse-spark-1.3-contributor-free".
+  return String(b).length - String(a).length;
+}
+
+function newestInFamily(models, prefix) {
+  const family = (models || []).filter((m) => m && String(m.id).startsWith(prefix));
+  if (!family.length) return null;
+  return family.reduce((best, m) => (compareVersions(m.id, best.id) > 0 ? m : best));
+}
+
+// Returns the declared subset, or everything when nothing is declared. Falling
+// back to the full list matters: a provider that renames a model shouldn't
+// leave the picker empty.
+function selectAllowedModels(models, rules) {
+  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly)) return models || [];
+  const chosen = [];
+  const seen = new Set();
+  const take = (model) => {
+    if (model && !seen.has(model.id)) {
+      seen.add(model.id);
+      chosen.push(model);
+    }
+  };
+
+  // freeOnly leans on isFreeModelId rather than repeating the naming rules, so
+  // "free" has one definition across the app. Families named in newestOf still
+  // collapse to their newest member.
+  if (rules.freeOnly) {
+    const families = rules.newestOf || [];
+    (models || [])
+      .filter((m) => m && isFreeModelId(m.id))
+      .filter((m) => !families.some((prefix) => String(m.id).startsWith(prefix)))
+      .forEach(take);
+    families.forEach((prefix) => {
+      const family = (models || []).filter((m) => m && isFreeModelId(m.id) && String(m.id).startsWith(prefix));
+      take(newestInFamily(family, prefix));
+    });
+  } else {
+    (rules.newestOf || []).forEach((prefix) => take(newestInFamily(models, prefix)));
+  }
+
+  // exact goes through matchListEntry so an id matches exactly the way it would
+  // in a plain array allowlist -- by id, or by label-based token match.
+  (rules.exact || []).forEach((wanted) => take((models || []).find((m) => m && matchListEntry(m, wanted))));
+  return chosen.length ? chosen : models || [];
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -1140,6 +1280,8 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeProviderReply,
     explainEmptyReply,
     isAccountLevelFailure,
+    isModelScopedRefusal,
+    nextUsableModel,
     usableChatModels,
     isFreeModelId,
     isFreeModel,
@@ -1152,5 +1294,8 @@ if (typeof module !== 'undefined' && module.exports) {
     upsertConversation,
     migrateLegacyMessages,
     parseSseChunk,
+    selectAllowedModels,
+    newestInFamily,
+    compareVersions,
   };
 }

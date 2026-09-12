@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
+const pkg = require('./package.json');
 const {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
@@ -13,7 +14,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, SKILL_SOURCES, parseSkillFrontmatter } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -26,7 +27,10 @@ const {
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
-const PUBLIC_PATHS = new Set(['/login.html', '/api/login']);
+// '/api/health' is public on purpose: it reports what the running deploy
+// actually is, so a merge can be confirmed live instead of assumed. The
+// response is written to carry no secrets — see llmHealth.
+const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/api/health']);
 const LOGIN_RATE_LIMIT = 10;
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 const loginAttempts = new Map();
@@ -219,8 +223,8 @@ function handleLogout(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
-function sendJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+function sendJson(res, status, body, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -572,14 +576,27 @@ const LLM_PROVIDERS = {
     envVar: 'OPENROUTER_API_KEY',
     // Free-tier only. Every id below carries the ":free" suffix and was
     // verified against the live catalogue (https://openrouter.ai/api/v1/models)
-    // on 2026-09-12: 443 models total, 19 of them free. Paid ids were pulled —
+    // on 2026-09-12: 445 models total, 19 of them free. Paid ids were pulled —
     // they only ever produced 402/403 errors on a free key. The allowlist is
     // intersected with the live catalogue, so when one of these is retired the
     // picker silently drops it instead of failing at send time.
+    //
+    // Being listed as free upstream is not enough, which is why one free id is
+    // missing below. OpenRouter also gates some free models to apps it has
+    // approved as an "agentic harness", and answers 403 for the rest -- so an
+    // id can be in the catalogue, priced at zero, and still be unroutable for
+    // us. Nothing in /models marks that gate, so it cannot be filtered out
+    // automatically, only learned from a refusal or left out by hand.
     models: [
       // Long-context reasoning: the 1M-context trio.
+      //
+      // thinkingmachines/inkling:free is left out on purpose: it is what
+      // produced "403: thinkingmachines/inkling:free is only available on
+      // agentic harnesses" on a free key. thinkingmachines/inkling-small:free
+      // is kept because the gate has only been observed on the larger model --
+      // removing a working id on the strength of its name would cost a usable
+      // model, so it stays until a refusal proves otherwise.
       'nvidia/nemotron-3-ultra-550b-a55b:free',
-      'thinkingmachines/inkling:free',
       'nvidia/nemotron-3.5-lightning:free',
       'thinkingmachines/inkling-small:free',
       // General chat.
@@ -613,26 +630,29 @@ const LLM_PROVIDERS = {
     label: 'NVIDIA',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
-    // Pinned to the allowed set, in picker order. Anything else the key can
-    // reach stays out of the list rather than appearing and failing on use.
-    models: [
-      'z-ai/glm-5.3',
-      'deepseek-ai/deepseek-v4-flash',
-      'deepseek-ai/deepseek-v4-pro',
-      'moonshotai/kimi-k3',
-      'minimaxai/minimax-m3',
-      'z-ai/glm-5.2',
-      'minimaxai/minimax-m2.7',
-      'mistralai/mistral-medium-3.5-128b',
-      'qwen/qwen3-coder-480b-a35b-instruct',
-      'nvidia/nemotron-3.5-lightning',
-      'google/gemma-4-31b-it',
-      'mistralai/mistral-medium-3.5-128b',
-      'qwen/qwen2.5-coder-32b-instruct',
-      'openai/gpt-oss-120b',
-      'openai/gpt-oss-20b',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-    ],
+    // The allowed set, in picker order. Anything else the key can reach stays
+    // out of the list rather than appearing and failing on use. Declared as
+    // rules rather than a bare array so a repeated id here cannot put the same
+    // model in the picker twice -- mistral-medium was listed twice before this.
+    models: {
+      exact: [
+        'z-ai/glm-5.3',
+        'deepseek-ai/deepseek-v4-flash',
+        'deepseek-ai/deepseek-v4-pro',
+        'moonshotai/kimi-k3',
+        'minimaxai/minimax-m3',
+        'z-ai/glm-5.2',
+        'minimaxai/minimax-m2.7',
+        'mistralai/mistral-medium-3.5-128b',
+        'qwen/qwen3-coder-480b-a35b-instruct',
+        'nvidia/nemotron-3.5-lightning',
+        'google/gemma-4-31b-it',
+        'qwen/qwen2.5-coder-32b-instruct',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+        'nvidia/nemotron-3-ultra-550b-a55b',
+      ],
+    },
   },
   mistral: {
     label: 'Mistral',
@@ -736,6 +756,27 @@ function providerConfig(id) {
   const rawBaseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   return { ...provider, key, baseUrl };
+}
+
+// Deploy verification, deliberately public: it exists so a merge can be
+// confirmed live instead of assumed. That makes this field list a security
+// boundary — ids and counters only, never keys, base URLs, account names or
+// paths, and never whether a provider is configured, which would let anyone
+// enumerate which of the operator's keys are present.
+function llmHealth(req, res) {
+  // The route below accepts HEAD as well as GET, so an uptime monitor lands
+  // here instead of falling through to the static handler, which answers 200
+  // with index.html. Node suppresses the body for a HEAD response on its own.
+  sendJson(res, 200, {
+    ok: true,
+    version: pkg.version,
+    // Railway injects these; null locally, which is itself the answer.
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    branch: process.env.RAILWAY_GIT_BRANCH || null,
+    uptimeSeconds: Math.round(process.uptime()),
+    // Source knowledge, not deployment state: every provider this build knows.
+    providers: Object.keys(LLM_PROVIDERS),
+  }, { 'Cache-Control': 'no-store' });
 }
 
 // Which providers the user can actually pick. A provider with no key stays out
@@ -1184,10 +1225,15 @@ async function llmModels(req, res) {
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
     // A curated allowlist pins the picker to exactly those ids, in that
-    // order. Without one the whole catalogue goes through untouched.
+    // order. Either form works: an array of ids, or a rule object
+    // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
+    // rather than listing -- see selectAllowedModels. Without one the whole
+    // catalogue goes through untouched.
     let listed = Array.isArray(provider.models)
       ? provider.models.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
-      : models;
+      : provider.models && typeof provider.models === 'object'
+        ? selectAllowedModels(models, provider.models)
+        : models;
     if (provider.freeOnly) listed = listed.filter((m) => isFreeModelId(m.id));
     // An allowlist that intersects the live catalogue at zero rows means every
     // pinned id was retired upstream — the empty picker that follows reads as
@@ -1558,6 +1604,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
+    if (urlPath === '/api/health' && (req.method === 'GET' || req.method === 'HEAD')) return llmHealth(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
     if (urlPath === '/api/skills' && req.method === 'GET') return llmSkills(req, res);
     if (urlPath === '/api/skills/content' && req.method === 'GET') return llmSkillContent(req, res);
