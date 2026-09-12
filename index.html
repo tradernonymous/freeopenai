@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Free OpenAI API | Chat</title>
+    <title>FreeAi4U | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
     <script src="chatlib.js"></script>
     <style>
@@ -499,10 +499,10 @@
         }
 
         /* Generated images */
-        .message-image-wrap { margin-top: 6px; }
+        .message-image-wrap { width: min(340px, 100%); margin-top: 6px; }
         /* ChatGPT-style shimmer while an image generates: a wavy gradient
            sweep. The global reduced-motion rule stills it for those users. */
-        .img-shimmer { aspect-ratio: 1 / 1; width: 100%; min-height: 240px; display: flex; align-items: center; justify-content: center; border-radius: var(--r); border: 1px solid var(--border); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 45%, var(--surface) 60%); background-size: 200% 100%; animation: shimmer-wave 1.6s linear infinite; }
+        .img-shimmer { aspect-ratio: 1 / 1; width: min(340px, 100%); min-height: 180px; max-height: 360px; margin-inline: auto; display: flex; align-items: center; justify-content: center; border-radius: var(--r); border: 1px solid var(--border); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 45%, var(--surface) 60%); background-size: 200% 100%; animation: shimmer-wave 1.6s linear infinite; }
         .img-shimmer span { font-size: 13px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; }
         @keyframes shimmer-wave { from { background-position: 180% 0; } to { background-position: -80% 0; } }
 
@@ -511,7 +511,7 @@
            grid hums and a progress ring counts the elapsed budget — pure
            CSS, zero dependencies, stills under prefers-reduced-motion. */
         .holo-forge {
-            aspect-ratio: 1 / 1; width: 100%; min-height: 240px;
+            aspect-ratio: 1 / 1; width: min(340px, 100%); min-height: 180px; max-height: 360px; margin-inline: auto;
             position: relative; overflow: hidden; border-radius: var(--r);
             border: 1px solid var(--border); background:
                 radial-gradient(ellipse at 50% 55%, var(--surface-2) 0%, var(--surface) 62%, var(--bg-elevated) 100%);
@@ -620,7 +620,11 @@
         .skill-chip .skill-src { color: var(--text-muted); font-size: 10px; }
         .message-image {
             display: block;
+            width: 100%;
             max-width: 100%;
+            max-height: 360px;
+            object-fit: contain;
+            background: var(--surface);
             border-radius: var(--r);
             border: 1px solid var(--border);
             cursor: zoom-in;
@@ -707,16 +711,34 @@
         .attach-menu-item .attach-item-hint { font-size: 11px; color: var(--text-muted); }
 
         .composer {
-            display: flex; align-items: flex-end; gap: 4px;
+            display: flex; flex-direction: column; gap: 4px;
             width: 100%;
             max-width: 768px;
             margin-inline: auto;
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 26px;
-            padding: 6px 6px 6px 8px;
+            border-radius: 20px;
+            padding: 8px;
             transition: var(--transition);
         }
+        .composer-input-row { display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+        .composer-controls {
+            display: flex; align-items: center; gap: 4px; min-width: 0;
+            overflow-x: auto; scrollbar-width: none; padding-top: 2px;
+        }
+        .composer-controls::-webkit-scrollbar { display: none; }
+        .composer-controls > * { flex-shrink: 0; }
+        .composer-controls .model-trigger { max-width: 220px; }
+        .composer-controls .model-trigger #modelLabel { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+        .skills-toggle { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 4px 10px; cursor: pointer; white-space: nowrap; }
+        .skills-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+        .skills-toggle[aria-pressed="false"] { opacity: .7; }
+        .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 150px; padding: 5px 7px; }
+        .composer-controls .effort-chip { display: inline-flex; }
+        .composer-model-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
+        .composer-model-controls > * { flex-shrink: 0; }
+        .composer-model-controls .model-trigger { max-width: 220px; }
+        .composer-model-controls #modelLabel { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
         .composer { box-shadow: var(--lift); }
         .composer:hover { border-color: var(--border-strong); }
         .composer:focus-within { border-color: var(--accent); box-shadow: var(--glow), var(--lift); }
@@ -952,7 +974,7 @@
             .message.user { max-width: 88%; }
             .chat-input-area { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             .status-bar { padding: 0 12px; }
-            .model-dropdown { position: fixed; top: calc(52px + env(safe-area-inset-top) + 8px); right: 10px; left: 10px; min-width: 0; }
+            .model-dropdown { position: fixed; top: auto; bottom: calc(78px + env(safe-area-inset-bottom)); right: 10px; left: 10px; min-width: 0; }
             /* iOS: prevent input zoom */
             .composer-input, .model-trigger, .effort-select { font-size: 16px; }
             /* A phone header can't hold "Effort: extra high" and still leave room
@@ -1036,9 +1058,10 @@
             .model-dropdown-search { font-size: 16px; }
             /* Phone reading distance wants a touch more size and air. */
             .message-text { font-size: 15px; line-height: 1.65; }
-            /* A generated image must not swallow the whole transcript. Both
-               constraints hold at once, so the aspect ratio survives. */
-            .message-image { max-height: 52vh; margin-inline: auto; }
+            /* Generated images stay compact in the transcript and open in the
+               existing lightbox when tapped. */
+            .message-image-wrap, .img-shimmer, .holo-forge { width: min(280px, 100%); }
+            .message-image { max-height: 45vh; margin-inline: auto; }
             /* iOS zooms any focused input under 16px. The model search was
                fixed earlier; these stragglers zoomed the same way. */
             .palette input { font-size: 16px; }
@@ -1082,7 +1105,11 @@
             .chat-bar { height: 44px; }
             .chat-input-area { padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); }
             .chat-messages { padding: 12px; gap: 16px; }
-            .composer { padding: 4px 4px 4px 6px; border-radius: 22px; }
+            .composer { padding: 6px; border-radius: 18px; }
+            .composer-model-controls { gap: 2px; }
+            .composer-model-controls #modelLabel { max-width: 92px; }
+            .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
+            .skills-toggle, .mode-chip { padding-inline: 8px; }
             .composer-input { min-height: 32px; }
             .composer-send, .composer-attach { width: 38px; height: 38px; }
             .status-bar { height: 22px; }
@@ -1123,23 +1150,9 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M3 6h18"/><path d="M3 18h18"/></svg>
                             </button>
                             <span class="dot"></span>
-                            <span>Free OpenAI API</span>
+                            <span>FreeAi4U</span>
                         </div>
                         <div class="chat-bar-actions">
-                            <div style="position: relative;">
-                                <button class="model-trigger" id="modelTrigger" aria-label="Select Model" aria-haspopup="listbox" aria-expanded="false">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-                                    <span id="modelLabel">Model</span>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                                </button>
-                                <div class="model-dropdown" id="modelDropdown" aria-label="Available models">
-                                    <input type="text" class="model-dropdown-search" id="modelSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelOptions(this.value)">
-                                    <div class="model-dropdown-list" id="modelDropdownList" role="listbox" aria-label="Available models"></div>
-                                </div>
-                            </div>
-                            <button class="effort-chip" id="effortChip" hidden title="Reasoning effort" aria-label="Reasoning effort" onclick="focusEffort()">auto</button>
-                            <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
-                            <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
                             <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
                             </button>
@@ -1177,8 +1190,13 @@
                             <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
                         </div>
                         <div class="composer">
-                            <div style="position: relative;">
-                                <button class="composer-attach" type="button" id="attachTrigger" onclick="event.stopPropagation(); toggleAttachMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Attach" title="Attach an image, document, or file">
+                            <div class="composer-input-row">
+                                <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                                <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
+                            </div>
+                            <div class="composer-controls" aria-label="Chat controls">
+                                <div style="position: relative;">
+                                    <button class="composer-attach" type="button" id="attachTrigger" onclick="event.stopPropagation(); toggleAttachMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Attach" title="Attach an image, document, or file">
                                     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <defs>
                                             <linearGradient id="clipGradient" x1="0" y1="0" x2="1" y2="1">
@@ -1212,11 +1230,27 @@
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
-                            <button class="mode-chip" type="button" id="modeChip" onclick="cycleMode()" aria-label="Build mode" title="Mode: Chat / Plan / Build — opencode-style modes. Plan reasons without changing anything; Build executes with the skill library active.">
+                            <button class="skills-toggle" type="button" id="skillsToggle" onclick="toggleSkills()" aria-pressed="true" title="Automatically apply relevant skills in Plan and Build modes">Skills on</button>
+                            <div class="composer-model-controls">
+                                <div style="position: relative;">
+                                    <button class="model-trigger" id="modelTrigger" aria-label="Select model" aria-haspopup="listbox" aria-expanded="false">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+                                        <span id="modelLabel">Model</span>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                    </button>
+                                    <div class="model-dropdown" id="modelDropdown" aria-label="Available models">
+                                        <input type="text" class="model-dropdown-search" id="modelSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelOptions(this.value)">
+                                        <div class="model-dropdown-list" id="modelDropdownList" role="listbox" aria-label="Available models"></div>
+                                    </div>
+                                </div>
+                                <select class="effort-select" id="providerSelect" aria-label="Provider" title="Which service answers — Puter needs no key, the others use yours" onchange="selectProvider(this.value)" hidden></select>
+                                <button class="effort-chip" id="effortChip" hidden title="Reasoning effort" aria-label="Reasoning effort" onclick="focusEffort()">auto</button>
+                                <select class="effort-select" id="effortSelect" aria-label="Reasoning effort" title="How hard the model thinks before answering" onchange="selectEffort(this.value)" hidden></select>
+                            </div>
+                            <button class="mode-chip" type="button" id="modeChip" onclick="cycleMode()" aria-label="Chat mode" title="Mode: Chat / Plan / Build">
                                 <span id="modeChipLabel">Chat</span>
                             </button>
-                            <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
-                            <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
+                            </div>
                         </div>
                     </div>
 
@@ -1402,7 +1436,7 @@
         <div class="lightbox-content" role="dialog" aria-modal="true" aria-label="Generated image" onclick="event.stopPropagation();">
             <img id="lightboxImg" src="" alt="">
                             <div class="lightbox-actions">
-                                <a id="lightboxDownload" class="icon-btn-text" download="freeopenai-image.png">Download</a>
+                                <a id="lightboxDownload" class="icon-btn-text" download="freeai4u-image.png">Download</a>
                                 <button class="icon-btn-text" type="button" onclick="copyLightboxImage()">Copy</button>
                                 <button class="icon-btn-text" type="button" onclick="openImageEdit(lightboxImg.src, lightboxImg.alt)">Edit</button>
                                 <button class="icon-btn-text" type="button" onclick="closeImageLightbox();">Close</button>
@@ -1460,7 +1494,7 @@
     <div class="modal-overlay drawer-overlay" id="drawerOverlay" onclick="closeDrawer();">
         <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Menu" onclick="event.stopPropagation();">
             <div class="drawer-header">
-                <span class="drawer-title">Free OpenAI API</span>
+                <span class="drawer-title">FreeAi4U</span>
                 <button class="modal-close" type="button" onclick="closeDrawer();" aria-label="Close menu">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -1542,6 +1576,22 @@
             ? localStorage.getItem('freeopenaiMode')
             : DEFAULT_MODE;
         let skillsCatalog = []; // { source, name, description } rows
+        let skillsEnabled = localStorage.getItem('freeopenaiSkills') !== '0';
+
+        function updateSkillsToggle() {
+            const toggle = document.getElementById('skillsToggle');
+            if (!toggle) return;
+            toggle.setAttribute('aria-pressed', String(skillsEnabled));
+            toggle.textContent = skillsEnabled ? 'Skills on' : 'Skills off';
+        }
+
+        function toggleSkills() {
+            skillsEnabled = !skillsEnabled;
+            localStorage.setItem('freeopenaiSkills', skillsEnabled ? '1' : '0');
+            updateSkillsToggle();
+            showStatus('info', skillsEnabled ? 'Skills enabled for Plan and Build' : 'Skills disabled');
+            if (skillsEnabled && selectedMode !== 'chat') ensureSkillsLoaded();
+        }
 
         function updateModeChip() {
             const chip = document.getElementById('modeChip');
@@ -1626,6 +1676,7 @@
         let lastFocusedBeforeModal = null;
         let imageMode = false;
         let currentAbort = null;
+        let generationId = 0;
         let autoRetryEnabled = true;
         let compactNotices = false;
         let turnStartedAt = 0;
@@ -1725,6 +1776,7 @@
             loadLimitsHint();
             updateModelLabel();
             updateModeChip();
+            updateSkillsToggle();
             updateAuthUI();
             // Learn up front whether the GitHub tools should be offered to the
             // model, rather than waiting for the user to open Settings.
@@ -2295,6 +2347,9 @@
                 select.value = selectedProvider;
                 select.hidden = false;
                 if (selectedProvider !== PUTER_PROVIDER) await loadProviderModels();
+                renderModelOptions();
+                updateModelLabel();
+                updateEffortPicker();
             } catch {
                 select.hidden = true;
             }
@@ -2382,7 +2437,7 @@
 
         // One call site for "ask a model", so the rest of the app doesn't care
         // which service is answering.
-        async function callModel(convo, extra = {}) {
+        async function callModel(convo, extra = {}, signal = null) {
             if (selectedProvider === PUTER_PROVIDER) {
                 return chatWithEffortFallback(selectedModel, (opts) =>
                     puter.ai.chat(convo, { ...opts, ...extra })
@@ -2404,6 +2459,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
+                ...(signal ? { signal } : {}),
             });
             let res = await send();
             let data = await safeJson(res);
@@ -2415,7 +2471,14 @@
             }
             if (autoRetryEnabled && res.status === 429 && isRateLimitError(data.error)) {
                 showStatus('info', 'The provider is rate limiting — waiting a moment, then retrying');
-                await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2));
+                await new Promise((resolve, reject) => {
+                    if (signal?.aborted) { reject(abortError()); return; }
+                    const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                    signal?.addEventListener('abort', () => {
+                        clearTimeout(timer);
+                        reject(abortError());
+                    }, { once: true });
+                });
                 res = await send();
                 data = await safeJson(res);
             }
@@ -2523,14 +2586,15 @@
             }
         }
 
-        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS) {
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
             let nudged = false;
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                if (signal?.aborted) throw abortError();
                 let response;
                 try {
-                    response = await callModel(convo, { tools });
+                    response = await callModel(convo, { tools }, signal);
                 } catch (err) {
                     // Some endpoints reject the tools shape outright or answer
                     // non-JSON. A plain call still answers; tools were a bonus,
@@ -2538,10 +2602,11 @@
                     if (round === 0 && tools.length && isToolsRejection(err)) {
                         showStatus('info', 'This model takes no tools — answering directly');
                         tools = [];
-                        response = await callModel(convo);
+                        response = await callModel(convo, {}, signal);
                     } else throw err;
                 }
                 const message = (response && response.message) || null;
+                if (signal?.aborted) throw abortError();
                 const calls = extractToolCalls(message);
                 if (!calls.length) {
                     // A model that ran its tools and then said nothing has the
@@ -2561,6 +2626,7 @@
                 // reply object is metadata the provider rejects.
                 convo.push(toConversationMessage(message));
                 for (const call of calls) {
+                    if (signal?.aborted) throw abortError();
                     const fn = (call && call.function) || {};
                     const args = parseToolArgs(fn.arguments);
                     addMessage('system', describeToolCall(fn.name, args));
@@ -2572,6 +2638,7 @@
                             ? await runUseSkillTool(args)
                             : 'Error: unknown tool ' + fn.name;
                     convo.push({ role: 'tool', tool_call_id: call.id, content: String(result) });
+                    if (signal?.aborted) throw abortError();
                 }
             }
             // Out of rounds. Everything read so far is still in `convo` and was
@@ -2579,7 +2646,7 @@
             // start another chain -- to turn it into an answer instead of
             // discarding it.
             convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
-            const summary = await callModel(convo);
+            const summary = await callModel(convo, {}, signal);
             return {
                 message: (summary && summary.message) || null,
                 response: summary,
@@ -2650,23 +2717,45 @@
 
         function setComposerBusy(busy) {
             isTyping = busy;
-            sendButton.disabled = busy;
+            sendButton.disabled = false;
             if (busy) {
                 sendButton.textContent = '■';
                 sendButton.classList.add('stop');
                 sendButton.setAttribute('aria-label', 'Stop generation');
             } else {
+                sendButton.disabled = !chatInput.value.trim();
                 sendButton.textContent = '→';
                 sendButton.classList.remove('stop');
                 sendButton.setAttribute('aria-label', 'Send message');
             }
         }
 
+        function abortError() {
+            const error = new Error('Generation stopped');
+            error.name = 'AbortError';
+            return error;
+        }
+
+        function isActiveRun(runId, controller) {
+            return runId === generationId && controller && !controller.signal.aborted;
+        }
+
+        function releaseRun(controller) {
+            // A stopped request can finish after a new request has started. It
+            // must not clear the newer request's controller or stop button.
+            if (currentAbort === controller) {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
+        }
+
         function stopGeneration() {
             if (!isTyping) return;
+            generationId += 1;
             currentAbort?.abort();
             removeTypingIndicator();
             setComposerBusy(false);
+            showStatus('info', 'Generation stopped');
         }
 
         function createStreamRenderer(bubble) {
@@ -2716,11 +2805,13 @@
             chatInput.value = '';
             chatInput.style.height = '36px';
             setComposerBusy(true);
-            currentAbort = new AbortController();
+            const runId = ++generationId;
+            const controller = new AbortController();
+            currentAbort = controller;
             showTypingIndicator();
 
             if (generateImage) {
-                await sendImageGeneration(raw);
+                await sendImageGeneration(raw, runId, controller);
                 return;
             }
 
@@ -2744,7 +2835,7 @@
                     // enters the system prompt, and use_skill lets the model
                     // pull any full skill mid-turn.
                     let activeSkills = null;
-                    if (selectedMode !== 'chat') {
+                    if (selectedMode !== 'chat' && skillsEnabled) {
                         const catalog = await ensureSkillsLoaded();
                         activeSkills = pickSkills(outgoing, selectedMode, catalog);
                         tools.push(USE_SKILL_TOOL);
@@ -2752,8 +2843,10 @@
                     const { message, exhausted, finishReason } = await runChatWithTools(
                         buildConversation(outgoing, activeSkills),
                         chatModel,
-                        tools
+                        tools,
+                        controller.signal
                     );
+                    if (!isActiveRun(runId, controller)) return;
                     if (activeSkills && activeSkills.length) {
                         addMessage('system', 'Skills applied: ' + activeSkills.map((s) => s.name).join(', '));
                     }
@@ -2785,21 +2878,26 @@
                     const bubble = createBotBubble();
                     const renderer = createStreamRenderer(bubble);
                     try {
-                        await streamProviderChat(buildConversation(outgoing), renderer, currentAbort.signal);
+                        await streamProviderChat(buildConversation(outgoing), renderer, controller.signal);
+                        if (!isActiveRun(runId, controller)) {
+                            renderer.abort();
+                            if (bubble.parentNode) bubble.remove();
+                            return;
+                        }
                         removeTypingIndicator();
                         finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
                         noteTurnStats(renderer.full.length, renderer.usage || 0);
                         showStatus('success', 'Sent');
-                    } catch (e) {
+                    } catch (error) {
                         removeTypingIndicator();
                         renderer.abort();
                         // Aborted or failed with no content — discard the empty bubble.
                         if (!renderer.full && bubble.parentNode) bubble.remove();
-                        if (e.name === 'AbortError') {
+                        if (error.name === 'AbortError' || !isActiveRun(runId, controller)) {
                             showStatus('info', 'Generation stopped');
                             return;
                         }
-                        throw e;
+                        throw error;
                     }
                     return;
                 }
@@ -2812,13 +2910,18 @@
                         ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
                         : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
                 );
+                if (!isActiveRun(runId, controller)) return;
                 removeTypingIndicator();
 
                 if (response && typeof response[Symbol.asyncIterator] === 'function') {
                     const bubble = createBotBubble();
                     const renderer = createStreamRenderer(bubble);
                     for await (const part of response) {
-                        if (currentAbort?.signal.aborted) break;
+                        if (!isActiveRun(runId, controller)) {
+                            renderer.abort();
+                            if (bubble.parentNode) bubble.remove();
+                            return;
+                        }
                         const think = extractReasoning(part);
                         renderer.appendReasoning(think);
                         const isReasoningPart = part && typeof part !== 'string' && (part.type === 'reasoning' || part.type === 'thinking');
@@ -2843,6 +2946,10 @@
                 showStatus('success', 'Sent');
             } catch (error) {
                 removeTypingIndicator();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
                 console.error('Chat request failed:', error);
                 // The credit advice is about Puter's allowance specifically. Shown
                 // for a Nara or OpenRouter failure it sends the user to the
@@ -2857,8 +2964,7 @@
                     addMessage('system', `Error (${selectedProvider}/${selectedModel}): ` + error.message, { error: true });
                 }
             } finally {
-                currentAbort = null;
-                setComposerBusy(false);
+                releaseRun(controller);
             }
         }
 
@@ -2889,7 +2995,7 @@
 
         const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
 
-        async function sendImageGeneration(promptText) {
+        async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort) {
             let bubble = null;
             let filled = false;
             const startedAt = Date.now();
@@ -2901,15 +3007,22 @@
                 let imgEl;
                 let lastError;
                 for (const model of IMAGE_MODELS) {
+                    if (!isActiveRun(runId, controller)) throw abortError();
                     try {
                         imgEl = await puter.ai.txt2img(promptText, { model });
+                        if (!isActiveRun(runId, controller)) throw abortError();
                         break;
                     } catch (error) {
+                        if (!isActiveRun(runId, controller)) throw abortError();
                         lastError = error;
                     }
                 }
                 if (!imgEl) throw lastError;
 
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
                 removeTypingIndicator();
                 fillImageBubble(bubble, promptText, imgEl.src);
                 filled = true;
@@ -2918,6 +3031,10 @@
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
                 if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
                 console.error('Image generation failed:', error);
                 const msg = String((error && (error.message || error)) || 'Unknown error');
                 // A failure inside two seconds never showed work — say so, so
@@ -2932,8 +3049,7 @@
                     addMessage('system', 'Error generating image: ' + instant + msg, { error: true });
                 }
             } finally {
-                currentAbort = null;
-                setComposerBusy(false);
+                releaseRun(controller);
             }
         }
 
@@ -2992,6 +3108,12 @@
             });
         }
 
+        function discardTransientBubble(el) {
+            if (!el) return;
+            clearHoloForge(el);
+            if (el.parentNode) el.remove();
+        }
+
         function createImageBubble() {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
             const el = document.createElement('div');
@@ -3026,6 +3148,7 @@
             clearHoloForge(el);
             el.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
             el.dataset.rawContent = `[Generated image: ${promptText}]`;
+            el.querySelectorAll('.message-image-wrap').forEach((wrap) => wrap.remove());
             const good = urls.filter((u) => typeof u === 'string' && u);
             good.forEach((u) => el.appendChild(buildImageWrap(u, promptText)));
             const caption = document.createElement('div');
@@ -3091,8 +3214,10 @@
         async function sendImageVariations(promptText) {
             const ok = await askImageConfirm('Generate 2 variations?', `"${promptText}" — two extra image generations will run.`);
             if (!ok) return;
+            const controller = new AbortController();
+            const runId = ++generationId;
+            currentAbort = controller;
             setComposerBusy(true);
-            currentAbort = new AbortController();
             showTypingIndicator();
             let bubble = null;
             const made = [];
@@ -3106,14 +3231,17 @@
                     let imgEl = null;
                     let lastError = null;
                     for (const model of IMAGE_MODELS) {
+                        if (!isActiveRun(runId, controller)) throw abortError();
                         try {
                             imgEl = await puter.ai.txt2img(promptText, { model });
+                            if (!isActiveRun(runId, controller)) throw abortError();
                             break;
                         } catch (error) {
                             lastError = error;
+                            if (error && error.name === 'AbortError') throw error;
                         }
                     }
-                    if (!imgEl) throw lastError;
+                    if (!imgEl) throw lastError || new Error('Image generation returned no image');
                     made.push(imgEl.src);
                     const shimmers = bubble.querySelectorAll('.holo-forge');
                     const wrap = buildImageWrap(imgEl.src, promptText);
@@ -3121,30 +3249,33 @@
                         const t = Number(shimmers[i].dataset.holoTimer);
                         if (t) clearInterval(t);
                         shimmers[i].replaceWith(wrap);
+                    } else {
+                        bubble.appendChild(wrap);
                     }
-                    else bubble.appendChild(wrap);
                 }
                 removeTypingIndicator();
                 finishImageContent(bubble, promptText + ' (variations)', made);
-                bubble.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
                 showStatus('success', 'Variations ready');
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble) {
-                    if (made.length) {
+                    if (made.length && isActiveRun(runId, controller)) {
                         finishImageContent(bubble, promptText + ' (variations)', made);
                     } else {
                         clearHoloForge(bubble);
                         if (bubble.parentNode) bubble.remove();
                     }
                 }
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
                 console.error('Image variations failed:', error);
                 const msg = String((error && (error.message || error)) || 'Unknown error');
                 showStatus('error', 'Failed: ' + msg);
                 addMessage('system', 'Error generating variations: ' + msg, { error: true });
             } finally {
-                currentAbort = null;
-                setComposerBusy(false);
+                releaseRun(controller);
             }
         }
 
@@ -3290,8 +3421,10 @@
                 maskData = '';
             }
             closeImageEdit();
+            const controller = new AbortController();
+            const runId = ++generationId;
+            currentAbort = controller;
             setComposerBusy(true);
-            currentAbort = new AbortController();
             showTypingIndicator();
             let bubble = null;
             let filled = false;
@@ -3307,9 +3440,13 @@
                         image: srcData,
                         ...(maskData ? { mask: maskData } : {}),
                     }),
-                    signal: currentAbort.signal,
+                    signal: controller.signal,
                 });
                 const data = await res.json().catch(() => ({}));
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
                 if (!res.ok) throw new Error(data.error || 'Edit failed');
                 const url = imageUrlFrom(data);
                 if (!url) throw new Error('Edit returned no image');
@@ -3321,7 +3458,7 @@
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
                 if (bubble && !filled && bubble.parentNode) bubble.remove();
-                if (error && error.name === 'AbortError') {
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
                     showStatus('info', 'Edit stopped');
                     return;
                 }
@@ -3330,8 +3467,7 @@
                 showStatus('error', 'Failed: ' + msg);
                 addMessage('system', 'Error editing image: ' + msg, { error: true });
             } finally {
-                currentAbort = null;
-                setComposerBusy(false);
+                releaseRun(controller);
             }
         }
 
@@ -3547,35 +3683,19 @@
             // instead. Guarded: the boot-test stub has no innerHeight.
             const cap = (typeof window !== 'undefined' && window.innerHeight) ? Math.max(80, Math.floor(window.innerHeight * 0.35)) : 140;
             ta.style.height = Math.min(ta.scrollHeight, cap) + 'px';
-            sendButton.disabled = !ta.value.trim();
+            sendButton.disabled = isTyping ? false : !ta.value.trim();
         }
 
         function handleKeyDown(e) {
-            if (e.key === 'Escape' && isTyping) { stopGeneration(); return; }
+            if (e.key === 'Escape' && isTyping) { e.preventDefault(); stopGeneration(); return; }
             if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'g') {
                 e.preventDefault();
                 if (isTyping) stopGeneration();
                 return;
             }
-            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-                // Readline editing, desktop-prompt style.
-                const ta = e.target;
-                const k = String(e.key || '').toLowerCase();
-                const pos = (p) => { try { ta.setSelectionRange(p, p); } catch { /* ignore */ } };
-                if (k === 'a') { e.preventDefault(); pos(0); return; }
-                if (k === 'e') { e.preventDefault(); pos(ta.value.length); return; }
-                if (k === 'k') { e.preventDefault(); ta.value = ta.value.slice(0, ta.selectionStart); autoResize(ta); return; }
-                if (k === 'u') { e.preventDefault(); ta.value = ta.value.slice(ta.selectionEnd); autoResize(ta); pos(0); return; }
-                if (k === 'w') {
-                    e.preventDefault();
-                    const s = ta.selectionStart;
-                    const cut = ta.value.slice(0, s).replace(/\S+\s*$/, '');
-                    ta.value = cut + ta.value.slice(s);
-                    autoResize(ta);
-                    pos(cut.length);
-                    return;
-                }
-            }
+            // Keep browser-native Ctrl/Cmd+A/C/V behavior. Shift+Space is also
+            // ordinary input (useful for deliberate spaces in the prompt).
+            if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v'].includes(String(e.key || '').toLowerCase())) return;
             if (e.altKey && !e.ctrlKey && !e.metaKey) {
                 const ta = e.target;
                 const k = String(e.key || '').toLowerCase();

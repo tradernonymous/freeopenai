@@ -624,7 +624,7 @@ const LLM_PROVIDERS = {
     // paid models through.
     freeOnly: process.env.OPENROUTER_FREE_ONLY !== '0',
     // Optional attribution headers OpenRouter documents for its leaderboards.
-    headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeOpenAI' }),
+    headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeAi4U' }),
   },
   nvidia: {
     label: 'NVIDIA',
@@ -740,6 +740,12 @@ function providerIsConfigured(provider) {
   return provider.needsKey === false && !!process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')];
 }
 
+function normalizeProviderBaseUrl(id, raw) {
+  const base = String(raw || '').replace(/\/+$/, '');
+  if (id !== 'ollama' || /\/v1$/i.test(base)) return base;
+  return base + '/v1';
+}
+
 function providerConfig(id) {
   const provider = LLM_PROVIDERS[id];
   if (!provider) return null;
@@ -747,7 +753,8 @@ function providerConfig(id) {
   const key = process.env[provider.envVar] || '';
   // A base URL override lets the same adapter reach a self-hosted NIM or a
   // proxy, and lets the tests point at a local stand-in.
-  const baseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
+  const rawBaseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
+  const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   return { ...provider, key, baseUrl };
 }
 
@@ -810,7 +817,7 @@ async function fetchText(url, acceptHtml = true) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'FreeOpenAI/1.0 (+https://github.com/tradernonymous/freeopenai)',
+        'User-Agent': 'FreeAi4U/1.0 (+https://github.com/tradernonymous/freeopenai)',
         Accept: acceptHtml ? 'text/html,*/*' : 'application/json',
       },
     });
@@ -1163,6 +1170,40 @@ async function providerFetch(req, provider, path, init = {}) {
   }
 }
 
+async function fetchOllamaModels(req, provider) {
+  const openai = await providerFetch(req, provider, '/models');
+  if (openai.ok && openai.data && Array.isArray(openai.data.data) && openai.data.data.length) {
+    return openai;
+  }
+
+  // Ollama's native catalogue is available even on installations that do not
+  // expose the OpenAI-compatible route. Reuse the same auth/timeout adapter,
+  // but remove /v1 before requesting /api/tags.
+  const nativeProvider = {
+    ...provider,
+    baseUrl: provider.baseUrl.replace(/\/v1\/?$/i, ''),
+  };
+  const native = await providerFetch(req, nativeProvider, '/api/tags');
+  if (native.ok && native.data && Array.isArray(native.data.models)) {
+    return {
+      ...native,
+      data: {
+        object: 'list',
+        data: native.data.models
+          .map((model) => {
+            const id = model && (model.name || model.model || model.id);
+            return id ? { id, name: id, owned_by: 'ollama' } : null;
+          })
+          .filter(Boolean),
+      },
+    };
+  }
+
+  // Preserve the OpenAI error because it is usually the useful one when both
+  // routes are unavailable (bad host, cold service, or auth failure).
+  return openai;
+}
+
 // Model lists are read from the provider at runtime rather than hardcoded, so
 // they can't go stale and a renamed model can't silently break a request.
 async function llmModels(req, res) {
@@ -1175,7 +1216,10 @@ async function llmModels(req, res) {
     return sendJson(res, 200, cached.models);
   }
   try {
-    const { ok, status, data } = await providerFetch(req, provider, '/models');
+    const result = id === 'ollama'
+      ? await fetchOllamaModels(req, provider)
+      : await providerFetch(req, provider, '/models');
+    const { ok, status, data } = result;
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     const models = (data && Array.isArray(data.data) ? data.data : [])
       .filter((m) => m && m.id)
@@ -1626,6 +1670,8 @@ module.exports = {
   createRequestHandler,
   normalizeProviderModel,
   normalizePricing,
+  normalizeProviderBaseUrl,
+  fetchOllamaModels,
   describeProviderError,
   fetchProviderWithRetry,
   fetchStreamWithRetry,
