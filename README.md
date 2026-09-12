@@ -362,6 +362,22 @@ Up to **three accounts** can be connected at once. Which one acts on a repo is r
 
 > Untick **Expire user access tokens** when registering the OAuth App. Refresh tokens aren't implemented, so an expiring token would silently disconnect after 8 hours.
 
+### 🗂️ The workspace
+
+Every chat can also read and write a small **workspace**: a flat set of text files the model keeps notes and drafts in.
+
+| Tool | What it does |
+| --- | --- |
+| `workspace_list_files` | Lists a folder, with the size of each file |
+| `workspace_read_file` | Reads one file |
+| `workspace_write_file` | Creates or replaces a file — **always asks you first** |
+
+It lives in your browser (localStorage) beside the conversations, not on the server. The deployment is shared and its container is rebuilt on every push, so a server-side workspace would be both visible to other people and temporary. Files can be downloaded or deleted from **Settings → Workspace files**.
+
+Paths are relative to the workspace root and a `..` is refused rather than resolved away, so nothing can reach outside it. Writes are capped (100 kB per file, 200 kB and 64 files in total) because the conversations share the same few megabytes of storage.
+
+Reads run in parallel with other reads; writes never do, since two writes to one path in the same moment is a race whose loser vanishes.
+
 ### 🩹 Provider quirks the app works around
 
 Puter fronts several providers, and they disagree in ways that surface as raw API errors. These are handled rather than passed through:

@@ -84,6 +84,11 @@ function harness({ toolCalls }) {
     isGithubTool: (n) => n.startsWith('github_'),
     isWebTool: (n) => n.startsWith('web_'),
     isUseSkillTool: (n) => n === 'use_skill',
+    // The workspace has its own dispatch branch. The sandbox has to know about
+    // it even though this file never calls one, or the loop's dependency guard
+    // has no way to tell a new branch from a typo.
+    isWorkspaceTool: (n) => n.startsWith('workspace_'),
+    runWorkspaceTool: async () => 'workspace',
     // Each runner marks itself busy, waits a tick, then marks itself done. Two
     // overlapping calls therefore appear interleaved, which is the whole point.
     githubTool: 'github',

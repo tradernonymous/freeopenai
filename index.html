@@ -622,6 +622,10 @@
         .mode-chip[data-mode="build"] { color: var(--text); background: var(--accent-bg); border-color: var(--accent); }
         .mode-chip[data-mode="build"]::before { background: var(--accent); animation: holo-pulse 1.6s ease-in-out infinite; }
         .skills-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .workspace-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+        .workspace-row { align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; display: flex; gap: 8px; padding: 6px 10px; }
+        .workspace-row .workspace-name { color: var(--text); flex: 1; font-size: 12px; overflow-wrap: anywhere; }
+        .workspace-row .workspace-size { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
         .skill-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); font-size: 11px; padding: 3px 10px; cursor: default; max-width: 100%; }
         .skill-chip b { color: var(--text); font-weight: 600; }
         .skill-chip .skill-src { color: var(--text-muted); font-size: 10px; }
@@ -1318,6 +1322,13 @@
                         </div>
                         <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
                     </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Workspace files</strong>
+                            <p class="settings-hint" id="workspaceStatus">Empty.</p>
+                        </div>
+                        <div class="workspace-list" id="workspaceFileList" aria-label="Workspace files"></div>
+                    </div>
                     <div class="settings-row">
                         <div>
                             <strong>Auto-retry on rate limit</strong>
@@ -1577,6 +1588,15 @@
         // on load and whenever the connector's state changes.
         let githubConnected = false;
 
+        // The workspace is a flat map of path -> text, kept in this browser. It
+        // is deliberately not the server's disk: the deployment is shared and
+        // its container is rebuilt on every push, so files kept there would be
+        // visible to other people and gone by the morning. Declared up here with
+        // the rest of the page state, because the startup calls below already
+        // render it and `let` is not readable before its own line.
+        const WORKSPACE_KEY = 'freeopenaiWorkspace';
+        let workspaceFiles = loadWorkspaceFiles();
+
         // --- Modes & skills (opencode-style) ---
         let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
             ? localStorage.getItem('freeopenaiMode')
@@ -1751,6 +1771,7 @@
         initializeApp();
         setupEventListeners();
         loadMessagesFromStorage();
+        renderWorkspaceFiles();
 
         function initializeApp() {
             if (typeof puter === 'undefined') {
@@ -2097,21 +2118,37 @@
             }
         }
 
-        let githubAlwaysAllow = false;
-        let githubConfirmResolver = null;
+        // Every action that changes something outside this page asks here: a
+        // GitHub commit, a workspace write. "Always allow" is remembered per
+        // kind, so allowing a file write this session never quietly becomes
+        // permission to commit to a repository.
+        const alwaysAllow = { github: false, workspace: false };
+        let confirmResolver = null;
+        let confirmKind = '';
 
-        function askGithubConfirm(text) {
-            if (githubAlwaysAllow) return Promise.resolve(true);
+        function askConfirm(kind, title, text) {
+            if (alwaysAllow[kind]) return Promise.resolve(true);
+            document.getElementById('githubConfirmTitle').textContent = title;
             document.getElementById('githubConfirmText').textContent = text;
             document.getElementById('githubConfirmOverlay').classList.add('open');
-            return new Promise((resolve) => { githubConfirmResolver = resolve; });
+            confirmKind = kind;
+            return new Promise((resolve) => { confirmResolver = resolve; });
+        }
+
+        function askGithubConfirm(text) {
+            return askConfirm('github', 'Commit to GitHub?', text);
+        }
+
+        function askWorkspaceConfirm(text) {
+            return askConfirm('workspace', 'Change a workspace file?', text);
         }
 
         function githubConfirmResolve(choice) {
             document.getElementById('githubConfirmOverlay').classList.remove('open');
-            if (choice === 'always') githubAlwaysAllow = true;
-            if (githubConfirmResolver) githubConfirmResolver(choice !== 'cancel');
-            githubConfirmResolver = null;
+            if (choice === 'always') alwaysAllow[confirmKind] = true;
+            if (confirmResolver) confirmResolver(choice !== 'cancel');
+            confirmResolver = null;
+            confirmKind = '';
         }
 
         async function refreshGithubStatus() {
@@ -2193,7 +2230,7 @@
         async function githubDisconnect(login) {
             const url = '/api/github/disconnect' + (login ? '?account=' + encodeURIComponent(login) : '');
             await fetch(url, { method: 'POST' });
-            githubAlwaysAllow = false;
+            alwaysAllow.github = false;
             githubConnected = false;
             refreshGithubStatus();
         }
@@ -2335,6 +2372,132 @@
             } catch (err) {
                 return 'Error: ' + err.message;
             }
+        }
+
+        function loadWorkspaceFiles() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || '{}');
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+                // Re-checked on the way in: an entry written by an older build,
+                // or edited by hand, must not smuggle in a path the tools would
+                // refuse. The stored key is what the tools will look up, so a
+                // key that no longer normalises is dropped rather than renamed.
+                const clean = {};
+                for (const path of Object.keys(parsed)) {
+                    if (normalizeWorkspacePath(path) === path && typeof parsed[path] === 'string') {
+                        clean[path] = parsed[path];
+                    }
+                }
+                return clean;
+            } catch (e) {
+                console.error('Failed to read the saved workspace:', e);
+                return {};
+            }
+        }
+
+        function saveWorkspaceFiles() {
+            try {
+                localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspaceFiles));
+            } catch (e) {
+                // A full localStorage must not take the whole turn down with it.
+                showStatus('error', 'Could not save the workspace: ' + e.message);
+            }
+            renderWorkspaceFiles();
+        }
+
+        function formatChars(n) {
+            return n < 1000 ? n + ' characters' : (n / 1000).toFixed(1) + 'k characters';
+        }
+
+        // The model's view of the workspace. Reads answer directly; a write is
+        // put to the user first, and only a write that was approved is kept.
+        async function runWorkspaceTool(name, args) {
+            if (name === 'workspace_list_files') {
+                const listed = workspaceList(workspaceFiles, args.path);
+                if (listed.error) return 'Error: ' + listed.error;
+                if (!listed.entries.length) {
+                    return listed.path ? 'No files under "' + listed.path + '".' : 'The workspace is empty.';
+                }
+                return listed.entries
+                    .map((entry) => entry.type === 'folder'
+                        ? entry.path + '/'
+                        : entry.path + ' (' + formatChars(entry.chars) + ')')
+                    .join('\n');
+            }
+            if (name === 'workspace_read_file') {
+                const read = workspaceRead(workspaceFiles, args.path);
+                if (read.error) return 'Error: ' + read.error;
+                return read.content;
+            }
+            if (name === 'workspace_write_file') {
+                const written = workspaceWrite(workspaceFiles, args.path, args.content);
+                // Size and path are known before asking, so the dialog can state
+                // exactly what will change instead of describing it vaguely.
+                if (written.error) return 'Error: ' + written.error;
+                const approved = await askWorkspaceConfirm(
+                    (written.created ? 'Create "' : 'Replace "') + written.path + '" in the workspace (' +
+                    formatChars(written.chars) + ')? Files here are stored in this browser only, and you can ' +
+                    'delete them from Settings.'
+                );
+                if (!approved) return 'The user declined this write. Do not try it again unless they ask.';
+                workspaceFiles = written.files;
+                saveWorkspaceFiles();
+                return 'Wrote "' + written.path + '" (' + formatChars(written.chars) + '), ' +
+                    written.totalFiles + ' file(s) in the workspace.';
+            }
+            return 'Error: unknown tool ' + name;
+        }
+
+        function renderWorkspaceFiles() {
+            const list = document.getElementById('workspaceFileList');
+            const status = document.getElementById('workspaceStatus');
+            if (!list || !status) return;
+            const names = Object.keys(workspaceFiles).sort();
+            list.innerHTML = '';
+            if (!names.length) {
+                status.textContent = 'Empty. An empty scratch space of text files the model can read and write, kept in this browser only.';
+                return;
+            }
+            status.textContent = names.length + ' file(s), stored in this browser only.';
+            for (const path of names) {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const name = document.createElement('span');
+                name.className = 'workspace-name';
+                name.textContent = path;
+                const size = document.createElement('span');
+                size.className = 'workspace-size';
+                size.textContent = formatChars(workspaceFiles[path].length);
+                const download = document.createElement('button');
+                download.className = 'icon-btn-text';
+                download.textContent = 'Download';
+                download.onclick = () => downloadWorkspaceFile(path);
+                const remove = document.createElement('button');
+                remove.className = 'icon-btn-text danger';
+                remove.textContent = 'Delete';
+                remove.onclick = () => deleteWorkspaceFile(path);
+                row.append(name, size, download, remove);
+                list.append(row);
+            }
+        }
+
+        function downloadWorkspaceFile(path) {
+            const text = workspaceFiles[path];
+            if (typeof text !== 'string') return;
+            const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = path.split('/').pop();
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function deleteWorkspaceFile(path) {
+            if (!Object.prototype.hasOwnProperty.call(workspaceFiles, path)) return;
+            const next = Object.assign({}, workspaceFiles);
+            delete next[path];
+            workspaceFiles = next;
+            saveWorkspaceFiles();
         }
 
         const githubShaCache = {};
@@ -2713,6 +2876,7 @@
         function runToolCall(name, args) {
             if (isGithubTool(name)) return runGithubTool(name, args);
             if (isWebTool(name)) return runWebTool(name, args);
+            if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
             if (isUseSkillTool(name)) return runUseSkillTool(args);
             return Promise.resolve('Error: unknown tool ' + name);
         }
@@ -2978,7 +3142,7 @@
                 // when GitHub is connected. An image attachment keeps the plain
                 // path since the image argument has no place in a message array.
                 if (!attachedImageFile) {
-                    const tools = [...WEB_TOOLS];
+                    const tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS];
                     if (githubConnected) tools.push(...GITHUB_TOOLS);
                     // Skills ride along in Plan & Build: the auto-picked set
                     // enters the system prompt, and use_skill lets the model
