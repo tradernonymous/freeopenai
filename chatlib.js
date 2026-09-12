@@ -1816,6 +1816,60 @@ function nextUsableModel(models, refusedIds) {
   return candidate ? candidate.id : null;
 }
 
+// Families are vendor lines inside a provider: picking Sonnet and having the
+// app answer with Opus is a different model than the one the user asked for,
+// so a refusal should first try another Claude. The heuristic is name-shaped,
+// like the rest of this file's ranking: the first path segment, or a known
+// family word anywhere in the id.
+const MODEL_FAMILIES = ['claude', 'gemini', 'gpt', 'llama', 'qwen', 'deepseek', 'kimi', 'glm', 'mistral', 'minimax', 'nemotron', 'granite', 'gemma', 'phi'];
+
+function modelFamily(id) {
+  const s = String(id || '').toLowerCase();
+  const seg = s.split('/')[0];
+  const named = MODEL_FAMILIES.find((f) => s.includes(f));
+  return named || (seg && seg.length > 2 ? seg : null);
+}
+
+// The variant line inside a family: claude-sonnet vs claude-opus, gemini-3.1
+// vs gemini-3. Answering a Sonnet pick with Opus is what read as the bug, so
+// the walker tries the variant first and only widens to the family after.
+function modelVariant(id) {
+  const s = String(id || '').toLowerCase();
+  const family = modelFamily(s);
+  if (!family) return null;
+  const at = s.indexOf(family);
+  const rest = s.slice(at + family.length).replace(/^[^a-z0-9.]+/, '');
+  const next = (rest.match(/^[a-z0-9.]+/) || [''])[0];
+  return next ? family + '-' + next : family;
+}
+
+// Like nextUsableModel, but stays within the refused model's line: same
+// variant first (Sonnet -> Sonnet 4.5), then the family (Sonnet -> Opus), and
+// only then the old head-of-list choice. Walking straight across families was
+// the old behaviour, and it read as a bug: choosing Sonnet on Antigravity and
+// getting Opus thinking-high mid-conversation.
+function nearestUsableModel(models, refusedIds, fromId) {
+  const list = Array.isArray(models) ? models : [];
+  const refused = refusedIds instanceof Set
+    ? (id) => refusedIds.has(id)
+    : Array.isArray(refusedIds)
+      ? (id) => refusedIds.includes(id)
+      : () => false;
+  const usable = list.filter((m) => m && m.id && !refused(m.id) && m.id !== fromId);
+  if (!usable.length) return null;
+  const variant = modelVariant(fromId);
+  if (variant) {
+    const sameVariant = usable.find((m) => modelVariant(m.id) === variant);
+    if (sameVariant) return sameVariant.id;
+  }
+  const family = modelFamily(fromId);
+  if (family) {
+    const sibling = usable.find((m) => modelFamily(m.id) === family);
+    if (sibling) return sibling.id;
+  }
+  return usable[0].id;
+}
+
 // Server-Sent Events arrive as newline-delimited `data:` lines. A single
 // provider chunk may contain several events, or a half-finished event that
 // the next chunk completes. This parser does not maintain state (that is the
@@ -2032,6 +2086,8 @@ if (typeof module !== 'undefined' && module.exports) {
     refusedModelIds,
     MAX_MODEL_REFUSAL_RETRIES,
     nextUsableModel,
+    modelFamily,
+    nearestUsableModel,
     usableChatModels,
     isFreeModelId,
     isFreeModel,

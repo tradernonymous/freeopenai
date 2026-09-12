@@ -2744,22 +2744,38 @@
         }
 
         // Takes a refused model out of circulation for the session and moves to
-        // one that works, so the next message doesn't repeat the failure. Returns
-        // the model it moved to, or null when the provider has nothing left --
-        // which is the caller's signal to report the failure, not retry it.
-        function forgetRefusedModel(modelId) {
+        // one that works, so the next message doesn't repeat the failure. The
+        // move stays inside the refused model's family when a sibling is still
+        // usable — answering a Sonnet pick with Opus read as the app ignoring
+        // the choice, so a cross-family jump happens only when the family has
+        // nothing left. detail (the upstream's own words) is announced in the
+        // transcript: a toast is gone in seconds and a mid-conversation switch
+        // the user never chose must be visible where the conversation is.
+        // Returns the model it moved to, or null when the provider has nothing
+        // left -- which is the caller's signal to report the failure, not retry it.
+        function forgetRefusedModel(modelId, detail) {
             if (!modelId || modelsRefusedBy.has(selectedProvider + ':' + modelId)) return null;
             modelsRefusedBy.add(selectedProvider + ':' + modelId);
             providerModels = providerModels.filter((m) => m.id !== modelId);
-            const next = nextUsableModel(providerModels, refusedModelIds(modelsRefusedBy, selectedProvider));
+            const next = nearestUsableModel(providerModels, refusedModelIds(modelsRefusedBy, selectedProvider), modelId);
             if (next) {
                 selectedModel = next;
                 localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
+                const why = typeof detail === 'string' && detail ? ' — ' + detail : '';
+                addMessage('system', modelId + ' refused (' + resummarizeRefusal(detail) + '), so the app switched to ' + next + why, { error: false });
                 showStatus('info', 'Switched to ' + selectedModel);
             }
             renderModelOptions();
             updateModelLabel();
             return next;
+        }
+
+        // One short line for the transcript: the upstream's message is often a
+        // long JSON-ish blob, and the family fact is what the user needs.
+        function resummarizeRefusal(detail) {
+            const text = typeof detail === 'string' ? detail : '';
+            const m = text.match(/model_not_found|not found|not available|access denied|unavailable/i);
+            return m ? m[0] : 'upstream refused it';
         }
 
         // An attached image rides inside the message array for the direct
@@ -2936,7 +2952,7 @@
                 const detail = data.error || 'Request failed (' + res.status + ')';
                 if (isModelScopedRefusal(res.status, detail, modelId)) {
                     // Drop it from the picker and move to one that answers.
-                    const next = forgetRefusedModel(modelId);
+                    const next = forgetRefusedModel(modelId, typeof detail === 'string' ? detail : JSON.stringify(detail));
                     if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
                 } else if (res.status === 403 || res.status === 402 || res.status === 404) {
                     // Account-level refusals apply to every model, so removing
@@ -3011,7 +3027,7 @@
                 // provider's own words and threw on a body of `null`.
                 const detail = errorDetailFromBody(await res.text().catch(() => '')) || 'Request failed (' + res.status + ')';
                 if (isModelScopedRefusal(res.status, detail, modelId)) {
-                    const next = forgetRefusedModel(modelId);
+                    const next = forgetRefusedModel(modelId, detail);
                     if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
                 } else if (res.status === 403 || res.status === 402 || res.status === 404) {
                     suspendProvider(detail);

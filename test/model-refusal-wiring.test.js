@@ -13,6 +13,7 @@ const {    errorDetailFromBody,
     isModelScopedRefusal,
     isQuotaExhausted,
     nextUsableModel,
+    nearestUsableModel,
     refusedModelIds,
     safeJson,
     isRetryableStatus,
@@ -97,6 +98,7 @@ const refusal = (id) => ({
 function harness({ models, answers, streamed = null }) {
   const requests = [];
   const status = [];
+  const notes = [];
   const renderer = {
     full: '',
     reasoning: '',
@@ -117,11 +119,19 @@ function harness({ models, answers, streamed = null }) {
     isModelScopedRefusal,
     isQuotaExhausted,
     nextUsableModel,
+    nearestUsableModel,
+    // resummarizeRefusal is page code, not chatlib: a stub with its exact
+    // matching keeps the harness about the wiring, not the wording.
+    resummarizeRefusal: (t) => {
+        const m = String(t || '').match(/model_not_found|not found|not available|access denied|unavailable/i);
+        return m ? m[0] : 'upstream refused it';
+    },
     refusedModelIds,
     autoRetryEnabled: false,
     RATE_LIMIT_BASE_DELAY_MS: 1,
     localStorage: { setItem() {} },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
+    addMessage: (role, text) => notes.push(`${role}: ${text}`),
     renderModelOptions() {},
     updateModelLabel() {},
     suspendProvider(detail) { status.push(`suspended: ${detail}`); },
