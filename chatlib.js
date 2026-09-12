@@ -1060,6 +1060,33 @@ function isTaskWriteTool(name) {
   return name === 'task_add' || name === 'task_update';
 }
 
+// Where an image can come from. Puter is the app's own account and is used
+// when it is signed in; our server route fronts a provider with an
+// image-capable model, so a setup that never signs in to Puter can still draw
+// instead of being told to sign in to something it wasn't using.
+const IMAGE_BACKENDS = ['puter', 'server'];
+
+function imageBackendOrder(options) {
+  // A destructuring default only covers `undefined`, so null and junk are read
+  // here too: "no options" must mean "the route", never a crash or an empty
+  // list of backends to try.
+  const puterSignedIn = !!(options && options.puterSignedIn);
+  // The server route is always behind Puter: Puter is already paid for by the
+  // signed-in account, while the route costs an API key that may not be set.
+  return puterSignedIn ? ['puter', 'server'] : ['server'];
+}
+
+// When every backend fails, the useful thing to report is what was tried and
+// what stopped each one. Reporting only the last error meant a provider-only
+// setup was told "Puter is not signed in" -- true, and not the reason.
+function imageFailureMessage({ puterError = '', serverError = '' } = {}) {
+  const tried = [];
+  if (puterError) tried.push('Puter (' + puterError + ')');
+  if (serverError) tried.push('the server image route (' + serverError + ')');
+  if (!tried.length) return 'Could not generate an image: no backend was available.';
+  return 'Could not generate an image. Tried ' + tried.join(' and ') + '.';
+}
+
 // Response bodies are JSON until a proxy, edge, or gateway hands back an
 // HTML/text error page instead (mid-restart deploys do this routinely).
 // Parsing that raw throws SyntaxError, which reads as gibberish to the user,
@@ -1873,6 +1900,9 @@ if (typeof module !== 'undefined' && module.exports) {
     EMPTY_REPLY_NUDGE,
     isGithubTool,
     isWebTool,
+    IMAGE_BACKENDS,
+    imageBackendOrder,
+    imageFailureMessage,
     WORKSPACE_TOOLS,
     WORKSPACE_TOOL_NAMES,
     isWorkspaceTool,

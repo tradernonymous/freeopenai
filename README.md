@@ -78,7 +78,7 @@
   <tr>
     <td valign="top">
       <h3>🖼️ Image generation</h3>
-      Toggle the image icon next to the input to generate a picture instead of chatting. A labelled shimmer placeholder holds the spot while it renders (instant failures say so instead of flashing past). Click any result to zoom in, download, copy, edit with a brush mask, or make variations — every image lands in the Gallery view, newest first.
+      Toggle the image icon next to the input to generate a picture instead of chatting. A labelled shimmer placeholder holds the spot while it renders (instant failures say so instead of flashing past). Click any result to zoom in, download, copy, edit with a brush mask, or make variations — every image lands in the Gallery view, newest first. Puter draws when it is signed in; when it isn't, or when it refuses (credits, access), the request falls through to the server's own image route, so a picture can still arrive instead of a failure that names the wrong problem. When every backend fails the message says which ones were tried and what stopped each.
     </td>
     <td valign="top">
       <h3>🧠 Reasoning summaries</h3>
@@ -238,7 +238,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
-| `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for the Edit flow (`/api/llm/images/edits`). Required — edits refuse clearly without it. |
+| `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for `/api/llm/images/generations` and `/api/llm/images/edits`. Required — both refuse clearly without it, rather than passing on Nara's "Image model is required". |
 | `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — **free tier only**. The picker pins all 19 `:free` models (verified 2026‑09‑12), led by Nemotron 3 Ultra 550B, Inkling / Inkling Small (1M ctx), Nemotron 3.5 Lightning (1M ctx), Gemma 4 31B, Laguna S/XS 2.1 and North Mini Code. `OPENROUTER_FREE_ONLY=0` lifts the free-only gate. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
