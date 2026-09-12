@@ -26,8 +26,20 @@ const {
   setTaskStatus,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
+const {
+  callStage,
+  routeStep,
+  routedStepFailure,
+  toolArgsUnusable,
+  describeRoute,
+  refusedModelIds,
+} = require('../chatlib.js');
 
-const NAMES = ['runChatWithTools', 'runToolCall'];
+// The routing the loop does per step is wired here too, so the per-step routing
+// tests at the foot of this file run against the same harness rather than a
+// second copy of it. The selector and the note are the page's own functions, not
+// stubs -- a stub would let these pass while the shipped wiring did nothing.
+const NAMES = ['runChatWithTools', 'runToolCall', 'routeForStep', 'noteRouteOnce'];
 
 // Arguments are real JSON, not an empty object for every call: two calls to the
 // same tool are only the same call when their arguments match, so a harness
@@ -79,10 +91,13 @@ test('a long round is sent in waves rather than all at once', () => {
   assert.ok(MAX_CONCURRENT_TOOLS > 0);
 });
 
-function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null }) {
+function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null, routing = 'off', models = [], refuseRouted = false }) {
   const events = [];
   const conversation = [];
   const runs = [];
+  // Which model each call was actually sent to, so a routed turn can be checked
+  // end to end rather than by reading the note it printed.
+  const asked = [];
   let round = 0;
   const deps = {
     // The real decisions, so the loop is tested against the shipped rules.
@@ -99,7 +114,10 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null 
     GITHUB_TOOLS: [],
     abortError: () => new Error('aborted'),
     isToolsRejection: () => false,
-    extractMessageText: () => 'text',
+    // Read from the message rather than always answering 'text': a turn that
+    // came back with nothing at all is one of the ways a routed step fails, and
+    // a stub that always says there is text cannot express that.
+    extractMessageText: (m) => (m && m.content) || '',
     extractMessageReasoning: () => '',
     toConversationMessage: (m) => ({ role: 'assistant', content: '', tool_calls: m.tool_calls }),
     extractToolCalls: (m) => (m && m.tool_calls) || [],
@@ -133,6 +151,29 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null 
     // Empty by default, so an unrelated test is not nudged about a plan it never
     // made. The tests that care set their own.
     taskGraph: taskGraph || newTaskGraph(),
+    // The real routing rules from chatlib, and the page's own selector. Routing
+    // is off unless a test asks for it: these tests are about the tool loop, and
+    // switching a second feature on underneath them would quietly rewrite what
+    // they assert rather than testing it.
+    callStage,
+    routeStep,
+    routedStepFailure,
+    toolArgsUnusable,
+    describeRoute,
+    refusedModelIds,
+    routingMode: routing,
+    selectedProvider: 'test-provider',
+    selectedModel: 'big-model',
+    providerModels: models,
+    modelsRefusedBy: new Set(),
+    // Turn-scoped routing state, which the shipped page declares at page scope.
+    // The `with` sandbox resolves these reads and lands the loop's assignments
+    // back here, so a test can watch a flag move.
+    routeNotedThisTurn: false,
+    escalateNextStep: false,
+    toolResultsSeen: 0,
+    escalatedBlankThisTurn: false,
+    lastReplyModel: null,
     // Each runner marks itself busy, waits a tick, then marks itself done. Two
     // overlapping calls therefore appear interleaved, which is the whole point.
     githubTool: 'github',
@@ -154,9 +195,22 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null 
     runUseSkillTool: async () => 'skill',
     // `rounds` lets a test script what the model asks for turn by turn, which
     // is what a repeat across rounds needs; `toolCalls` stays the simple case.
-    callModel: async () => {
+    // askModel is the routed choice for this step, or null for the chosen model.
+    callModel: async (convo, extra, signal, askModel = null) => {
+      asked.push(askModel);
+      // A routed model that refuses this step is marked, which is what sends the
+      // step back to the chosen model instead of ending the turn.
+      if (refuseRouted && askModel) {
+        const refused = new Error('model not found');
+        refused.routed = true;
+        refused.modelId = askModel;
+        throw refused;
+      }
       const planned = rounds ? rounds[round] : round === 0 ? toolCalls : [];
       round += 1;
+      // A round scripted as 'blank' is a model that came back with nothing at
+      // all: no text, no reasoning, no tool calls.
+      if (planned === 'blank') return { message: {}, finishReason: 'stop' };
       if (planned && planned.length) return { message: { tool_calls: planned }, finishReason: 'tool_calls' };
       return { message: { content: 'done' }, finishReason: 'stop' };
     },
@@ -164,7 +218,7 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null 
   deps.conversation = conversation;
   deps.events = events;
   deps.runs = runs;
-  return { deps, conversation, events, runs, ...loadFromIndex(NAMES, deps) };
+  return { deps, conversation, events, runs, asked, ...loadFromIndex(NAMES, deps) };
 }
 
 test('the extracted source is the shipped one, and the sandbox covers it', () => {
@@ -413,9 +467,133 @@ test('a turn that wrote to the list and closed everything is not nagged', async 
 test('the shipped call site hands the loop a memory to remember reads in', () => {
   const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.match(HTML, /readMemoryFor\(activeConversationId\)/, 'the page keeps a per-conversation read memory');
+  // The last argument is whether this turn carries an image, which routing reads
+  // to keep an image turn on a model that can see it. Pinned here because
+  // dropping it would silently let a routed step be handed a picture it cannot
+  // read -- and nothing else in the suite would notice.
   assert.match(
     HTML,
-    /runChatWithTools\(turnConvo, selectedModel, tools, controller\.signal, memo, remembered\)/,
+    /runChatWithTools\(turnConvo, selectedModel, tools, controller\.signal, memo, remembered, !!attachedImageFile\)/,
     'and passes it in, or the memory is written and never read'
   );
+});
+
+// --- Per-step routing, driven through the shipped loop ---
+//
+// The rules are unit-tested in routing.test.js. These are about the loop: that a
+// work step really is asked of the cheaper model, that the plan and the answer
+// are not, and that a cheaper model which cannot do the job hands the work back
+// instead of ending a turn that is already paid for.
+const BIG = { id: 'big-model', pricing: { prompt: 0.000015, completion: 0.000075 }, supportedParameters: ['tools'] };
+const SMALL = { id: 'small-model:free', pricing: { prompt: 0, completion: 0 }, supportedParameters: ['tools'] };
+const SEARCH = (id, query) => call('web_search', id, { query });
+// Tools have to be on offer for any of this to be a work step: with an empty
+// list every call is classified as the answer, which is correct and is what the
+// harness's older tests do -- they are about the tool loop, not about routing.
+const TOOLS = [{ type: 'function', function: { name: 'web_search' } }];
+
+test('routing off is the control: every step stays on the chosen model', async () => {
+  const h = harness({ rounds: [[SEARCH('a', 'one')], [SEARCH('b', 'two')], []], models: [BIG, SMALL] });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  assert.deepEqual(h.asked, [null, null, null]);
+  assert.equal(h.events.filter((e) => /Reading tool results goes to/i.test(e)).length, 0);
+});
+
+test('the plan stays on the chosen model, and the steps that read tool output do not', async () => {
+  const h = harness({
+    rounds: [[SEARCH('a', 'one')], [SEARCH('b', 'two')], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+  });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  // Round 0 is the plan: nothing has been read, so it decides the whole turn.
+  // Round 1 and the round after it have a search result in hand: those are the
+  // input-heavy steps, and they are the ones worth moving.
+  assert.deepEqual(h.asked, [null, SMALL.id, SMALL.id]);
+  // One note for the turn, not one per step, and it names both models -- a turn
+  // served by two models must not look like one.
+  const notes = h.events.filter((e) => /Reading tool results goes to/i.test(e));
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /small-model:free/);
+  assert.match(notes[0], /big-model/);
+});
+
+test('a retry with nothing new to read stays on the chosen model', async () => {
+  // A plan that comes back with nothing is nudged and asked again. Nothing has
+  // been read at that point, so the retry has to answer and there is nothing to
+  // digest -- it is not a work step and must not be moved. This is the one place
+  // the loop can observe that stage directly: once any tool has run, every later
+  // step with tools on offer genuinely is a work step.
+  const h = harness({
+    rounds: ['blank', [], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+  });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  assert.deepEqual(h.asked, [null, null]);
+  assert.equal(h.events.filter((e) => /Reading tool results goes to/i.test(e)).length, 0);
+  // The blank reply was nudged, which is the path that exists for a strong model
+  // stopping short -- not a routed step failing.
+  assert.equal(h.conversation.filter((m) => m.role === 'user').length, 1);
+});
+
+test('a routed step that comes back with nothing hands the next step back', async () => {
+  const h = harness({
+    rounds: [[SEARCH('a', 'one')], 'blank', [], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+  });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  // Round 1 was routed and produced nothing, so round 2 is the chosen model's.
+  assert.deepEqual(h.asked, [null, SMALL.id, null]);
+  assert.ok(
+    h.events.some((e) => /came back with nothing/.test(e) && /big-model/.test(e)),
+    'the transcript says which step failed and where it went'
+  );
+  // And it said it once, not once per retry.
+  assert.equal(h.events.filter((e) => /came back with nothing/.test(e)).length, 1);
+});
+
+test('a routed step that repeats itself hands the next step back', async () => {
+  const h = harness({
+    rounds: [[SEARCH('a', 'one')], [SEARCH('b', 'one')], [SEARCH('c', 'one')], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+  });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  // The same query three times is the routed model failing to read its own
+  // results, so the step that has to make sense of them goes back.
+  assert.equal(h.asked[0], null);
+  assert.equal(h.asked[1], SMALL.id);
+  assert.equal(h.asked[2], SMALL.id, 'the repeat is only a signal once it is a repeat');
+  assert.equal(h.asked[3], null, 'and then the chosen model picks it up');
+  assert.ok(h.events.some((e) => /asked again for something it already had/.test(e)));
+});
+
+test('a routed model that refuses the step is replaced, not reported as the turn failing', async () => {
+  const h = harness({
+    rounds: [[SEARCH('a', 'one')], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+    refuseRouted: true,
+  });
+  const outcome = await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  // Round 1 went to the cheap model, which refused; the same step was then asked
+  // of the chosen model and the turn finished.
+  assert.deepEqual(h.asked, [null, SMALL.id, null]);
+  assert.ok(outcome && outcome.message, 'the turn still produced an answer');
+});
+
+test('arguments the tools cannot use are noticed, not swallowed', async () => {
+  const broken = { id: 'x', type: 'function', function: { name: 'web_search', arguments: '{"query": openviking}' } };
+  const h = harness({
+    rounds: [[SEARCH('a', 'one')], [broken], []],
+    routing: 'auto',
+    models: [BIG, SMALL],
+  });
+  await h.runChatWithTools(h.conversation, 'big-model', TOOLS, null, new Map());
+  // parseToolArgs has to swallow the parse failure to keep the turn alive, which
+  // is exactly why the loop has to notice it separately.
+  assert.ok(h.events.some((e) => /arguments that could not be used/.test(e)));
+  assert.equal(h.asked[2], null, 'the step after the bad one goes back to the chosen model');
 });
