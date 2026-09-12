@@ -1119,6 +1119,61 @@ function describeProviderModel(model) {
   return parts.slice(0, 3).join(' · ');
 }
 
+// The model menu is anchored to a trigger that sits at the foot of the window,
+// so a menu sized for the models in it ran off the bottom of the screen and was
+// clipped by the toolbar it hung from -- roughly one row of a long list was
+// reachable. These bound the menu to whatever space the trigger actually has.
+const MODEL_MENU_MIN_HEIGHT = 180;
+const MODEL_MENU_MAX_HEIGHT = 460;
+const MODEL_MENU_GAP = 6;
+const MODEL_MENU_MARGIN = 8;
+const MODEL_MENU_WIDTH = 380;
+
+// Where the model menu should go, given the trigger's rect and the viewport.
+// Pure geometry, so the clamping can be tested without a browser: the caller
+// only applies the numbers.
+//
+// It opens upward unless there is genuinely more room below, because the trigger
+// lives in the composer at the bottom of the screen. `bottom` and `top` are
+// alternatives -- the caller uses whichever one is a number.
+function placeDropdown(trigger, viewport, overrides = {}) {
+  const gap = overrides.gap === undefined ? MODEL_MENU_GAP : overrides.gap;
+  const margin = overrides.margin === undefined ? MODEL_MENU_MARGIN : overrides.margin;
+  const wantWidth = overrides.width === undefined ? MODEL_MENU_WIDTH : overrides.width;
+  const minHeight = overrides.minHeight === undefined ? MODEL_MENU_MIN_HEIGHT : overrides.minHeight;
+  const maxHeight = overrides.maxHeight === undefined ? MODEL_MENU_MAX_HEIGHT : overrides.maxHeight;
+
+  const rect = trigger || {};
+  const viewWidth = Number(viewport && viewport.width) || 0;
+  const viewHeight = Number(viewport && viewport.height) || 0;
+  const triggerTop = Number(rect.top) || 0;
+  const triggerBottom = Number(rect.bottom) || 0;
+  const triggerRight = Number(rect.right) || 0;
+
+  const spaceAbove = Math.max(0, triggerTop - gap - margin);
+  const spaceBelow = Math.max(0, viewHeight - triggerBottom - gap - margin);
+  // Only open downward when the menu cannot fit above and there is more room
+  // below; otherwise a trigger in the middle of a tall window would flip up.
+  const openUp = spaceBelow < Math.min(maxHeight, spaceAbove);
+  const available = openUp ? spaceAbove : spaceBelow;
+  // Never taller than the space it has, even when that is less than the minimum:
+  // a short menu on screen beats a tall one running off it.
+  const height = Math.min(available, Math.min(maxHeight, Math.max(minHeight, available)));
+
+  const width = Math.max(0, Math.min(wantWidth, viewWidth - margin * 2));
+  // Right-aligned to the trigger at first, then pulled back inside the window.
+  const left = Math.min(Math.max(margin, triggerRight - width), Math.max(margin, viewWidth - width - margin));
+
+  return {
+    openUp,
+    left: Math.round(left),
+    top: openUp ? null : Math.round(triggerBottom + gap),
+    bottom: openUp ? Math.round(viewHeight - triggerTop + gap) : null,
+    width: Math.round(width),
+    maxHeight: Math.round(height),
+  };
+}
+
 // A 402 or 403 can mean two very different things, and the difference decides
 // what to do about it.
 //
@@ -1373,6 +1428,8 @@ if (typeof module !== 'undefined' && module.exports) {
     emitsText,
     isCapableModelId,
     describeProviderModel,
+    placeDropdown,
+    MODEL_MENU_MAX_HEIGHT,
     newConversation,
     sortConversations,
     upsertConversation,

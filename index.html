@@ -327,15 +327,22 @@
         }
         .effort-select:hover { border-color: var(--accent); color: var(--accent); }
         .model-trigger svg { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
+        /* Fixed, not absolute. The trigger lives in the composer toolbar, which
+           scrolls its own contents (overflow-x: auto, which forces overflow-y too),
+           and an absolutely positioned child of that toolbar is clipped by it --
+           the menu was cut down to about one row. The geometry is then set from
+           the trigger's real rect in positionModelDropdown; the values here are
+           the fallback for the moment before that runs. */
         .model-dropdown {
-            position: absolute; top: calc(100% + 6px); right: 16px;
+            position: fixed; top: auto; bottom: calc(84px + env(safe-area-inset-bottom));
+            left: auto; right: 12px;
             background: var(--glass);
             backdrop-filter: blur(14px) saturate(140%);
             -webkit-backdrop-filter: blur(14px) saturate(140%);
             border: 1px solid var(--border);
             border-radius: var(--r);
             padding: 4px;
-            min-width: 240px; max-width: min(92vw, 380px);
+            min-width: 0; max-width: none;
             box-shadow: var(--lift-lg);
             z-index: 50;
             display: none;
@@ -974,7 +981,6 @@
             .message.user { max-width: 88%; }
             .chat-input-area { padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); }
             .status-bar { padding: 0 12px; }
-            .model-dropdown { position: fixed; top: auto; bottom: calc(78px + env(safe-area-inset-bottom)); right: 10px; left: 10px; min-width: 0; }
             /* iOS: prevent input zoom */
             .composer-input, .model-trigger, .effort-select { font-size: 16px; }
             /* A phone header can't hold "Effort: extra high" and still leave room
@@ -1881,6 +1887,9 @@
             modelDropdown.addEventListener('keydown', handleModelDropdownKeydown);
             attachMenu.addEventListener('keydown', handleAttachMenuKeydown);
 
+            // A rotated phone or a resized window moves the trigger out from
+            // under the menu, which would leave it hanging in the wrong place.
+            window.addEventListener('resize', positionModelDropdown);
             document.addEventListener('click', () => {
                 closeModelDropdown();
                 closeAttachMenu();
@@ -1927,6 +1936,25 @@
             }
         }
 
+        // The menu is fixed to the viewport and placed from the trigger's real
+        // rect, so it stays whole however the composer is laid out -- and it
+        // opens upward, because below the composer there is only the edge of
+        // the screen.
+        function positionModelDropdown() {
+            if (!modelDropdown.classList.contains('open')) return;
+            const spot = placeDropdown(
+                modelTrigger.getBoundingClientRect(),
+                { width: window.innerWidth, height: window.innerHeight }
+            );
+            modelDropdown.style.width = spot.width + 'px';
+            modelDropdown.style.maxWidth = spot.width + 'px';
+            modelDropdown.style.maxHeight = spot.maxHeight + 'px';
+            modelDropdown.style.left = spot.left + 'px';
+            modelDropdown.style.right = 'auto';
+            modelDropdown.style.top = spot.openUp ? 'auto' : spot.top + 'px';
+            modelDropdown.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
+        }
+
         function openModelDropdown() {
             closeAttachMenu();
             modelDropdown.classList.add('open');
@@ -1934,6 +1962,7 @@
             modelSearch.hidden = !many;
             modelSearch.value = '';
             filterModelOptions('');
+            positionModelDropdown();
             if (many) modelSearch.focus();
             modelTrigger.setAttribute('aria-expanded', 'true');
         }
