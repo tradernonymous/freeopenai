@@ -3179,6 +3179,82 @@
             toolMemoKey = '';
         }
 
+        // A turn that stopped part-way has already paid for everything in it:
+        // the model calls that decided what to look up, and the lookups
+        // themselves. Throwing that away and asking the same question from the
+        // start is the most expensive thing this app can do, so the conversation
+        // so far is kept and can be carried back into the loop.
+        const PENDING_TURN_KEY = 'freeopenaiPendingTurn';
+        // Only worth resuming while its lookups are still likely true: a file
+        // read half an hour ago may well have changed since.
+        const PENDING_TURN_TTL_MS = 30 * 60 * 1000;
+
+        function readPendingTurn() {
+            try {
+                const stored = parsePendingTurn(localStorage.getItem(PENDING_TURN_KEY) || '');
+                if (!stored) return null;
+                if (!stored.at || Date.now() - stored.at > PENDING_TURN_TTL_MS) {
+                    clearPendingTurn();
+                    return null;
+                }
+                return stored;
+            } catch {
+                return null;
+            }
+        }
+
+        function writePendingTurn(question, convo) {
+            const json = serializePendingTurn({
+                question: question,
+                convo: convo,
+                steps: pendingTurnStepCount(convo),
+                at: Date.now(),
+            });
+            // Too large to store, or nothing to store: the retry still works, it
+            // just starts the tool work again.
+            if (!json) return null;
+            try {
+                localStorage.setItem(PENDING_TURN_KEY, json);
+            } catch {
+                return null;
+            }
+            return json;
+        }
+
+        function clearPendingTurn() {
+            try {
+                localStorage.removeItem(PENDING_TURN_KEY);
+            } catch {
+                /* nothing to clear */
+            }
+        }
+
+        // Carries a restored turn's answers into the memo, so continuing does not
+        // buy the same file reads a second time.
+        function seedToolMemo(memo, convo) {
+            const restored = toolMemoFromConversation(convo);
+            for (const [key, value] of restored) {
+                if (!memo.has(key)) memo.set(key, value);
+            }
+            return restored.size;
+        }
+
+        // What to say when a tool loop stops part-way: the steps already paid
+        // for are kept, and Retry carries on from them.
+        function noteInterruptedTurn(question, convo) {
+            if (!convo || !hasToolWork(convo)) return false;
+            if (!writePendingTurn(question, convo)) return false;
+            const steps = pendingTurnStepCount(convo);
+            // The button rides on the notice itself: there is no reply to put
+            // one under, and the steps are only kept so they can be continued.
+            addMessage(
+                'system',
+                'Kept ' + steps + ' completed tool step(s) — Retry continues from here instead of starting over.',
+                { retryText: question }
+            );
+            return true;
+        }
+
         async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null) {
             // Only one nudge per message: if asking plainly doesn't produce an
             // answer, asking again won't either.
@@ -3481,6 +3557,8 @@
             const controller = new AbortController();
             currentAbort = controller;
             showTypingIndicator();
+            // Held so a failure can keep what the tool loop already paid for.
+            let inFlightConvo = null;
 
             if (generateImage) {
                 await sendImageGeneration(raw, runId, controller);
@@ -3512,12 +3590,33 @@
                         activeSkills = pickSkills(outgoing, selectedMode, catalog);
                         tools.push(USE_SKILL_TOOL);
                     }
+                    // A turn that stopped part-way can be picked back up: the
+                    // question is the same, so the lookups already paid for are
+                    // still the right ones. Anything else starts clean, and drops
+                    // whatever the previous question left behind.
+                    const stored = readPendingTurn();
+                    const resuming = stored && stored.question === raw ? stored : null;
+                    if (stored && !resuming) clearPendingTurn();
+                    const turnConvo = resuming ? resuming.convo : buildConversation(outgoing, activeSkills);
+                    const memo = toolMemoFor(raw);
+                    if (resuming) {
+                        // One continuation line, however many times it is resumed.
+                        const last = turnConvo[turnConvo.length - 1];
+                        if (!last || last.content !== RESUME_CONTINUATION_PROMPT) {
+                            turnConvo.push({ role: 'user', content: RESUME_CONTINUATION_PROMPT });
+                        }
+                        // Rebuilt from the conversation, so the steps already done
+                        // are not bought a second time -- even after a reload.
+                        seedToolMemo(memo, turnConvo);
+                        addMessage('system', 'Resuming the interrupted request — ' + resuming.steps + ' tool step(s) already done');
+                    }
+                    inFlightConvo = turnConvo;
                     const { message, exhausted, finishReason } = await runChatWithTools(
-                        buildConversation(outgoing, activeSkills),
+                        turnConvo,
                         chatModel,
                         tools,
                         controller.signal,
-                        toolMemoFor(raw)
+                        memo
                     );
                     if (!isActiveRun(runId, controller)) return;
                     if (activeSkills && activeSkills.length) {
@@ -3542,6 +3641,7 @@
                     });
                     noteTurnStats(text.length);
                     releaseToolMemo();
+                    clearPendingTurn();
                     showStatus('success', 'Sent');
                     return;
                 }
@@ -3644,6 +3744,10 @@
             } catch (error) {
                 removeTypingIndicator();
                 if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    // Stopping is not failing: the lookups already done are still
+                    // worth keeping, so Retry carries on from here rather than
+                    // paying for them again.
+                    noteInterruptedTurn(raw, inFlightConvo);
                     showStatus('info', 'Generation stopped');
                     return;
                 }
@@ -3662,6 +3766,9 @@
                     const failedOn = (error.providerId || selectedProvider) + '/' + (error.modelId || selectedModel);
                     addMessage('system', `Error (${failedOn}): ` + error.message, { error: true });
                 }
+                // After the failure itself, so the state of the work kept reads
+                // as the answer to it.
+                noteInterruptedTurn(raw, inFlightConvo);
             } finally {
                 releaseRun(controller);
             }
@@ -4400,12 +4507,21 @@
                 // Copy only -- retrying your own message is what the composer
                 // is for, and a second button here would just be noise.
                 el.appendChild(buildMessageActions(null, false, false));
+            } else if (opts.retryText) {
+                // A turn that stopped part-way never produced a reply to put a
+                // button under, so its notice carries one: continuing is the
+                // whole point of what was kept.
+                el.appendChild(buildMessageActions(opts.retryText, false, false));
             }
 
             chatMessages.appendChild(el);
             chatMessages.scrollTop = chatMessages.scrollHeight;
 
-            messages.push({ type, content, reasoning: opts.reasoning || undefined, timestamp: Date.now(), error: !!opts.error });
+            // Only a message that has no reply to sit under needs its own retry
+            // target stored; a bot reply recovers the preceding user turn, so
+            // storing a second copy of the prompt would just double the list.
+            const storedRetry = type === 'bot' ? undefined : opts.retryText || undefined;
+            messages.push({ type, content, reasoning: opts.reasoning || undefined, timestamp: Date.now(), error: !!opts.error, retryText: storedRetry });
             persistMessages();
 
             return el;
@@ -5159,9 +5275,7 @@
                     renderExpiredImageMessage(msg.content);
                     return;
                 }
-                const retryText = (msg.type === 'bot' && saved[i - 1] && saved[i - 1].type === 'user')
-                    ? saved[i - 1].content
-                    : undefined;
+                const retryText = retryTargetFor(msg, saved[i - 1]);
                 addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
             });
         }
