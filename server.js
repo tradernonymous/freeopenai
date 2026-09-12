@@ -576,14 +576,27 @@ const LLM_PROVIDERS = {
     envVar: 'OPENROUTER_API_KEY',
     // Free-tier only. Every id below carries the ":free" suffix and was
     // verified against the live catalogue (https://openrouter.ai/api/v1/models)
-    // on 2026-09-12: 443 models total, 19 of them free. Paid ids were pulled —
+    // on 2026-09-12: 445 models total, 19 of them free. Paid ids were pulled —
     // they only ever produced 402/403 errors on a free key. The allowlist is
     // intersected with the live catalogue, so when one of these is retired the
     // picker silently drops it instead of failing at send time.
+    //
+    // Being listed as free upstream is not enough, which is why one free id is
+    // missing below. OpenRouter also gates some free models to apps it has
+    // approved as an "agentic harness", and answers 403 for the rest -- so an
+    // id can be in the catalogue, priced at zero, and still be unroutable for
+    // us. Nothing in /models marks that gate, so it cannot be filtered out
+    // automatically, only learned from a refusal or left out by hand.
     models: [
       // Long-context reasoning: the 1M-context trio.
+      //
+      // thinkingmachines/inkling:free is left out on purpose: it is what
+      // produced "403: thinkingmachines/inkling:free is only available on
+      // agentic harnesses" on a free key. thinkingmachines/inkling-small:free
+      // is kept because the gate has only been observed on the larger model --
+      // removing a working id on the strength of its name would cost a usable
+      // model, so it stays until a refusal proves otherwise.
       'nvidia/nemotron-3-ultra-550b-a55b:free',
-      'thinkingmachines/inkling:free',
       'nvidia/nemotron-3.5-lightning:free',
       'thinkingmachines/inkling-small:free',
       // General chat.

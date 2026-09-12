@@ -1084,6 +1084,38 @@ function isAccountLevelFailure(message, modelId) {
   return /payment method|payment (is )?required|billing|subscription|upgrade your plan|no active plan|add funds/i.test(text);
 }
 
+// Whether a refusal is about this one model, and so can be routed around by
+// answering with a different one.
+//
+// The status codes are the three providers actually use for it: OpenRouter
+// answers 403 for an app-gated model ("…:free is only available on agentic
+// harnesses"), NVIDIA answers 404 for an id an account cannot reach, and a
+// free key meeting a paid id answers 402.
+//
+// Deliberately false for 429 and 5xx. Those are transient or provider-wide, and
+// retrying them against another model buries a real outage behind a slow crawl
+// through the whole list. An account-level refusal is false for the same
+// reason: every candidate would fail the same way.
+function isModelScopedRefusal(status, message, modelId) {
+  if (status !== 402 && status !== 403 && status !== 404) return false;
+  return !isAccountLevelFailure(message, modelId);
+}
+
+// The id worth trying next, given the models already refused here, or null when
+// nothing is left -- which is the caller's signal to stop retrying and report
+// the failure instead of looping. Returning the id rather than the model keeps
+// the caller's assignment to one line.
+function nextUsableModel(models, refusedIds) {
+  const list = Array.isArray(models) ? models : [];
+  const refused = refusedIds instanceof Set
+    ? (id) => refusedIds.has(id)
+    : Array.isArray(refusedIds)
+      ? (id) => refusedIds.includes(id)
+      : () => false;
+  const candidate = list.find((m) => m && m.id && !refused(m.id));
+  return candidate ? candidate.id : null;
+}
+
 // Server-Sent Events arrive as newline-delimited `data:` lines. A single
 // provider chunk may contain several events, or a half-finished event that
 // the next chunk completes. This parser does not maintain state (that is the
@@ -1248,6 +1280,8 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeProviderReply,
     explainEmptyReply,
     isAccountLevelFailure,
+    isModelScopedRefusal,
+    nextUsableModel,
     usableChatModels,
     isFreeModelId,
     isFreeModel,
