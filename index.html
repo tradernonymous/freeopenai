@@ -708,8 +708,14 @@
         .attachment-thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
         .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
+        /* Fixed to the viewport rather than absolute, for the same reason the
+           model menu is: the controls row scrolls horizontally on a phone, and
+           a scroll container clips anything positioned outside its own box --
+           which is exactly where a menu that opens above the trigger lives.
+           positionAttachMenu() sets the real coordinates; these are the
+           fallback for the frame before it runs. */
         .attach-menu {
-            position: absolute; bottom: calc(100% + 8px); left: 0;
+            position: fixed; top: auto; bottom: calc(84px + env(safe-area-inset-bottom)); left: 12px;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--r);
@@ -1972,7 +1978,10 @@
 
             // A rotated phone or a resized window moves the trigger out from
             // under the menu, which would leave it hanging in the wrong place.
-            window.addEventListener('resize', positionModelDropdown);
+            window.addEventListener('resize', () => {
+                positionModelDropdown();
+                positionAttachMenu();
+            });
             document.addEventListener('click', () => {
                 closeModelDropdown();
                 closeAttachMenu();
@@ -4690,9 +4699,38 @@
             if (attachMenu.classList.contains('open')) closeAttachMenu();
             else openAttachMenu();
         }
+        // The attach menu is anchored to the paperclip's own rect and to the left
+        // edge of it, unlike the model menu, which is anchored to its trigger's
+        // right edge: this one opens from the start of the controls row.
+        function positionAttachMenu() {
+            if (!attachMenu.classList.contains('open')) return;
+            const rect = attachTrigger.getBoundingClientRect();
+            const view = { width: window.innerWidth, height: window.innerHeight };
+            const spot = placeDropdown(rect, view, {
+                width: ATTACH_MENU_WIDTH,
+                minHeight: ATTACH_MENU_MIN_HEIGHT,
+                maxHeight: ATTACH_MENU_MAX_HEIGHT,
+            });
+            const margin = 8;
+            const left = Math.min(
+                Math.max(margin, Math.round(rect.left)),
+                Math.max(margin, view.width - spot.width - margin)
+            );
+            attachMenu.style.width = spot.width + 'px';
+            attachMenu.style.maxWidth = spot.width + 'px';
+            attachMenu.style.maxHeight = spot.maxHeight + 'px';
+            attachMenu.style.left = left + 'px';
+            attachMenu.style.right = 'auto';
+            attachMenu.style.top = spot.openUp ? 'auto' : spot.top + 'px';
+            attachMenu.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
+        }
+
         function openAttachMenu() {
             closeModelDropdown();
             attachMenu.classList.add('open');
+            // Placed while open, so the measured position cannot be lost to the
+            // display:none it comes from.
+            positionAttachMenu();
             attachTrigger.setAttribute('aria-expanded', 'true');
         }
         function closeAttachMenu() {
