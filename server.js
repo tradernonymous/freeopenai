@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
+const pkg = require('./package.json');
 const {
   SESSION_COOKIE_NAME,
   SESSION_TTL_MS,
@@ -26,7 +27,10 @@ const {
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
-const PUBLIC_PATHS = new Set(['/login.html', '/api/login']);
+// '/api/health' is public on purpose: it reports what the running deploy
+// actually is, so a merge can be confirmed live instead of assumed. The
+// response is written to carry no secrets — see llmHealth.
+const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/api/health']);
 const LOGIN_RATE_LIMIT = 10;
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 const loginAttempts = new Map();
@@ -219,8 +223,8 @@ function handleLogout(req, res) {
   res.end(JSON.stringify({ ok: true }));
 }
 
-function sendJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+function sendJson(res, status, body, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -732,6 +736,27 @@ function providerConfig(id) {
   // proxy, and lets the tests point at a local stand-in.
   const baseUrl = process.env[provider.envVar.replace(/_API_KEY$/, '_BASE_URL')] || provider.baseUrl;
   return { ...provider, key, baseUrl };
+}
+
+// Deploy verification, deliberately public: it exists so a merge can be
+// confirmed live instead of assumed. That makes this field list a security
+// boundary — ids and counters only, never keys, base URLs, account names or
+// paths, and never whether a provider is configured, which would let anyone
+// enumerate which of the operator's keys are present.
+function llmHealth(req, res) {
+  // The route below accepts HEAD as well as GET, so an uptime monitor lands
+  // here instead of falling through to the static handler, which answers 200
+  // with index.html. Node suppresses the body for a HEAD response on its own.
+  sendJson(res, 200, {
+    ok: true,
+    version: pkg.version,
+    // Railway injects these; null locally, which is itself the answer.
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    branch: process.env.RAILWAY_GIT_BRANCH || null,
+    uptimeSeconds: Math.round(process.uptime()),
+    // Source knowledge, not deployment state: every provider this build knows.
+    providers: Object.keys(LLM_PROVIDERS),
+  }, { 'Cache-Control': 'no-store' });
 }
 
 // Which providers the user can actually pick. A provider with no key stays out
@@ -1522,6 +1547,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
+    if (urlPath === '/api/health' && (req.method === 'GET' || req.method === 'HEAD')) return llmHealth(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
     if (urlPath === '/api/skills' && req.method === 'GET') return llmSkills(req, res);
     if (urlPath === '/api/skills/content' && req.method === 'GET') return llmSkillContent(req, res);
