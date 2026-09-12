@@ -50,3 +50,15 @@ test('settings selects resist the iOS focus zoom on phones', () => {
   assert.ok(portrait, 'the portrait media block is gone -- re-point this test');
   assert.match(portrait[0], /\.settings-row select\s*\{[^}]*font-size:\s*16px/);
 });
+
+test('the chat card shrinks to the shell instead of overflowing it on a phone', () => {
+  // .chat-card is a flex child of .chat-shell with the default min-width:auto.
+  // The composer's toolbar is a row of flex-shrink:0 controls, so the card
+  // refused to shrink below that toolbar's width on a phone, pushed the chat
+  // bar's right edge (the menu button) past the viewport, and .chat-shell's
+  // overflow:hidden clipped it. The toolbar scrolls now; the card must not
+  // blow out to its min-content width.
+  const block = HTML.match(/\.chat-card\s*\{[^}]*\}/);
+  assert.ok(block, '.chat-card rule is gone -- re-point this test');
+  assert.match(block[0], /min-width:\s*0/, 'the card must be allowed to shrink -- a refactor re-added min-width:auto');
+});

@@ -256,6 +256,13 @@
             display: flex;
             flex-direction: column;
             min-height: 0;
+            /* min-width:auto lets the card refuse to shrink below its widest
+               content, and the composer's toolbar row is a long line of
+               flex-shrink:0 controls. On a phone that pushed the card to its
+               min-content width and the chat bar's right edge (menu button)
+               past the viewport, clipped by .chat-shell. 0 lets it shrink so
+               the toolbar scrolls inside the composer instead. */
+            min-width: 0;
             background: var(--surface);
             border: 1px solid var(--border);
             overflow: visible;
