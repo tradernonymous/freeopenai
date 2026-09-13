@@ -35,9 +35,9 @@ function harness(t) {
     dir,
     marker,
     accounts: path.join(dir, 'data', 'antigravity-accounts.json'),
-    run(env) {
+    run(env, cwd = dir) {
       const output = execFileSync('sh', [ENTRYPOINT], {
-        cwd: dir,
+        cwd,
         encoding: 'utf8',
         env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, ...env },
       });
@@ -81,6 +81,38 @@ test('a missing seed variable is survivable, not fatal', { skip: shWorks ? false
   assert.equal(h.bunArgs(), 'run src/server.ts', 'it must still run the proxy');
   assert.match(out, /AG_ACCOUNTS_JSON is empty/, 'and say what is missing');
   assert.equal(fs.existsSync(h.accounts), false, 'and not invent an empty file');
+});
+
+test('an IPv4-only bind is switched to dual-stack for Railway private networking', { skip: shWorks ? false : 'no sh on this machine' }, (t) => {
+  // Railway routes .railway.internal over IPv6 ULA addresses, but the generated
+  // proxy binds "0.0.0.0" (IPv4-only) — the app resolves the name, connects to
+  // the IPv6 address, and gets ECONNREFUSED. The entrypoint must flip the bind
+  // to "::" so the proxy answers on the address the app actually connects to.
+  const h = harness(t);
+  const src = path.join(h.dir, 'src');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'server.ts'), '/* generated */\n    hostname: "0.0.0.0",\n  port: 3000,\n');
+
+  const out = h.run({ ACCOUNTS_FILE: h.accounts, AG_ACCOUNTS_JSON: '{"accounts":[]}' }, h.dir);
+
+  const rewritten = fs.readFileSync(path.join(src, 'server.ts'), 'utf8');
+  assert.equal(rewritten.includes('hostname: "0.0.0.0"'), false, 'the IPv4-only bind must be gone');
+  assert.equal(rewritten.includes('hostname: "::"'), true, 'and replaced with the dual-stack bind');
+  assert.match(out, /switched to ::/, 'and say so, because the log is the only way to see it worked');
+  assert.equal(h.bunArgs(), 'run src/server.ts', 'and still end up running the proxy');
+});
+
+test('a proxy that already binds dual-stack is left alone', { skip: shWorks ? false : 'no sh on this machine' }, (t) => {
+  const h = harness(t);
+  const src = path.join(h.dir, 'src');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'server.ts'), 'hostname: "::",\n');
+
+  h.run({ ACCOUNTS_FILE: h.accounts, AG_ACCOUNTS_JSON: '{"accounts":[]}' }, h.dir);
+
+  const untouched = fs.readFileSync(path.join(src, 'server.ts'), 'utf8');
+  assert.match(untouched, /hostname: "::"/, 'the dual-stack bind must survive');
+  assert.doesNotMatch(untouched, /hostname: "0\.0\.0\.0"/);
 });
 
 test('with no ACCOUNTS_FILE the script stays out of the way', { skip: shWorks ? false : 'no sh on this machine' }, (t) => {

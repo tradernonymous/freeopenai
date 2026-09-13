@@ -51,7 +51,7 @@ From the app, the failure tells you which half is wrong:
 | --- | --- |
 | Antigravity absent from the model picker | `ANTIGRAVITY_BASE_URL` is unset on the app service, or it was not redeployed |
 | `Could not reach Antigravity: fetch failed (ENOTFOUND: the host name did not resolve)` | the service name does not resolve — wrong name, or a different project/environment |
-| `... fetch failed (ECONNREFUSED: the host resolved but nothing is listening on that port)` | the name resolves, the container is not up — check its deploy logs |
+| `... fetch failed (ECONNREFUSED: the host resolved but nothing is listening on that port)` | the name resolves but the app cannot connect to any listening socket — usually the IPv6-only private-network bind. The proxy's generated server binds `0.0.0.0` (IPv4-only); Railway routes `.railway.internal` over IPv6, so nothing answers the address the app connects to. The entrypoint here switches the bind to `::` (dual-stack) automatically, so re-deploying the proxy picks up the fix. If it still refuses, check the container is actually up in its deploy logs. |
 | `429: Quota Exhausted: All accounts failed` | the proxy is reachable and has no accounts — the seed variable or the entrypoint did not take |
 | Works, then stops | the account's daily quota is spent |
 

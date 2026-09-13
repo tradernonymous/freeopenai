@@ -12,7 +12,20 @@
 # truth: editing it and redeploying is all it takes to change accounts. The
 # proxy's own runtime state (health scores, cooldowns) is not preserved unless a
 # volume is mounted, and never was across a redeploy that replaces the container.
+#
+# Railway's private network (the .railway.internal names) hands the app an IPv6
+# ULA address (fd12::/8), but the generated proxy binds "0.0.0.0", which is
+# IPv4-only -- so the app resolves the name, connects to the IPv6 address, and
+# gets ECONNREFUSED because nothing is listening there. Flipping the bind to
+# "::" makes it dual-stack: it answers on both the IPv6 address Railway routes
+# to and any IPv4 that still works. Only done when the source literally binds
+# 0.0.0.0, so a future upstream that fixes this on its own is left alone.
 set -e
+
+if [ -f src/server.ts ] && grep -q 'hostname: "0.0.0.0"' src/server.ts; then
+  sed -i 's/hostname: "0.0.0.0"/hostname: "::"/' src/server.ts
+  echo "[entrypoint] proxy binds 0.0.0.0 (IPv4-only); switched to :: so Railway private networking (IPv6) can reach it"
+fi
 
 if [ -n "${ACCOUNTS_FILE}" ]; then
   mkdir -p "$(dirname "${ACCOUNTS_FILE}")"
