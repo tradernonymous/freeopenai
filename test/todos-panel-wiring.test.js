@@ -321,14 +321,19 @@ test('the panels are cards beside the chat, and drawers on a phone', () => {
   assert.ok(!/position: absolute/.test(skillCard), 'the skills card follows the same shape');
   assert.match(skillCard, /margin: 10px 0 10px 10px/);
 
-  // Both narrow layouts turn the todo card into an off-canvas drawer, from the
-  // right, flush and square: at 640px and in a landscape phone there is no room
-  // for a card beside anything.
-  const portrait = HTML.slice(HTML.indexOf('@media (max-width: 640px)'), HTML.indexOf('@media (max-width: 380px)'));
-  assert.match(portrait, /\.todo-sidebar \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
-  assert.match(portrait, /\.chat-shell\.todos-hidden \.todo-sidebar \{[\s\S]*?translateX\(102%\)/);
-  const landscape = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape)'));
-  assert.match(landscape, /\.todo-sidebar \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0/);
+  // Both small screens -- a portrait phone and a short landscape one -- turn the
+  // todo card into an off-canvas drawer from the right, flush and square: there
+  // is no room for a card beside anything. That shape is shared, so it lives in
+  // the one small-screen block; the landscape block only narrows how much of the
+  // width the drawer takes.
+  const small = HTML.slice(
+    HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape)'),
+    HTML.indexOf('@media (max-width: 380px)'),
+  );
+  assert.match(small, /\.todo-sidebar \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
+  assert.match(small, /\.chat-shell\.todos-hidden \.todo-sidebar \{[\s\S]*?translateX\(102%\)/);
+  const landscape = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
+  assert.match(landscape, /\.todo-sidebar,[\s\S]*?width: 32%/);
   // With no room for a third column the skills card yields first: it is
   // information, and the same facts are a tap away in the picker.
   assert.match(HTML, /@media \(max-width: 1100px\) \{\s*\.skill-rail, #skillRailToggle \{ display: none; \}/);

@@ -47,6 +47,16 @@
             --ctl-bg: rgba(255,255,255,.05);
             --ctl-bg-hover: rgba(255,255,255,.1);
             --ctl-edge: rgba(255,255,255,.08);
+            /* Small-screen geometry. Declared once so the shared small-screen
+               layer and the two orientation blocks cannot disagree about how
+               tall the bar is or how big a finger target must be. */
+            --bar-h: 44px;
+            --touch: 44px;
+            /* A user bubble is a tint over whatever surface is behind it. It
+               was hard-coded white-on-white, which is why the bubble vanished
+               in the light theme; a token lets each palette say what one is. */
+            --bubble-user: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.07));
+            --bubble-edge: rgba(255,255,255,.09);
         }
         /* Light theme: same tokens, inverted monochrome. Code blocks stay
            dark on purpose -- a dark well reads as code in either theme. */
@@ -70,6 +80,10 @@
             --ctl-bg: rgba(0,0,0,.04);
             --ctl-bg-hover: rgba(0,0,0,.08);
             --ctl-edge: rgba(0,0,0,.06);
+            /* A dark tint over a light surface, so the bubble reads as a bubble
+               instead of the white-on-white it was. */
+            --bubble-user: linear-gradient(180deg, rgba(0,0,0,.07), rgba(0,0,0,.035));
+            --bubble-edge: rgba(0,0,0,.09);
         }
         html[data-theme="light"] .message-text pre { background: #111111; border-color: #333333; }
         html[data-theme="light"] .message-text pre code { color: #eeeeee; }
@@ -168,20 +182,10 @@
         /* A horizontal scroller inside a message shouldn't get the full-size bar. */
         .message-text pre::-webkit-scrollbar { height: 8px; }
 
-        /* Menu trigger button, one per view's chat-bar (replaces the old top header) */
-        .menu-trigger-btn {
-            position: relative;
-            width: 32px; height: 32px;
-            border-radius: var(--r-sm);
-            background: transparent;
-            border: 1px solid transparent;
-            color: var(--text-dim);
-            cursor: pointer;
-            display: grid; place-items: center;
-            transition: var(--transition);
-        }
-        .menu-trigger-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
-        .menu-trigger-btn svg { width: 16px; height: 16px; }
+        /* Menu trigger button, one per view's chat-bar (replaces the old top header).
+           Its shape comes from the shared icon-control rule further down, beside
+           .icon-btn and .modal-close; only the signed-in badge is its own. */
+        .menu-trigger-btn { position: relative; }
         .menu-trigger-btn .signed-in-dot {
             position: absolute; top: 2px; right: 2px;
             width: 7px; height: 7px; border-radius: 50%;
@@ -396,10 +400,12 @@
             padding: 7px 10px; display: flex; align-items: center; gap: 8px;
         }
         .todo-foot button {
-            background: none; border: none; padding: 0; cursor: pointer;
-            font: inherit; font-size: 11px; color: var(--text-muted);
+            background: var(--ctl-bg); border: 1px solid var(--ctl-edge);
+            border-radius: var(--ctl-r); min-height: 24px; padding: 0 8px;
+            cursor: pointer; font: inherit; font-size: 11px; color: var(--text-muted);
+            transition: var(--transition);
         }
-        .todo-foot button:hover { color: var(--text-dim); }
+        .todo-foot button:hover { background: var(--ctl-bg-hover); color: var(--text-dim); }
         .todo-foot button.danger:hover { color: var(--danger); }
 
         /* The reasoning strip: what the model is doing, in one line, while it
@@ -451,20 +457,19 @@
 
         /* Chat header bar */
         .chat-bar {
-            /* Translucent, so content scrolling underneath is felt rather than
-               hidden behind an opaque slab. */
-            background: var(--glass);
-            backdrop-filter: blur(14px) saturate(140%);
-            -webkit-backdrop-filter: blur(14px) saturate(140%);
+            /* Opaque, and said once. This block used to set a translucent
+               --glass background and a backdrop-filter, then override both two
+               lines later -- so the blur ran on every frame of a scrolling
+               transcript to tint a surface that was already solid. */
+            background: var(--bg-elevated);
             box-shadow: inset 0 -1px 0 rgba(255,255,255,.04);
             position: relative; z-index: 20;
-            height: 44px;
+            height: var(--bar-h);
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 0 14px;
             border-bottom: 1px solid var(--border);
-            background: var(--bg-elevated);
             gap: 12px;
         }
         .chat-bar-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
@@ -480,9 +485,13 @@
         /* The menu button is the only way to reach the drawer, so it never shrinks
            and never scrolls off; the model and effort controls give way instead. */
         .chat-bar-actions > .menu-trigger-btn, .chat-bar-actions > .icon-btn { flex-shrink: 0; }
-        .icon-btn {
+        /* One square icon control. The chat bar's icon button, the menu trigger
+           and every dialog's close button were three copies of these same seven
+           declarations -- which is how a close button drifts away from the
+           control beside it. They share one rule now. */
+        .icon-btn, .menu-trigger-btn, .modal-close {
             width: 32px; height: 32px;
-            border-radius: var(--r-sm);
+            border-radius: var(--ctl-r);
             background: transparent;
             border: 1px solid transparent;
             color: var(--text-dim);
@@ -490,8 +499,9 @@
             display: grid; place-items: center;
             transition: var(--transition);
         }
-        .icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
-        .icon-btn svg { width: 16px; height: 16px; }
+        .icon-btn:hover, .menu-trigger-btn:hover, .modal-close:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+        .icon-btn svg, .modal-close svg { width: 16px; height: 16px; }
+        .menu-trigger-btn svg { width: 16px; height: 16px; }
 
         /* Model selector - compact icon-only */
         .model-trigger {
@@ -508,13 +518,15 @@
             transition: var(--transition);
             white-space: nowrap;
         }
-        .model-trigger:hover { background: var(--ctl-bg-hover); border-color: var(--border-strong); }
         .model-trigger, .effort-select { box-shadow: var(--lift); }
-        .model-trigger:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--lift-lg); }
+        .model-trigger:hover { background: var(--ctl-bg-hover); border-color: var(--accent); color: var(--accent); box-shadow: var(--lift-lg); }
         .effort-select:focus { outline: none; border-color: var(--border-strong); box-shadow: var(--glow); }
+        /* A select is a control like any other: the same radius and fill as the
+           chips beside it, so the one native widget in the row stops being the
+           one thing that reads as a different shape. */
         .effort-select {
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--r-sm); color: var(--text-dim);
+            background: var(--ctl-bg); border: 1px solid var(--border);
+            border-radius: var(--ctl-r); color: var(--text-dim);
             font-family: inherit; font-size: 12px; padding: 6px 8px;
             cursor: pointer; transition: var(--transition);
         }
@@ -604,10 +616,13 @@
         @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .message.user {
             align-self: flex-end;
-            background: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.07));
+            /* The bubble is a tint over the surface, so it is themed rather
+               than hard-coded: the light theme's white-on-white had no bubble
+               at all until this became a token. */
+            background: var(--bubble-user);
             color: var(--text);
             padding: 10px 14px;
-            border: 1px solid rgba(255,255,255,.09);
+            border: 1px solid var(--bubble-edge);
             border-radius: 18px;
             border-bottom-right-radius: 4px;
             box-shadow: var(--lift);
@@ -651,7 +666,10 @@
         .message-reasoning > summary {
             cursor: pointer;
             padding: 4px 8px;
-            font-size: 9px;
+            /* 9px was a stray from a smaller type scale and read as a smudge.
+               The summary is the control that opens the reasoning, so it is
+               sized like text. */
+            font-size: 12px;
             color: var(--text-muted);
             list-style: none;
             user-select: none;
@@ -661,8 +679,10 @@
         .message-reasoning[open] > summary { border-bottom: 1px solid var(--border); }
         .reasoning-text {
             padding: 6px 8px;
-            font-size: 7px;
-            line-height: 1.8;
+            /* 7px is not readable at any distance; the reasoning is body text
+               that happens to be dimmed, so it is sized as body text. */
+            font-size: 11px;
+            line-height: 1.7;
             color: var(--text-muted);
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -703,7 +723,7 @@
             right: 6px;
             font-size: 11px;
             padding: 3px 9px;
-            border-radius: 6px;
+            border-radius: var(--ctl-r);
             background: var(--surface-2);
             border: 1px solid var(--border);
             color: var(--text-dim);
@@ -805,7 +825,7 @@
         @keyframes holo-caret { 50% { opacity: 0; } }
         .image-caption { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
         .image-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-        .caption-copy { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-dim); font-size: 11px; padding: 3px 8px; cursor: pointer; flex-shrink: 0; }
+        .caption-copy { background: none; border: 1px solid var(--border); border-radius: var(--ctl-r); color: var(--text-dim); font-size: 11px; padding: 3px 8px; cursor: pointer; flex-shrink: 0; }
         .caption-copy:hover { background: var(--surface-2); color: var(--text); }
         /* Showcase gallery: uniform tiles, prompt on hover. */
         .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
@@ -1090,6 +1110,36 @@
             border-radius: var(--r-sm); padding: 6px 10px; font-size: 13px; max-width: 55%;
         }
         .settings-row-column { flex-direction: column; align-items: stretch; gap: 12px; }
+
+        /* Settings sections. Fourteen rows of equal weight gave no answer to
+           "where is the thing I came for", so the rows are grouped and the
+           groups are named in a rail across the top of the view. The rail sits
+           outside the scrolling body, so it stays put while the rows move. */
+        .settings-nav {
+            display: flex; gap: 4px; padding: 10px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-elevated);
+            overflow-x: auto; scrollbar-width: none; flex-shrink: 0;
+        }
+        .settings-nav::-webkit-scrollbar { display: none; }
+        .settings-nav-btn {
+            flex-shrink: 0; height: var(--ctl-h); padding: 0 12px;
+            border-radius: var(--ctl-r); background: var(--ctl-bg);
+            border: 1px solid var(--ctl-edge); color: var(--text-dim);
+            font: inherit; font-size: 11px; font-weight: 500;
+            display: inline-flex; align-items: center;
+            cursor: pointer; white-space: nowrap; transition: var(--transition);
+        }
+        .settings-nav-btn:hover { background: var(--ctl-bg-hover); border-color: var(--border-strong); color: var(--text); }
+        .settings-nav-btn:focus-visible { outline: none; box-shadow: var(--glow); border-color: var(--accent); }
+        /* The heading is the group label and the jump target of the rail above,
+           which is why it carries the id the rail looks for. */
+        .settings-section-title {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: .08em; color: var(--text-muted);
+            padding-top: 6px; scroll-margin-top: 12px;
+        }
+        .settings-body > .settings-section-title:first-child { padding-top: 0; }
         .github-panel-head {
             display: flex; align-items: center; justify-content: space-between;
             gap: 10px; width: 100%; flex-wrap: wrap;
@@ -1121,11 +1171,19 @@
             font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
         .icon-btn-text {
-            padding: 8px 14px; border-radius: var(--r-sm); background: var(--surface);
-            border: 1px solid var(--border); color: var(--text); font-size: 12px; cursor: pointer;
-            transition: var(--transition); white-space: nowrap;
+            /* The labelled control: the same tokens as every chip and icon
+               button, just wider. It used to invent its own fill, radius and
+               padding, which is why a dialog's buttons looked like a different
+               app from the toolbar that opened it. */
+            height: var(--ctl-h); padding: 0 12px;
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            border-radius: var(--ctl-r); background: var(--ctl-bg);
+            border: 1px solid var(--ctl-edge); color: var(--text);
+            font: inherit; font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: var(--transition); white-space: nowrap;
         }
-        .icon-btn-text:hover { border-color: var(--accent); color: var(--accent); }
+        .icon-btn-text:hover { background: var(--ctl-bg-hover); border-color: var(--accent); color: var(--accent); }
+        .icon-btn-text:focus-visible { outline: none; box-shadow: var(--glow); border-color: var(--accent); }
         .icon-btn-text.danger:hover { border-color: var(--danger); color: var(--danger); }
 
         .models-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1161,9 +1219,6 @@
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
         .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
         .modal-header h3 { font-size: 15px; font-weight: 600; }
-        .modal-close { width: 32px; height: 32px; border-radius: var(--r-sm); background: transparent; border: 1px solid transparent; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; transition: var(--transition); }
-        .modal-close:hover { background: var(--surface-2); color: var(--text); }
-        .modal-close svg { width: 16px; height: 16px; }
         .modal-body { padding: 20px; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
         .modal-body ul { list-style: none; }
         .modal-body li { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
@@ -1245,10 +1300,29 @@
             .message-image-wrap img { max-width: 100%; }
         }
 
-        /* Responsive */
-        @media (max-width: 640px) {
+        /* Responsive.
+           Two things make a screen small here: a portrait phone (narrow) and a
+           landscape phone (short). A landscape phone is usually wider than
+           640px -- 844x390 is typical -- so keying every ergonomic fix to width
+           alone left it with a mouse-sized UI: 32px icon buttons, 13px fields
+           iOS zooms on focus, two-column settings rows, and hover-only deletes
+           a finger can never reveal. The rules below are grouped by what they
+           are rather than by which query they used to sit in:
+
+             SMALL            what any finger-driven, space-starved screen needs.
+                              Both conditions get it.
+             <=380            the extra squeeze on the narrowest phones.
+             SHORT LANDSCAPE  geometry only: how wide the off-canvas panels are,
+                              and how thin the fixed strips can be.
+
+           The same two conditions are named once in JS (SMALL_SCREEN_QUERY),
+           because the page also decides at load time whether a panel starts
+           open, and that answer has to be the one the CSS already gave. */
+        @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
+            /* A phone's bar carries finger-sized controls, so it is taller. */
+            :root { --bar-h: 52px; }
             .drawer-footer .auth-name { max-width: 120px; }
-            .chat-bar { padding: 0 8px; height: 52px; gap: 4px; }
+            .chat-bar { padding: 0 8px; gap: 4px; }
             .chat-bar-actions { gap: 2px; }
             /* Icon buttons keep their 44px finger target via the ::after rule
                below, so the visible glyph can shrink to fit 375px. */
@@ -1266,16 +1340,31 @@
                too doubled the dead zone under the composer on every phone. */
             .chat-input-area { padding: 10px 10px 10px; }
             .status-bar { padding: 0 12px; }
-            /* iOS: prevent input zoom */
-            .composer-input, .model-trigger, .effort-select { font-size: 16px; }
+            /* iOS zooms any focused field under 16px, which turns a dropdown
+               into a zoomed viewport. Every field in the page, not just the
+               composer's: the settings and GitHub ones only got the guard in
+               portrait, so a landscape phone still zoomed. */
+            .composer-input, .model-trigger, .effort-select, #providerSelect,
+            .settings-row select, .github-browser-row select, .github-browser-row input,
+            #githubFileContent, .model-dropdown-search, .palette input, .mask-prompt {
+                font-size: 16px;
+            }
             /* A phone header can't hold "Effort: extra high" and still leave room
                for the menu button, so the picker shows the level alone. */
             .effort-select { max-width: 92px; padding: 6px 4px; }
-            /* Pseudo elements don't render inside a select, so these are sized
-               for real rather than padded out like the buttons. */
-            .effort-select, #providerSelect { min-height: 44px; }
+            /* One row, one height. A 44px select beside a 30px chip is most of
+               what made a phone toolbar look assembled rather than designed, so
+               every control in the row is a finger target. min-height beats the
+               height the desktop tokens set, which is why it works on the chips
+               without a second rule for each of them. */
+            .model-trigger, .effort-chip, .mode-chip, .skills-toggle,
+            .effort-select, #providerSelect { min-height: var(--touch); }
             .effort-select option { font-size: 14px; }
             .model-trigger { padding: 6px 6px; }
+            /* The model picker is the reason the control row exists, and here it
+               sat behind four chips in a scroller nothing says is a scroller.
+               It goes first; the rest still scroll. */
+            .composer-model-controls { order: -1; }
             .history-sidebar {
                 position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
                 width: 78%; max-width: 300px;
@@ -1315,10 +1404,11 @@
             }
             .chat-shell.todos-hidden .todo-scrim { opacity: 0; pointer-events: none; }
             /* A phone row is a finger target, so it grows and the delete button
-               stops being hover-only -- there is no hover to reveal it with. */
+               stops being hover-only -- there is no hover to reveal it with.
+               The reveal itself lives in the (hover: none) block below, since
+               that is a pointer question rather than a size one. */
             .todo-row { padding: 12px 10px; }
             .todo-check { width: 22px; height: 22px; }
-            .todo-remove { opacity: 1; }
             /* Touch targets. Both Apple and Google ask for ~44px, and the icon
                buttons here are 24-32px. Growing them for real would push the
                header past 375px, so the hit area is extended with a pseudo
@@ -1349,6 +1439,8 @@
             .model-option { padding: 12px; }
             .attach-menu-item { padding: 14px 12px; }
             .drawer-nav-btn { padding: 14px; }
+            .settings-nav-btn { min-height: 34px; }
+            .todo-foot button { min-height: 34px; }
 
             /* Stacked so the file path and its button aren't fighting for 375px. */
             .github-browser-row { flex-direction: column; }
@@ -1363,15 +1455,15 @@
             .reasoning-text { max-height: 160px; }
             /* The summary is what you tap to open it, so give it real height. */
             .message-reasoning > summary { padding: 15px 10px; }
-            .composer-input { min-height: 44px; }
-            .composer-attach, .composer-send { width: 44px; height: 44px; }
+            .composer-input { min-height: var(--touch); }
+            .composer-attach, .composer-send { width: var(--touch); height: var(--touch); }
             .settings-body { padding: 14px; }
             .settings-row { flex-direction: column; align-items: flex-start; gap: 10px; }
             .settings-row select, .settings-row button { max-width: 100%; width: 100%; }
             /* A settings select keeps its 13px on desktop, which iOS answers
                with a zoomed viewport the moment it is tapped — same treatment
                the composer inputs already get, plus a finger-sized target. */
-            .settings-row select { font-size: 16px; min-height: 44px; }
+            .settings-row select { min-height: var(--touch); }
             .empty-state p { font-size: 14px; }
             /* 13px is fine with a mouse, but iOS zooms any focused input
                under 16px -- and a zoomed dropdown is a broken dropdown. */
@@ -1422,14 +1514,22 @@
             .skill-rail, #skillRailToggle { display: none; }
         }
 
+        /* A screen with no hover state never reveals an affordance that depends
+           on one: the sidebar's per-chat delete and the todo row's remove both
+           stay hidden until a pointer passes over, which on a touchscreen is
+           never. Keyed to the pointer rather than the width -- a touchscreen
+           laptop has no hover either. */
         @media (hover: none) {
-            .history-item .history-delete { opacity: 1; }
+            .history-item .history-delete, .todo-remove { opacity: 1; }
         }
 
-        /* A landscape phone trades height for width, so every fixed strip
-           steals a big slice of the transcript. Tighten them. */
+        /* A landscape phone trades height for width, so every fixed strip steals
+           a big slice of the transcript. Tighten them, and give the off-canvas
+           panels a narrower share of the width than portrait's 78%. The shared
+           small-screen layer above already made them off-canvas and set the
+           scrim, so only what differs by orientation lives here. */
         @media (max-height: 520px) and (orientation: landscape) {
-            .chat-bar { height: 44px; }
+            :root { --bar-h: 46px; }
             .chat-input-area { padding: 6px 10px 6px; }
             .chat-messages { padding: 12px; gap: 16px; }
             .composer { padding: 6px; border-radius: 18px; }
@@ -1437,48 +1537,19 @@
             .composer-model-controls #modelLabel { max-width: 92px; }
             .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
             .skills-toggle, .mode-chip { padding-inline: 8px; }
+            /* Height is the scarce axis here, so the whole strip -- input,
+               round buttons and every chip -- goes one notch under the 44px
+               finger target together, rather than one control at a time. */
+            .model-trigger, .effort-chip, .mode-chip, .skills-toggle,
+            .effort-select, #providerSelect { min-height: 38px; }
             .composer-input { min-height: 32px; }
             .composer-send, .composer-attach { width: 38px; height: 38px; }
             .status-bar { height: 22px; }
             .modal { max-height: 90vh; }
-            /* A 224px sidebar is a third of a landscape phone's width, so the
-               off-canvas treatment from the portrait block applies here too,
-               with the same scrim and toggle behaviour. */
-            .history-sidebar {
-                position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
-                width: 34%; max-width: 300px;
-                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
-                transform: translateX(0); transition: transform 180ms ease;
-            }
-            .chat-shell.history-hidden .history-sidebar {
-                width: 34%; opacity: 1; transform: translateX(-102%);
-                border-right-color: var(--border);
-            }
-            /* Landscape has width to spare and height to lose, so the panel is
-               narrower here and starts closed: a transcript is what a short
-               viewport needs most. */
-            .todo-sidebar {
-                position: absolute; top: 0; bottom: 0; right: 0; z-index: 40;
-                width: 32%; max-width: 300px; margin: 0;
-                border-radius: 0; border-width: 0 0 0 1px;
-                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
-                transform: translateX(0); transition: transform 180ms ease;
-            }
-            .chat-shell.todos-hidden .todo-sidebar {
-                width: 32%; opacity: 1; transform: translateX(102%);
-                border-left-color: var(--border);
-            }
-            .chat-shell { position: relative; }
-            .history-scrim {
-                display: block; position: absolute; inset: 0; z-index: 39;
-                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
-            }
-            .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
-            .todo-scrim {
-                display: block; position: absolute; inset: 0; z-index: 39;
-                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
-            }
-            .chat-shell.todos-hidden .todo-scrim { opacity: 0; pointer-events: none; }
+            .history-sidebar,
+            .chat-shell.history-hidden .history-sidebar { width: 34%; max-width: 300px; }
+            .todo-sidebar,
+            .chat-shell.todos-hidden .todo-sidebar { width: 32%; max-width: 300px; }
         }
     </style>
 </head>
@@ -1699,7 +1770,17 @@
                         </button>
                     </div>
                 </div>
+                <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
+                    <button class="settings-nav-btn" type="button" data-section="model" onclick="jumpToSettingsSection('model')">Model</button>
+                    <button class="settings-nav-btn" type="button" data-section="chat" onclick="jumpToSettingsSection('chat')">Chat</button>
+                    <button class="settings-nav-btn" type="button" data-section="workspace" onclick="jumpToSettingsSection('workspace')">Workspace</button>
+                    <button class="settings-nav-btn" type="button" data-section="skills" onclick="jumpToSettingsSection('skills')">Skills</button>
+                    <button class="settings-nav-btn" type="button" data-section="account" onclick="jumpToSettingsSection('account')">Account</button>
+                    <button class="settings-nav-btn" type="button" data-section="github" onclick="jumpToSettingsSection('github')">GitHub</button>
+                    <button class="settings-nav-btn" type="button" data-section="server" onclick="jumpToSettingsSection('server')">Server</button>
+                </nav>
                 <div class="settings-body">
+                    <h3 class="settings-section-title" id="settingsSectionModel">Model</h3>
                     <div class="settings-row">
                         <div>
                             <strong>Default model</strong>
@@ -1707,6 +1788,7 @@
                         </div>
                         <select id="defaultModelSelect" aria-label="Default model"></select>
                     </div>
+                    <h3 class="settings-section-title" id="settingsSectionAccount">Account</h3>
                     <div class="settings-row">
                         <div>
                             <strong>Account</strong>
@@ -1721,6 +1803,7 @@
                         </div>
                         <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
                     </div>
+                    <h3 class="settings-section-title" id="settingsSectionWorkspace">Workspace</h3>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
                             <strong>Workspace files</strong>
@@ -1739,6 +1822,7 @@
                             <button class="icon-btn-text danger" onclick="clearTaskList(true)">Clear the task list</button>
                         </div>
                     </div>
+                    <h3 class="settings-section-title" id="settingsSectionChat">Chat</h3>
                     <div class="settings-row">
                         <div>
                             <strong>Auto-retry on a transient provider error</strong>
@@ -1760,19 +1844,6 @@
                         </div>
                         <input type="checkbox" id="routingCheck" checked onchange="setRoutingEnabled(this.checked)" aria-label="Send tool-reading steps to the cheapest model">
                     </div>
-                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
-                        <div>
-                            <strong>Agent skills</strong>
-                            <p class="settings-hint" id="skillsStatus">Loading the skill library…</p>
-                        </div>
-                        <div class="skills-list" id="skillsList" aria-label="Installed agent skills"></div>
-                    </div>
-                    <div class="settings-row">
-                        <div>
-                            <strong>Server response limits</strong>
-                            <p class="settings-hint" id="limitsHint">Loading…</p>
-                        </div>
-                    </div>
                     <div class="settings-row">
                         <div>
                             <strong>Compact notices</strong>
@@ -1780,6 +1851,15 @@
                         </div>
                         <input type="checkbox" id="compactNoticesCheck" onchange="setCompactNotices(this.checked)" aria-label="Hide tool and system notices">
                     </div>
+                    <h3 class="settings-section-title" id="settingsSectionSkills">Skills</h3>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Agent skills</strong>
+                            <p class="settings-hint" id="skillsStatus">Loading the skill library…</p>
+                        </div>
+                        <div class="skills-list" id="skillsList" aria-label="Installed agent skills"></div>
+                    </div>
+                    <h3 class="settings-section-title" id="settingsSectionGithub">GitHub</h3>
                     <div class="settings-row" id="githubDisconnectedRow">
                         <div>
                             <strong>GitHub</strong>
@@ -1810,6 +1890,13 @@
                                 <button class="icon-btn-text" onclick="githubCommit()">Commit</button>
                             </div>
                             <p class="settings-hint" id="githubActionStatus"></p>
+                        </div>
+                    </div>
+                    <h3 class="settings-section-title" id="settingsSectionServer">Server</h3>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Server response limits</strong>
+                            <p class="settings-hint" id="limitsHint">Loading…</p>
                         </div>
                     </div>
                 </div>
@@ -1957,6 +2044,10 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                     Gallery
                 </button>
+                <button class="drawer-nav-btn" type="button" onclick="openPaletteFromDrawer()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Command palette
+                </button>
                 <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                     Save chat as PDF
@@ -2001,6 +2092,12 @@
         // free models to approved agentic apps, and nothing in the catalogue
         // says which -- only trying finds out, so remember the answer.
         const modelsRefusedBy = new Set();
+
+        // What counts as a small screen, written once and read by the CSS of
+        // the same name in this file. Declared with the rest of the state
+        // because the startup block decides whether a side panel begins closed
+        // before any of the functions below run.
+        const SMALL_SCREEN_QUERY = '(max-width: 640px), (max-height: 520px) and (orientation: landscape)';
 
         // Which service answers. 'puter' needs no key; the others go through our
         // own server, which holds the key.
@@ -2842,6 +2939,20 @@
         function switchViewFromDrawer(name) {
             switchView(name);
             closeDrawer();
+        }
+
+        // The settings rail is navigation, not filtering: clicking a chip is a
+        // request to go there, so the named heading is brought to the top of the
+        // scrolling body rather than nudged into view.
+        function jumpToSettingsSection(slug) {
+            const heading = document.getElementById('settingsSection' + String(slug || '').charAt(0).toUpperCase() + String(slug || '').slice(1));
+            if (!heading || typeof heading.scrollIntoView !== 'function') return;
+            let reduced = false;
+            try {
+                reduced = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+                    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            } catch { /* a stub DOM with no matchMedia still gets the jump */ }
+            heading.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
         }
 
         function toggleModelDropdown() {
@@ -6499,6 +6610,12 @@
         // boot-test stub never trips over missing nodes at load.
         let paletteIndex = 0;
         let paletteItems = [];
+        // The palette is the app's jump-to-anything, and a phone has no Ctrl+P
+        // to open it with -- so the drawer offers it as a row too.
+        function openPaletteFromDrawer() {
+            closeDrawer();
+            openPalette();
+        }
         function paletteActions() {
             const actions = [
                 { label: 'New chat', hint: 'session', run: () => startNewConversation() },
@@ -6853,11 +6970,13 @@
         }
 
         function isNarrowScreen() {
-            // Portrait phones, and any short landscape phone: in both, the
-            // history sidebar overlays the chat instead of sitting beside it,
-            // so it should start out of the way.
-            return window.matchMedia('(max-width: 640px)').matches
-                || window.matchMedia('(hover: none) and (orientation: landscape) and (max-height: 520px)').matches;
+            // Portrait phones, and any short landscape phone: in both, the side
+            // panels overlay the chat rather than sitting beside it, so they
+            // should start out of the way. This reads the same condition the
+            // CSS does -- keeping a second copy here is exactly how the two
+            // drifted apart before, when the JS carried a pointer test the CSS
+            // did not and a short landscape window got an overlay starting open.
+            return window.matchMedia(SMALL_SCREEN_QUERY).matches;
         }
 
         // force true shows, false hides, undefined toggles. persist false is for

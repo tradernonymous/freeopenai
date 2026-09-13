@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply in a centered 768px column at compact density. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
+      Ask anything and get a streamed, markdown-rendered reply at compact density, spanning the transcript column rather than a fixed 768px one. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -68,7 +68,7 @@
     </td>
     <td valign="top">
       <h3>⚙️ Settings</h3>
-      Default model, sign-in state, and a one-click "clear history" — all local, nothing leaves your browser.
+      Grouped under named sections — Model, Chat, Workspace, Skills, Account, GitHub, Server — with a chip rail across the top that jumps to any of them, so fourteen rows no longer read as one undifferentiated scroll. Default model, sign-in state, and a one-click "clear history" are all local; nothing leaves your browser.
     </td>
     <td valign="top">
       <h3>♿ Accessible by default</h3>
@@ -114,7 +114,7 @@
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
-      A slide-out drawer, safe-area insets, 16px inputs so iOS doesn't zoom, a Send key on soft keyboards, no double-tap delay, a layout that resizes with the keyboard instead of hiding behind it, wrapped links, capped image heights, and controls that shrink rather than shove each other off a 375px screen.
+      One small-screen definition covers a portrait phone <b>and</b> a landscape one — the landscape case matters because at 844×390 the screen is <i>wider</i> than the 640px breakpoint, so keying everything to width alone left it with a mouse-sized UI. Both get off-canvas side panels with a scrim, 44px finger targets, 16px fields everywhere (so iOS never zooms a focused one), finger-sized rows, and no hover-only deletes. The composer's control strip is one height, and the model picker is first in it. Plus safe-area insets, a Send key on soft keyboards, no double-tap delay, a layout that resizes with the keyboard instead of hiding behind it, wrapped links and capped image heights. Desktop keeps its own density: 30px controls, three columns, no forced 16px text.
     </td>
   </tr>
   <tr>
@@ -173,7 +173,7 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | Action | How |
 | --- | --- |
 | Send a message | Type and press `Enter` (`Shift+Enter` for a newline) |
-| Switch model | Click the model pill in the chat header, or open the **Models** tab |
+| Switch model | Click the model pill in the composer, or open the **Models** tab |
 | Attach a file | Paperclip icon — an image, a PDF/DOCX, or a text file |
 | Generate an image | Image icon next to the input — describes what to draw instead of chatting |
 | View / download an image | Click any generated image to zoom in, with a download link |
@@ -187,6 +187,8 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | Connect GitHub | **Settings** tab → **Connect GitHub** → load or commit a file in any of your public repos |
 | Ask the model to use GitHub | Once connected, just say it in chat — *"read my README and fix the typos"*. Each repo action shows in the transcript, and commits ask first. |
 | Set reasoning effort | The picker beside the model pill, on models that support it |
+| Jump to anything | `Ctrl+P`, or **Command palette** in the drawer — type a model name or an action (a phone has no Ctrl+P, so the drawer carries it too) |
+| Find a setting | The section chips across the top of **Settings** — Model, Chat, Workspace, Skills, Account, GitHub, Server |
 | Save the chat as a PDF | **Save chat as PDF** in the drawer — prints through your browser, so on a phone it lands in the share sheet |
 | Sign in / out | Account icon, top right, or the **Settings** tab |
 
