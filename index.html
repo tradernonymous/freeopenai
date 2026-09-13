@@ -627,13 +627,15 @@
             line-height: 1.6;
             word-wrap: break-word;
             animation: slideIn 150ms ease;
-            /* A long session keeps every bubble in the DOM. This takes the ones
-               scrolled out of view out of layout and paint, which is the
-               difference between a smooth scroll and a slide show on a phone.
-               contain-intrinsic-size remembers the last measured height, so the
-               scrollbar does not jump while a bubble is skipped. */
-            content-visibility: auto;
-            contain-intrinsic-size: auto 96px;
+            /* Keep each bubble's styles self-contained so a long transcript can
+               be painted independently, but do not skip its layout: the browser
+               must be able to compute one honest scrollHeight for jump-to-newest,
+               rotation, and restored chats. `content-visibility: auto` looked
+               attractive here but lets flex children report a stale maximum on
+               some mobile/Chromium combinations, which makes a jump land in the
+               middle of a conversation. Reliability wins over that speculative
+               paint saving. */
+            contain: style;
         }
         /* Restoring a saved chat builds every bubble at once; animating all of
            them is a two-hundred-element slide-in for content already read. */
@@ -1565,14 +1567,20 @@
             #themeToggle { display: none; }
         }
 
-        /* A phone that has no hover state never reveals the delete affordances
-           that rely on it, so the sidebar's per-chat delete stays hidden for
-           every chat except the active one. Make it always visible. */
-        /* The skills card is information rather than a control, so it is the
-           first thing to go when there is no room: below this, the same facts
-           are a tap away in the skill picker, and the chat keeps its width. */
-        @media (max-width: 1100px) {
+        /* A 1440px desktop is not wide enough for history + skills + chat +
+           todos at their comfortable widths. Let the informational skills rail
+           yield before the transcript does; it remains reachable from the
+           composer picker and returns at genuinely wide desktop sizes. */
+        @media (min-width: 1101px) and (max-width: 1499px) {
             .skill-rail, #skillRailToggle { display: none; }
+        }
+
+        /* At very wide desktop sizes the side panels may remain visible without
+           squeezing the actual reading surface. This minimum is a layout budget,
+           not a magic width for the prose: code and images can still use the
+           whole card, while the message measure keeps ordinary text readable. */
+        @media (min-width: 1500px) {
+            .chat-card { min-width: 700px; }
         }
 
         /* A screen with no hover state never reveals an affordance that depends

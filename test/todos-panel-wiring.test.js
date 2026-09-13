@@ -336,7 +336,7 @@ test('the panels are cards beside the chat, and drawers on a phone', () => {
   assert.match(landscape, /\.todo-sidebar,[\s\S]*?width: 32%/);
   // With no room for a third column the skills card yields first: it is
   // information, and the same facts are a tap away in the picker.
-  assert.match(HTML, /@media \(max-width: 1100px\) \{\s*\.skill-rail, #skillRailToggle \{ display: none; \}/);
+  assert.match(HTML, /@media \(min-width: 1101px\) and \(max-width: 1499px\) \{\s*\.skill-rail, #skillRailToggle \{ display: none; \}/);
 });
 
 test('every control in the toolbar is built from the same four values', () => {

@@ -213,6 +213,7 @@ npm start
 ```bash
 npm test      # node --test — server logic + shared chat helpers
 npm run lint  # eslint
+npm run smoke # optional clean-profile Chrome smoke check (Node 22+ and Chrome required)
 ```
 
 <br>
