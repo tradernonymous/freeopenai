@@ -8,9 +8,11 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
-    environment:
-      TUNNEL_TOKEN: ""
+    # Quick tunnel (default): public trycloudflare.com URL, needs NO token.
+    # Grab the printed https://xxx.trycloudflare.com from `docker logs app-cloudflared-1`.
+    command: tunnel --no-autoupdate --url http://omniroute:20128
+    # Permanent URL: put the connector token in .env (TUNNEL_TOKEN=eyJ...) then swap the command to:
+    # command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on: [omniroute]
     restart: unless-stopped
 
