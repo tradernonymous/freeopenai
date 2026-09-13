@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply at compact density, spanning the transcript column rather than a fixed 768px one. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
+      Ask anything and get a streamed, markdown-rendered reply at compact density, set to a <b>760px reading measure</b> inside a window you can actually see the edges of. Scroll up while a reply is still being written and it stays where you put it — a count of what arrived appears above the composer, and one tap takes you back down. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -423,6 +423,20 @@ The list sits **beside the chat**: a floating card on the right rather than a ta
 It is kept in the browser like the workspace and rides in the system prompt when it isn't empty, so a later turn — or a different chat — can pick the work up where it stopped. **When a reply arrives while the list it touched this turn still has items open, the app hands it back to the model once and asks it to finish them or say plainly which are open**, because "done, all sorted" reads as complete while three unticked rows sit beside it. The check is armed only by a turn that actually wrote to the list, so an old open task from another conversation never interrupts an answer about something else.
 
 No approval is asked for a change: it alters nothing outside the conversation, and a dialog in front of every status change would make planning unusable. **Settings → Tasks** shows the count and points at the panel rather than repeating the list, since two renderings of one list is two places for it to be wrong.
+
+### ⬇️ Reading while it writes
+
+A reply that arrives while you are reading something above it is the case every streaming app gets wrong. This one used to write the scroll position from ten places, nine of them unconditional, so a streamed reply dragged you back to the bottom roughly every 40ms and you could not read anything until it finished. There was also no "am I at the bottom?" answer anywhere, which is why a scroll-to-bottom control could not exist: it had nothing to be drawn from.
+
+The policy now lives in `chatlib.js` as rules that are tested without a browser — *at the bottom* means within 120px of the newest line, a transcript too short to scroll is always at the bottom, and only two things may move you against your own scrolling: **the message you just sent**, and **something you asked for** (tapping the pill, opening a saved chat). Everything else — a streamed chunk, a tool notice, a picture finishing — obeys the pin. One seam (`appendToTranscript`) is where every arrival goes, so this is a decision rather than an accident of which function appended it.
+
+When output lands while you are reading above it, a pill appears above the composer: **`3 new`** when there is a count to give, `New output` while a turn is still running, `Newest` when you have scrolled up in a reply that has stopped growing. It is anchored to the reading column rather than the window edge, so on a wide screen it sits where the text is.
+
+Two details that took a real browser to find. Off-screen bubbles are laid out lazily for scroll performance, so the bottom of the transcript is a *moving* maximum: a single write to it lands a few lines short, and a jump therefore settles over a few frames, bounded so it can never spin. And a **rotation** re-lays the whole transcript, which fires a scroll event with a clamped position that reads as "the reader scrolled away" — so the pin is read *before* the re-layout and restored after it, or turning your phone would drop you into the middle of an old reply.
+
+**A turn says what it is doing.** The three dots said "busy", which is the same for a two-second lookup and a stuck provider; beside them a label now names the step — `Thinking…`, the tool being run, `Writing the reply…` — and goes away with the row.
+
+**Generated pictures are kept, not just described.** Every Puter image arrives as a `data:` URL, with the whole picture inside the string, and history kept only `http(s)` links — so the picture was dropped the moment it was saved. The bubble showed it (still in memory) while the Gallery, which reads saved history, had nothing but the prompt. A generated image is now re-encoded down to a 1024px JPEG, stored, and the newest eight per chat are kept; a remote link is left as it stands, because those bytes were never ours. When browser storage fills up, **the pictures go before the history does** — a chat with no image is still a chat, a chat with no history is a loss — and every step of that is a rule in `chatlib.js` with its own test rather than a try/catch nobody reads.
 
 <a name="antigravity"></a>
 

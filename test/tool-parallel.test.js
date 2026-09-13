@@ -126,6 +126,9 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
     },
     describeToolCall: (name) => 'step: ' + name,
     addMessage: (role, text) => events.push(text),
+    // The activity line beside the dots, which the loop names the current step
+    // to. Not what these tests are about, so it records and moves on.
+    setActivity: (text) => events.push('activity:' + text),
     showStatus: (kind, text) => events.push(kind + ': ' + text),
     isGithubTool: (n) => n.startsWith('github_'),
     isWebTool: (n) => n.startsWith('web_'),

@@ -136,6 +136,9 @@ function harness({ models, answers, streamed = null }) {
     addMessage: (role, text) => notes.push(`${role}: ${text}`),
     // finalizePartial's DOM surface, observed so the tests can assert on it.
     persistMessages() {},
+    // Where the transcript sits is transcript.test.js's subject; here the
+    // partial ending is, so the scroll seam is inert.
+    scrollTranscript() {},
     setMessageContent() {},
     setReasoningContent() {},
     buildMessageActions: () => null,

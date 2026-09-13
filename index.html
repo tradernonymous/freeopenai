@@ -52,6 +52,12 @@
                tall the bar is or how big a finger target must be. */
             --bar-h: 44px;
             --touch: 44px;
+            /* The reading measure. The transcript window still spans the screen
+               -- the panels sit beside it, and code, tables and images use the
+               width -- but prose set 1400px wide loses the reader on every
+               line. The message column and the composer share this number, so
+               the input sits under the text it is answering. */
+            --measure: 760px;
             /* A user bubble is a tint over whatever surface is behind it. It
                was hard-coded white-on-white, which is why the bubble vanished
                in the light theme; a token lets each palette say what one is. */
@@ -454,6 +460,15 @@
             border: 1px solid var(--border);
             overflow: visible;
         }
+        /* The transcript is a window inside the app frame, not the frame itself.
+           Edge to edge it read as "the page" rather than as a conversation with
+           a size, and the reading column floated in whatever width the display
+           happened to be. A small inset and a rounded edge give it boundaries.
+           The small-screen layer drops the inset -- a phone's transcript wants
+           every pixel -- and the card keeps `overflow: visible` because the
+           model picker and attach menu hang below the composer. */
+        #viewChat { padding: 10px; }
+        #viewChat .chat-card { border-radius: var(--r-lg); box-shadow: var(--lift); }
 
         /* Chat header bar */
         .chat-bar {
@@ -612,7 +627,17 @@
             line-height: 1.6;
             word-wrap: break-word;
             animation: slideIn 150ms ease;
+            /* A long session keeps every bubble in the DOM. This takes the ones
+               scrolled out of view out of layout and paint, which is the
+               difference between a smooth scroll and a slide show on a phone.
+               contain-intrinsic-size remembers the last measured height, so the
+               scrollbar does not jump while a bubble is skipped. */
+            content-visibility: auto;
+            contain-intrinsic-size: auto 96px;
         }
+        /* Restoring a saved chat builds every bubble at once; animating all of
+           them is a two-hundred-element slide-in for content already read. */
+        .chat-messages.no-anim .message { animation: none; }
         @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .message.user {
             align-self: flex-end;
@@ -626,15 +651,15 @@
             border-radius: 18px;
             border-bottom-right-radius: 4px;
             box-shadow: var(--lift);
-            /* Right edge tracks the message column, which now spans near the
-               full window instead of the old 768px column, matching opencode's
-               chat. */
-            max-width: min(88%, calc(100% - 40px));
+            /* Right edge tracks the reading measure rather than the window: a
+               bubble pinned to the screen edge beside a 760px column floats
+               away from the text it is answering. */
+            max-width: min(88%, var(--measure));
             margin-left: auto;
-            margin-right: 12px;
+            margin-right: max(12px, calc((100% - var(--measure)) / 2));
         }
-        .message.bot { align-self: center; width: 100%; max-width: 100%; padding: 2px 0; }
-        .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: 100%; text-align: center; }
+        .message.bot { align-self: center; width: 100%; max-width: min(100%, var(--measure)); padding: 2px 0; }
+        .message.system { align-self: center; background: transparent; color: var(--text-muted); font-size: 12px; padding: 4px 12px; max-width: min(100%, var(--measure)); text-align: center; }
         /* Long error text — a lure URL, a socket path, a stack line — must wrap
            inside the scroll window, never escape it. The scroll area's flex
            children each take min-width:0 (below) so a centered system bubble can
@@ -900,7 +925,11 @@
            center track and width as .message.bot, so the dots sit exactly
            where the reply will start instead of floating outside the
            conversation. */
-        .typing-indicator { display: flex; align-items: center; gap: 6px; padding: 10px 16px; align-self: center; width: 100%; max-width: 100%; color: var(--text-muted); font-size: 12px; }
+        .typing-indicator { display: flex; align-items: center; gap: 8px; padding: 10px 16px; align-self: center; width: 100%; max-width: min(100%, var(--measure)); color: var(--text-muted); font-size: 12px; }
+        /* What the agent is doing, not just that it is doing something: the dots
+           say "busy", which is the same for a two-second lookup and a stuck
+           provider. The label names the step and its age. */
+        .typing-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .typing-dots { display: flex; gap: 3px; }
         .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: typing 1.2s infinite ease-in-out; }
         .typing-dots span:nth-child(2) { animation-delay: .15s; }
@@ -936,9 +965,34 @@
             border-top: 1px solid var(--border);
             background: var(--bg-elevated);
             padding: 12px 16px;
+            /* The way back to the newest output is anchored here, so it tracks
+               the composer as the textarea grows instead of living at a guessed
+               offset from the card. */
+            position: relative;
         }
+        /* Shown only while the reader is scrolled away from the newest output,
+           carrying a count, because "3 new" answers the only question that
+           matters at that moment: is it worth going back down. */
+        .scroll-bottom {
+            /* Anchored to the reading measure, not the window: on a wide screen
+               the column is centred, so a pill at the window's right edge would
+               float nowhere near the text it returns you to. */
+            position: absolute; top: -34px; z-index: 30;
+            right: max(16px, calc((100% - var(--measure)) / 2 + 16px));
+            display: none; align-items: center; gap: 6px;
+            height: var(--ctl-h); padding: 0 12px;
+            border-radius: 999px;
+            background: var(--surface-2); border: 1px solid var(--border-strong);
+            color: var(--text-dim); font: inherit; font-size: 11px; font-weight: 500;
+            white-space: nowrap;
+            cursor: pointer; box-shadow: var(--lift-lg); transition: var(--transition);
+        }
+        .scroll-bottom.visible { display: inline-flex; }
+        .scroll-bottom:hover { color: var(--text); border-color: var(--accent); }
+        .scroll-bottom:focus-visible { outline: none; box-shadow: var(--glow); }
+        .scroll-bottom svg { width: 12px; height: 12px; }
         .attachment-chip {
-            display: flex; align-items: center; gap: 8px; width: 100%; max-width: 100%; margin: 0 auto 8px;
+            display: flex; align-items: center; gap: 8px; width: 100%; max-width: var(--measure); margin: 0 auto 8px;
             padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
             background: var(--surface); font-size: 12px; color: var(--text-dim);
         }
@@ -981,7 +1035,7 @@
         .composer {
             display: flex; flex-direction: column; gap: 4px;
             width: 100%;
-            max-width: 100%;
+            max-width: var(--measure);
             margin-inline: auto;
             background: var(--surface);
             border: 1px solid var(--border);
@@ -1005,7 +1059,7 @@
 
         /* Skills pinned to this chat, above the composer. Hidden when there are
            none: a permanent empty row is worse than no row. */
-        .skill-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; align-items: center; }
+        .skill-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 auto 6px; max-width: var(--measure); align-items: center; }
         .skill-bar[hidden] { display: none; }
         .skill-pin {
             display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
@@ -1320,7 +1374,14 @@
            open, and that answer has to be the one the CSS already gave. */
         @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
             /* A phone's bar carries finger-sized controls, so it is taller. */
-            :root { --bar-h: 52px; }
+            :root { --bar-h: 52px; --measure: 100%; }
+            /* Full bleed. The desktop inset is a frame around a window; on a
+               phone the window is the screen. */
+            #viewChat { padding: 0; }
+            /* The keyboard takes half a landscape phone's height, and the status
+               bar is the first thing that can go while it is up. */
+            body.keyboard-open .status-bar { display: none; }
+            .scroll-bottom { top: -40px; height: 34px; }
             .drawer-footer .auth-name { max-width: 120px; }
             .chat-bar { padding: 0 8px; gap: 4px; }
             .chat-bar-actions { gap: 2px; }
@@ -1639,6 +1700,10 @@
                     </div>
 
                     <div class="chat-input-area">
+                        <button class="scroll-bottom" id="scrollBottom" type="button" onclick="jumpToNewest()" aria-label="Scroll to the newest output" title="Scroll to the newest output">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m6 13 6 6 6-6"/></svg>
+                            <span class="scroll-bottom-label">Newest</span>
+                        </button>
                         <div class="attachment-chip" id="attachmentChip" hidden>
                             <img class="attachment-thumb" id="attachmentThumb" alt="" hidden>
                             <span class="attachment-name" id="attachmentName"></span>
@@ -2694,15 +2759,137 @@
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
-        // Some on-screen keyboards shrink the visual viewport without moving
-        // the layout viewport, which can strand the newest message under the
-        // keyboard. If the reader was pinned to the bottom, stay pinned.
-        // Guarded: the boot-test stub DOM has no visualViewport, so this is
-        // a no-op there.
+        // Where the transcript sits, and who is allowed to move it. The app used
+        // to write scrollTop = scrollHeight from ten places, nine of them
+        // unconditional -- a streaming reply dragged the reader back to the
+        // bottom every 40ms, and there was no "am I at the bottom?" state for a
+        // jump-to-newest control to read. The rules live in chatlib.js so they
+        // can be tested without a browser; this is the one place they touch the
+        // DOM.
+        let transcriptPinned = true;
+        let unreadWhileDetached = 0;
+
+        function updateScrollBottomPill() {
+            const pill = document.getElementById('scrollBottom');
+            if (!pill) return;
+            pill.classList.toggle('visible', !transcriptPinned);
+            const label = pill.querySelector('.scroll-bottom-label');
+            if (!label) return;
+            // A count answers the only question at that moment -- is it worth
+            // going back down -- so it is used whenever there is one to give.
+            label.textContent = unreadWhileDetached > 0
+                ? unreadWhileDetached + ' new'
+                : (isTyping ? 'New output' : 'Newest');
+        }
+
+        // Off-screen bubbles are laid out lazily, so the scroll height is still
+        // moving after a write that lands on a stale maximum -- which is how a
+        // jump to the newest output stops a few lines short. The second write is
+        // on the next frame, when the layout it depended on exists, and it
+        // re-checks the pin first so a reader who grabbed the scrollbar in
+        // between keeps their place.
+        function pinTranscriptToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            if (typeof requestAnimationFrame !== 'function') return;
+            let tries = 0;
+            const settle = () => {
+                if (!transcriptPinned) return;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                const gap = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+                // Writing the maximum can itself reveal more layout above it,
+                // which moves the maximum. Repeat while it is still moving, with
+                // a hard stop so this can never spin.
+                if (gap > 4 && ++tries < 12) requestAnimationFrame(settle);
+            };
+            requestAnimationFrame(settle);
+        }
+
+        function setTranscriptPinned(pinned) {
+            if (pinned === transcriptPinned) return;
+            transcriptPinned = pinned;
+            if (pinned) unreadWhileDetached = 0;
+            updateScrollBottomPill();
+        }
+
+        // Everything that lands in the transcript goes through here, so whether
+        // an arrival is allowed to drag the reader is a decision rather than an
+        // accident of which function appended it.
+        function appendToTranscript(el, source) {
+            const detached = !transcriptPinned;
+            chatMessages.appendChild(el);
+            if (detached && announcesUnread(source)) unreadWhileDetached += 1;
+            if (shouldFollowTranscript(source, transcriptPinned)) {
+                // A jump source moves the reader, so the state moves with them.
+                // The scroll event that would normally notice cannot run until
+                // after this function returns, and until it does the pill would
+                // sit there claiming output already on screen.
+                unreadWhileDetached = 0;
+                transcriptPinned = true;
+                pinTranscriptToBottom();
+            }
+            updateScrollBottomPill();
+            return el;
+        }
+
+        // Text growing inside a bubble that is already on screen: pinned keeps
+        // up with it, detached is left where the reader put it.
+        function scrollTranscript(source) {
+            if (shouldFollowTranscript(source, transcriptPinned)) chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Back to the newest output, and out of the detached state.
+        function jumpToNewest() {
+            unreadWhileDetached = 0;
+            transcriptPinned = true;
+            pinTranscriptToBottom();
+            updateScrollBottomPill();
+        }
+
+        // While a re-layout is settling. The layout itself fires scroll events,
+        // and a clamped scroll position reads as "the reader scrolled away" when
+        // nothing touched the scrollbar -- so those are ignored.
+        let layoutSettlingUntil = 0;
+
+        chatMessages.addEventListener('scroll', () => {
+            const atBottom = transcriptAtBottom(chatMessages.scrollTop, chatMessages.scrollHeight, chatMessages.clientHeight);
+            if (atBottom) unreadWhileDetached = 0;
+            else if (Date.now() < layoutSettlingUntil) return;
+            setTranscriptPinned(atBottom);
+        });
+
+        // A rotation or a resized window re-lays the transcript out, and a reader
+        // who was pinned has no way to know it happened -- they just find
+        // themselves looking at the middle of an old reply. The pin is read
+        // before the re-layout, because afterwards the answer is the wrong one.
+        // The write waits for the layout it describes: the first resize event
+        // arrives before it.
+        let resizeSettle = 0;
+        window.addEventListener('resize', () => {
+            const wasPinned = transcriptPinned;
+            layoutSettlingUntil = Date.now() + 600;
+            if (resizeSettle) clearTimeout(resizeSettle);
+            resizeSettle = setTimeout(() => {
+                resizeSettle = 0;
+                if (wasPinned) {
+                    transcriptPinned = true;
+                    pinTranscriptToBottom();
+                }
+                updateScrollBottomPill();
+            }, 150);
+        });
+
+        // Some on-screen keyboards shrink the visual viewport without moving the
+        // layout viewport, which can strand the newest message under the keys.
+        // Two things follow: a pinned transcript stays pinned, and the body
+        // carries the keyboard state so the CSS can give up the status bar for
+        // the height instead. Guarded: the boot-test stub DOM has no
+        // visualViewport, so this is a no-op there.
         if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
             window.visualViewport.addEventListener('resize', () => {
-                const nearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 120;
-                if (nearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+                const viewport = window.visualViewport;
+                const keyboard = !!(window.innerHeight && viewport.height < window.innerHeight - 120);
+                if (document.body && document.body.classList) document.body.classList.toggle('keyboard-open', keyboard);
+                if (transcriptPinned) chatMessages.scrollTop = chatMessages.scrollHeight;
             });
         }
         const chatInput = document.getElementById('chatInput');
@@ -4835,7 +5022,10 @@
                 // queued up behind each other.
                 for (const call of calls) {
                     const fn = (call && call.function) || {};
-                    addMessage('system', describeToolCall(fn.name, parseToolArgs(fn.arguments)));
+                    const line = describeToolCall(fn.name, parseToolArgs(fn.arguments));
+                    addMessage('system', line);
+                    // So a long tool round reads as progress rather than a hang.
+                    setActivity(line);
                 }
                 const plan = planToolCalls(calls);
                 const results = new Array(calls.length);
@@ -5092,19 +5282,33 @@
             let full = '';
             let reasoning = '';
             let renderTimer = null;
+            let cadence = STREAM_RENDER_MIN_MS;
+            let writing = false;
             function scheduleFlush() {
                 if (renderTimer) return;
                 renderTimer = setTimeout(() => {
                     renderTimer = null;
+                    const startedAt = Date.now();
                     setMessageContent(bubble, full);
                     if (reasoning) setReasoningStrip(bubble, reasoning);
-                    chatMessages.scrollTop = chatMessages.scrollHeight;
-                }, 40);
+                    scrollTranscript('follow');
+                    // Every flush re-renders the whole reply, so the cost of one
+                    // grows with the reply; the interval follows that cost.
+                    cadence = nextStreamCadence(Date.now() - startedAt, cadence);
+                }, cadence);
             }
             return {
-                appendText(chunk) { if (chunk) { full += chunk; scheduleFlush(); } },
+                appendText(chunk) {
+                    if (!chunk) return;
+                    full += chunk;
+                    // The dots say "busy", which is the same for a two-second
+                    // lookup and a stuck provider; the label says what is
+                    // happening, and this is when the writing starts.
+                    if (!writing) { writing = true; setActivity('Writing the reply…'); }
+                    scheduleFlush();
+                },
                 appendReasoning(chunk) { if (chunk) { reasoning += chunk; scheduleFlush(); } },
-                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningStrip(bubble, reasoning); chatMessages.scrollTop = chatMessages.scrollHeight; },
+                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningStrip(bubble, reasoning); scrollTranscript('follow'); },
                 abort() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } },
                 get full() { return full; },
                 get reasoning() { return reasoning; },
@@ -5625,8 +5829,7 @@
             const el = document.createElement('div');
             el.className = 'message bot';
             el.appendChild(createHoloForge('Generating image…'));
-            chatMessages.appendChild(el);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            appendToTranscript(el, 'follow');
             return el;
         }
 
@@ -5639,15 +5842,75 @@
             img.alt = promptText;
             img.loading = 'lazy';
             img.addEventListener('click', () => openImageLightbox(src, promptText));
-            img.addEventListener('load', () => { chatMessages.scrollTop = chatMessages.scrollHeight; });
+            // A picture finishing is new output: follow it only if the reader
+            // is already at the bottom.
+            img.addEventListener('load', () => { scrollTranscript('follow'); });
             wrap.appendChild(img);
             return wrap;
         }
 
-        function persistableImageUrl(url) {
-            // Blob URLs die with the page; only remote URLs survive a reload,
-            // so only those enter history and the gallery.
-            return typeof url === 'string' && /^https?:/i.test(url) ? url : '';
+        // A generated picture arrives as a data: or blob: URL -- the whole image
+        // inside the string -- and history kept only http(s) links, so every one
+        // of them was dropped the moment it was saved. The bubble showed the
+        // picture (it was still in memory) while the gallery, which reads saved
+        // history, had nothing but the "[Generated image: ...]" text.
+        //
+        // Storing is deliberately off the critical path: re-encoding a 1024px
+        // JPEG is hundreds of milliseconds of canvas work, and the reader is
+        // already looking at the picture. The message entry exists first, so a
+        // failed encode costs the picture in history -- which the gallery
+        // already knows how to explain -- and never the message itself.
+        async function storeGeneratedImages(entry, urls, promptText) {
+            const wanted = urls.filter((u) => storedImagePlan(u) !== 'skip');
+            if (!wanted.length) return;
+            const stored = [];
+            for (const url of wanted) {
+                if (storedImagePlan(url) === 'remote') {
+                    // The bytes were never ours; re-encoding saves nothing.
+                    stored.push({ url, prompt: promptText });
+                    continue;
+                }
+                const compact = await compactImageForStorage(url);
+                if (compact) stored.push({ url: compact, prompt: promptText });
+            }
+            if (!stored.length) return;
+            entry.images = stored;
+            persistMessages();
+            renderGallery();
+        }
+
+        // Downscale to a size worth storing, then walk the quality down until the
+        // string fits. Returns '' when the bytes cannot be read or no quality
+        // fits, and the caller keeps the placeholder text in that case.
+        function compactImageForStorage(url) {
+            return new Promise((resolve) => {
+                let settled = false;
+                const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+                try {
+                    const img = new Image();
+                    img.onload = () => {
+                        try {
+                            const width = img.naturalWidth || 0;
+                            const height = img.naturalHeight || 0;
+                            if (!width || !height) return done('');
+                            const scale = Math.min(1, STORED_IMAGE_MAX_EDGE / Math.max(width, height));
+                            const canvas = document.createElement('canvas');
+                            canvas.width = Math.max(1, Math.round(width * scale));
+                            canvas.height = Math.max(1, Math.round(height * scale));
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx) return done('');
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            for (const quality of [0.72, 0.6, 0.5, 0.4, 0.3]) {
+                                const out = canvas.toDataURL('image/jpeg', quality);
+                                if (out && out.length <= STORED_IMAGE_MAX_CHARS) return done(out);
+                            }
+                            return done('');
+                        } catch { done(''); }
+                    };
+                    img.onerror = () => done('');
+                    img.src = url;
+                } catch { done(''); }
+            });
         }
 
         function finishImageContent(el, promptText, urls) {
@@ -5672,12 +5935,14 @@
             el.appendChild(caption);
             el.appendChild(buildMessageActions(promptText, true));
             appendImageTools(el, good[0] || '', promptText);
-            const stored = good.filter((u) => persistableImageUrl(u)).map((url) => ({ url, prompt: promptText }));
             const entry = { type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() };
-            if (stored.length) entry.images = stored;
             messages.push(entry);
             persistMessages();
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scrollTranscript('follow');
+            // No await: the picture is on screen, and storing it is not the
+            // reader's problem. Whatever could not be stored stays a
+            // placeholder naming its prompt.
+            storeGeneratedImages(entry, good, promptText);
         }
 
         function fillImageBubble(el, promptText, src) {
@@ -6152,8 +6417,7 @@
             textEl.className = 'message-text';
             el.appendChild(textEl);
             setMessageContent(el, '');
-            chatMessages.appendChild(el);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            appendToTranscript(el, 'follow');
             return el;
         }
 
@@ -6163,7 +6427,7 @@
             el.appendChild(buildMessageActions(retryText, false, attachmentLost));
             messages.push({ type: 'bot', content, reasoning: reasoning || undefined, timestamp: Date.now() });
             persistMessages();
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scrollTranscript('follow');
         }
 
         // A stream that died after tokens were already on screen: keep every
@@ -6186,7 +6450,7 @@
             bubble.appendChild(note);
             messages.push({ type: 'bot', content: text, reasoning: renderer.reasoning || undefined, timestamp: Date.now() });
             persistMessages();
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            scrollTranscript('follow');
             showStatus('error', notice || 'The stream ended early');
         }
 
@@ -6214,8 +6478,9 @@
                 el.appendChild(buildMessageActions(opts.retryText, false, false));
             }
 
-            chatMessages.appendChild(el);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            // Your own message is the one arrival allowed to move you: you sent
+            // it, and you are waiting for what it produces.
+            appendToTranscript(el, type === 'user' ? 'own-message' : 'follow');
 
             // Only a message that has no reply to sit under needs its own retry
             // target stored; a bot reply recovers the preceding user turn, so
@@ -6233,9 +6498,18 @@
             el.id = 'typingIndicator';
             el.setAttribute('role', 'status');
             el.setAttribute('aria-label', 'Assistant is thinking');
-            el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-            chatMessages.appendChild(el);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>'
+                + '<div class="typing-label" id="typingLabel">Thinking…</div>';
+            // The indicator is a placeholder that removes itself, so it never
+            // counts as output the reader missed.
+            appendToTranscript(el, 'indicator');
+        }
+
+        // What the agent is doing right now, in one line. The dots say "busy",
+        // which is the same for a two-second lookup and a stuck provider.
+        function setActivity(text) {
+            const el = document.getElementById('typingLabel');
+            if (el) el.textContent = text || '';
         }
 
         function removeTypingIndicator() {
@@ -6751,16 +7025,26 @@
         }
 
         function writeConversations() {
+            const write = () => localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
             try {
-                localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
+                write();
                 localStorage.setItem(ACTIVE_CONVERSATION_KEY, activeConversationId || '');
             } catch (e) {
-                // A full quota shouldn't lose the chat on screen, so drop the
-                // oldest half and try once more before admitting defeat.
+                // A full quota shouldn't lose the chat on screen. Pictures go
+                // before words do: a chat with no image is still a chat, a chat
+                // with no history is a loss. Other conversations first, then the
+                // one being read, and the oldest half only as a last resort.
                 console.error('Failed to persist conversations:', e);
+                conversations = stripStoredImages(conversations, activeConversationId);
+                try { write(); return; } catch { /* still full */ }
+                conversations = stripStoredImages(conversations, '');
+                // The live transcript holds the same message objects, so a strip
+                // that is not reflected here is undone by the very next persist.
+                messages = capConversationImages(messages, 0);
+                try { write(); return; } catch { /* still full */ }
                 conversations = conversations.slice(0, Math.max(1, Math.floor(conversations.length / 2)));
                 try {
-                    localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
+                    write();
                 } catch {
                     showStatus('error', 'Browser storage is full - history may not save');
                 }
@@ -6768,7 +7052,9 @@
         }
 
         function persistMessages() {
-            const trimmed = messages.slice(-MAX_MESSAGES_PER_CONVERSATION);
+            // Pictures are the only part of history that grows without bound and
+            // localStorage is what pays for it, so the newest few per chat stay.
+            const trimmed = capConversationImages(messages.slice(-MAX_MESSAGES_PER_CONVERSATION));
             conversations = upsertConversation(conversations, {
                 id: activeConversationId,
                 title: deriveChatTitle(trimmed),
@@ -6911,10 +7197,21 @@
         }
 
         function renderActiveConversation() {
+            // Restoring a saved chat builds every bubble at once; animating all
+            // of them is a two-hundred-element slide-in for content already read.
+            chatMessages.classList.add('no-anim');
             chatMessages.innerHTML = '';
             chatMessages.appendChild(emptyState);
             emptyState.style.display = messages.length ? 'none' : 'flex';
             if (messages.length) renderSavedMessages();
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => chatMessages.classList.remove('no-anim'));
+            } else {
+                chatMessages.classList.remove('no-anim');
+            }
+            // Opening a chat is something the reader asked for, so it lands on
+            // the newest output rather than wherever the last chat was left.
+            jumpToNewest();
             renderHistoryList();
             // Whatever this chat pinned -- and refused -- comes back with it; a
             // fresh chat has neither.

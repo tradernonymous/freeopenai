@@ -89,6 +89,18 @@ function referencedPageNames(names) {
   const declared = new Set(
     [...sources.matchAll(/(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
   );
+  // Parameters of nested functions and arrows are locals too. Without this, a
+  // Promise executor's `resolve` read as a page-scope name the sandbox was
+  // missing -- and the only fix at the call site was to pass a stub that the
+  // real function's own parameter shadows, which documents nothing.
+  // Deliberately not matching `if (...) {`: a condition's identifier may well be
+  // page scope, and treating it as a local would blind the guard.
+  for (const m of sources.matchAll(/function\s*[\w$]*\s*\(([^()]*)\)|\(([^()]*)\)\s*=>/g)) {
+    for (const param of (m[1] || m[2] || '').split(',')) {
+      const name = param.trim().replace(/=.*$/, '').replace(/^\.\.\./, '');
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+    }
+  }
   // A leading dot means a method call (`.drawImage(`), which is not page scope.
   const called = [...sources.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]);
   return [...new Set(called)].filter((n) => !declared.has(n) && !BUILTINS.has(n));

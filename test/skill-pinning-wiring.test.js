@@ -7,6 +7,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { sourceOf } = require('./helpers/index-html.js');
+
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 test('a command is resolved before anything is sent, and never sent to a model', () => {
@@ -35,13 +37,16 @@ test('each command does what it says on the tin', () => {
 });
 
 test('the pinned set belongs to the chat: saved with it, loaded from it, absent in a new one', () => {
+  // Each assertion reads the function's own body. A fixed character window was
+  // the old form, and every unrelated line added inside one of these functions
+  // pushed the call out of it -- reporting a broken pin when nothing had moved.
   // Saved: persistMessages writes the pinned names onto the conversation.
-  assert.match(HTML, /function persistMessages[\s\S]{0,600}skills: activeSkillNames,/);
+  assert.match(sourceOf('persistMessages'), /skills: activeSkillNames,/);
   // Loaded: the only source of the pinned set is the conversation itself.
-  assert.match(HTML, /function syncActiveSkillsFromConversation[\s\S]{0,400}Array\.isArray\(convo\.skills\)/);
+  assert.match(sourceOf('syncActiveSkillsFromConversation'), /Array\.isArray\(convo\.skills\)/);
   // Called wherever a conversation becomes the active one...
-  assert.match(HTML, /function renderActiveConversation[\s\S]{0,400}syncActiveSkillsFromConversation\(\)/);
-  assert.match(HTML, /function loadMessagesFromStorage[\s\S]{0,2000}syncActiveSkillsFromConversation\(\)/);
+  assert.match(sourceOf('renderActiveConversation'), /syncActiveSkillsFromConversation\(\)/);
+  assert.match(sourceOf('loadMessagesFromStorage'), /syncActiveSkillsFromConversation\(\)/);
   // ...and the sync derives the names rather than keeping them, which is what
   // makes a new chat start empty without anyone having to remember to clear it.
   const sync = HTML.slice(HTML.indexOf('function syncActiveSkillsFromConversation'), HTML.indexOf('function renderSkillBar'));
@@ -140,8 +145,8 @@ test('accepting an offer pins it and teaches the app; dismissing it is remembere
   // A refusal belongs to the chat that made it, and is saved with it.
   assert.match(HTML, /function dismissSkillSuggestion\(\)[\s\S]{0,500}activeSkillDismissals = \[\.\.\.activeSkillDismissals, name\]/);
   assert.match(HTML, /skillsDismissed: activeSkillDismissals,/);
-  assert.match(HTML, /function syncDismissedSuggestionsFromConversation\(\)[\s\S]{0,400}convo\.skillsDismissed/);
-  assert.match(HTML, /function renderActiveConversation[\s\S]{0,500}syncDismissedSuggestionsFromConversation\(\)/);
+  assert.match(sourceOf('syncDismissedSuggestionsFromConversation'), /convo\.skillsDismissed/);
+  assert.match(sourceOf('renderActiveConversation'), /syncDismissedSuggestionsFromConversation\(\)/);
 });
 
 test('the offer is visible with nothing pinned, and says why it is being made', () => {

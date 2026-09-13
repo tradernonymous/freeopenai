@@ -3162,8 +3162,150 @@ function selectAllowedModels(models, rules) {
   return chosen.length ? chosen : models || [];
 }
 
+// --- Where the transcript is scrolled, and who is allowed to move it --------
+//
+// The app used to write chatMessages.scrollTop = scrollHeight from ten places,
+// nine of them unconditional -- so a streaming reply dragged the reader back to
+// the bottom every 40ms, and there was no way to read anything above it. There
+// was also no "am I at the bottom?" state for a scroll-to-bottom control to
+// read, which is why one could not exist. The policy lives here as rules so it
+// can be tested without a browser: follow the newest output only while the
+// reader is already at the bottom -- unless the app is showing them the message
+// they just sent, or something they explicitly asked for.
+
+// One short line above the fold still counts as being at the bottom. A
+// fractional scrollHeight, a device-pixel rounding error or the tail of the last
+// line should not read as the reader having scrolled away.
+const TRANSCRIPT_BOTTOM_SLACK_PX = 120;
+
+function transcriptAtBottom(scrollTop, scrollHeight, clientHeight, slack = TRANSCRIPT_BOTTOM_SLACK_PX) {
+  const top = Number(scrollTop) || 0;
+  const height = Number(scrollHeight) || 0;
+  const view = Number(clientHeight) || 0;
+  // A transcript shorter than its window cannot be scrolled at all, and is
+  // therefore always at the bottom -- otherwise every append would look like a
+  // detach and the app would stop following on a one-message conversation.
+  if (height <= view) return true;
+  const room = Math.max(0, Number(slack) || 0);
+  return height - top - view <= room;
+}
+
+// The two writes allowed to move the reader against their own scrolling: the
+// message they just sent, and something they asked for (tapping the pill,
+// opening a saved chat). Everything else -- a streamed chunk, a tool notice, an
+// image finishing -- obeys the pin.
+const TRANSCRIPT_JUMP_SOURCES = ['own-message', 'user-request'];
+
+function shouldFollowTranscript(source, pinned) {
+  if (TRANSCRIPT_JUMP_SOURCES.includes(String(source || ''))) return true;
+  return pinned === true;
+}
+
+// Which arrivals are worth announcing while the reader is elsewhere. A tool
+// line or a reply that landed is news; the typing indicator is a placeholder
+// that removes itself, and the reader's own message is what they just did.
+const TRANSCRIPT_QUIET_SOURCES = ['own-message', 'indicator', 'user-request'];
+
+function announcesUnread(source) {
+  return !TRANSCRIPT_QUIET_SOURCES.includes(String(source || ''));
+}
+
+// --- What of a generated image is worth keeping -----------------------------
+//
+// A generated picture arrives as a data: or blob: URL -- the whole image inside
+// the string -- and history kept only http(s) links, so every data URL was
+// dropped the moment it was saved. The bubble showed the picture (it was still
+// in memory) while the gallery, which reads from saved history, had nothing but
+// the "[Generated image: ...]" text. Data URLs are kept now, re-encoded small
+// enough to be worth storing; a remote link is kept as it stands, because the
+// bytes were never ours and re-encoding it would save nothing.
+
+// --- How often a streamed reply may be re-rendered ---------------------------
+//
+// Every flush re-renders the whole reply's markdown, so the cost of a flush
+// grows with the reply. One fixed interval is therefore always wrong somewhere:
+// short replies want a fast one or text arrives in visible clumps, long replies
+// want a slow one or every frame pays for markup nobody is reading yet. The
+// cadence backs off only where a flush actually costs something, and it is
+// bounded at both ends so the feel never degrades into a stutter.
+const STREAM_RENDER_MIN_MS = 40;
+const STREAM_RENDER_MAX_MS = 200;
+
+function nextStreamCadence(lastRenderMs, current = STREAM_RENDER_MIN_MS) {
+  const now = Math.min(
+    STREAM_RENDER_MAX_MS,
+    Math.max(STREAM_RENDER_MIN_MS, Number(current) || STREAM_RENDER_MIN_MS),
+  );
+  const took = Number(lastRenderMs) || 0;
+  // 16ms is a dropped frame on a 60Hz display: past that, back off.
+  if (took > 16) return Math.min(STREAM_RENDER_MAX_MS, Math.round(now * 1.5));
+  // Comfortably cheap, so try to get back to smooth.
+  if (took < 6) return Math.max(STREAM_RENDER_MIN_MS, Math.round(now * 0.8));
+  return now;
+}
+
+const STORED_IMAGE_MAX_EDGE = 1024;
+const STORED_IMAGE_MAX_CHARS = 300000;
+
+// 'remote' -- an http(s) link: store it as it stands
+// 'encode' -- data:/blob: bytes already in hand: re-encode before storing
+// 'skip'   -- nothing usable
+function storedImagePlan(url) {
+  const value = String(url || '');
+  if (/^https?:\/\//i.test(value)) return 'remote';
+  if (/^data:image\//i.test(value) || /^blob:/i.test(value)) return 'encode';
+  return 'skip';
+}
+
+// Images are the only part of history that grows without bound, and
+// localStorage is what pays for it. Keep the newest few per conversation, and
+// when the browser refuses the write anyway, the pictures go before the text:
+// a chat with no image is still a chat, a chat with no history is a loss.
+const MAX_STORED_IMAGES_PER_CONVERSATION = 8;
+
+function capConversationImages(messages, max = MAX_STORED_IMAGES_PER_CONVERSATION) {
+  const limit = Math.max(0, Number(max) || 0);
+  const list = Array.isArray(messages) ? messages : [];
+  const holders = [];
+  list.forEach((m, i) => { if (m && Array.isArray(m.images) && m.images.length) holders.push(i); });
+  const overflow = holders.length - limit;
+  if (overflow <= 0) return list.slice();
+  const drop = new Set(holders.slice(0, overflow));
+  return list.map((m, i) => (drop.has(i) ? { ...m, images: [] } : m));
+}
+
+// Every conversation's images except the protected one -- the active chat is the
+// last thing to give up its pictures, since that is where the reader is looking.
+function stripStoredImages(conversations, protectId = '') {
+  return (Array.isArray(conversations) ? conversations : []).map((c) => {
+    if (!c) return c;
+    if (protectId && c.id === protectId) return c;
+    if (!Array.isArray(c.messages)) return c;
+    if (!c.messages.some((m) => m && Array.isArray(m.images) && m.images.length)) return c;
+    return {
+      ...c,
+      messages: c.messages.map((m) => (m && Array.isArray(m.images) && m.images.length ? { ...m, images: [] } : m)),
+    };
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    TRANSCRIPT_BOTTOM_SLACK_PX,
+    transcriptAtBottom,
+    TRANSCRIPT_JUMP_SOURCES,
+    shouldFollowTranscript,
+    TRANSCRIPT_QUIET_SOURCES,
+    announcesUnread,
+    STREAM_RENDER_MIN_MS,
+    STREAM_RENDER_MAX_MS,
+    nextStreamCadence,
+    STORED_IMAGE_MAX_EDGE,
+    STORED_IMAGE_MAX_CHARS,
+    storedImagePlan,
+    MAX_STORED_IMAGES_PER_CONVERSATION,
+    capConversationImages,
+    stripStoredImages,
     MODES,
     DEFAULT_MODE,
     isValidMode,
