@@ -8,11 +8,10 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    # Quick tunnel (default): public trycloudflare.com URL, needs NO token.
-    # Grab the printed https://xxx.trycloudflare.com from `docker logs app-cloudflared-1`.
+    # Quick tunnel: public trycloudflare.com URL, no token needed, works without a domain.
+    # NOTE: URL changes if this container is recreated (docker compose up --force-recreate / machine reboot).
+    # Get the URL from: docker logs app-cloudflared-1  (look for https://xxx.trycloudflare.com)
     command: tunnel --no-autoupdate --url http://omniroute:20128
-    # Permanent URL: put the connector token in .env (TUNNEL_TOKEN=eyJ...) then swap the command to:
-    # command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on: [omniroute]
     restart: unless-stopped
 

@@ -155,6 +155,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.cloudflared/
 .venv
 env/
 venv/
