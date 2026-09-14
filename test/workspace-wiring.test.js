@@ -9,7 +9,11 @@ const {
   workspaceList,
   workspaceRead,
   workspaceWrite,
+  workspaceEdit,
+  workspaceDelete,
+  workspaceSearch,
   MAX_WORKSPACE_FILE_CHARS,
+  MAX_WORKSPACE_SEARCH_MATCHES,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -27,6 +31,10 @@ function harness({ files = {}, approve = true, capture = null } = {}) {
     workspaceList,
     workspaceRead,
     workspaceWrite,
+    workspaceEdit,
+    workspaceDelete,
+    workspaceSearch,
+    MAX_WORKSPACE_SEARCH_MATCHES,
     normalizeWorkspacePath,
     // Mirrors the page's contract: setActiveWorkspace persists the store.
     activeWorkspace: () => store,
@@ -153,4 +161,91 @@ test('a read is not held up by an approval and never saves', async () => {
 
 test('an unknown workspace tool is an error, not a silent success', async () => {
   assert.equal(await harness({}).call('workspace_rm_rf', {}), 'Error: unknown tool workspace_rm_rf');
+});
+
+// ---- the tools a coding agent actually needs most --------------------------
+
+test('a search answers with paths and line numbers, not a wall of text', async () => {
+  const h = harness({ files: { 'src/a.js': 'const x = 1;\n// TODO: rename\n', 'src/b.js': 'nothing here\n' } });
+  assert.equal(await h.call('workspace_search_files', { query: 'todo' }), 'src/a.js:2: // TODO: rename');
+  // The line number is the point: without it the answer is "it is in there",
+  // which costs a full read to act on.
+  assert.equal(await h.call('workspace_search_files', { query: 'rename', path: 'src' }), 'src/a.js:2: // TODO: rename');
+  assert.equal(await h.call('workspace_search_files', { query: 'goldfish' }), 'No match anywhere in the workspace.');
+  assert.equal(await h.call('workspace_search_files', { query: 'x', path: 'nope' }), 'No match in "nope".');
+  // And no user is asked about a read.
+  assert.equal(h.saves(), 0);
+});
+
+test('a search is capped, and says when it stopped early', async () => {
+  const many = Array.from({ length: MAX_WORKSPACE_SEARCH_MATCHES + 10 }, (_, i) => 'hit ' + i).join('\n');
+  const text = await harness({ files: { 'a.txt': many } }).call('workspace_search_files', { query: 'hit' });
+  assert.equal(text.split('\n').length, MAX_WORKSPACE_SEARCH_MATCHES + 1);
+  assert.match(text, new RegExp('stopped at ' + MAX_WORKSPACE_SEARCH_MATCHES + ' matches'));
+});
+
+test('an edit that cannot find its target says so instead of writing anyway', async () => {
+  const asked = [];
+  const h = harness({ files: { 'a.md': 'hello world' }, capture: asked });
+  const reply = await h.call('workspace_edit_file', { path: 'a.md', old_text: 'goodbye', new_text: 'hi' });
+  assert.match(reply, /^Error: old_text does not appear/);
+  // Refusing and then asking permission would be incoherent, and the file would
+  // be the only place the user saw the mistake.
+  assert.equal(asked.length, 0);
+  assert.equal(h.files()['a.md'], 'hello world');
+  assert.equal(h.saves(), 0);
+});
+
+test('an ambiguous edit is refused with the count rather than guessed at', async () => {
+  const asked = [];
+  const h = harness({ files: { 'a.md': 'x\nx\n' }, capture: asked });
+  const reply = await h.call('workspace_edit_file', { path: 'a.md', old_text: 'x', new_text: 'y' });
+  assert.match(reply, /appears 2 times/);
+  assert.match(reply, /all: true/);
+  assert.equal(asked.length, 0, 'a replacement nobody can place is not a question for the user');
+});
+
+test('an approved edit reports what it replaced, and an all:true edit reports the count', async () => {
+  const asked = [];
+  const one = harness({ files: { 'a.md': 'keep\ntarget\nkeep\n' }, capture: asked });
+  const reply = await one.call('workspace_edit_file', { path: 'a.md', old_text: 'target', new_text: 'changed' });
+  assert.equal(one.files()['a.md'], 'keep\nchanged\nkeep\n');
+  assert.match(reply, /Edited "a\.md" \(1 replacement\), 1 file\(s\)/);
+  assert.match(asked[0], /1 replacement/);
+
+  const all = harness({ files: { 'a.md': 'x x x' } });
+  const many = await all.call('workspace_edit_file', { path: 'a.md', old_text: 'x', new_text: 'y', all: true });
+  assert.equal(all.files()['a.md'], 'y y y');
+  assert.match(many, /\(3 replacements\)/);
+});
+
+test('a declined edit changes nothing and is not saved', async () => {
+  const h = harness({ files: { 'a.md': 'old' }, approve: false });
+  const reply = await h.call('workspace_edit_file', { path: 'a.md', old_text: 'old', new_text: 'new' });
+  assert.match(reply, /user declined/);
+  assert.equal(h.files()['a.md'], 'old');
+  assert.equal(h.saves(), 0);
+});
+
+test('a delete asks first, and only an approved one removes the file', async () => {
+  const asked = [];
+  const yes = harness({ files: { 'a.md': 'x', 'b.md': 'y' }, capture: asked });
+  const reply = await yes.call('workspace_delete_file', { path: 'a.md' });
+  assert.deepEqual(Object.keys(yes.files()), ['b.md']);
+  assert.equal(yes.saves(), 1);
+  assert.match(reply, /Deleted "a\.md", 1 file\(s\) left/);
+  assert.match(asked[0], /cannot be undone/);
+
+  const no = harness({ files: { 'a.md': 'x' }, approve: false });
+  assert.match(await no.call('workspace_delete_file', { path: 'a.md' }), /user declined/);
+  assert.deepEqual(Object.keys(no.files()), ['a.md']);
+  assert.equal(no.saves(), 0);
+});
+
+test('deleting a file that is not there names what is', async () => {
+  const h = harness({ files: { 'a.md': 'x' } });
+  const reply = await h.call('workspace_delete_file', { path: 'b.md' });
+  assert.match(reply, /^Error: No file at "b\.md"/);
+  assert.ok(reply.includes('a.md'));
+  assert.equal(h.saves(), 0);
 });

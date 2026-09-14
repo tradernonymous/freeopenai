@@ -24,6 +24,9 @@ const {
   newTaskGraph,
   addTask,
   setTaskStatus,
+  modeAllowsTool,
+  modeBlocksWrite,
+  modeWriteRefusal,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 const {
@@ -164,6 +167,13 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
     toolArgsUnusable,
     describeRoute,
     refusedModelIds,
+    // The mode's tool surface, with the shipped rules rather than stubs: these
+    // tests drive the loop as Build, which is the mode that may write, so a
+    // refusal here would mean the mode gate had stopped real work.
+    modeBlocksWrite,
+    modeWriteRefusal,
+    modeAllowsTool,
+    selectedMode: 'build',
     routingMode: routing,
     selectedProvider: 'test-provider',
     selectedModel: 'big-model',
@@ -251,6 +261,19 @@ test('independent reads are issued together instead of one after another', async
   ]);
   // And the user is told what is going on rather than seeing nothing.
   assert.ok(h.events.some((e) => /Looking up 3 things at once/.test(e)));
+});
+
+test('a write outside Build mode is refused by the loop, not run', async () => {
+  // The tool list is the mode's surface, and this is the belt to its braces: a
+  // turn resumed from another mode, or a model calling a tool from memory, must
+  // not commit in Chat or Plan mode because the request said not to.
+  const h = harness({ toolCalls: [call('github_commit_file', 'a', { repo: 'o/r', path: 'a.md', content: 'x', message: 'y' })] });
+  h.deps.selectedMode = 'plan';
+  await h.runChatWithTools(h.conversation, 'model', [], null);
+  assert.deepEqual(h.runs, [], 'nothing was run');
+  const toolMessages = h.conversation.filter((m) => m.role === 'tool');
+  assert.match(toolMessages[0].content, /Plan mode is read-only/);
+  assert.match(toolMessages[0].content, /Nothing changed/);
 });
 
 test('a write never overlaps another tool', async () => {

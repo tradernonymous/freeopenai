@@ -3,12 +3,16 @@ const assert = require('node:assert/strict');
 const {
   WORKSPACE_TOOLS,
   WORKSPACE_TOOL_NAMES,
+  WORKSPACE_WRITE_TOOL_NAMES,
   isWorkspaceTool,
   isWorkspaceWriteTool,
   normalizeWorkspacePath,
   workspaceList,
   workspaceRead,
   workspaceWrite,
+  workspaceEdit,
+  workspaceDelete,
+  workspaceSearch,
   planToolCalls,
   isConcurrentSafeTool,
   describeToolCall,
@@ -16,15 +20,19 @@ const {
   MAX_WORKSPACE_FILES,
   MAX_WORKSPACE_FILE_CHARS,
   MAX_WORKSPACE_TOTAL_CHARS,
+  MAX_WORKSPACE_SEARCH_MATCHES,
 } = require('../chatlib.js');
 
 test('the workspace tools are well-formed specs with unique names', () => {
   assert.deepEqual(WORKSPACE_TOOL_NAMES, [
     'workspace_list_files',
     'workspace_read_file',
+    'workspace_search_files',
     'workspace_write_file',
+    'workspace_edit_file',
+    'workspace_delete_file',
   ]);
-  assert.deepEqual(WORKSPACE_TOOLS.map((t) => t.type), ['function', 'function', 'function']);
+  assert.deepEqual(WORKSPACE_TOOLS.map((t) => t.type), WORKSPACE_TOOL_NAMES.map(() => 'function'));
   for (const tool of WORKSPACE_TOOLS) {
     assert.equal(typeof tool.function.name, 'string');
     // The description is what decides whether the model reaches for the tool at
@@ -164,9 +172,15 @@ test('writes are serial while workspace reads may overlap', () => {
   // so it can never share a wave with anything else.
   assert.ok(isConcurrentSafeTool('workspace_read_file'));
   assert.ok(isConcurrentSafeTool('workspace_list_files'));
-  assert.ok(!isConcurrentSafeTool('workspace_write_file'));
-  assert.ok(isWorkspaceWriteTool('workspace_write_file'));
+  assert.ok(isConcurrentSafeTool('workspace_search_files'));
+  // Every tool that changes the store, named once so a new one cannot be added
+  // to the write table and forgotten here.
+  for (const name of WORKSPACE_WRITE_TOOL_NAMES) {
+    assert.ok(!isConcurrentSafeTool(name), name + ' must never share a wave');
+    assert.ok(isWorkspaceWriteTool(name));
+  }
   assert.ok(!isWorkspaceWriteTool('workspace_read_file'));
+  assert.ok(!isWorkspaceWriteTool('workspace_search_files'));
 
   const plan = planToolCalls([
     { function: { name: 'workspace_read_file' } },
@@ -177,9 +191,77 @@ test('writes are serial while workspace reads may overlap', () => {
   assert.deepEqual(plan.serial, [1]);
 });
 
+test('editing changes one occurrence, and refuses an ambiguous target', () => {
+  const base = { 'a.md': 'one two one' };
+  const single = workspaceEdit(base, 'a.md', 'two', '2');
+  assert.equal(single.files['a.md'], 'one 2 one');
+  assert.equal(single.replaced, 1);
+  // The input store is untouched, so a declined edit cannot leak out.
+  assert.deepEqual(base, { 'a.md': 'one two one' });
+
+  const ambiguous = workspaceEdit(base, 'a.md', 'one', '1');
+  assert.match(ambiguous.error, /appears 2 times/);
+  assert.equal(ambiguous.files, undefined);
+
+  const every = workspaceEdit(base, 'a.md', 'one', '1', true);
+  assert.equal(every.files['a.md'], '1 two 1');
+  assert.equal(every.replaced, 2);
+  assert.equal(every.occurrences, 2);
+});
+
+test('an edit that cannot be placed is refused with the reason', () => {
+  assert.match(workspaceEdit({ 'a.md': 'x' }, 'a.md', 'zzz', 'y').error, /does not appear/);
+  assert.match(workspaceEdit({ 'a.md': 'x' }, 'a.md', '', 'y').error, /old_text is required/);
+  assert.match(workspaceEdit({}, 'a.md', 'x', 'y').error, /No file at "a\.md"/);
+  assert.match(workspaceEdit({ 'a.md': 'x' }, '../etc', 'x', 'y').error, /Invalid file path/);
+});
+
+test('an edit that would break a cap is refused, and changes nothing', () => {
+  const near = { 'a.md': 'x'.repeat(MAX_WORKSPACE_FILE_CHARS - 4) + 'END' };
+  const grown = workspaceEdit(near, 'a.md', 'END', 'x'.repeat(40));
+  assert.match(grown.error, /the limit is/);
+  assert.equal(grown.files, undefined);
+});
+
+test('deleting returns a new store, and refuses a file that is not there', () => {
+  const base = { 'a.md': 'x', 'b.md': 'y' };
+  const removed = workspaceDelete(base, 'a.md');
+  assert.deepEqual(Object.keys(removed.files), ['b.md']);
+  assert.equal(removed.totalFiles, 1);
+  assert.deepEqual(base, { 'a.md': 'x', 'b.md': 'y' });
+  assert.match(workspaceDelete(base, 'c.md').error, /No file at "c\.md"/);
+  assert.match(workspaceDelete(base, '/etc/passwd').error, /Invalid file path/);
+});
+
+test('a search is case-insensitive, positional, and scoped to a folder', () => {
+  const files = { 'src/a.js': 'alpha\nBeta here\n', 'docs/b.md': 'beta too\n' };
+  assert.deepEqual(workspaceSearch(files, 'beta').matches, [
+    { path: 'docs/b.md', line: 1, text: 'beta too' },
+    { path: 'src/a.js', line: 2, text: 'Beta here' },
+  ]);
+  assert.deepEqual(workspaceSearch(files, 'beta', 'src').matches.map((m) => m.path), ['src/a.js']);
+  assert.deepEqual(workspaceSearch(files, 'nothing').matches, []);
+  assert.match(workspaceSearch(files, '  ').error, /query is required/);
+  assert.match(workspaceSearch(files, 'x', '/etc').error, /Invalid folder path/);
+});
+
+test('a search stops at the cap and says it did', () => {
+  const lines = Array.from({ length: MAX_WORKSPACE_SEARCH_MATCHES + 5 }, (_, i) => 'hit ' + i).join('\n');
+  const found = workspaceSearch({ 'a.txt': lines }, 'hit');
+  assert.equal(found.matches.length, MAX_WORKSPACE_SEARCH_MATCHES);
+  assert.equal(found.truncated, true);
+  const small = workspaceSearch({ 'a.txt': 'hit\n' }, 'hit');
+  assert.equal(small.truncated, false);
+});
+
 test('a workspace step names the file it is touching', () => {
   assert.equal(describeToolCall('workspace_write_file', { path: 'a.md' }), 'Writing "a.md" to the workspace');
   assert.equal(describeToolCall('workspace_read_file', { path: 'a.md' }), 'Reading "a.md" from the workspace');
   assert.equal(describeToolCall('workspace_list_files', {}), 'Listing the workspace files');
   assert.equal(describeToolCall('workspace_list_files', { path: 'notes' }), 'Listing the workspace folder "notes"');
+  // The announcement and the approval dialog read the same sentence, so a new
+  // tool that says "Running workspace_edit_file" is a gap worth failing on.
+  assert.equal(describeToolCall('workspace_edit_file', { path: 'a.md' }), 'Editing "a.md" in the workspace');
+  assert.equal(describeToolCall('workspace_delete_file', { path: 'a.md' }), 'Deleting "a.md" from the workspace');
+  assert.equal(describeToolCall('workspace_search_files', { query: 'TODO' }), 'Searching the workspace for "TODO"');
 });

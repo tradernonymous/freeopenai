@@ -3634,6 +3634,14 @@
         // break the loop that is trying to recover.
         async function runGithubTool(name, args) {
             try {
+                // Every tool that changes a repository is confirmed here, once,
+                // rather than inside each branch. A write added without its own
+                // dialog would otherwise commit without asking, and that is the
+                // one mistake this app cannot take back.
+                if (isGithubWriteTool(name)) {
+                    const approved = await askGithubConfirm(describeToolCall(name, args) + '?');
+                    if (!approved) return 'The user declined this. Do not try it again unless they ask.';
+                }
                 if (name === 'github_list_repos') {
                     const res = await fetch('/api/github/repos');
                     const data = await safeJson(res);
@@ -3643,7 +3651,8 @@
 
                 if (name === 'github_list_files') {
                     if (!args.repo) return 'Error: repo is required.';
-                    const url = `/api/github/tree?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path || '')}${accountParam(args)}`;
+                    const url = '/api/github/tree?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path || '') + accountParam(args);
                     const res = await fetch(url);
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
@@ -3652,7 +3661,8 @@
 
                 if (name === 'github_read_file') {
                     if (!args.repo || !args.path) return 'Error: repo and path are required.';
-                    const url = `/api/github/file?repo=${encodeURIComponent(args.repo)}&path=${encodeURIComponent(args.path)}${accountParam(args)}`;
+                    const url = '/api/github/file?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path) + accountParam(args);
                     const res = await fetch(url);
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
@@ -3662,12 +3672,54 @@
                     return data.content;
                 }
 
+                if (name === 'github_search_code') {
+                    if (!args.repo || !args.query) return 'Error: repo and query are required.';
+                    const url = '/api/github/search?repo=' + encodeURIComponent(args.repo) +
+                        '&q=' + encodeURIComponent(args.query) + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not search the code');
+                    if (!data.length) return 'No code in ' + args.repo + ' matches "' + args.query + '".';
+                    return data
+                        .map((hit) => hit.path + (hit.line ? ':' + hit.line : '') + (hit.text ? ' — ' + hit.text : ''))
+                        .join('\n');
+                }
+
+                if (name === 'github_list_commits') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const url = '/api/github/commits?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path || '') + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list commits');
+                    if (!data.length) return 'No commits found in ' + args.repo + (args.path ? ' for ' + args.path : '') + '.';
+                    return data
+                        .map((c) => c.sha.slice(0, 7) + ' ' + (c.date || '').slice(0, 10) + ' ' + (c.author || '?') + ': ' + c.message)
+                        .join('\n');
+                }
+
+                if (name === 'github_delete_file') {
+                    if (!args.repo || !args.path) return 'Error: repo and path are required.';
+                    const res = await fetch('/api/github/file', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            path: args.path,
+                            message: args.message || ('Delete ' + args.path),
+                            account: args.account,
+                        }),
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'delete failed');
+                    delete githubShaCache[shaKey(args)];
+                    return 'Deleted ' + args.path + ' as ' + data.account + '. ' + data.commitUrl;
+                }
+
                 if (name === 'github_commit_file') {
                     if (!args.repo || !args.path || typeof args.content !== 'string') {
                         return 'Error: repo, path, and content are required.';
                     }
-                    const approved = await askGithubConfirm(describeToolCall(name, args) + '?');
-                    if (!approved) return 'The user declined this commit. Do not try it again unless they ask.';
                     const res = await fetch('/api/github/file', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -3675,7 +3727,7 @@
                             repo: args.repo,
                             path: args.path,
                             content: args.content,
-                            message: args.message || `Update ${args.path}`,
+                            message: args.message || ('Update ' + args.path),
                             sha: githubShaCache[shaKey(args)],
                             account: args.account,
                         }),
@@ -3683,7 +3735,7 @@
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
                     githubShaCache[shaKey(args)] = data.sha;
-                    return `Committed as ${data.account}. ${data.commitUrl}`;
+                    return 'Committed as ' + data.account + '. ' + data.commitUrl;
                 }
 
                 return 'Error: unknown tool ' + name;
@@ -3706,7 +3758,7 @@
                     const res = await fetch('/api/llm/fetch?url=' + encodeURIComponent(String(args.url)));
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) return 'Error: ' + (data.error || 'fetch failed');
-                    return `Title: ${data.title || '(untitled)'}\nURL: ${data.url}\n\n${data.text}`;
+                    return 'Title: ' + (data.title || '(untitled)') + '\nURL: ' + data.url + '\n\n' + data.text;
                 }
                 return 'Error: unknown tool ' + name;
             } catch (err) {
@@ -3809,6 +3861,17 @@
                 if (read.error) return 'Error: ' + read.error;
                 return read.content;
             }
+            if (name === 'workspace_search_files') {
+                const found = workspaceSearch(activeWorkspace(), args.query, args.path);
+                if (found.error) return 'Error: ' + found.error;
+                if (!found.matches.length) {
+                    return found.root ? 'No match in "' + found.root + '".' : 'No match anywhere in the workspace.';
+                }
+                return found.matches
+                    .map((m) => m.path + ':' + m.line + ': ' + m.text)
+                    .join('\n') +
+                    (found.truncated ? '\n(stopped at ' + MAX_WORKSPACE_SEARCH_MATCHES + ' matches)' : '');
+            }
             if (name === 'workspace_write_file') {
                 const written = workspaceWrite(activeWorkspace(), args.path, args.content);
                 // Size and path are known before asking, so the dialog can state
@@ -3823,6 +3886,32 @@
                 setActiveWorkspace(written.files);
                 return 'Wrote "' + written.path + '" (' + formatChars(written.chars) + '), ' +
                     written.totalFiles + ' file(s) in the workspace.';
+            }
+            if (name === 'workspace_edit_file') {
+                // The edit is computed first so the dialog can say what it will
+                // do with the real numbers, and so a target that does not match
+                // anything is an answer rather than a question the user has to
+                // decide about.
+                const edited = workspaceEdit(activeWorkspace(), args.path, args.old_text, args.new_text, args.all === true);
+                if (edited.error) return 'Error: ' + edited.error;
+                const approved = await askWorkspaceConfirm(
+                    'Change "' + edited.path + '" in the workspace (' + edited.replaced + ' replacement' +
+                    (edited.replaced === 1 ? '' : 's') + ')? Files here are stored in this browser only.'
+                );
+                if (!approved) return 'The user declined this edit. Do not try it again unless they ask.';
+                setActiveWorkspace(edited.files);
+                return 'Edited "' + edited.path + '" (' + edited.replaced + ' replacement' +
+                    (edited.replaced === 1 ? '' : 's') + '), ' + edited.totalFiles + ' file(s) in the workspace.';
+            }
+            if (name === 'workspace_delete_file') {
+                const removed = workspaceDelete(activeWorkspace(), args.path);
+                if (removed.error) return 'Error: ' + removed.error;
+                const approved = await askWorkspaceConfirm(
+                    'Delete "' + removed.path + '" from the workspace? This cannot be undone.'
+                );
+                if (!approved) return 'The user declined this delete. Do not try it again unless they ask.';
+                setActiveWorkspace(removed.files);
+                return 'Deleted "' + removed.path + '", ' + removed.totalFiles + ' file(s) left in the workspace.';
             }
             return 'Error: unknown tool ' + name;
         }
@@ -4980,6 +5069,14 @@
         // wave of them can be awaited together without one rejection losing the
         // rest.
         function runToolCall(name, args) {
+            // The mode's surface is enforced where the tools are offered, which is
+            // the version the model can see -- but a call can still arrive: a turn
+            // resumed from another mode carries its own conversation, and a model
+            // that has seen the tool before may reach for it from memory. Refusing
+            // it here costs one string and makes the promise true either way.
+            if (modeBlocksWrite(selectedMode, name)) {
+                return Promise.resolve(modeWriteRefusal(selectedMode, name));
+            }
             if (isGithubTool(name)) return runGithubTool(name, args);
             if (isWebTool(name)) return runWebTool(name, args);
             if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
@@ -5702,8 +5799,13 @@
                 // when GitHub is connected. An image attachment keeps the plain
                 // path since the image argument has no place in a message array.
                 if (!attachedImageFile) {
-                    let tools = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
-                    if (githubConnected) tools.push(...GITHUB_TOOLS);
+                    // The mode decides the surface, not the prompt: Plan is
+                    // read-only because the write tools are not in the request at
+                    // all, which is the one version of "this mode changes nothing"
+                    // that holds against a model with a tool in front of it.
+                    const offered = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
+                    if (githubConnected) offered.push(...GITHUB_TOOLS);
+                    let tools = toolsForMode(selectedMode, offered);
                     // Skills ride along: whatever this chat pinned, plus what the
                     // router picks when auto-skills are on and the mode allows it.
                     // A pinned skill applies in Chat mode too -- that is the point
@@ -5731,7 +5833,11 @@
                             // before use_skill joins, so the loader itself is
                             // never filtered out.
                             tools = filterToolsBySkills(tools, activeSkills);
-                            tools.push(USE_SKILL_TOOL);
+                            // The loader is a tool like any other, so the mode's
+                            // surface decides it: Chat mode runs pinned skills
+                            // without offering the model a way to go shopping for
+                            // more, and Plan and Build can browse the library.
+                            if (modeAllowsTool(selectedMode, USE_SKILL_TOOL.function.name)) tools.push(USE_SKILL_TOOL);
                             logSkillsUsed(activeConversationId, activeSkills);
                         }
                     }
@@ -7698,9 +7804,20 @@
             if (active) {
                 activeConversationId = active.id;
                 messages = active.messages;
+                // The chat's own settings first, before a single bubble is built.
+                // Rendering a saved chat goes through addMessage, which saves the
+                // chat on the way past -- and it saves whatever is in page state
+                // at that moment. Restored after the render, the pins (and the
+                // declined offers) were overwritten by the still-empty state
+                // first, so every reload quietly dropped them: the skills
+                // reappeared nowhere, and there was no chip left to turn off.
+                syncActiveSkillsFromConversation();
+                syncDismissedSuggestionsFromConversation();
                 renderSavedMessages();
             } else {
                 activeConversationId = newConversationId();
+                syncActiveSkillsFromConversation();
+                syncDismissedSuggestionsFromConversation();
             }
             writeConversations();
             renderHistoryList();
@@ -7710,9 +7827,6 @@
             renderTaskList();
             workspaceFiles = loadWorkspaceFiles();
             renderWorkspaceFiles();
-            // The chat reopened with whatever it had pinned; a brand-new one has none.
-            syncActiveSkillsFromConversation();
-            syncDismissedSuggestionsFromConversation();
         }
 
         function renderHistoryList() {
@@ -7816,6 +7930,11 @@
             chatMessages.innerHTML = '';
             chatMessages.appendChild(emptyState);
             emptyState.style.display = messages.length ? 'none' : 'flex';
+            // Whatever this chat pinned -- and refused -- comes back with it; a
+            // fresh chat has neither. Read before the bubbles, for the same
+            // reason as the reload above: building a saved chat saves the chat.
+            syncActiveSkillsFromConversation();
+            syncDismissedSuggestionsFromConversation();
             if (messages.length) renderSavedMessages();
             if (typeof requestAnimationFrame === 'function') {
                 requestAnimationFrame(() => chatMessages.classList.remove('no-anim'));
@@ -7826,10 +7945,6 @@
             // the newest output rather than wherever the last chat was left.
             jumpToNewest();
             renderHistoryList();
-            // Whatever this chat pinned -- and refused -- comes back with it; a
-            // fresh chat has neither.
-            syncActiveSkillsFromConversation();
-            syncDismissedSuggestionsFromConversation();
         }
 
         function openConversation(id) {

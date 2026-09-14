@@ -604,6 +604,130 @@ function githubPutFile(req, res) {
   });
 }
 
+// Which line of a search fragment the first match sits on. GitHub returns the
+// text around a hit, not its position, so the position is counted here -- a
+// result a caller cannot locate is a result they have to read the whole file to
+// use, which is the cost the search existed to avoid.
+function lineOfFirstMatch(fragment, match) {
+  const text = String(fragment || '');
+  const at = typeof match === 'string' ? text.indexOf(match) : Number(match);
+  if (!Number.isFinite(at) || at < 0) return 0;
+  return text.slice(0, at).split('\n').length;
+}
+
+// Text search inside one repository. GitHub's code search is the cheapest way to
+// find where a symbol lives, and the only one that does not cost a directory
+// listing plus a guess per level.
+async function githubSearchCode(req, res) {
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  const term = query.get('q');
+  if (!repo || !term) return sendJson(res, 400, { error: 'repo and q are required' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
+  try {
+    const { ok, status, data } = await githubApiFetch(
+      account.token,
+      'https://api.github.com/search/code?per_page=30&q=' + encodeURIComponent(term + ' repo:' + repo),
+      // text-match+json is what adds the matching fragments to each result; the
+      // plain shape answers with paths only, which is half an answer.
+      { headers: { Accept: 'application/vnd.github.text-match+json' } }
+    );
+    // A repository GitHub has not indexed answers 422 with its own explanation
+    // ("you can only search the default branch"), which is more useful than a
+    // generic failure because the fix is to search the default branch instead.
+    if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not search the code' });
+    const items = Array.isArray(data && data.items) ? data.items : [];
+    sendJson(res, 200, items.map((item) => {
+      const fragment = Array.isArray(item.text_matches) ? item.text_matches[0] : null;
+      const first = fragment && Array.isArray(fragment.matches) ? fragment.matches[0] : null;
+      return {
+        path: item.path,
+        line: fragment ? lineOfFirstMatch(fragment.fragment, first) : 0,
+        text: fragment ? String(fragment.fragment || '').trim().replace(/\s+/g, ' ').slice(0, 240) : '',
+      };
+    }));
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+// Recent history, optionally for one file. A commit list is how "why is this
+// like this" gets answered without reading the whole repository.
+async function githubListCommits(req, res) {
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  const filePath = query.get('path') || '';
+  if (!repo) return sendJson(res, 400, { error: 'repo is required' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
+  try {
+    const url = `https://api.github.com/repos/${repo}/commits?per_page=20` +
+      (filePath ? '&path=' + encodeURIComponent(filePath) : '');
+    const { ok, status, data } = await githubApiFetch(account.token, url);
+    if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not list commits' });
+    const rows = Array.isArray(data) ? data : [];
+    sendJson(res, 200, rows.map((row) => ({
+      sha: String(row.sha || ''),
+      message: String((row.commit && row.commit.message) || '').split('\n')[0].slice(0, 200),
+      author: (row.commit && row.commit.author && row.commit.author.name) || '',
+      date: (row.commit && row.commit.author && row.commit.author.date) || '',
+    })));
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+// Delete one file, as a commit. The contents API wants the blob's current sha,
+// the same way an update does, and for the same reason it is looked up here
+// rather than carried by the caller: a model that deletes without reading first
+// has no sha to give, and the failure it got was about a detail it should never
+// have been handling.
+function githubDeleteFile(req, res) {
+  readJsonBody(req, 64 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const { repo, path: filePath, message, account: requested } = body || {};
+    if (!repo || !filePath) return sendJson(res, 400, { error: 'repo and path are required' });
+    const picked = pickAccount(getGithubSession(req), repo, requested);
+    if (picked.error) {
+      return sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
+    }
+    const account = picked.account;
+    try {
+      const existing = await githubApiFetch(
+        account.token,
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
+      );
+      if (!existing.ok || !existing.data || Array.isArray(existing.data) || !existing.data.sha) {
+        // GitHub answers a missing file with "Not Found", which tells a caller
+        // nothing about which of its arguments was wrong. The path is the one
+        // thing worth repeating, and it is the one thing GitHub left out.
+        const status = existing.status === 200 ? 400 : existing.status || 502;
+        return sendJson(res, status, {
+          error: `No file at "${filePath}" in ${repo} to delete`,
+        });
+      }
+      const { ok, status, data } = await githubApiFetch(
+        account.token,
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: message || `Delete ${filePath}`, sha: existing.data.sha }),
+        }
+      );
+      if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not delete file' });
+      sendJson(res, 200, {
+        path: filePath,
+        commitUrl: data.commit && data.commit.html_url,
+        account: account.login,
+      });
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 function isSecretFile(path) {
   const secretNames = ['.env', '.env.local', '.env.*', '.claude-local', '.claude.json', '.freebuff', 'antigravity-accounts.json', 'token.json', 'config.yaml', 'opencode.json', '.github/workflows/', 'deploy/antigravity-proxy/data/'];
   const p = String(path || '').toLowerCase();
@@ -615,7 +739,13 @@ function enforceNoSecretWrites(req) {
   // refused. We check the message arguments directly because the body has
   // no filePath field at this layer; if a path argument is present and
   // names a secret, the turn is blocked with a clear reason.
-  const dangerousWrites = { workspace_write_file: true };
+  const dangerousWrites = {
+    workspace_write_file: true,
+    workspace_edit_file: true,
+    workspace_delete_file: true,
+    github_commit_file: true,
+    github_delete_file: true,
+  };
   if (req.body && Array.isArray(req.body.tools)) {
     const dangerous = req.body.tools.filter((t) => dangerousWrites[t.function?.name]);
     const firstDangerous = dangerous[0];
@@ -2834,6 +2964,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
     if (urlPath === '/api/github/file' && req.method === 'PUT') return githubPutFile(req, res);
+    if (urlPath === '/api/github/file' && req.method === 'DELETE') return githubDeleteFile(req, res);
+    if (urlPath === '/api/github/search' && req.method === 'GET') return githubSearchCode(req, res);
+    if (urlPath === '/api/github/commits' && req.method === 'GET') return githubListCommits(req, res);
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });

@@ -303,6 +303,111 @@ async function main() {
     if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
     if (!behavior.gallery.stored || !behavior.gallery.jpeg || !behavior.gallery.rendered) throw new Error('generated image did not survive into the Gallery');
 
+    // A pinned skill has to survive a reload *and* keep the chip that turns it
+    // off. A pin that still applies with nothing on screen is a setting the user
+    // cannot reach: the skill is running and there is nothing to click.
+    await send('Page.navigate', { url: url + '-pinned' });
+    await waitFor(() => evaluate('!!document.getElementById("skillBar") && typeof pinSkillForChat === "function"'), 'pinned page');
+    await sleep(400);
+    const pinned = await evaluate(`(async () => {
+      await ensureSkillsLoaded();
+      const names = (skillsCatalog || []).slice(0, 2).map((s) => s.name);
+      for (const name of names) pinSkillForChat(name);
+      return {
+        catalog: (skillsCatalog || []).length,
+        active: activeSkillNames.slice(),
+        chips: document.querySelectorAll('#skillBar .skill-pin').length,
+        offButtons: document.querySelectorAll('#skillBar .skill-pin button').length,
+      };
+    })()`);
+    console.log('pinned: ' + JSON.stringify(pinned));
+    if (!pinned.active.length) throw new Error('could not pin a skill in the smoke browser: ' + JSON.stringify(pinned));
+    if (pinned.chips !== pinned.active.length) throw new Error('the pinned chips do not match what is pinned');
+    if (pinned.offButtons !== pinned.active.length) throw new Error('a pinned chip has no way to turn it off');
+
+    // The same chat, reloaded: the pins have to come back, chip and all.
+    await send('Page.navigate', { url: url + '-pinned' });
+    await waitFor(() => evaluate('typeof syncActiveSkillsFromConversation === "function"'), 'pinned reload');
+    await sleep(600);
+    const restored = await evaluate(`({
+      active: activeSkillNames.slice(),
+      chips: document.querySelectorAll('#skillBar .skill-pin').length,
+      offButtons: document.querySelectorAll('#skillBar .skill-pin button').length,
+      saved: ((conversations.find((c) => c.id === activeConversationId) || {}).skills) || null,
+      barHidden: document.getElementById('skillBar').hidden,
+    })`);
+    console.log('restored: ' + JSON.stringify(restored));
+    if (JSON.stringify(restored.active) !== JSON.stringify(pinned.active)) {
+      throw new Error('a reload lost the pinned skills: ' + JSON.stringify(restored));
+    }
+    if (restored.chips !== restored.active.length || restored.offButtons !== restored.active.length) {
+      throw new Error('a reload left a pinned skill with no chip to turn it off: ' + JSON.stringify(restored));
+    }
+
+    // And the chip has to work: turning one off is the whole point of it coming
+    // back, and the turn-off has to survive the next reload too.
+    const turnedOff = await evaluate(`({
+      before: activeSkillNames.length,
+      clicked: (document.querySelector('#skillBar .skill-pin button') || {}).click ? (document.querySelector('#skillBar .skill-pin button').click(), true) : false,
+    })`);
+    await sleep(200);
+    const afterOff = await evaluate(`({
+      active: activeSkillNames.slice(),
+      chips: document.querySelectorAll('#skillBar .skill-pin').length,
+    })`);
+    console.log('turned off: ' + JSON.stringify({ turnedOff, afterOff }));
+    if (turnedOff.before !== afterOff.active.length + 1 || afterOff.chips !== afterOff.active.length) {
+      throw new Error('the chip did not turn a pinned skill off: ' + JSON.stringify({ turnedOff, afterOff }));
+    }
+    await send('Page.navigate', { url: url + '-pinned' });
+    await waitFor(() => evaluate('typeof syncActiveSkillsFromConversation === "function"'), 'pinned reload after removal');
+    await sleep(600);
+    const stayedOff = await evaluate('activeSkillNames.slice()');
+    if (JSON.stringify(stayedOff) !== JSON.stringify(afterOff.active)) {
+      throw new Error('a skill turned off came back after a reload: ' + JSON.stringify(stayedOff));
+    }
+
+    // The mode's tool surface, in the page as shipped. A mode that only asks
+    // nicely in its prompt is not a mode: in Chat and Plan the write tools are
+    // not offered, and a call that arrives anyway is refused by the runner --
+    // which is what this drives, through the real dispatcher.
+    const modes = await evaluate(`(async () => {
+      const writes = ['github_commit_file', 'github_delete_file', 'workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'];
+      const args = { path: 'notes/probe.md', repo: 'o/r', content: 'x', message: 'm', old_text: 'a', new_text: 'b' };
+      const before = selectedMode;
+      const refused = {};
+      for (const mode of ['chat', 'plan']) {
+        selectedMode = mode;
+        refused[mode] = [];
+        for (const name of writes) {
+          const reply = await runToolCall(name, args);
+          if (/^Refused:/.test(reply) && /Nothing changed/.test(reply)) refused[mode].push(name);
+        }
+      }
+      selectedMode = before;
+      return {
+        mode: before,
+        refused,
+        offered: writes.filter((n) => modeAllowsTool(before, n)).length,
+        blocked: writes.map((n) => modeBlocksWrite(before, n)).filter(Boolean).length,
+        workspaceEmpty: Object.keys(activeWorkspace() || {}).length === 0,
+      };
+    })()`);
+    console.log('modes: ' + JSON.stringify(modes));
+    const writeNames = ['github_commit_file', 'github_delete_file', 'workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'];
+    for (const mode of ['chat', 'plan']) {
+      if (modes.refused[mode].length !== writeNames.length) {
+        throw new Error(mode + ' mode did not refuse every write: ' + JSON.stringify(modes.refused[mode]));
+      }
+    }
+    if (modes.workspaceEmpty !== true) throw new Error('a refused write still wrote to the workspace');
+    // Whatever the page was left in has to agree with itself: Build offers every
+    // write and blocks none, and the other two offer none and block every one.
+    const writable = modes.mode === 'build';
+    if (modes.offered !== (writable ? writeNames.length : 0) || modes.blocked !== (writable ? 0 : writeNames.length)) {
+      throw new Error('the mode surface and the refusal disagree: ' + JSON.stringify(modes));
+    }
+
     if (errors.length) throw new Error('browser reported errors: ' + errors.join('; '));
     console.log('browser smoke: PASS (' + version.Browser + ')');
     if (serverOutput) process.stderr.write(serverOutput);

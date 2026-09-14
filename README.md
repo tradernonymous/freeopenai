@@ -354,6 +354,16 @@ The composer has a mode chip that cycles **Chat → Plan → Build**, the same t
 | **Plan** | Reasons about the task, writes an implementation plan, changes nothing | planning/writing skills as matched |
 | **Build** | Executes with the full tool loop, TDD-first discipline | methodology core + best-matched skills |
 
+**A mode is a tool surface, not a tone of voice.** Chat and Plan are not asked nicely to behave — the write tools are **not sent to the model at all**, and a call that arrives anyway is refused by the runner with a message naming the mode and how to leave it. That is the difference between a mode that can be talked out of its rules and one that cannot.
+
+| | Research | Workspace | Repos | Task list | Skills |
+| --- | --- | --- | --- | --- | --- |
+| **Chat** | `web_search`, `web_fetch` | read, search | read, search, commits | — | — |
+| **Plan** | the same | the same | the same | `task_*` | `use_skill` |
+| **Build** | the same | **+ write, edit, delete** | **+ commit, delete** | `task_*` | `use_skill` |
+
+The split follows opencode, which is where the three modes come from: **Chat researches** (search, read pages, cite primary sources, answer — no plan document, no commits), **Plan investigates and proposes** but cannot change anything, and **Build executes** the agreed plan with the write tools in hand. The task list is deliberately a Plan-mode tool: writing down a plan is the point of the mode, so the task tools are not in the write group and are not refused. A tool in no group is offered in every mode — the table is a lock on writes, never on a read tool added later.
+
 Skills are pulled from open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down. **136 skills** across eleven libraries, loaded in about half a second cold and 3 ms warm:
 
 | Library | What it contributes |
@@ -396,7 +406,10 @@ Once connected, the model can work with your repos directly:
 | `github_list_repos` | Lists public repos across every connected account |
 | `github_list_files` | Lists a folder, so it can find a path |
 | `github_read_file` | Reads one file |
+| `github_search_code` | Searches code across a repo, so it finds the right file instead of guessing paths |
+| `github_list_commits` | Lists recent commits, with messages and dates |
 | `github_commit_file` | Writes and commits — **always asks you first** |
+| `github_delete_file` | Deletes a file and commits the removal — **always asks you first** |
 
 Up to **three accounts** can be connected at once. Which one acts on a repo is resolved in a fixed order: an explicitly named account, then the repo's owner, and otherwise it refuses and asks — it never tries tokens in turn until one works, because guessing wrong on a write means committing under the wrong identity.
 
@@ -410,7 +423,12 @@ Every chat can also read and write a small **workspace**: a flat set of text fil
 | --- | --- |
 | `workspace_list_files` | Lists a folder, with the size of each file |
 | `workspace_read_file` | Reads one file |
+| `workspace_search_files` | Greps the workspace, with the line each match is on |
 | `workspace_write_file` | Creates or replaces a file — **always asks you first** |
+| `workspace_edit_file` | Replaces one exact string in a file — **always asks you first** |
+| `workspace_delete_file` | Removes a file — **always asks you first** |
+
+`workspace_edit_file` exists because of what a whole-file write costs: re-sending a long file to a model to change one line is expensive and the model often truncates it. An edit sends the old text and the new text, and the change is refused if the old text appears zero times or more than once — an ambiguous anchor would silently edit the wrong one.
 
 It lives in your browser (localStorage) beside the conversations, not on the server. The deployment is shared and its container is rebuilt on every push, so a server-side workspace would be both visible to other people and temporary. Files can be downloaded or deleted from **Settings → Workspace files**.
 

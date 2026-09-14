@@ -26,16 +26,22 @@ function isValidMode(id) {
 // is its /build: carry out an agreed approach with the discipline skills
 // (TDD, verification, lean scope) watching over every step.
 const MODE_PROMPTS = {
-  chat: '',
+  chat: [
+    'MODE: CHAT. The user wants an answer, not a change to anything.',
+    'Research it: search the web and read pages whenever the answer depends on anything past your training, prefer primary sources, and cite them as [title](url).',
+    'You can read this workspace and any connected repository, but you have no tools that write, commit or delete -- in this mode they are not offered at all. So never promise to "just fix it" here: say what would change, and that Build mode is where it happens.',
+    'Answer plainly and finish. No plan document, no todo list, no commit.',
+  ].join('\n'),
   plan: [
     'MODE: PLAN. The user wants an implementation plan, not changes.',
-    'Investigate first (read files via the GitHub tools, search the web for unknowns), then answer with:',
+    'Your tools are read-only on purpose: in this mode there is no way to write a file, commit, or delete anything, so investigate freely and propose -- never report a change as done.',
+    'Investigate first (read the repo and the workspace, search the web for unknowns), then answer with:',
     'a short goal statement, what you found in the code (file paths), a numbered step-by-step plan, risks, and open decisions.',
-    'Do not write or commit code in this mode. End by asking the user to switch to Build mode to execute.',
-    'Record the plan you propose as tasks with the task tools, so Build mode can pick it up rather than re-deriving it.',
+    'Record the plan you propose as tasks with the task tools, so Build mode picks it up rather than re-deriving it.',
+    'End by asking the user to switch to Build mode to execute.',
   ].join('\n'),
   build: [
-    'MODE: BUILD. You are executing agreed work. Be disciplined about it:',
+    'MODE: BUILD. You are executing agreed work, and this is the only mode with the tools to change anything. Be disciplined about it:',
     '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
     '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
     '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
@@ -210,6 +216,85 @@ function skillsAllowedForMode(mode) {
   if (mode === 'plan') return 'process';
   if (mode === 'build') return 'all';
   return 'none';
+}
+
+// --- What a mode may do, as a tool surface rather than a sentence ---
+//
+// A mode that only asks nicely is not a mode. opencode's plan mode is read-only
+// because the write tools are not in the request at all, which is the version
+// that holds: a model with a tool in front of it will reach for it, whatever the
+// instruction above says. So each mode gets its own list here, and the executor
+// refuses a write that arrives anyway -- a resumed turn from another mode, or a
+// model calling a tool from memory.
+//
+//   chat   research: the web, this workspace, connected repos -- all read-only
+//   plan   the same, plus the task list the plan is recorded in
+//   build  everything, and it is the only mode that changes anything
+//
+// A tool in no group is offered in every mode. That is deliberate for a name
+// this table has never seen: a read-only tool added later must not be locked out
+// of two modes by omission. Every *write* is listed in a write group below, and
+// those are the groups the executor checks, so a write added without one is
+// still stopped by the approval dialog every write already goes through.
+const TOOL_GROUPS = {
+  research: ['web_search', 'web_fetch'],
+  workspaceRead: ['workspace_list_files', 'workspace_read_file', 'workspace_search_files'],
+  workspaceWrite: ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'],
+  repoRead: ['github_list_repos', 'github_list_files', 'github_read_file', 'github_search_code', 'github_list_commits'],
+  repoWrite: ['github_commit_file', 'github_delete_file'],
+  plan: ['task_list', 'task_add', 'task_update'],
+  skills: ['use_skill'],
+};
+
+const MODE_TOOL_GROUPS = {
+  chat: ['research', 'workspaceRead', 'repoRead'],
+  plan: ['research', 'workspaceRead', 'repoRead', 'plan', 'skills'],
+  build: ['research', 'workspaceRead', 'workspaceWrite', 'repoRead', 'repoWrite', 'plan', 'skills'],
+};
+
+// The groups that change something outside this conversation: a file in the
+// workspace, a file in a repository. The task list is deliberately not one of
+// them -- a plan is a note to self, and Plan mode is exactly where it is written.
+const WRITE_TOOL_GROUPS = ['workspaceWrite', 'repoWrite'];
+
+function toolGroupsForName(name) {
+  const wanted = String(name || '');
+  return Object.keys(TOOL_GROUPS).filter((group) => TOOL_GROUPS[group].includes(wanted));
+}
+
+function modeAllowsTool(mode, name) {
+  const groups = toolGroupsForName(name);
+  if (!groups.length) return true;
+  const allowed = MODE_TOOL_GROUPS[mode] || MODE_TOOL_GROUPS[DEFAULT_MODE];
+  return groups.every((group) => allowed.includes(group));
+}
+
+// What the model is actually offered, which is what a mode really is.
+//
+// Entries that name no tool are dropped rather than passed on: this list goes
+// straight into a request, and a provider rejects the whole turn over one
+// malformed spec -- so a filter is the wrong place to keep something unusable.
+function toolsForMode(mode, tools) {
+  return (Array.isArray(tools) ? tools : []).filter((tool) => {
+    const name = tool && tool.function && tool.function.name;
+    return typeof name === 'string' && name && modeAllowsTool(mode, name);
+  });
+}
+
+// The belt to those braces: a call that got through anyway is refused here.
+function modeBlocksWrite(mode, name) {
+  if (mode === 'build') return false;
+  const groups = toolGroupsForName(name);
+  return groups.some((group) => WRITE_TOOL_GROUPS.includes(group));
+}
+
+// What the model is told when it is refused, in the words a user would use.
+function modeWriteRefusal(mode, name) {
+  const label = mode === 'plan' ? 'Plan' : 'Chat';
+  const next = mode === 'plan'
+    ? 'Finish the plan and tell the user to switch to Build mode to execute it.'
+    : 'Describe what would change and say that Build mode is where it happens.';
+  return 'Refused: ' + label + ' mode is read-only, so ' + name + ' was not run. Nothing changed. ' + next;
 }
 
 // Token overlap between the request and a skill's name + description.
@@ -777,12 +862,17 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   'github_list_repos',
   'github_list_files',
   'github_read_file',
+  // Code search and history are lookups too: a round that asks "where is this
+  // called" and "who touched it last" is two reads, and reads may share a wave.
+  'github_search_code',
+  'github_list_commits',
   'use_skill',
   // Workspace reads only. A write is absent on purpose, so it keeps running on
   // its own and cannot interleave with another call. The task writers are
   // absent for the same reason.
   'workspace_list_files',
   'workspace_read_file',
+  'workspace_search_files',
   'task_list',
 ]);
 
@@ -1235,6 +1325,38 @@ const GITHUB_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'github_search_code',
+      description: 'Search the code inside one repository for a word or phrase and get back the matching files and lines. Use it to find where something is defined or used before reading whole files -- much cheaper than listing directories and guessing. GitHub indexes the default branch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          query: { type: 'string', description: 'The text to find, e.g. "handleSendMessage" or "TODO(perf)".' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
+        },
+        required: ['repo', 'query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_commits',
+      description: 'List the most recent commits on a repository (or on one file). Use it to see what changed lately and who changed it, which is often the fastest way to find the code responsible for a bug.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Only commits that touched this path, e.g. "src/index.js". Omit for the whole repository.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'github_commit_file',
       description: 'Write a file to a repository and commit it. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every commit before it happens.',
       parameters: {
@@ -1247,6 +1369,23 @@ const GITHUB_TOOLS = [
           account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
         },
         required: ['repo', 'path', 'content', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_delete_file',
+      description: 'Delete one file from a repository and commit the deletion. The user is asked to approve it, the same way every commit is.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Path of the file to delete inside the repo.' },
+          message: { type: 'string', description: 'Commit message.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo', 'path', 'message'],
       },
     },
   },
@@ -1276,8 +1415,17 @@ const TOOL_ROUNDS_EXHAUSTED_PROMPT =
 
 const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
 
+const GITHUB_WRITE_TOOL_NAMES = ['github_commit_file', 'github_delete_file'];
+
 function isGithubTool(name) {
   return GITHUB_TOOL_NAMES.includes(name);
+}
+
+// The two that change a repository. Named here rather than at the call sites so
+// the mode surface, the commit confirmation and any secret-file guard all agree
+// about what a write is.
+function isGithubWriteTool(name) {
+  return GITHUB_WRITE_TOOL_NAMES.includes(name);
 }
 
 // Web research, available in every chat with no account needed. The model
@@ -1358,8 +1506,23 @@ const WORKSPACE_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'workspace_search_files',
+      description: 'Search every file in the workspace for a piece of text. Returns "path: line: text" for each match, so it is how you find where something is written before reading whole files. Plain text, not a regular expression, and case-insensitive.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The text to look for, e.g. "TODO" or "function handleSend".' },
+          path: { type: 'string', description: 'Folder to search inside, e.g. "notes". Empty string or omitted searches every file.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'workspace_write_file',
-      description: 'Write a text file in the workspace, creating it or replacing it whole. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every write before it happens.',
+      description: 'Write a text file in the workspace, creating it or replacing it whole. The content replaces the whole file, so send the complete new text, not a diff. To change part of a file that already exists, prefer workspace_edit_file. The user is asked to approve every write before it happens.',
       parameters: {
         type: 'object',
         properties: {
@@ -1370,9 +1533,45 @@ const WORKSPACE_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_edit_file',
+      description: 'Change part of a workspace file: old_text is replaced by new_text. Read the file first and copy old_text from it exactly. old_text must appear exactly once unless all is true, so an edit can never land somewhere you did not mean. The user is asked to approve every edit before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file to change, e.g. "notes/todo.md".' },
+          old_text: { type: 'string', description: 'The exact text to replace, copied from the file.' },
+          new_text: { type: 'string', description: 'What to put in its place. An empty string deletes the old text.' },
+          all: { type: 'boolean', description: 'Replace every occurrence instead of requiring exactly one.' },
+        },
+        required: ['path', 'old_text', 'new_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_delete_file',
+      description: 'Delete a file from the workspace. The user is asked to approve every delete before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file to delete, e.g. "notes/todo.md".' },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
 const WORKSPACE_TOOL_NAMES = WORKSPACE_TOOLS.map((t) => t.function.name);
+
+// Which of them read and which of them change the store. The split is what the
+// mode surface and the parallel-safety rule both key off, so it is one list
+// rather than two spellings of the same idea.
+const WORKSPACE_WRITE_TOOL_NAMES = ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'];
 
 function isWorkspaceTool(name) {
   return WORKSPACE_TOOL_NAMES.includes(name);
@@ -1381,7 +1580,7 @@ function isWorkspaceTool(name) {
 // A write is never parallel-safe, however it is spelled: two writes to one path
 // in the same round is a race whose loser disappears without a trace.
 function isWorkspaceWriteTool(name) {
-  return name === 'workspace_write_file';
+  return WORKSPACE_WRITE_TOOL_NAMES.includes(name);
 }
 
 // Caps, so one runaway turn cannot fill the browser's storage. localStorage
@@ -1479,6 +1678,105 @@ function workspaceWrite(files, path, content) {
     return { error: 'That would put the workspace at ' + total + ' characters; the limit is ' + MAX_WORKSPACE_TOTAL_CHARS + '.' };
   }
   return { files: store, path: target, chars: text.length, created, totalFiles: names.length };
+}
+
+// A delete hands back a new store, like a write: the caller decides whether to
+// keep it, and a refused delete leaves the workspace exactly as it was.
+function workspaceDelete(files, path) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const store = files && typeof files === 'object' ? files : {};
+  if (!Object.prototype.hasOwnProperty.call(store, target)) {
+    const names = workspaceFileNames(store);
+    return {
+      error: 'No file at "' + target + '".' + (names.length ? ' Existing files: ' + names.join(', ') : ' The workspace is empty.'),
+    };
+  }
+  const next = Object.assign({}, store);
+  delete next[target];
+  return { files: next, path: target, totalFiles: workspaceFileNames(next).length };
+}
+
+// Change part of a file, with the match count checked before anything moves.
+//
+// An edit that cannot see its own target must not guess: a model that guessed
+// would write the change into the first place that looked close, which is worse
+// than a failed call because it looks like success. So a missing old_text, or
+// one that appears more than once without `all`, is refused with the count.
+function workspaceEdit(files, path, oldText, newText, all) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const store = files && typeof files === 'object' ? files : {};
+  if (!Object.prototype.hasOwnProperty.call(store, target)) {
+    const names = workspaceFileNames(store);
+    return {
+      error: 'No file at "' + target + '".' + (names.length ? ' Existing files: ' + names.join(', ') : ' The workspace is empty.'),
+    };
+  }
+  const from = typeof oldText === 'string' ? oldText : '';
+  if (!from) return { error: 'old_text is required, and must be text copied from the file.' };
+  const to = typeof newText === 'string' ? newText : newText == null ? '' : String(newText);
+  const content = String(store[target]);
+  let count = 0;
+  for (let i = content.indexOf(from); i !== -1; i = content.indexOf(from, i + from.length)) count += 1;
+  if (!count) {
+    return { error: 'old_text does not appear in "' + target + '". Read the file and copy the text exactly, whitespace included.' };
+  }
+  if (count > 1 && all !== true) {
+    return {
+      error: 'old_text appears ' + count + ' times in "' + target + '". Include more surrounding text to make it unique, or pass all: true to replace every occurrence.',
+    };
+  }
+  const next = Object.assign({}, store);
+  next[target] = all === true ? content.split(from).join(to) : content.replace(from, to);
+  const written = next[target];
+  if (written.length > MAX_WORKSPACE_FILE_CHARS) {
+    return { error: 'That edit would make the file ' + written.length + ' characters; the limit is ' + MAX_WORKSPACE_FILE_CHARS + '.' };
+  }
+  const total = workspaceFileNames(next).reduce((sum, name) => sum + String(next[name]).length, 0);
+  if (total > MAX_WORKSPACE_TOTAL_CHARS) {
+    return { error: 'That would put the workspace at ' + total + ' characters; the limit is ' + MAX_WORKSPACE_TOTAL_CHARS + '.' };
+  }
+  return {
+    files: next,
+    path: target,
+    replaced: all === true ? count : 1,
+    occurrences: count,
+    totalFiles: workspaceFileNames(next).length,
+  };
+}
+
+// Find text across the workspace without reading every file into the prompt.
+// The line number is what makes a result usable: a match with no position is a
+// note that something is in there somewhere, which costs a read to act on.
+const MAX_WORKSPACE_SEARCH_MATCHES = 60;
+const MAX_WORKSPACE_SEARCH_LINE_CHARS = 200;
+
+function workspaceSearch(files, query, dir) {
+  const needle = String(query == null ? '' : query);
+  if (!needle.trim()) return { error: 'query is required.' };
+  const wanted = String(dir == null ? '' : dir).trim();
+  const base = wanted ? normalizeWorkspacePath(wanted) : '';
+  if (base === null) return { error: 'Invalid folder path.' };
+  const prefix = base ? base + '/' : '';
+  // Case-insensitive on purpose, and stated in the tool description: a search
+  // that misses on capitalisation is the one that makes an agent read more files
+  // than it needed to, while an edit stays exact.
+  const low = needle.toLowerCase();
+  const store = files && typeof files === 'object' ? files : {};
+  const matches = [];
+  let truncated = false;
+  for (const path of workspaceFileNames(store)) {
+    if (!path.startsWith(prefix)) continue;
+    const lines = String(store[path]).split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!lines[i].toLowerCase().includes(low)) continue;
+      if (matches.length >= MAX_WORKSPACE_SEARCH_MATCHES) { truncated = true; break; }
+      matches.push({ path, line: i + 1, text: lines[i].trim().slice(0, MAX_WORKSPACE_SEARCH_LINE_CHARS) });
+    }
+    if (truncated) break;
+  }
+  return { matches, truncated, root: base };
 }
 
 // A small task list the model keeps between turns, so work that spans several
@@ -2042,6 +2340,14 @@ function describeToolCall(name, args = {}) {
       return `Listing ${args.path ? `"${args.path}" in ` : 'the root of '}${repo}`;
     case 'github_read_file':
       return `Reading "${args.path || '?'}" from ${repo}${as}`;
+    case 'github_search_code':
+      return `Searching ${repo}${as} for "${args.query || '?'}"`;
+    case 'github_list_commits':
+      return `Listing recent commits in ${repo}${args.path ? ` (${args.path})` : ''}${as}`;
+    case 'github_delete_file': {
+      const owner = args.account || String(args.repo || '').split('/')[0];
+      return `Deleting "${args.path || '?'}" from ${repo}${owner ? ` as ${owner}` : ''}`;
+    }
     case 'github_commit_file': {
       // A commit dialog must always name the identity it will land under, so
       // fall back to the repo owner -- which is the account the server picks
@@ -2059,6 +2365,12 @@ function describeToolCall(name, args = {}) {
       return `Reading "${args.path || '?'}" from the workspace`;
     case 'workspace_write_file':
       return `Writing "${args.path || '?'}" to the workspace`;
+    case 'workspace_search_files':
+      return `Searching the workspace for "${args.query || '?'}"`;
+    case 'workspace_edit_file':
+      return `Editing "${args.path || '?'}" in the workspace`;
+    case 'workspace_delete_file':
+      return `Deleting "${args.path || '?'}" from the workspace`;
     case 'task_list':
       return 'Reading the task list';
     case 'task_add':
@@ -3610,6 +3922,14 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_MODE,
     isValidMode,
     modePrompt,
+    TOOL_GROUPS,
+    MODE_TOOL_GROUPS,
+    WRITE_TOOL_GROUPS,
+    toolGroupsForName,
+    modeAllowsTool,
+    toolsForMode,
+    modeBlocksWrite,
+    modeWriteRefusal,
     SKILL_SOURCES,
     BUILD_CORE_SKILLS,
     skillEntriesFromTree,
@@ -3669,6 +3989,8 @@ if (typeof module !== 'undefined' && module.exports) {
     DOCUMENT_EXTENSIONS,
     isDocumentFile,
     GITHUB_TOOLS,
+    GITHUB_WRITE_TOOL_NAMES,
+    isGithubWriteTool,
     GITHUB_TOOL_NAMES,
     WEB_TOOLS,
     WEB_TOOL_NAMES,
@@ -3695,6 +4017,11 @@ if (typeof module !== 'undefined' && module.exports) {
     isModerationRefusal,
     IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,
+    WORKSPACE_WRITE_TOOL_NAMES,
+    workspaceDelete,
+    workspaceEdit,
+    workspaceSearch,
+    MAX_WORKSPACE_SEARCH_MATCHES,
     WORKSPACE_TOOL_NAMES,
     isWorkspaceTool,
     isWorkspaceWriteTool,
