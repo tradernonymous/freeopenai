@@ -139,6 +139,26 @@ test('an empty Nara catalogue serves the pinned list instead of an empty picker'
   });
 });
 
+test('a Nara 500 on the catalogue serves the pinned list instead of an error', async () => {
+  clearModelCache();
+  // The reported symptom: "Could not load models: 500: An internal error
+  // occurred." -- upstream's catalogue endpoint erroring while chat on the
+  // same key stays up. The pinned ids remain addressable, so serve them.
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'An internal error occurred.' } }));
+  });
+  await withNaraUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`);
+    const body = await res.json();
+    app.close();
+    assert.equal(res.status, 200);
+    assert.deepEqual(body.map((m) => m.id), LLM_PROVIDERS.nara.models);
+  });
+});
+
 test('an upstream outage never empties the picker across repeated polls', async () => {
   clearModelCache();
   let hits = 0;

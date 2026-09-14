@@ -1722,7 +1722,22 @@ async function llmModels(req, res) {
       ? await fetchOllamaModels(req, provider)
       : await providerFetch(req, provider, provider.modelsPath || '/models');
     const { ok, status, data } = result;
-    if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
+    if (!ok) {
+      // Nara's catalogue endpoint occasionally answers 500 ("An internal
+      // error occurred.") while chat on the same key stays up. A provider
+      // with a pinned allowlist can still offer a pickable list, so serve
+      // it as bare ids rather than emptying the picker for a transient
+      // catalogue outage. Transport-level failures (502/504, empty body)
+      // still report as errors -- the tests below lock that in.
+      if (status === 500 && data != null && Array.isArray(provider.models) && provider.models.length) {
+        const pinned = provider.models.map((id) => ({ id })).filter((m) => m && m.id);
+        if (pinned.length) {
+          modelCache.set(id, { fetchedAt: Date.now(), models: pinned });
+          return sendJson(res, 200, pinned);
+        }
+      }
+      return sendJson(res, status, { error: describeProviderError(status, data, provider) });
+    }
     // OpenAI-compatible providers wrap the catalogue in { data: [...] }, but
     // the wire occasionally disagrees -- a bare array, or Ollama-style
     // { models: [...] }. Reading any of those beats reading the answer as
