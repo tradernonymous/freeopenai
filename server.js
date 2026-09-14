@@ -1686,13 +1686,22 @@ function imageCandidateFor(id, options) {
 // request's own `provider`, and the operator's IMAGE_PROVIDER, which is a
 // deployment saying "this is the service I pay for".
 //
-// Nothing named means fall through, and that is what makes this route cover
-// every provider instead of the first one that happens to be configured: an
-// OpenRouter key draws without NARA_API_KEY, a HuggingFace key draws without
-// either, and so on down the order. Ollama and OmniRoute come last because
-// their model names are the operator's to supply, so they can only ever be
-// reached when one was.
-function imageDrawOrder(requested, explicitModel) {
+// A *preferred* provider is not that. The page sends the service the conversation
+// is on -- "generate an image" should follow the choice the user already made
+// rather than asking again -- and a preference is exactly the strength that
+// deserves: that provider goes first, with the chat's own model, and the rest of
+// the order stays behind it for the case where it cannot draw. Pinning would turn
+// a service that does not do images into a dead end.
+//
+// Nothing named and nothing preferred means fall through, and that is what makes
+// this route cover every provider instead of the first one that happens to be
+// configured: an OpenRouter key draws without NARA_API_KEY, a HuggingFace key
+// draws without either, and so on down the order. Ollama and OmniRoute come last
+// because their model names are the operator's to supply, so they can only ever
+// be reached when one was.
+function imageDrawOrder(requested, options) {
+  const settings = options || {};
+  const explicitModel = String(settings.explicitModel || '').trim();
   const named = String(requested || process.env.IMAGE_PROVIDER || '').trim();
   if (named) {
     const provider = LLM_PROVIDERS[named];
@@ -1701,9 +1710,17 @@ function imageDrawOrder(requested, explicitModel) {
     }
     return { candidates: [imageCandidateFor(named, { explicitModel })] };
   }
+  const preferred = String(settings.preferredProvider || '').trim();
+  const order = preferred && IMAGE_PROVIDER_ORDER.includes(preferred)
+    ? [preferred, ...IMAGE_PROVIDER_ORDER.filter((id) => id !== preferred)]
+    : IMAGE_PROVIDER_ORDER;
   const candidates = [];
-  for (const id of IMAGE_PROVIDER_ORDER) {
-    const candidate = imageCandidateFor(id, {});
+  for (const id of order) {
+    // The conversation's model is offered to the provider the conversation is on,
+    // and to that one alone: ids come from per-provider catalogues, so an
+    // OpenRouter name handed to Nara is a 404 dressed up as a bad request. A
+    // provider further down the order draws with its own model.
+    const candidate = imageCandidateFor(id, { explicitModel: id === preferred ? explicitModel : '' });
     if (!candidate.error) candidates.push(candidate);
   }
   if (!candidates.length) return { error: imageUnavailableMessage() };
@@ -1711,9 +1728,13 @@ function imageDrawOrder(requested, explicitModel) {
 }
 
 // Which providers could draw right now, in the order they would be tried, and
-// what each is missing when it could not. The page reads this instead of
-// guessing: a picker that offers a service the server cannot reach is a picker
-// that turns a working setup into a failure the user has to debug.
+// what each is missing when it could not.
+//
+// The page used to read this to build a picker of image services, which was the
+// second question the composer should never have asked: an image request now
+// follows the conversation, so this is the operator's view of the order rather
+// than the browser's. It is also what a failure message is written from, so the
+// variables it names are the ones that would actually fix the setup.
 function imageProvidersReport() {
   const rows = [];
   for (const id of IMAGE_PROVIDER_ORDER) {
@@ -1840,6 +1861,51 @@ function aspectForSize(size) {
   return '';
 }
 
+// How close two sizes are, so "the nearest one it does offer" has a meaning:
+// shape first, area second. A 16:9 request lands on 16:9 before it lands on
+// something with the same megapixels, which is what the user is asking about.
+function nearestDeclaredSize(declared, parts) {
+  if (!parts) return '';
+  const scored = declared
+    .map((entry) => ({ value: entry.value, parts: sizeParts(entry.value) }))
+    .filter((entry) => entry.parts)
+    .map((entry) => ({
+      value: entry.value,
+      aspect: Math.abs(entry.parts.w / entry.parts.h - parts.w / parts.h),
+      area: Math.abs(entry.parts.w * entry.parts.h - parts.w * parts.h),
+    }))
+    .sort((a, b) => a.aspect - b.aspect || a.area - b.area);
+  if (!scored.length) return '';
+  return scored[0].value;
+}
+
+// The size this service will actually be asked for.
+//
+// A store that lists its sizes has agreed to them, and handing it one it does
+// not offer used to mean the draw failed on a service that was ready and had
+// credits -- the request was refused for a reason nobody typed. The nearest size
+// it does offer is used instead, and the swap is a sentence on screen rather
+// than something found later in the download.
+//
+// A store that lists none has said nothing about size, and there a size is a
+// preference like quality: sent, and dropped on a 400 rather than losing the
+// picture over a setting nobody promised to understand.
+function resolveImageSize(store, requested, label) {
+  const want = String(requested || '').trim();
+  if (!want) return { declaredSize: '', preferenceSize: '' };
+  const declared = Array.isArray(store.sizes) && store.sizes.length ? store.sizes : null;
+  if (!declared) return { declaredSize: '', preferenceSize: want };
+  const exact = declared.find((entry) => entry.value === want);
+  if (exact) return { declaredSize: exact.value, preferenceSize: '' };
+  const nearest = nearestDeclaredSize(declared, sizeParts(want));
+  if (!nearest || nearest === want) return { declaredSize: want, preferenceSize: '' };
+  return {
+    declaredSize: nearest,
+    preferenceSize: '',
+    note: (label ? 'asked for ' + want + ' — ' + label + ' draws ' : 'asked for ' + want + ' — the service draws ') + nearest,
+  };
+}
+
 // The multipart body an OpenAI-shaped edits endpoint wants: file parts for the
 // picture and its mask, fields for the rest. Built per attempt because the
 // boundary is the framing, and a retry must not reuse the framing of a request
@@ -1880,7 +1946,7 @@ function imageEditMultipart(args) {
 // rewrite. So a 400 that arrives while a preference was sent buys exactly one
 // more attempt without it. A 400 is never billed, which is what makes that free.
 async function drawImage(args) {
-  const { id, provider, store, model, kind, prompt, image, mask, source, options, headers, signal } = args;
+  const { id, provider, store, model, explicitModel, kind, prompt, image, mask, source, options, headers, signal } = args;
   const base = imageBaseFor(id, provider, store);
   // A keyless local server (Ollama) sends no auth header at all rather than a
   // bare "Bearer ", which some fronts read as a malformed token. A provider's
@@ -1891,17 +1957,13 @@ async function drawImage(args) {
   // store, not global: 1024x1024 is Nara's and nothing else's business.
   const fallbackSize = store.sizeEnv ? String(process.env[store.sizeEnv] || '').trim() : '';
   const requestedSize = String(options.size || '').trim() || fallbackSize;
-  // A store that lists its sizes has agreed to them: the one it was handed was
-  // checked against that list before it got here, so it is a field. A store that
-  // lists none has said nothing about size, and then a size is a preference like
-  // the others -- sent, and dropped on a 400 rather than losing the picture over
-  // a setting nobody promised to understand.
-  const declaredSize = Array.isArray(store.sizes) && store.sizes.length ? requestedSize : '';
+  const sizeForService = resolveImageSize(store, requestedSize, provider.label);
+  const declaredSize = sizeForService.declaredSize;
   // Only what a service is free not to know about.
   const extra = {};
   if (options.quality) extra.quality = options.quality;
   if (options.n > 1) extra.n = options.n;
-  if (requestedSize && !declaredSize) extra.size = requestedSize;
+  if (sizeForService.preferenceSize) extra.size = sizeForService.preferenceSize;
 
   const postJson = (url, body, withExtra) => fetch(url, {
     method: 'POST',
@@ -1910,89 +1972,115 @@ async function drawImage(args) {
     body: JSON.stringify(withExtra ? { ...body, ...extra } : body),
   });
 
-  // The OpenAI-shaped request, used by Nara, OpenRouter, a gateway (OmniRoute),
-  // a local server (Ollama) and a self-hosted NVIDIA NIM. An edit rides either
-  // the edits endpoint as multipart, or the same generations endpoint as a
-  // reference -- which of the two is the store's `edit` mode.
-  const openaiAttempt = (path) => (withExtra) => {
-    const body = { model, prompt };
-    if (declaredSize) body.size = declaredSize;
-    if (kind === 'edits' && store.edit === 'references' && source) {
-      body.input_references = [{ type: 'image_url', image_url: { url: source } }];
+  // Every shape below takes the model as an argument rather than closing over
+  // one: the ladder at the bottom tries a second model, and rebuilding the
+  // request is the only way a retry can differ from the attempt it repeats.
+  const attemptsFor = (useModel) => {
+    // The OpenAI-shaped request, used by Nara, OpenRouter, a gateway (OmniRoute),
+    // a local server (Ollama) and a self-hosted NVIDIA NIM. An edit rides either
+    // the edits endpoint as multipart, or the same generations endpoint as a
+    // reference -- which of the two is the store's `edit` mode.
+    const openaiAttempt = (path) => (withExtra) => {
+      const body = { model: useModel, prompt };
+      if (declaredSize) body.size = declaredSize;
+      if (kind === 'edits' && store.edit === 'references' && source) {
+        body.input_references = [{ type: 'image_url', image_url: { url: source } }];
+      }
+      return postJson(base + path, body, withExtra);
+    };
+    const multipartAttempt = (withExtra) => {
+      const fields = withExtra ? { ...(declaredSize ? { size: declaredSize } : {}), ...extra } : (declaredSize ? { size: declaredSize } : {});
+      const built = imageEditMultipart({ image, mask, prompt, model: useModel, extra: fields });
+      return fetch(base + (store.editPath || '/images/edits'), {
+        method: 'POST',
+        signal,
+        headers: { ...auth, 'Content-Type': 'multipart/form-data; boundary=' + built.boundary },
+        body: built.body,
+      });
+    };
+
+    if (store.shape === 'nvidia-genai') {
+      return [
+        (withExtra) => {
+          // The hosted FLUX models: {prompt} in, {artifacts:[{base64}]} out.
+          const body = { prompt, mode: 'base' };
+          const aspect = aspectForSize(requestedSize);
+          if (aspect) body.aspect_ratio = aspect;
+          if (withExtra && extra.n > 1) body.n = extra.n;
+          return postJson(base + '/genai/' + useModel, body, false);
+        },
+        // A self-hosted visual-genai NIM documents an OpenAI-compatible images
+        // API instead of that shape, so a 404 moves here.
+        openaiAttempt('/images/generations'),
+      ];
     }
-    return postJson(base + path, body, withExtra);
-  };
-  const multipartAttempt = (withExtra) => {
-    const fields = withExtra ? { ...(declaredSize ? { size: declaredSize } : {}), ...extra } : (declaredSize ? { size: declaredSize } : {});
-    const built = imageEditMultipart({ image, mask, prompt, model, extra: fields });
-    return fetch(base + (store.editPath || '/images/edits'), {
-      method: 'POST',
-      signal,
-      headers: { ...auth, 'Content-Type': 'multipart/form-data; boundary=' + built.boundary },
-      body: built.body,
-    });
+    if (store.shape === 'hf-inference') {
+      // The task route, not the router: {inputs, parameters} in, image bytes out.
+      return [(withExtra) => {
+        const parameters = {};
+        const parts = sizeParts(requestedSize);
+        if (parts) { parameters.width = parts.w; parameters.height = parts.h; }
+        if (withExtra && extra.n > 1) parameters.num_images = extra.n;
+        return postJson(base + '/models/' + useModel, { inputs: prompt, parameters }, false);
+      }];
+    }
+    if (kind === 'edits' && store.edit === 'multipart') return [multipartAttempt];
+    // Two paths where a service describes its own endpoint two ways.
+    return [store.path || '/images/generations', store.altPath].filter(Boolean).map(openaiAttempt);
   };
 
-  let attempts;
-  if (store.shape === 'nvidia-genai') {
-    attempts = [
-      (withExtra) => {
-        // The hosted FLUX models: {prompt} in, {artifacts:[{base64}]} out.
-        const body = { prompt, mode: 'base' };
-        const aspect = aspectForSize(requestedSize);
-        if (aspect) body.aspect_ratio = aspect;
-        if (withExtra && extra.n > 1) body.n = extra.n;
-        return postJson(base + '/genai/' + model, body, false);
-      },
-      // A self-hosted visual-genai NIM documents an OpenAI-compatible images API
-      // instead of that shape, so a 404 moves here.
-      openaiAttempt('/images/generations'),
-    ];
-  } else if (store.shape === 'hf-inference') {
-    // The task route, not the router: {inputs, parameters} in, image bytes out.
-    attempts = [(withExtra) => {
-      const parameters = {};
-      const parts = sizeParts(requestedSize);
-      if (parts) { parameters.width = parts.w; parameters.height = parts.h; }
-      if (withExtra && extra.n > 1) parameters.num_images = extra.n;
-      return postJson(base + '/models/' + model, { inputs: prompt, parameters }, false);
-    }];
-  } else if (kind === 'edits' && store.edit === 'multipart') {
-    attempts = [multipartAttempt];
-  } else {
-    // Two paths where a service describes its own endpoint two ways.
-    attempts = [store.path || '/images/generations', store.altPath].filter(Boolean).map(openaiAttempt);
+  // The chat's own model first, then the one this provider would draw with by
+  // itself.
+  //
+  // The page now sends the model the conversation is on, because "generate an
+  // image" should follow the choice the user already made rather than a second
+  // picker. Most chat models on these services can draw, but not all, and a
+  // model that cannot is a fact about the model and not about the provider: a
+  // 400 is never billed, so the provider's own image model costs one free
+  // attempt and is what makes this a preference rather than a gamble.
+  const models = [model];
+  if (explicitModel) {
+    const own = imageModelFor(store, '');
+    if (own && own !== model) models.push(own);
   }
 
   let response = null;
-  const send = async (withExtra) => {
-    for (const attempt of attempts) {
-      response = await attempt(withExtra);
-      if (response.status !== 404) return;
+  for (let index = 0; index < models.length; index++) {
+    const attempts = attemptsFor(models[index]);
+    const send = async (withExtra) => {
+      for (const attempt of attempts) {
+        response = await attempt(withExtra);
+        if (response.status !== 404) return;
+      }
+    };
+    await send(true);
+    if (Object.keys(extra).length && response && response.status === 400) {
+      // A 400 is never billed, which is what makes this second attempt free. The
+      // first answer is the one kept when the second fails too: dropping a
+      // preference answers "was it the preference?", and when the answer is no, the
+      // sentence worth reporting is the refusal the service actually wrote.
+      console.warn('image ' + kind + ': ' + provider.label + ' refused a request carrying ' + Object.keys(extra).join(', ') + ' — retrying without them');
+      const refusedWithPreferences = response;
+      await send(false);
+      if (!response || response.status >= 400) {
+        if (response && response.body) await response.body.cancel().catch(() => {});
+        response = refusedWithPreferences;
+      }
     }
-  };
-  await send(true);
-  if (Object.keys(extra).length && response && response.status === 400) {
-    // A 400 is never billed, which is what makes this second attempt free. The
-    // first answer is the one kept when the second fails too: dropping a
-    // preference answers "was it the preference?", and when the answer is no, the
-    // sentence worth reporting is the refusal the service actually wrote.
-    console.warn('image ' + kind + ': ' + provider.label + ' refused a request carrying ' + Object.keys(extra).join(', ') + ' — retrying without them');
-    const refusedWithPreferences = response;
-    await send(false);
-    if (!response || response.status >= 400) {
-      if (response && response.body) await response.body.cancel().catch(() => {});
-      response = refusedWithPreferences;
-    }
+    const last = index === models.length - 1;
+    if (last || !response || response.status !== 400) break;
+    console.warn('image ' + kind + ': ' + provider.label + ' refused the chat model ' + models[index] + ' — retrying with its own image model, ' + models[index + 1]);
   }
 
   // Bytes or JSON, whichever this service answers with: hf-inference returns the
   // picture itself, the others return a document that carries it.
   const mediaType = String(response.headers.get('content-type') || '').split(';')[0].trim();
+  const notes = sizeForService.note ? [sizeForService.note] : [];
   if (/^image\//i.test(mediaType)) {
     const bytes = Buffer.from(await response.arrayBuffer());
     return {
       status: response.status,
+      notes,
       data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: bytes.toString('base64'), media_type: mediaType }] },
     };
   }
@@ -2002,10 +2090,10 @@ async function drawImage(args) {
   if (payload && !payload.data) {
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
-      return { status: response.status, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
+      return { status: response.status, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
     }
   }
-  return { status: response.status, data: payload };
+  return { status: response.status, notes, data: payload };
 }
 
 // The largest source picture an edit will carry, in bytes. The browser already
@@ -2071,9 +2159,15 @@ async function llmImage(req, res, kind) {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
-    // Resolved before anything else is read: a request that cannot be served
-    // should say so in its first sentence rather than after a 12MB upload.
-    const order = imageDrawOrder(body.provider, body.model);
+    // The conversation's own service and model, sent as a preference rather than
+    // a pin: that provider is asked first, with that model, and the rest of the
+    // order stays behind it. Which one the page names is the user's own choice
+    // from the model picker, so it is worth honouring -- and worth not being
+    // trapped by when the model turns out not to draw.
+    const order = imageDrawOrder(body.provider, {
+      explicitModel: body.model,
+      preferredProvider: body.preferProvider,
+    });
     if (order.error) return sendJson(res, 400, { error: order.error });
     const options = {
       size: String(body.size || '').trim(),
@@ -2138,6 +2232,9 @@ async function llmImage(req, res, kind) {
             mask: useMask,
             source,
             options,
+            // Whether the name being tried is the request's own, which is what
+            // earns the second attempt with this provider's own image model.
+            explicitModel: candidate.model === String(body.model || '').trim() && !!candidate.model,
             headers: typeof candidate.provider.headers === 'function' ? candidate.provider.headers(req) : null,
             signal: controller.signal,
           });
@@ -2154,12 +2251,16 @@ async function llmImage(req, res, kind) {
             // Which service drew rides back with the picture. It is the one fact
             // about an image that cannot be recovered afterwards, and the page
             // says it rather than leaving the user to guess who to thank.
+            // What the provider had to say about itself rides along with the
+            // picture: a size it had to swap for its nearest one, a mask it
+            // cannot take. Both are answers to questions the request asked.
+            const allNotes = [...(drawn.notes || []), ...notes];
             sendJson(res, 200, {
               ...drawn.data,
               provider: candidate.id,
               providerLabel: candidate.provider.label,
               model: candidate.model,
-              ...(notes.length ? { notes } : {}),
+              ...(allNotes.length ? { notes: allNotes } : {}),
             });
             return;
           }

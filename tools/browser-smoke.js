@@ -178,6 +178,36 @@ async function main() {
         const el = (selector) => document.querySelector(selector);
         const rect = (selector) => { const node = el(selector); if (!node) return null; const box = node.getBoundingClientRect(); return { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom), width: Math.round(box.width), height: Math.round(box.height) }; };
         const style = (selector, prop) => { const node = el(selector); return node ? getComputedStyle(node)[prop] : null; };
+        // The two buttons every message needs -- attach and draw -- plus the
+        // settings strip they sit beside. On a phone the strip scrolls and the
+        // actions must not, which is a claim about the layout that only the
+        // layout can answer.
+        const composerControls = (() => {
+          const row = el('.composer-controls');
+          const actions = el('.composer-actions');
+          const settings = el('.composer-settings');
+          if (!row || !actions || !settings) return null;
+          const box = (node) => { const r = node.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), width: Math.round(r.width) }; };
+          const place = (node) => {
+            if (!node) return null;
+            const r = node.getBoundingClientRect();
+            return {
+              left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top),
+              inView: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1,
+            };
+          };
+          return {
+            actions: box(actions),
+            settings: box(settings),
+            settingsScrolls: settings.scrollWidth > settings.clientWidth + 1,
+            actionsScrolls: actions.scrollWidth > actions.clientWidth + 1,
+            attach: place(el('#attachTrigger')),
+            image: place(el('#imageModeBtn')),
+            // The picker that made this row too long is gone; a second one coming
+            // back is the regression this notices.
+            imageProviderSelect: !!el('#imageProviderSelect'),
+          };
+        })();
         const messages = document.getElementById('chatMessages');
         const header = [...document.querySelectorAll('.chat-bar-actions .icon-btn')]
           .filter((b) => getComputedStyle(b).display !== 'none')
@@ -286,6 +316,7 @@ async function main() {
           model: rect('#modelTrigger'),
           attach: rect('#attachTrigger'),
           header,
+          composerControls,
           themeButton,
           appearance,
           panels,
@@ -339,6 +370,29 @@ async function main() {
       const widths = new Set(shot.header.map((b) => b.w));
       if (heights.size > 1 || widths.size > 1) {
         throw new Error(name + ' header controls are not one size: ' + JSON.stringify(shot.header));
+      }
+    }
+
+    // Attach and draw are the two controls every message needs, and on a phone
+    // they used to scroll off the right edge of a one-row strip. They now have a
+    // group of their own that cannot scroll; the settings scroll beside them.
+    for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {
+      const c = shot.composerControls;
+      if (!c) throw new Error(name + ' has no composer controls at all');
+      if (c.imageProviderSelect) throw new Error(name + ' still offers a second image provider picker');
+      if (c.actionsScrolls) throw new Error(name + ' lets the actions group scroll');
+      for (const [which, place] of [['attach', c.attach], ['draw', c.image]]) {
+        if (!place) throw new Error(name + ' has no ' + which + ' button');
+        if (!place.inView) throw new Error(name + ' puts the ' + which + ' button off screen: ' + JSON.stringify(place));
+      }
+      const sameRow = Math.abs(c.settings.top - c.actions.top) <= 2;
+      if (sameRow && c.attach.right > c.settings.left + 1) {
+        throw new Error(name + ' overlaps the settings with the actions: ' + JSON.stringify(c));
+      }
+      // A phone fits the settings on a second row rather than beside the
+      // actions, and that second row is the whole reason the actions stay put.
+      if (Number(shot.viewport.split('x')[0]) <= 640 && sameRow) {
+        throw new Error(name + ' keeps one row on a phone, which is what pushed attach and draw off the edge: ' + JSON.stringify(c));
       }
     }
 

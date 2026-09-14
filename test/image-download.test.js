@@ -12,9 +12,15 @@ const {
   imageDownloadFormat,
   imageDownloadStem,
   imageDownloadFilename,
-  PDF_PAGE_PT,
-  PDF_MARGIN_PT,
+  PDF_MAX_PAGE_PT,
   pdfPageFor,
+  IMAGE_SIZE_PRESETS,
+  imageSizePreset,
+  imageSizeFromPrompt,
+  imageSizeBody,
+  imageRatioBody,
+  imageRatioLabel,
+  describeDrawnSize,
   buildImagePdf,
 } = require('../chatlib.js');
 
@@ -67,27 +73,36 @@ test('the filename says the size, so a folder listing answers "was it the size I
   assert.equal(imageDownloadFilename('cat', 'png'), 'freeai4u-cat.png');
 });
 
-test('the page suits the picture, and a small picture is not blown up to fill it', () => {
+test('the page is the picture: no sheet, no margin, nothing blank around it', async () => {
+  // The complaint this replace: an A4 page with a 24pt margin printed the
+  // drawing as a stamp in the middle of a white sheet. A PDF that follows the
+  // image fills its own page, so the picture is the whole document.
   const tall = pdfPageFor(1024, 1536);
-  assert.ok(tall.height > tall.width, 'a portrait picture gets a portrait page');
-  assert.equal(tall.width, PDF_PAGE_PT.width);
-  assert.equal(tall.height, PDF_PAGE_PT.height);
+  assert.equal(tall.width, 1024, 'the page has to be the picture');
+  assert.equal(tall.height, 1536);
+  assert.equal(tall.imageWidth, 1024, 'and the picture has to fill it');
+  assert.equal(tall.imageHeight, 1536);
+  assert.equal(tall.x, 0, 'a centred picture is a picture with a margin');
+  assert.equal(tall.y, 0);
 
   const wide = pdfPageFor(1536, 1024);
-  assert.ok(wide.width > wide.height, 'a landscape picture gets a landscape page, not a stamp on A4');
-  assert.equal(wide.width, PDF_PAGE_PT.height);
+  assert.equal(wide.width, 1536);
+  assert.equal(wide.height, 1024);
 
-  // Fit inside the margins, aspect preserved, centred.
-  for (const page of [tall, wide]) {
-    assert.ok(page.imageWidth <= page.width - PDF_MARGIN_PT * 2 + 0.01);
-    assert.ok(page.imageHeight <= page.height - PDF_MARGIN_PT * 2 + 0.01);
-    assert.ok(page.x >= PDF_MARGIN_PT - 0.01 && page.y >= PDF_MARGIN_PT - 0.01);
-    assert.ok(Math.abs(page.imageWidth / page.imageHeight - page.pixels.width / page.pixels.height) < 0.01);
-  }
+  const odd = pdfPageFor(1640, 856);
+  assert.equal(odd.width, 1640, 'an unusual ratio is followed exactly, not rounded to a sheet');
+  assert.equal(odd.height, 856);
 
-  const small = pdfPageFor(256, 256);
-  assert.equal(small.imageWidth, 256, 'upscaling a 256px picture would claim a resolution it has not got');
-  assert.equal(small.imageHeight, 256);
+  // A very large drawing keeps the promise at a smaller scale rather than
+  // asking a reader for a four-foot page.
+  const huge = pdfPageFor(4096, 2048);
+  assert.equal(Math.max(huge.width, huge.height), PDF_MAX_PAGE_PT);
+  assert.equal(huge.imageWidth, huge.width);
+  assert.equal(huge.imageHeight, huge.height);
+  assert.ok(Math.abs(huge.width / huge.height - 2) < 0.01, 'the shape survives the scale');
+
+  const broken = pdfPageFor(0, 0);
+  assert.equal(broken.width, 1, 'a page of nothing is a document no reader will open');
 });
 
 test('the PDF is a document a reader will open', () => {
@@ -100,7 +115,7 @@ test('the PDF is a document a reader will open', () => {
   assert.match(text, /\/Type \/Catalog/);
   assert.match(text, /\/Type \/Pages/);
   assert.match(text, /\/Type \/Page /);
-  assert.match(text, /\/MediaBox \[0 0 841\.89 595\.28\]/, 'the MediaBox has to be the landscape page the picture chose');
+  assert.match(text, /\/MediaBox \[0 0 1536 1024\]/, 'the MediaBox has to be the picture, not a sheet it was pasted onto');
   assert.match(text, /\/Filter \/DCTDecode/, 'the JPEG goes in as itself rather than a second lossy pass');
   assert.match(text, /\/Width 1536 \/Height 1024/, 'the image object declares the pixels, not a square');
 
@@ -147,7 +162,73 @@ test('a PDF for a picture the browser could not measure is still a PDF', () => {
   const pdf = buildImagePdf(new Uint8Array(0), 0, 0);
   const text = asLatin1(pdf);
   assert.match(text, /^%PDF-1\.4/);
-  assert.match(text, /\/MediaBox \[0 0 595\.28 841\.89\]/, 'an unmeasurable picture gets plain A4');
+  assert.match(text, /\/MediaBox \[0 0 1 1\]/, 'an unmeasurable picture gets a page, not a zero box');
   assert.match(text, /%%EOF\n$/);
   assert.doesNotMatch(text, /\/Width 0 |\/Height 0 /);
+});
+
+test('the size a picture was asked for is read from the request itself', () => {
+  // Nothing in the composer asks for dimensions, so the request is where the
+  // answer has to come from: this is the whole of "I asked for a wide one and got
+  // a square", because a request carrying no size is answered with a default.
+  const exact = imageSizeFromPrompt('a 1536x1024 photo of a harbour');
+  assert.equal(exact.id, 'exact');
+  assert.equal(imageSizeBody(exact), '1536x1024');
+  assert.deepEqual(imageRatioBody(exact), { w: 1536, h: 1024 });
+
+  const wide = imageSizeFromPrompt('a 16:9 banner for the shop front');
+  assert.equal(wide.label, '16:9');
+  assert.equal(imageSizeBody(wide), '1536x864');
+  assert.deepEqual(imageRatioBody(wide), { w: 16, h: 9 }, "Puter's txt2img takes the ratio, not the pixels");
+
+  assert.equal(imageSizeFromPrompt('a tall phone wallpaper').id, 'tall');
+  assert.equal(imageSizeFromPrompt('a square icon').id, 'square');
+  assert.equal(imageSizeFromPrompt('a landscape oil painting').id, 'landscape');
+  // Scaled to something a service will draw, rather than 21 by 9 pixels.
+  const cinematic = imageSizeFromPrompt('a 21:9 cinematic shot');
+  assert.equal(cinematic.label, '21:9');
+  assert.ok(cinematic.width >= 1024 && cinematic.height >= 256);
+
+  // Nothing asked for is nothing sent, which is the old behaviour and still the
+  // right one: a service's own default beats a size this app invented.
+  for (const plain of ['draw a cat', 'make me a hero image', '', undefined]) {
+    assert.equal(imageSizeFromPrompt(plain), null, `"${plain}" invented a size`);
+    assert.equal(imageSizeBody(null), '');
+    assert.equal(imageRatioBody(null), null);
+  }
+
+  // The words that must not fire: a portrait is a subject, and "widespread" is
+  // not a shape.
+  assert.equal(imageSizeFromPrompt('a portrait of a woman in oils'), null);
+  assert.equal(imageSizeFromPrompt('a widespread field of grass'), null);
+  assert.equal(imageSizeFromPrompt('the history of the bicycle'), null, 'story inside history');
+
+  // An edit takes the spelled-out size and nothing else: "make the poster blue"
+  // is an instruction about the picture already on screen, and reshaping it would
+  // crop something nobody asked about.
+  assert.equal(imageSizeFromPrompt('make the poster blue', { words: false }), null);
+  assert.equal(imageSizeFromPrompt('make it a tall phone wallpaper', { words: false }), null);
+  assert.equal(imageSizeBody(imageSizeFromPrompt('crop this to 16:9', { words: false })), '1536x864');
+  assert.equal(imageSizeBody(imageSizeFromPrompt('resize to 1024x1024', { words: false })), '1024x1024');
+
+  // A grid is not a resolution, and a proportion with no px in it still is.
+  assert.equal(imageSizeFromPrompt('a 3x2 grid of stickers'), null, 'a small pair is a layout, not dimensions');
+  const classic = imageSizeFromPrompt('a 4:3 photo of a temple');
+  assert.equal(classic.label, '4:3');
+  assert.equal(imageSizeBody(classic), '1536x1152');
+
+  assert.deepEqual(IMAGE_SIZE_PRESETS.map((p) => p.id), ['square', 'landscape', 'portrait', 'wide', 'tall']);
+  assert.equal(imageRatioLabel(1536, 1024), '3:2');
+});
+
+test('a picture that came back the wrong shape is said out loud', () => {
+  const wide = imageSizePreset('wide');
+  const note = describeDrawnSize(wide, 1024, 1024);
+  assert.match(note, /asked for 16:9 \(1536x864\), drawn 1:1 \(1024×1024\)/);
+  // A provider rounding onto its own grid is the same picture to anyone looking
+  // at it, and a warning nobody can act on is noise.
+  assert.equal(describeDrawnSize(wide, 1536, 870), '');
+  assert.equal(describeDrawnSize(wide, 1530, 860), '');
+  assert.equal(describeDrawnSize(null, 1024, 1024), '', 'nothing was asked for');
+  assert.equal(describeDrawnSize(wide, 0, 0), '', 'nothing was measured');
 });

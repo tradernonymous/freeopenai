@@ -22,23 +22,34 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-test('the attach menu is fixed to the viewport, not trapped in the scrolling row', () => {
+test('the attach menu is fixed to the viewport, and its trigger cannot scroll away', () => {
   const block = HTML.match(/\.attach-menu\s*\{[^}]*\}/);
   assert.ok(block, '.attach-menu is gone -- re-point this test');
-  assert.match(block[0], /position:\s*fixed/, 'an absolutely positioned menu here is clipped by the controls row');
+  assert.match(block[0], /position:\s*fixed/, 'an absolutely positioned menu here is clipped by whatever scrolls around it');
   assert.doesNotMatch(block[0], /position:\s*absolute/);
 
-  // The reason it must be fixed, asserted rather than described: without the
-  // scrolling row there would be nothing to clip it.
-  const controls = HTML.match(/\.composer-controls\s*\{[^}]*\}/);
-  assert.ok(controls, '.composer-controls is gone -- re-point this test');
-  assert.match(controls[0], /overflow-x:\s*auto/);
+  // The controls are two groups: the settings scroll, the actions do not. That
+  // is what keeps attach and draw on screen on a phone instead of sliding off
+  // the right edge, and it is also why the menu has to be placed against the
+  // viewport rather than against the row it belongs to.
+  const settings = HTML.match(/\.composer-settings\s*\{[^}]*\}/);
+  assert.ok(settings, '.composer-settings is gone -- re-point this test');
+  assert.match(settings[0], /overflow-x:\s*auto/);
+  const actions = HTML.match(/\.composer-actions\s*\{[^}]*\}/);
+  assert.ok(actions, '.composer-actions is gone -- re-point this test');
+  assert.doesNotMatch(actions[0], /overflow/, 'the actions group must never scroll');
 
-  // And the trigger really is inside that row, or the two facts never meet.
-  const row = HTML.indexOf('class="composer-controls"');
+  // And the trigger really is inside the group that does not scroll, while the
+  // settings live in the one that does.
+  const actionsAt = HTML.indexOf('class="composer-actions"');
+  const settingsAt = HTML.indexOf('class="composer-settings"');
   const trigger = HTML.indexOf('id="attachTrigger"');
   const menu = HTML.indexOf('id="attachMenu"');
-  assert.ok(row !== -1 && trigger > row && menu > trigger, 'the menu must still live inside the scrolling row for this test to mean anything');
+  const imageBtn = HTML.indexOf('id="imageModeBtn"');
+  assert.ok(actionsAt !== -1 && settingsAt > actionsAt, 'the actions group must come first');
+  assert.ok(trigger > actionsAt && trigger < settingsAt, 'the attach trigger left the actions group');
+  assert.ok(menu > trigger && menu < settingsAt, 'the menu must still live beside its trigger');
+  assert.ok(imageBtn > trigger && imageBtn < settingsAt, 'draw must stay beside attach, not scroll with the settings');
 });
 
 test('opening the menu places it, and a resize re-places it', () => {

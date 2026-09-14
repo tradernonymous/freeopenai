@@ -2131,6 +2131,142 @@ function imageModelsFor(kind) {
 // like; the server route asks its upstream for the same thing.
 const IMAGE_QUALITY = 'high';
 
+// --- The size a picture was asked for ---
+//
+// The request used to carry no dimensions at all, which is the whole of "I asked
+// for a wide one and got a square": every service drew its own default and the
+// user found out in the download. Reading the size out of the prompt fixes that
+// without adding a sixth control to a composer that is already crowded, and it
+// matches how the request is actually written -- "a 16:9 banner", "1536x1024",
+// "a tall phone wallpaper".
+//
+// One choice, three readings: an OpenAI-shaped images API wants "1536x1024",
+// Puter's txt2img wants the ratio as {w, h}, and a Together model wants pixels.
+// Nothing downstream re-derives them.
+const IMAGE_SIZE_PRESETS = [
+  { id: 'square', label: '1:1', width: 1024, height: 1024, ratio: { w: 1, h: 1 } },
+  { id: 'landscape', label: '3:2', width: 1536, height: 1024, ratio: { w: 3, h: 2 } },
+  { id: 'portrait', label: '2:3', width: 1024, height: 1536, ratio: { w: 2, h: 3 } },
+  { id: 'wide', label: '16:9', width: 1536, height: 864, ratio: { w: 16, h: 9 } },
+  { id: 'tall', label: '9:16', width: 864, height: 1536, ratio: { w: 9, h: 16 } },
+];
+
+// The words that mean a shape, and the shape they mean. `square` is checked
+// before the orientation words so "square 16:9-ish crop" does not become a
+// widescreen request, and `portrait` on its own is deliberately absent: "a
+// portrait of a woman" is a subject, and turning that into a 2:3 frame would be
+// the app inventing a layout nobody asked for. "portrait orientation" is the
+// phrase that does mean the frame.
+const IMAGE_SIZE_WORDS = [
+  { id: 'square', words: ['square'] },
+  { id: 'wide', words: ['widescreen', 'wide', 'cinematic', '16:9', 'banner', 'youtube thumbnail', 'desktop wallpaper'] },
+  { id: 'tall', words: ['9:16', 'reels', 'reel', 'story', 'stories', 'tiktok', 'phone wallpaper', 'mobile wallpaper'] },
+  { id: 'landscape', words: ['landscape', 'horizontal', '3:2', 'postcard'] },
+  { id: 'portrait', words: ['portrait orientation', 'portrait mode', 'vertical', '2:3', 'poster', 'book cover'] },
+];
+
+function imageSizePreset(id) {
+  return IMAGE_SIZE_PRESETS.find((preset) => preset.id === id) || null;
+}
+
+// A pair of numbers as a label: 1536x1024 is 3:2, and saying so is how a user
+// can tell a request that was understood from one that was ignored.
+function imageRatioLabel(width, height) {
+  const w = Math.round(Number(width) || 0);
+  const h = Math.round(Number(height) || 0);
+  if (!w || !h) return '';
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const divisor = gcd(w, h) || 1;
+  return w / divisor + ':' + h / divisor;
+}
+
+// The size a prompt asks for, or null for "let the service choose". Explicit
+// pixels win over an explicit ratio, and both win over a shape word, because
+// that is the order of specificity -- "16:9 at 2048x1152" is a 2048x1152 image.
+//
+// `words: false` is for an edit. "Make the poster blue" is an instruction about a
+// picture that already exists, and reshaping it because the sentence happened to
+// contain a shape word would crop something the user only asked to recolour. An
+// edit still honours dimensions or a ratio that were spelled out: those are a
+// request for a shape rather than a passing mention of one.
+function imageSizeFromPrompt(promptText, options) {
+  const text = String(promptText || '').toLowerCase();
+  if (!text) return null;
+  const wordsCount = !(options && options.words === false);
+  const pixels = /(\d{2,5})\s*[x×]\s*(\d{2,5})/.exec(text);
+  if (pixels) {
+    const width = Number(pixels[1]);
+    const height = Number(pixels[2]);
+    // Small numbers are proportions ("3x2 sticker shapes") and enormous ones are
+    // not dimensions this app could ask anyone for.
+    if (width >= 64 && height >= 64 && width <= 4096 && height <= 4096) {
+      return { id: 'exact', label: imageRatioLabel(width, height), width, height, ratio: { w: width, h: height } };
+    }
+  }
+  const ratio = /(?<!\d)(\d{1,2})\s*:\s*(\d{1,2})(?!\d)/.exec(text);
+  if (ratio) {
+    const w = Number(ratio[1]);
+    const h = Number(ratio[2]);
+    if (w && h && w <= 32 && h <= 32) {
+      // Scaled to something a service will actually draw: a 21:9 request is
+      // 1536x658, not 21x9.
+      const long = 1536;
+      const scale = long / Math.max(w, h);
+      return {
+        id: 'ratio',
+        label: w + ':' + h,
+        width: Math.max(64, Math.round(w * scale)),
+        height: Math.max(64, Math.round(h * scale)),
+        ratio: { w, h },
+      };
+    }
+  }
+  if (!wordsCount) return null;
+  for (const entry of IMAGE_SIZE_WORDS) {
+    for (const word of entry.words) {
+      // Word boundaries on both sides, so "wide" does not fire on "widespread"
+      // and "story" does not fire on "history".
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp('(^|[^a-z0-9])' + escaped + '([^a-z0-9]|$)', 'i').test(text)) {
+        const preset = imageSizePreset(entry.id);
+        if (preset) return { ...preset, words: true };
+      }
+    }
+  }
+  return null;
+}
+
+// What an OpenAI-shaped images endpoint wants in its `size` field, or '' to send
+// nothing and let the service do as it likes.
+function imageSizeBody(size) {
+  if (!size || !size.width || !size.height) return '';
+  return Math.round(size.width) + 'x' + Math.round(size.height);
+}
+
+// What Puter's txt2img wants. Its `ratio` is documented as {w, h} and is the one
+// field every Puter image provider understands, which is why the pixel pair is
+// not sent to it: an unrecognised option there is a failed draw.
+function imageRatioBody(size) {
+  if (!size || !size.ratio) return null;
+  return { w: size.ratio.w, h: size.ratio.h };
+}
+
+// The sentence for a picture that came back a different shape from the one that
+// was asked for. Silence would be the same silence that produced the complaint:
+// the user is looking at a square and believes they asked for a square.
+function describeDrawnSize(size, drawnWidth, drawnHeight) {
+  const w = Math.round(Number(drawnWidth) || 0);
+  const h = Math.round(Number(drawnHeight) || 0);
+  if (!size || !w || !h) return '';
+  const asked = size.width / size.height;
+  const drawn = w / h;
+  // Two percent: providers round a ratio to the grid their model draws on, and
+  // 1536x1024 against 1530x1020 is the same picture to anyone looking at it.
+  if (Math.abs(asked - drawn) / asked <= 0.02) return '';
+  return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), drawn ' +
+    imageRatioLabel(w, h) + ' (' + w + '×' + h + ')';
+}
+
 // A refusal is the *prompt's* fault -- not the account's, and not that model's.
 // Trying the next model, and then the other backend, buys the same answer a
 // second time and reads to the user as a hang rather than a decision. Puter
@@ -3903,36 +4039,35 @@ function imageDownloadFilename(promptText, format, width, height) {
   return `freeai4u-${imageDownloadStem(promptText)}${size}.${spec.ext}`;
 }
 
-// A4 at 72dpi, whichever way up suits the picture, with a margin wide enough to
-// print. Kept in points so the numbers below are a real page and not a screen.
-const PDF_PAGE_PT = { width: 595.28, height: 841.89 };
-const PDF_MARGIN_PT = 24;
+// The page is the picture.
+//
+// It used to be A4, whichever way up suited the drawing, with a 24pt margin --
+// which is what "the PDF has a white blank page around my image" was: the
+// picture the user asked for, printed as a stamp in the middle of a sheet they
+// did not ask for. One point per pixel makes the page exactly the picture, so a
+// reader shows it edge to edge and a printer scales the whole frame onto paper.
+// Only the page's size changes: the JPEG still goes in untouched.
+const PDF_MAX_PAGE_PT = 2400;
 
-// Where the picture lands on that page. Scaled down to fit, centred, and never
-// blown up: a 512px image printed at 200% claims a resolution it does not have.
 function pdfPageFor(imageWidth, imageHeight) {
   const pixels = {
     width: Math.max(1, Math.round(Number(imageWidth) || 0)),
     height: Math.max(1, Math.round(Number(imageHeight) || 0)),
   };
-  // Pages are portrait by default; a picture wider than it is tall gets a
-  // landscape sheet, or it would print as a stamp in the middle of an A4 page.
-  const landscape = pixels.width > pixels.height;
-  const width = landscape ? PDF_PAGE_PT.height : PDF_PAGE_PT.width;
-  const height = landscape ? PDF_PAGE_PT.width : PDF_PAGE_PT.height;
-  const boxWidth = Math.max(1, width - PDF_MARGIN_PT * 2);
-  const boxHeight = Math.max(1, height - PDF_MARGIN_PT * 2);
-  const scale = Math.min(boxWidth / pixels.width, boxHeight / pixels.height, 1);
-  const drawWidth = pixels.width * scale;
-  const drawHeight = pixels.height * scale;
+  // A very large drawing gets a proportionally smaller page rather than a
+  // 4000pt sheet: the page still holds nothing but the picture, which is the
+  // promise; only its scale changes.
+  const scale = Math.min(1, PDF_MAX_PAGE_PT / Math.max(pixels.width, pixels.height));
+  const width = pixels.width * scale;
+  const height = pixels.height * scale;
   return {
     pixels,
     width,
     height,
-    imageWidth: drawWidth,
-    imageHeight: drawHeight,
-    x: (width - drawWidth) / 2,
-    y: (height - drawHeight) / 2,
+    imageWidth: width,
+    imageHeight: height,
+    x: 0,
+    y: 0,
   };
 }
 
@@ -4069,8 +4204,7 @@ if (typeof module !== 'undefined' && module.exports) {
     imageDownloadFormat,
     imageDownloadStem,
     imageDownloadFilename,
-    PDF_PAGE_PT,
-    PDF_MARGIN_PT,
+    PDF_MAX_PAGE_PT,
     pdfPageFor,
     pdfBytes,
     buildImagePdf,
@@ -4176,6 +4310,13 @@ if (typeof module !== 'undefined' && module.exports) {
     IMAGE_EDIT_MODELS,
     imageModelsFor,
     IMAGE_QUALITY,
+    IMAGE_SIZE_PRESETS,
+    imageSizePreset,
+    imageSizeFromPrompt,
+    imageSizeBody,
+    imageRatioBody,
+    imageRatioLabel,
+    describeDrawnSize,
     isModerationRefusal,
     IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,

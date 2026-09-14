@@ -456,3 +456,150 @@ test('the provider report says what is ready, with which model, and what is miss
     app.close();
   }
 });
+
+// ---- following the conversation --------------------------------------------
+//
+// The page no longer offers a second picker for images: the image request goes
+// to the provider and model the conversation is already on. These tests are the
+// route's half of that promise -- the chat's provider is asked first, its model
+// is offered to it, and neither turns a service that cannot draw into a dead end.
+
+test('the chat’s own provider is asked first, with the chat’s own model', async () => {
+  const hugging = await upstreamOf((req, res) => res.end(Buffer.from([1, 2, 3])));
+  const openrouter = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/chat-model.png' }] }));
+  // Nara is configured and would otherwise lead the order: this is the assertion
+  // that the conversation's choice outranks the deployment's default.
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image';
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = openrouter.url;
+  process.env.HF_TOKEN = 'hf';
+  process.env.HF_IMAGE_MODEL = 'black-forest-labs/FLUX.1-schnell';
+  process.env.HF_IMAGES_BASE_URL = hugging.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: 'openrouter',
+      model: 'google/gemini-2.5-flash-image',
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'openrouter');
+    assert.equal(openrouter.seen.length, 1, 'the chat’s provider draws the picture');
+    assert.equal(hugging.seen.length, 0, 'and the rest of the order was not spent');
+    assert.equal(JSON.parse(openrouter.seen[0].body).model, 'google/gemini-2.5-flash-image');
+  } finally {
+    app.close();
+    await new Promise((r) => openrouter.server.close(r));
+    await new Promise((r) => hugging.server.close(r));
+  }
+});
+
+test('a chat model that cannot draw is not the end of the provider', async () => {
+  // A 400 is never billed, which is what makes this a preference and not a
+  // gamble: the provider is asked again with the model it would have used.
+  let attempts = 0;
+  const up = await upstreamOf((req, res, raw) => {
+    attempts++;
+    const body = JSON.parse(raw);
+    if (body.model === 'some-chat-model') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'not an image model' } }));
+    }
+    assert.equal(body.model, 'google/gemini-2.5-flash-image', 'the provider’s own model is the second try');
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/fallback.png' }] });
+  });
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: 'openrouter',
+      model: 'some-chat-model',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).data[0].url, 'https://img.test/fallback.png');
+    assert.equal(attempts, 2);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a preference is not a pin: a provider that cannot draw is stepped past', async () => {
+  const hugging = await upstreamOf((req, res, raw) => {
+    assert.equal(req.url, '/models/black-forest-labs/FLUX.1-schnell');
+    assert.equal(JSON.parse(raw).inputs, 'a fox');
+    res.writeHead(200, { 'Content-Type': 'image/png' });
+    res.end(Buffer.from([0xff, 0xd8, 0xff]));
+  });
+  const nara = await upstreamOf((req, res) => jsonAnswer(res, 500, { error: 'down' }));
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image';
+  process.env.NARA_IMAGES_BASE_URL = nara.url;
+  process.env.HF_TOKEN = 'hf';
+  process.env.HF_IMAGE_MODEL = 'black-forest-labs/FLUX.1-schnell';
+  process.env.HF_IMAGES_BASE_URL = hugging.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: 'nara',
+      model: 'nara-chat-model',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).provider, 'huggingface', 'the order carries on behind the preference');
+  } finally {
+    app.close();
+    await new Promise((r) => nara.server.close(r));
+    await new Promise((r) => hugging.server.close(r));
+  }
+});
+
+test('a size the service does not offer is swapped for its nearest, and said out loud', async () => {
+  // Nara declares its sizes. Handing it 1536x1024 used to mean the draw failed on
+  // a service that was ready and had credits -- refused for a reason nobody
+  // typed. It now draws 1640x856, the closest shape it offers, and the swap is a
+  // sentence in `notes` rather than something found later in the download.
+  const up = await upstreamOf((req, res, raw) => {
+    const body = JSON.parse(raw);
+    assert.equal(body.size, '1640x856');
+    jsonAnswer(res, 200, { data: [{ b64_json: 'AAA' }] });
+  });
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image';
+  process.env.NARA_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a banner', size: '1536x1024' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.data[0].b64_json, 'AAA');
+    assert.equal(body.notes.length, 1);
+    assert.match(body.notes[0], /asked for 1536x1024 — Nara draws 1640x856/);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a size the service does offer is passed through untouched, with nothing to report', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(JSON.parse(raw).size, '2048x1024');
+    jsonAnswer(res, 200, { data: [{ b64_json: 'AAA' }] });
+  });
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image';
+  process.env.NARA_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a banner', size: '2048x1024' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).notes, undefined);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
