@@ -87,6 +87,81 @@ async function withOpenRouterUpstream(upstream, run) {
   }
 }
 
+async function withNaraUpstream(upstream, run) {
+  await new Promise((r) => upstream.listen(0, r));
+  const savedKey = process.env.NARA_API_KEY;
+  const savedBase = process.env.NARA_BASE_URL;
+  process.env.NARA_API_KEY = 'k';
+  process.env.NARA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  try {
+    await run();
+  } finally {
+    upstream.close();
+    if (savedKey === undefined) delete process.env.NARA_API_KEY; else process.env.NARA_API_KEY = savedKey;
+    if (savedBase === undefined) delete process.env.NARA_BASE_URL; else process.env.NARA_BASE_URL = savedBase;
+    clearModelCache();
+  }
+}
+
+// A catalogue that parses to nothing used to be served as an empty 200, which
+// the client reads as "this provider returned no chat models" -- the exact
+// report behind these tests. Every surprise shape must end in pickable rows.
+
+test('Nara catalogue arriving as a bare array is read, not read as nothing', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([{ id: 'nara-unlisted-model-a' }, { id: 'nara-unlisted-model-b' }]));
+  });
+  await withNaraUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
+    app.close();
+    // Not in the pinned list, so only a tolerant parse plus the live-catalogue
+    // fallback can produce them.
+    assert.deepEqual(body.map((m) => m.id), ['nara-unlisted-model-a', 'nara-unlisted-model-b']);
+  });
+});
+
+test('an empty Nara catalogue serves the pinned list instead of an empty picker', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [] }));
+  });
+  await withNaraUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
+    app.close();
+    assert.deepEqual(body.map((m) => m.id), LLM_PROVIDERS.nara.models);
+  });
+});
+
+test('an upstream outage never empties the picker across repeated polls', async () => {
+  clearModelCache();
+  let hits = 0;
+  const upstream = http.createServer((req, res) => {
+    hits++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: [] }));
+  });
+  await withNaraUpstream(upstream, async () => {
+    const app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const base = `http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`;
+    const first = await (await fetch(base)).json();
+    assert.deepEqual(first.map((m) => m.id), LLM_PROVIDERS.nara.models);
+    const second = await (await fetch(base)).json();
+    app.close();
+    // Whether the second poll re-reads the broken upstream or is served from
+    // the cache, the user must see a pickable list either way.
+    assert.deepEqual(second.map((m) => m.id), LLM_PROVIDERS.nara.models);
+    assert.ok(hits >= 1);
+  });
+});
+
 // Every provider is OpenAI-compatible for chat and then invents its own
 // metadata around it. These are real response shapes taken from each service.
 

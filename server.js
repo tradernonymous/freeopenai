@@ -1723,7 +1723,16 @@ async function llmModels(req, res) {
       : await providerFetch(req, provider, provider.modelsPath || '/models');
     const { ok, status, data } = result;
     if (!ok) return sendJson(res, status, { error: describeProviderError(status, data, provider) });
-    const models = (data && Array.isArray(data.data) ? data.data : [])
+    // OpenAI-compatible providers wrap the catalogue in { data: [...] }, but
+    // the wire occasionally disagrees -- a bare array, or Ollama-style
+    // { models: [...] }. Reading any of those beats reading the answer as
+    // nothing, which used to flow on as an empty 200 and the client's
+    // "this provider returned no chat models".
+    let rows = [];
+    if (data && Array.isArray(data.data)) rows = data.data;
+    else if (data && Array.isArray(data.models)) rows = data.models;
+    else if (Array.isArray(data)) rows = data;
+    const models = rows
       .filter((m) => m && m.id)
       .map(normalizeProviderModel);
     // A curated allowlist pins the picker to exactly those ids, in that
@@ -1742,15 +1751,24 @@ async function llmModels(req, res) {
     // a bug ("no model" + a fetch error on the user's side). Serve the live
     // catalogue instead and let the client's free-first ranking sort it out;
     // that degrades to "wrong order", never to "nothing to pick".
-    if (Array.isArray(provider.models) && listed.length === 0) {
+    // A catalogue that parsed to nothing (upstream hiccup, surprise shape)
+    // lands here too, and an empty-rows fallback that still leaves nothing
+    // serves the pinned list as bare ids: pickable and addressable beats a
+    // picker with no rows at all.
+    if (listed.length === 0) {
       if (provider.freeOnly) {
         const free = models.filter((m) => isFreeModelId(m.id));
         if (free.length) listed = free;
       }
-      if (!listed.length) listed = models;
+      if (!listed.length && models.length) listed = models;
+      if (!listed.length && Array.isArray(provider.models)) {
+        listed = provider.models.map((id) => ({ id })).filter((m) => m && m.id);
+      }
     }
-    // Only a successful catalogue is worth caching; errors rust nothing.
-    modelCache.set(id, { fetchedAt: Date.now(), models: listed });
+    // Only a successful, non-empty answer is worth caching; errors rust
+    // nothing, and an empty list would outlive the upstream hiccup that
+    // caused it, pinning "no models" for the cache's whole lifetime.
+    if (listed.length) modelCache.set(id, { fetchedAt: Date.now(), models: listed });
     sendJson(res, 200, listed);
   } catch (err) {
     sendJson(res, 502, { error: err.message });
