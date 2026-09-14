@@ -50,6 +50,10 @@ function harness({
   puterResult = null,
   route = null,
   provider = PUTER_PROVIDER,
+  // Whether this chat has asked for Puter to draw. Off is the shipped default,
+  // so a test that wants Puter in the chain has to say so -- the same thing the
+  // user has to do.
+  puterImages = false,
   model = 'gpt-5.4-nano',
   dims = { width: 0, height: 0 },
 } = {}) {
@@ -71,6 +75,7 @@ function harness({
     imageRatioBody,
     describeDrawnSize,
     selectedProvider: provider,
+    drawWithPuter: puterImages,
     selectedModel: model,
     // Measuring a picture is a decode, which this test has no DOM for: the
     // dimensions it would have read are the input instead.
@@ -129,8 +134,8 @@ test('the extracted source is the shipped one, and the sandbox covers it', () =>
   assertSandboxCovers(NAMES, harness().deps);
 });
 
-test('a chat on Puter draws on Puter, with the conversation’s own model first', async () => {
-  const h = harness({ signedIn: true, puterResult: { src: 'data:image/png;base64,PUTER' }, model: 'gpt-5.4-nano' });
+test('Puter draws once asked for, with the conversation’s own model first', async () => {
+  const h = harness({ signedIn: true, puterImages: true, puterResult: { src: 'data:image/png;base64,PUTER' }, model: 'gpt-5.4-nano' });
   assert.equal(await h.generate('a fox'), 'data:image/png;base64,PUTER');
   // The chat's model is the first ask, because the image request follows the
   // conversation; the published image models stand behind it for the models that
@@ -159,7 +164,7 @@ test('a chat on a server provider draws on that provider, even with Puter signed
 test('the size a prompt asks for rides along, in the shape each backend reads', async () => {
   // Two readings of one choice: Puter's txt2img wants the ratio as {w, h}, the
   // OpenAI-shaped route wants "1536x864". Neither is derived from the other.
-  const puter = harness({ signedIn: true, puterResult: { src: 'data:image/png;base64,P' } });
+  const puter = harness({ signedIn: true, puterImages: true, puterResult: { src: 'data:image/png;base64,P' } });
   await puter.generate('a 16:9 banner for the shop front');
   assert.deepEqual(puter.calls.puterOpts[0].ratio, { w: 16, h: 9 });
   assert.equal(puter.calls.puterOpts[0].model, 'gpt-5.4-nano');
@@ -178,7 +183,7 @@ test('the size a prompt asks for rides along, in the shape each backend reads', 
 
 test('a picture drawn the wrong shape says so, and one drawn right stays quiet', async () => {
   const h = harness({
-    signedIn: true,
+    signedIn: true, puterImages: true,
     puterResult: { src: 'data:image/png;base64,P' },
     dims: { width: 1024, height: 1024 },
   });
@@ -188,13 +193,43 @@ test('a picture drawn the wrong shape says so, and one drawn right stays quiet',
   assert.match(outcome.notes[0], /asked for 16:9 \(1536x864\), drawn 1:1/);
 
   const right = harness({
-    signedIn: true,
+    signedIn: true, puterImages: true,
     puterResult: { src: 'data:image/png;base64,P' },
     dims: { width: 1536, height: 866 },
   });
   const clean = { notes: [] };
   await right.generate('a 16:9 banner with no text', null, clean);
   assert.deepEqual(clean.notes, [], 'a provider rounding onto its grid is not a complaint');
+});
+
+test('a chat on Puter still draws on the route while the switch is off', async () => {
+  // The leak this closes: Puter signed in, the conversation on Puter, and a
+  // picture asked for in passing -- which used to spend Puter credits without
+  // anyone choosing to. Chat on Puter is cheap; drawing on it is not, and a
+  // monthly allowance that does not roll over should not go on pictures the
+  // user never picked it for.
+  const h = harness({
+    signedIn: true,
+    provider: PUTER_PROVIDER,
+    puterResult: { src: 'data:image/png;base64,SHOULD_NOT_BE_USED' },
+    route: { data: { data: [{ url: 'from-the-route' }] } },
+  });
+  assert.equal(await h.generate('a fox in the snow'), 'from-the-route');
+  assert.deepEqual(h.calls.puter, [], 'Puter was asked to draw without being chosen');
+  assert.equal(h.calls.fetch.length, 1);
+});
+
+test('a route failure reports it rather than falling back onto Puter credits', async () => {
+  // A silent fallback is the same leak wearing a different hat: every failing
+  // route request would become a Puter charge. The message names the switch
+  // instead, so spending stays a decision.
+  const h = harness({
+    signedIn: true,
+    puterResult: { src: 'data:image/png;base64,SHOULD_NOT_BE_USED' },
+    route: { ok: false, data: { error: 'no key' } },
+  });
+  await assert.rejects(() => h.generate('a fox'), /Draw with Puter/);
+  assert.deepEqual(h.calls.puter, [], 'a failed route quietly billed Puter');
 });
 
 test('without Puter the server route draws, and Puter is never asked', async () => {
@@ -227,7 +262,7 @@ test('a count the backend will not honour is topped up rather than lost', async 
 });
 
 test('a signed-in Puter that fails falls through to the server route', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
   assert.equal(await h.generate('a fox'), 'u');
   // A failure that might be this one model's fault tries the next model first:
   // the conversation's model, then the image models Puter publishes.
@@ -236,7 +271,7 @@ test('a signed-in Puter that fails falls through to the server route', async () 
 });
 
 test('a spent Puter account is not asked once per model before moving on', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
   assert.equal(await h.generate('a fox'), 'u');
   // The account being out of credits is the same answer for every model, so the
   // second call could only buy the same refusal.
@@ -247,7 +282,7 @@ test('a spent Puter account is not asked once per model before moving on', async
 test('a refused prompt is reported as a refusal, not retried into a hang', async () => {
   const refused = new Error('moderation_flagged');
   refused.errorCode = 'moderation_flagged';
-  const h = harness({ signedIn: true, puterResult: refused, route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: refused, route: { data: { data: [{ url: 'u' }] } } });
   await assert.rejects(
     () => h.generate('a gory poster'),
     (err) => {
@@ -279,7 +314,7 @@ test('an image-less success is a failure, not an empty picture', async () => {
 });
 
 test('when everything fails the message names every backend, not just the last', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('not signed in'), route: { ok: false, data: { error: 'no key' } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: new Error('not signed in'), route: { ok: false, data: { error: 'no key' } } });
   await assert.rejects(
     () => h.generate('a fox'),
     (err) => {
@@ -294,7 +329,7 @@ test('when everything fails the message names every backend, not just the last',
 test('stopping a generation does not quietly start a second one', async () => {
   const abort = new Error('aborted');
   abort.name = 'AbortError';
-  const h = harness({ signedIn: true, puterResult: abort, route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: abort, route: { data: { data: [{ url: 'u' }] } } });
   await assert.rejects(() => h.generate('a fox'), /aborted/);
   // Falling through on an abort would spend the route's quota on a request the
   // user just cancelled.
@@ -304,7 +339,7 @@ test('stopping a generation does not quietly start a second one', async () => {
 // ---- what the image model is asked for -----------------------------------
 
 test('generation asks Puter for a quality, because low is the silent default', async () => {
-  const h = harness({ signedIn: true, puterResult: { src: 'data:image/png;base64,PUTER' } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: { src: 'data:image/png;base64,PUTER' } });
   await h.generate('a fox');
   assert.equal(h.calls.puterOpts[0].quality, IMAGE_QUALITY);
   assert.equal(h.calls.puterOpts[0].input_images, undefined, 'a generation carries no source picture');
@@ -333,7 +368,7 @@ test('a model the conversation is not on is not offered to the other backend', (
 // ---- edits --------------------------------------------------------------
 
 test('a signed-in Puter edits first, and the server route is not touched', async () => {
-  const h = harness({ signedIn: true, puterResult: { src: 'data:image/png;base64,EDITED' } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: { src: 'data:image/png;base64,EDITED' } });
   const out = await h.edit('make it red', 'data:image/png;base64,CAR');
   assert.equal(out, 'data:image/png;base64,EDITED');
   assert.deepEqual(h.calls.puter, ['gpt-5.4-nano']);
@@ -359,7 +394,7 @@ test('without Puter the server edit route runs, and Puter is never asked', async
 });
 
 test('a painted mask goes to the route first, because Puter has no mask field', async () => {
-  const h = harness({ signedIn: true, route: { data: { data: [{ url: 'masked' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, route: { data: { data: [{ url: 'masked' }] } } });
   const notes = [];
   const out = await h.edit('add horns', 'data:image/png;base64,CAR', null, { mask: 'data:image/png;base64,MASK', notes });
   assert.equal(out, 'masked');
@@ -373,7 +408,7 @@ test('a route that cannot take the mask still edits, and says the mask was dropp
   // region, the route refused for want of a model alias, and the brush editor
   // produced nothing at all.
   const h = harness({
-    signedIn: true,
+    signedIn: true, puterImages: true,
     puterResult: { src: 'data:image/png;base64,EDITED' },
     route: { ok: false, data: { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' } },
   });
@@ -387,7 +422,7 @@ test('a route that cannot take the mask still edits, and says the mask was dropp
 });
 
 test('a Puter edit failure falls through to the server route', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
   assert.equal(await h.edit('make it red', 'src'), 'u');
   assert.deepEqual(h.calls.puter, ['gpt-5.4-nano', ...imageModelsFor('edit')]);
   assert.equal(h.calls.fetch.length, 1);
@@ -406,7 +441,7 @@ test('an edit failure says what was edited with and names every backend', async 
 });
 
 test('a spent Puter account on an edit moves on to the route after one ask', async () => {
-  const h = harness({ signedIn: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
   assert.equal(await h.edit('make it red', 'src'), 'u');
   assert.deepEqual(h.calls.puter, ['gpt-5.4-nano']);
   assert.equal(h.calls.fetch.length, 1);
@@ -415,7 +450,7 @@ test('a spent Puter account on an edit moves on to the route after one ask', asy
 test('stopping an edit does not quietly start a second one', async () => {
   const abort = new Error('aborted');
   abort.name = 'AbortError';
-  const h = harness({ signedIn: true, puterResult: abort, route: { data: { data: [{ url: 'u' }] } } });
+  const h = harness({ signedIn: true, puterImages: true, puterResult: abort, route: { data: { data: [{ url: 'u' }] } } });
   await assert.rejects(() => h.edit('make it red', 'src'), /aborted/);
   assert.equal(h.calls.fetch.length, 0);
 });

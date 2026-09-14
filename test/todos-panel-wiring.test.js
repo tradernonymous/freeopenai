@@ -154,6 +154,7 @@ function harness({
   skillNames = [],
   skillUse = {},
   imageModeOn = false,
+  puterImagesOn = false,
   conversationId = 'c1',
 } = {}) {
   const document = stubDocument();
@@ -184,9 +185,10 @@ function harness({
     SESSION_TAB_KEY: 'freeopenaiSessionTab',
     SESSION_TABS: ['skills', 'tasks', 'image'],
     sessionTab: 'skills',
-    // The two page-scope names the summary reads. Neither is written by the
-    // panel, so a test can set the world and read what the panel says about it.
+    // The page-scope names the summary reads. None is written by the panel, so
+    // a test can set the world and read what the panel says about it.
     imageMode: imageModeOn,
+    drawWithPuter: puterImagesOn,
     activeSkillNames: skillNames,
     activeConversationId: conversationId,
     skillUseLog: skillUse,
@@ -537,6 +539,15 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // hero starter that turns it on is still the discoverable path to it.
   assert.match(HTML, /<label for="imageModeSwitch">Read the next message as a drawing<\/label>/);
   assert.match(HTML, /<input type="checkbox" id="imageModeSwitch" onchange="setImageMode\(this\.checked\)">/);
+  // Spending Puter credits on a picture is a choice, and this is where it is
+  // made. It sits beside the drawing switch because that is where someone who
+  // wants a better picture will look for it.
+  assert.match(HTML, /<input type="checkbox" id="imagePuterSwitch" onchange="setDrawWithPuter\(this\.checked\)">/);
+  assert.match(HTML, /Draw with Puter/);
+  assert.match(HTML, /spends credits/);
+  // Off unless the stored value says otherwise: a default that read the other
+  // way would spend the allowance before anyone touched anything.
+  assert.match(HTML, /let drawWithPuter = localStorage\.getItem\(IMAGE_PUTER_KEY\) === '1';/);
   assert.match(HTML, /onclick="startImageTurn\(\)"/);
   const hero = HTML.slice(HTML.indexOf('function startImageTurn()'), HTML.indexOf('function startPlanTurn()'));
   assert.match(hero, /if \(!imageMode\) toggleImageMode\(\);/);

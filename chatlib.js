@@ -2104,10 +2104,9 @@ function isTaskWriteTool(name) {
   return name === 'task_add' || name === 'task_update';
 }
 
-// Where an image can come from. Puter is the app's own account and is used
-// when it is signed in; our server route fronts a provider with an
-// image-capable model, so a setup that never signs in to Puter can still draw
-// instead of being told to sign in to something it wasn't using.
+// Where an image can come from. Our server route fronts a provider with an
+// image-capable model and is the everyday backend; Puter is the app's own
+// account and draws only when it is asked for by name.
 const IMAGE_BACKENDS = ['puter', 'server'];
 
 // Which image models each kind of work is asked of, best first.
@@ -2289,26 +2288,42 @@ function imageBackendOrder(options) {
   // here too: "no options" must mean "the route", never a crash or an empty
   // list of backends to try.
   const puterSignedIn = !!(options && options.puterSignedIn);
-  // The server route is always behind Puter: Puter is already paid for by the
-  // signed-in account, while the route costs an API key that may not be set.
-  if (!puterSignedIn) return ['server'];
-  // One thing reverses that, and only one: a painted brush mask. Puter's image
-  // options have no mask field at all, so the route is the only backend that can
-  // express it -- asking Puter first would silently ignore the region the user
-  // painted and edit the whole picture instead. The caller falls back to Puter
-  // without the mask if the route refuses, and says so.
+  const puterChosen = !!(options && options.puterChosen);
+  // Puter is opt-in, and it is opt-in because of what it costs. A Puter account
+  // has a fixed monthly allowance of credits that does not roll over, and one
+  // picture spends a visible slice of it, where the server route spends a free
+  // provider key. So an image nobody pointed at Puter goes to the route, and a
+  // route that fails says so rather than quietly billing the allowance -- an
+  // automatic fallback is exactly how the month's credits disappear into
+  // pictures the user never chose to pay for.
+  //
+  // Being *on* Puter for chat is not that choice either: chat is cheap there and
+  // images are not, so the picker deciding the conversation must not also decide
+  // to spend credits on every drawing.
+  if (!puterSignedIn || !puterChosen) return ['server'];
+  // With Puter asked for, one thing still puts the route first: a painted brush
+  // mask. Puter's image options have no mask field at all, so the route is the
+  // only backend that can express it -- asking Puter first would silently ignore
+  // the region the user painted and edit the whole picture instead. The caller
+  // falls back to Puter without the mask if the route refuses, and says so.
   return options.serverFirst ? ['server', 'puter'] : ['puter', 'server'];
 }
 
 // When every backend fails, the useful thing to report is what was tried and
 // what stopped each one. Reporting only the last error meant a provider-only
 // setup was told "Puter is not signed in" -- true, and not the reason.
-function imageFailureMessage({ puterError = '', serverError = '' } = {}, verb = 'generate') {
+function imageFailureMessage({ puterError = '', serverError = '', puterAvailable = false } = {}, verb = 'generate') {
   const tried = [];
   if (puterError) tried.push('Puter (' + puterError + ')');
   if (serverError) tried.push('the server image route (' + serverError + ')');
-  if (!tried.length) return 'Could not ' + verb + ' an image: no backend was available.';
-  return 'Could not ' + verb + ' an image. Tried ' + tried.join(' and ') + '.';
+  // Puter sitting there unused is the one fact that turns this message into
+  // something the user can act on, so it is only offered when it really is a
+  // way out: signed in, and not already one of the things that just failed.
+  const offer = puterAvailable && !puterError
+    ? ' Turn on “Draw with Puter” in the session panel to spend Puter credits on this one instead.'
+    : '';
+  if (!tried.length) return 'Could not ' + verb + ' an image: no backend was available.' + offer;
+  return 'Could not ' + verb + ' an image. Tried ' + tried.join(' and ') + '.' + offer;
 }
 
 // Whether a turn needs a Puter account before it can start.

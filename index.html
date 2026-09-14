@@ -361,6 +361,10 @@
         }
         .session-switch label { flex: 1; min-width: 0; cursor: pointer; }
         .session-switch input { flex-shrink: 0; accent-color: var(--accent); }
+        .session-switch-note {
+            font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+            color: var(--danger); white-space: nowrap; opacity: .85;
+        }
         .session-hint { margin: 0; padding: 0 12px 10px; font-size: 11px; line-height: 1.7; color: var(--text-muted); }
         .session-subhead {
             display: flex; align-items: center; gap: 6px;
@@ -2106,6 +2110,11 @@
                                 <input type="checkbox" id="imageModeSwitch" onchange="setImageMode(this.checked)">
                             </div>
                             <p class="session-hint">Asking for a picture works without this — “draw a cat” is understood either way. This forces it, for when the wording could go both ways.</p>
+                            <div class="session-switch">
+                                <label for="imagePuterSwitch">Draw with Puter <span class="session-switch-note">spends credits</span></label>
+                                <input type="checkbox" id="imagePuterSwitch" onchange="setDrawWithPuter(this.checked)">
+                            </div>
+                            <p class="session-hint">Off, pictures come from a free provider key. On, Puter draws them &mdash; better at the top end, and it spends a monthly allowance that does not roll over. Worth turning on for one picture, not for every one.</p>
                             <h4 class="session-subhead">Shape</h4>
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
@@ -2560,6 +2569,15 @@
         // cheaper for 3.3 points of accuracy.
         const ROUTING_KEY = 'freeopenaiRoutingOff';
         let routingMode = localStorage.getItem(ROUTING_KEY) === '1' ? 'off' : 'auto';
+
+        // Whether a drawing may spend Puter credits. Off, and off by default for
+        // a reason that is about money rather than quality: a Puter account gets
+        // a fixed monthly allowance that does not roll over, and images are the
+        // most expensive thing on it. Every other image provider here runs on a
+        // free key. So the allowance is kept for the pictures worth spending it
+        // on, and this switch is how one gets chosen.
+        const IMAGE_PUTER_KEY = 'freeopenaiDrawWithPuter';
+        let drawWithPuter = localStorage.getItem(IMAGE_PUTER_KEY) === '1';
 
         // --- Modes & skills (opencode-style) ---
         let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
@@ -3337,6 +3355,7 @@
             }
 
             renderModelOptions();
+            setDrawWithPuter(drawWithPuter);
             restoreHistoryVisibility();
             loadUserPreferences();
             loadLimitsHint();
@@ -4507,8 +4526,9 @@
             else if (pinned) parts.push(pinned + ' pinned');
             if (totals.total) parts.push(totals.done + '/' + totals.total + ' tasks');
             if (imageMode) parts.push('drawing');
+            if (drawWithPuter) parts.push('Puter images');
             if (count) count.textContent = parts.length ? parts.join(' · ') : 'nothing on yet';
-            if (badge) badge.style.display = totals.open || pinned || imageMode ? '' : 'none';
+            if (badge) badge.style.display = totals.open || pinned || imageMode || drawWithPuter ? '' : 'none';
         }
 
         // --- What this chat is actually running on ---
@@ -4904,11 +4924,15 @@
         function imageBackendsForTurn(options) {
             return imageBackendOrder({
                 puterSignedIn: puterCanDraw(),
-                // The conversation's own service draws first. A brush mask still
-                // forces the server route: Puter's image options have no mask
-                // field at all, so asking it first would silently ignore the
-                // region the user painted.
-                serverFirst: selectedProvider !== PUTER_PROVIDER || !!(options && options.mask),
+                // Asked for by name, or not at all. What this used to read
+                // instead was which service the *conversation* was on, which
+                // made picking Puter for chat -- where it is cheap -- also mean
+                // paying Puter for every picture, where it is not.
+                puterChosen: drawWithPuter,
+                // A brush mask still forces the server route: Puter's image
+                // options have no mask field at all, so asking it first would
+                // silently ignore the region the user painted.
+                serverFirst: !!(options && options.mask),
             });
         }
 
@@ -5971,6 +5995,14 @@
 
         function toggleImageMode() { setImageMode(!imageMode); }
 
+        function setDrawWithPuter(on) {
+            drawWithPuter = !!on;
+            try { localStorage.setItem(IMAGE_PUTER_KEY, drawWithPuter ? '1' : ''); } catch (e) {}
+            const box = document.getElementById('imagePuterSwitch');
+            if (box) box.checked = drawWithPuter;
+            updateSessionSummary();
+        }
+
         // The three first-run starters on the hero.
         //
         // Each one turns its subject on and puts the cursor where the next
@@ -6805,7 +6837,10 @@
             // A refusal is the prompt's fault, so the message says what to change
             // rather than naming backends that were never broken.
             if (errors.refused) throw new Error(IMAGE_REFUSAL_ADVICE);
-            throw new Error(imageFailureMessage(errors, kind === 'edit' ? 'edit' : 'generate'));
+            throw new Error(imageFailureMessage(
+                { ...errors, puterAvailable: !drawWithPuter && puterCanDraw() },
+                kind === 'edit' ? 'edit' : 'generate'
+            ));
         }
 
         // An attached image plus an edit request goes here, not to txt2img and
