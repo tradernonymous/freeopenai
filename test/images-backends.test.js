@@ -18,6 +18,16 @@ test('the order never comes back empty, whatever it is asked', () => {
   }
 });
 
+test('only a painted mask puts the server route first, and never alone', () => {
+  // Puter has no mask field at all, so a mask can only be expressed by the
+  // route -- but the route is not a reason to stop offering Puter afterwards,
+  // which is what keeps a mask edit from producing nothing at all.
+  assert.deepEqual(imageBackendOrder({ puterSignedIn: true, serverFirst: true }), ['server', 'puter']);
+  assert.deepEqual(imageBackendOrder({ puterSignedIn: true, serverFirst: false }), ['puter', 'server']);
+  // With no Puter account there is nothing to reverse.
+  assert.deepEqual(imageBackendOrder({ puterSignedIn: false, serverFirst: true }), ['server']);
+});
+
 test('a failure names every backend that was tried, not just the last', () => {
   // The behaviour this replaces: a provider-only setup was told "Puter is not
   // signed in", which names something the user was not using.

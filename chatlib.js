@@ -950,6 +950,126 @@ function imageAction(text, hasImage = false, forced = false) {
   return detectsImageIntent(text) ? 'generate' : 'chat';
 }
 
+// ---------------------------------------------------------------------------
+// What kind of image turn is this, and what does the image model get told?
+//
+// ChatGPT does neither of those with keywords: the model reads the conversation,
+// chooses generate or edit, and writes the prompt the image model actually
+// receives -- the API hands it back as `revised_prompt`. This app's first
+// version did the opposite. A regex picked generate-vs-edit from the raw text,
+// and the raw text was sent on as the prompt. That is why "make the sky purple"
+// with a photo attached answered *about* the photo instead of editing it: no
+// verb-and-noun pair in the pattern matched, so the turn fell through to a
+// vision chat and could never reach an image model at all.
+//
+// The rules below keep the deterministic decision as a *floor* rather than
+// replacing it, because the failure it exists to prevent is worth keeping fixed:
+// an attached picture must never become a fresh text-only render (the bug that
+// drew a poster of a car where a recoloured one was asked for). A turn the
+// pattern is sure about stays that kind of turn whatever the planner says; the
+// planner can only move a turn *into* image work, never out of it.
+//
+// The planner is consulted only for turns that could plausibly be image work --
+// something attached, or a plain-language draw request -- so an ordinary chat
+// message never pays for the extra call.
+const IMAGE_PLAN_ACTIONS = ['generate', 'edit', 'chat'];
+const MAX_IMAGE_PROMPT_CHARS = 1200;
+
+// Written as a contract rather than a conversation, because the reply has to be
+// parseable. The instruction not to leave pronouns in the prompt is the one that
+// matters most: "make it warmer" reaches a text-to-image model with nothing to
+// warm, and a prompt referring to "the attached image" reaches it with a phrase
+// no image model can resolve.
+const IMAGE_PLANNER_PROMPT = [
+  'You decide how an image request is handled. Reply with one JSON object and nothing else.',
+  '',
+  '{"action": "generate" | "edit" | "chat", "prompt": "..."}',
+  '',
+  '- "generate": draw a new picture from scratch.',
+  '- "edit": change something in a picture the user supplied, or in the picture already shown in this chat, keeping the rest of it.',
+  '- "chat": a question about a picture, or code or prose that merely mentions images. Nothing is drawn.',
+  '',
+  'The prompt you return is sent to the image model verbatim, so:',
+  '- For "edit", say only what changes and what must stay: "recolour the car deep red; keep the wheels, the number plate and the background unchanged".',
+  '- For "generate", write a self-contained description with subject, style and framing. Leave no pronoun such as "it" or "this" in it.',
+  '- Write the prompt in English even when the request is not, and never mention the user, this chat, or "the attached image".',
+  '- For "chat", return an empty prompt.',
+].join('\n');
+
+// Models wrap JSON in prose or a code fence however firmly they are told not to,
+// so the first object in the reply is read rather than the whole body. Anything
+// that does not parse is no plan at all, which leaves the deterministic floor in
+// charge -- never a half-understood action guessing at what to draw.
+function parseImagePlan(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const action = String(parsed.action || '').toLowerCase().trim();
+  if (!IMAGE_PLAN_ACTIONS.includes(action)) return null;
+  const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim().slice(0, MAX_IMAGE_PROMPT_CHARS) : '';
+  return { action, prompt };
+}
+
+// The floor plus the plan, as one rule. `fallback` is what imageAction() decided
+// from the text alone, and it wins whenever the plan cannot make the turn
+// *better*: an edit stays an edit, a draw request stays a draw request, and a
+// plain chat message only becomes image work when there is something to work
+// from (an attachment, or a picture already in this chat) or the image toggle
+// says so. Without those guards a chat that merely sounded like a description
+// would start rendering pictures nobody asked for.
+//
+// The one asymmetry worth stating: a plan may ask for a *generation* only when
+// the user turned the image toggle on. With a picture attached, "generate" would
+// mean ignoring the picture -- the poster-of-a-car bug -- and the whole point of
+// the deterministic floor is that no reading of the request can get back there.
+// A follow-up that genuinely wants a new picture from an old one says so, and
+// the toggle is right there.
+function resolveImageAction(fallback, plan, options = {}) {
+  const hasImage = !!(options && options.hasImage);
+  const hasPreviousImage = !!(options && options.hasPreviousImage);
+  const forced = !!(options && options.forced);
+  const source = hasImage || hasPreviousImage;
+  if (fallback === 'edit') return 'edit';
+  if (fallback === 'generate') {
+    if (plan && plan.action === 'edit' && source) return 'edit';
+    return 'generate';
+  }
+  if (!plan) return 'chat';
+  if (plan.action === 'edit' && source) return 'edit';
+  if (plan.action === 'generate' && forced) return 'generate';
+  return 'chat';
+}
+
+// The newest picture already in the conversation, which is what "now make it
+// look realistic" is about. Chat keeps every generated picture it stores (see
+// storedImagePlan), so the previous turn's image is the source of the next
+// edit -- without it, multi-turn editing is impossible: no API hands an image
+// model a picture the client cannot name, and re-attaching your own output by
+// hand is not a thing anyone does.
+function lastImageInMessages(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const entry = list[i];
+    const images = entry && Array.isArray(entry.images) ? entry.images : [];
+    for (let j = images.length - 1; j >= 0; j -= 1) {
+      const image = images[j];
+      if (image && typeof image.url === 'string' && image.url) {
+        return { url: image.url, prompt: String(image.prompt || '') };
+      }
+    }
+  }
+  return null;
+}
+
 // Applies **bold**, *italic*, `inline code`, fenced code blocks, -/1. lists and
 // [title](url) links to already-HTML-escaped text. Only ever emits a small
 // fixed set of tags (strong/em/code/pre/ul/ol/li/a) around text that was
@@ -1692,6 +1812,44 @@ function isTaskWriteTool(name) {
 // instead of being told to sign in to something it wasn't using.
 const IMAGE_BACKENDS = ['puter', 'server'];
 
+// Which image models each kind of work is asked of, best first.
+//
+// Puter documents Sunburst as the one to pick when editing precision matters and
+// Flare as the fast everyday *generation* model. The app pinned gpt-image-2 and
+// gpt-image-1.5 for both jobs, so every edit was made by a generation-leaning
+// model that predates both of those -- the class of mistake that shows up as an
+// edit drifting away from its source. The chains keep a second and third choice,
+// because a Puter account can be refused one model without losing the rest.
+const IMAGE_GENERATE_MODELS = ['gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5'];
+const IMAGE_EDIT_MODELS = ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2'];
+
+function imageModelsFor(kind) {
+  return kind === 'edit' ? IMAGE_EDIT_MODELS.slice() : IMAGE_GENERATE_MODELS.slice();
+}
+
+// Puter draws at 'low' when nothing asks for better, and nothing did: every
+// picture this app has produced was rendered at the bottom quality tier while
+// paying the same credits. 'high' is the tier the models are documented to look
+// like; the server route asks its upstream for the same thing.
+const IMAGE_QUALITY = 'high';
+
+// A refusal is the *prompt's* fault -- not the account's, and not that model's.
+// Trying the next model, and then the other backend, buys the same answer a
+// second time and reads to the user as a hang rather than a decision. Puter
+// reports it as errorCode 'moderation_flagged'; the phrasings below catch the
+// fronts that report it as plain prose.
+function isModerationRefusal(error) {
+  const message = String((error && (error.message || error.error || error.errorCode || error)) || '');
+  if (!message) return false;
+  if (/moderation_flagged/i.test(message)) return true;
+  return /content policy|safety (system|filter)|moderation|prohibited|violates? (our|the) (polic|usage)/i.test(message);
+}
+
+// What to say when every backend answered the same way: reword it. Naming the
+// backends is right for a transport failure and wrong here -- nothing was broken.
+const IMAGE_REFUSAL_ADVICE =
+  'The image service refused that request under its content policy. Reword the prompt — drop real names, logos and graphic detail — and try again.';
+
 function imageBackendOrder(options) {
   // A destructuring default only covers `undefined`, so null and junk are read
   // here too: "no options" must mean "the route", never a crash or an empty
@@ -1699,7 +1857,13 @@ function imageBackendOrder(options) {
   const puterSignedIn = !!(options && options.puterSignedIn);
   // The server route is always behind Puter: Puter is already paid for by the
   // signed-in account, while the route costs an API key that may not be set.
-  return puterSignedIn ? ['puter', 'server'] : ['server'];
+  if (!puterSignedIn) return ['server'];
+  // One thing reverses that, and only one: a painted brush mask. Puter's image
+  // options have no mask field at all, so the route is the only backend that can
+  // express it -- asking Puter first would silently ignore the region the user
+  // painted and edit the whole picture instead. The caller falls back to Puter
+  // without the mask if the route refuses, and says so.
+  return options.serverFirst ? ['server', 'puter'] : ['puter', 'server'];
 }
 
 // When every backend fails, the useful thing to report is what was tried and
@@ -3518,6 +3682,18 @@ if (typeof module !== 'undefined' && module.exports) {
     IMAGE_BACKENDS,
     imageBackendOrder,
     imageFailureMessage,
+    IMAGE_PLANNER_PROMPT,
+    IMAGE_PLAN_ACTIONS,
+    MAX_IMAGE_PROMPT_CHARS,
+    parseImagePlan,
+    resolveImageAction,
+    lastImageInMessages,
+    IMAGE_GENERATE_MODELS,
+    IMAGE_EDIT_MODELS,
+    imageModelsFor,
+    IMAGE_QUALITY,
+    isModerationRefusal,
+    IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,
     WORKSPACE_TOOL_NAMES,
     isWorkspaceTool,

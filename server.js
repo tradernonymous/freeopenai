@@ -1398,6 +1398,46 @@ function naraImagesBase() {
   return process.env.NARA_IMAGES_BASE_URL || 'https://api-images.bynara.id';
 }
 
+// The largest source picture an edit will carry, in bytes. The browser already
+// shrinks attachments to fit, so this only ever catches a link that resolves to
+// something enormous.
+const IMAGE_FETCH_MAX_BYTES = 12 * 1024 * 1024;
+
+// An edit's source picture arrives either as a data URL (something just
+// attached) or as an https link (a picture this chat already drew, whose bytes
+// live on the image host, or a photo from anywhere else). The multipart endpoint
+// only takes bytes, so a link is fetched here -- through the same private-address
+// guard the page reader uses, because this URL comes from the browser and the
+// server would otherwise be talked into fetching from inside its own network.
+//
+// Without this an implicit edit -- "now make it look warmer", with no attachment
+// and the previous picture named by its URL -- could only ever fail, and the one
+// case that would have worked was re-uploading your own output by hand.
+async function imageBytesFor(value, label) {
+  const raw = String(value || '');
+  const dataUrl = /^data:(.+?);base64,([\s\S]+)$/.exec(raw);
+  if (dataUrl) return { contentType: dataUrl[1], bytes: Buffer.from(dataUrl[2], 'base64') };
+  if (!/^https?:\/\//i.test(raw)) {
+    throw new Error(`Invalid ${label} image — expected a data URL or an http(s) link.`);
+  }
+  const parsed = new URL(raw);
+  let address;
+  try {
+    address = await lookupHost(parsed.hostname);
+  } catch {
+    throw new Error(`Could not resolve the host for that ${label} image`);
+  }
+  if (isPrivateIp(address)) throw new Error(`That ${label} image address is not readable from here`);
+  const fetched = await fetch(parsed.href);
+  if (!fetched.ok) throw new Error(`Could not fetch the ${label} image (${fetched.status})`);
+  const declared = Number(fetched.headers.get('content-length') || 0);
+  if (declared > IMAGE_FETCH_MAX_BYTES) throw new Error(`That ${label} image is too large to edit here`);
+  const bytes = Buffer.from(await fetched.arrayBuffer());
+  if (bytes.length > IMAGE_FETCH_MAX_BYTES) throw new Error(`That ${label} image is too large to edit here`);
+  const contentType = String(fetched.headers.get('content-type') || 'image/png').split(';')[0].trim();
+  return { contentType: /^image\//i.test(contentType) ? contentType : 'image/png', bytes };
+}
+
 async function llmImage(req, res, kind) {
   const key = process.env.NARA_API_KEY;
   const what = kind === 'edits' ? 'Image editing' : 'Image generation';
@@ -1415,6 +1455,39 @@ async function llmImage(req, res, kind) {
     const timer = setTimeout(() => controller.abort(), budget);
     try {
       const headers = { Authorization: `Bearer ${key}` };
+      // quality and n are preferences, not requirements: each is documented on
+      // the OpenAI-shaped images API this route fronts, but a front is free to
+      // know only some of them -- and this one is strict, refusing a size outside
+      // its fixed set with a 400 rather than rewriting it. So a 400 while a
+      // preference was sent buys exactly one more attempt without it. The picture
+      // the user asked for beats a setting that was only ever a preference, the
+      // second attempt's answer is the one reported if that fails too, and a 400
+      // is never billed, which is what makes the retry free. size is not in here:
+      // it is validated below, so by the time it is sent the upstream has already
+      // agreed to it.
+      const optionals = {};
+      if (body.quality) optionals.quality = body.quality;
+      // Kept as it arrived: the JSON route sends n as a number, the same way an
+      // images API expects to read it, and the multipart route stringifies it in
+      // its own field writer.
+      if (body.n) optionals.n = body.n;
+      // Dimensions are an upstream contract (this endpoint forwards to
+      // api-images.bynara.id): only validated, standard sizes pass; anything
+      // else is refused clearly rather than being rewritten silently. Checked
+      // once, here, so an edit and a generation agree about what is allowed
+      // instead of one of them discovering it as a 400 from upstream.
+      const SUPPORTED_IMAGE_SIZES = [
+        { label: 'Square (1:1)', value: '1024x1024' },
+        { label: 'Facebook cover (wide, 1640×856)', value: '1640x856' },
+        { label: 'Portrait (4:5)', value: '1024x1280' },
+        { label: 'Landscape banner (2:1)', value: '2048x1024' },
+      ];
+      const sizeValue = body.size || process.env.NARA_IMAGE_SIZE || '';
+      const sizeValid = SUPPORTED_IMAGE_SIZES.some((s) => s.value === sizeValue);
+      if (body.size && !sizeValid) {
+        return sendJson(res, 400, { error: 'Image size ' + sizeValue + ' is not supported. Supported: ' + SUPPORTED_IMAGE_SIZES.map((s) => s.value).join(', ') + '.' });
+      }
+      let send = null;
       let upstream;
       if (kind === 'edits') {
         const model = body.model || process.env.NARA_IMAGE_MODEL;
@@ -1422,62 +1495,76 @@ async function llmImage(req, res, kind) {
           return sendJson(res, 400, { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' });
         }
         if (!body.image) return sendJson(res, 400, { error: 'image is required' });
-        const boundary = '----freeopenai' + Date.now().toString(36);
-        const parts = [];
-        const filePart = (name, filename, dataUrl) => {
-          const m = /^data:(.+?);base64,([\s\S]+)$/.exec(String(dataUrl || ''));
-          if (!m) throw new Error(`Invalid image data for "${name}" — expected a data URL.`);
-          parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${m[1]}\r\n\r\n`));
-          parts.push(Buffer.from(m[2], 'base64'));
-          parts.push(Buffer.from('\r\n'));
+        // Read the bytes first: a link has to be fetched, and the mask has to
+        // match the picture it describes, so both are resolved before any part
+        // is written. A link that cannot be read is a 400 with the reason, not a
+        // malformed multipart body sent upstream to be guessed at.
+        let image;
+        let mask = null;
+        try {
+          image = await imageBytesFor(body.image, 'source');
+          if (body.mask) mask = await imageBytesFor(body.mask, 'mask');
+        } catch (e) {
+          return sendJson(res, 400, { error: e.message });
+        }
+        // Built per attempt, because the body is the thing that changes: the
+        // boundary is regenerated with it so a retry cannot reuse the framing of
+        // the request that was refused.
+        send = (extra) => {
+          const boundary = '----freeopenai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+          const parts = [];
+          const filePart = (name, filename, file) => {
+            parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
+            parts.push(file.bytes);
+            parts.push(Buffer.from('\r\n'));
+          };
+          const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+          filePart('image', 'image.png', image);
+          if (mask) filePart('mask', 'mask.png', mask);
+          field('prompt', prompt);
+          field('model', model);
+          if (sizeValue) field('size', sizeValue);
+          for (const [name, value] of Object.entries(extra)) field(name, value);
+          parts.push(Buffer.from(`--${boundary}--\r\n`));
+          return fetch(naraImagesBase() + '/v1/images/edits', {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+            body: Buffer.concat(parts),
+          });
         };
-        const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
-        filePart('image', 'image.png', body.image);
-        if (body.mask) filePart('mask', 'mask.png', body.mask);
-        field('prompt', prompt);
-        field('model', model);
-        if (body.size) field('size', body.size);
-        parts.push(Buffer.from(`--${boundary}--\r\n`));
-        upstream = await fetch(naraImagesBase() + '/v1/images/edits', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
-          body: Buffer.concat(parts),
-        });
       } else {
         // The alias is required, the same way it is for an edit: the upstream
         // answers "Image model is required" to a body without one, and that
         // sentence arrives here as a 400 that looks like our bug. Falling back
         // to the operator's configured alias keeps the client from having to
         // know Nara's model names.
-        // Dimensions are an upstream contract (this endpoint forwards to
-        // api-images.bynara.id): only validated, standard sizes pass; anything
-        // else is refused clearly rather than being rewritten silently.
-        const SUPPORTED_IMAGE_SIZES = [
-          { label: 'Square (1:1)', value: '1024x1024' },
-          { label: 'Facebook cover (wide, 1640×856)', value: '1640x856' },
-          { label: 'Portrait (4:5)', value: '1024x1280' },
-          { label: 'Landscape banner (2:1)', value: '2048x1024' },
-        ];
-        const sizeValue = body.size || process.env.NARA_IMAGE_SIZE || '';
-        const sizeValid = SUPPORTED_IMAGE_SIZES.some((s) => s.value === sizeValue);
-        if (body.size && !sizeValid) {
-          return sendJson(res, 400, { error: 'Image size ' + sizeValue + ' is not supported. Supported: ' + SUPPORTED_IMAGE_SIZES.map((s) => s.value).join(', ') + '.' });
-        }
         const model = body.model || process.env.NARA_IMAGE_MODEL;
         if (!model) {
           return sendJson(res, 400, { error: 'Image generation needs NARA_IMAGE_MODEL set to an image-capable alias.' });
         }
-        upstream = await fetch(naraImagesBase() + '/v1/images/generations', {
+        send = (extra) => fetch(naraImagesBase() + '/v1/images/generations', {
           method: 'POST',
           signal: controller.signal,
           headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt,
             model,
-            ...(body.size ? { size: body.size } : {}),
+            // sizeValue, not body.size: the operator's NARA_IMAGE_SIZE is a
+            // default for exactly this request, and a variable that only
+            // validated would be a setting that never reached the service.
+            ...(sizeValue ? { size: sizeValue } : {}),
+            ...extra,
           }),
         });
+      }
+      upstream = await send(optionals);
+      // One more try, without the preferences, when the refusal may have been
+      // theirs. Guarded on there being something to drop, so an ordinary 400
+      // (a bad alias, a refusal) is reported as it arrives rather than re-sent.
+      if (Object.keys(optionals).length && upstream.status === 400) {
+        console.warn('image ' + kind + ': upstream refused a request carrying ' + Object.keys(optionals).join(', ') + ' — retrying without them');
+        upstream = await send({});
       }
       const data = await upstream.json().catch(() => null);
       if (!upstream.ok || !data) {

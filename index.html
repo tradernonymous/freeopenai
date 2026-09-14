@@ -5509,13 +5509,19 @@
                 outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
             }
 
-            // One decision for the whole turn, from chatlib: an attached image
-            // makes any image request an edit of that image, never a fresh
+            // The deterministic half of the decision, from chatlib: an attached
+            // image makes any image request an edit of that image, never a fresh
             // text-to-image generation -- which is how "change the color of my
-            // car" drew a poster of a car instead of editing the picture.
-            const imageActionTaken = imageAction(raw, !!attachedImageFile, imageMode);
-            const generateImage = imageActionTaken !== 'chat';
-            const editImage = imageActionTaken === 'edit' && attachedImageFile;
+            // car" drew a poster of a car instead of editing the picture. The
+            // model's own reading is asked for below and may only sharpen this.
+            const forcedByToggle = !!imageMode;
+            const fallbackAction = imageAction(raw, !!attachedImageFile, imageMode);
+            // The newest picture this chat already shows, which is what a follow-up
+            // like "now make it look warmer" is about. Without it multi-turn
+            // editing is impossible: no image service hands a model a picture the
+            // client cannot name, and re-attaching your own output by hand is not
+            // something anyone does.
+            const previousImage = lastImageInMessages(messages);
             if (imageMode) toggleImageMode();
 
             addMessage('user', raw);
@@ -5534,12 +5540,78 @@
             // Held so a failure can keep what the tool loop already paid for.
             let inFlightConvo = null;
 
-            if (editImage) {
-                await sendImageEdit(raw, attachedImageFile, runId, controller);
-                return;
+            // The planner is consulted only for a turn that could plausibly be
+            // image work -- something attached, a picture already in the chat, a
+            // plain-language draw request, or the image toggle -- so an ordinary
+            // chat message never pays for the extra call. Its answer is best
+            // effort: no plan means the keyword decision stands.
+            let plan = null;
+            if (fallbackAction !== 'chat' || attachedImageFile) {
+                setActivity('Reading the request…');
+                try {
+                    plan = await planImageTurn(raw, {
+                        hasImage: !!attachedImageFile,
+                        hasPreviousImage: !!previousImage,
+                        signal: controller.signal,
+                    });
+                } catch (error) {
+                    if (error && error.name === 'AbortError') {
+                        removeTypingIndicator();
+                        showStatus('info', 'Stopped');
+                        releaseRun(controller);
+                        return;
+                    }
+                    // A planner that failed for any other reason is no plan: the
+                    // keyword decision below is still a good answer.
+                    plan = null;
+                }
+                if (!isActiveRun(runId, controller)) return;
             }
-            if (generateImage) {
-                await sendImageGeneration(raw, runId, controller);
+            const actionTaken = resolveImageAction(fallbackAction, plan, {
+                hasImage: !!attachedImageFile,
+                hasPreviousImage: !!previousImage,
+                forced: forcedByToggle,
+            });
+            // What the image model is told. The planner's rewrite is the prompt
+            // the image model receives, ChatGPT style, because "make it warmer"
+            // reaches a text-to-image model with nothing to warm; the user's own
+            // words are the fallback whenever there is no rewrite.
+            const imagePrompt = plan && plan.prompt ? plan.prompt : raw;
+
+            if (actionTaken === 'edit') {
+                if (attachedImageFile) {
+                    let source = '';
+                    try {
+                        source = await imageEditSource(attachedImageFile, controller.signal);
+                    } catch (error) {
+                        removeTypingIndicator();
+                        if (error && error.name === 'AbortError') {
+                            showStatus('info', 'Stopped');
+                            releaseRun(controller);
+                            return;
+                        }
+                        // Drawing a fresh picture here would be the exact bug this
+                        // path exists to prevent, so it reports instead.
+                        const detail = String((error && error.message) || error);
+                        showStatus('error', 'Failed: ' + detail);
+                        addMessage('system', 'Error editing image: ' + detail, { error: true });
+                        releaseRun(controller);
+                        return;
+                    }
+                    if (!isActiveRun(runId, controller)) return;
+                    await sendImageEdit(imagePrompt, source, runId, controller);
+                    return;
+                }
+                // No attachment, so the edit is of the picture this chat already
+                // shows. Named on screen, so the result is not a surprise.
+                if (previousImage) {
+                    addMessage('system', 'Editing the last image in this chat.');
+                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image' });
+                    return;
+                }
+            }
+            if (actionTaken === 'generate') {
+                await sendImageGeneration(imagePrompt, runId, controller);
                 return;
             }
 
@@ -5842,11 +5914,59 @@
             showStatus('info', warning);
         }
 
-        const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5'];
+        // Which image models each kind of work is asked of, and at what quality,
+        // is named once in chatlib (imageModelsFor / IMAGE_QUALITY) so the page,
+        // the server defaults and the tests cannot drift apart.
 
         function puterCanDraw() {
             return typeof puter !== 'undefined' && !!puter.ai &&
                 (!puter.auth || typeof puter.auth.isSignedIn !== 'function' || puter.auth.isSignedIn());
+        }
+
+        // The one small model call that decides what an image-ish turn is and
+        // writes the prompt the image model receives. ChatGPT does both of those
+        // with the model, and that is the difference that matters here: "make the
+        // sky purple" matched no verb-and-noun pair in the keyword rules, so with
+        // a photo attached it fell through to a vision answer *about* the photo
+        // and never reached an image model at all.
+        //
+        // Best effort by design. Any failure -- a provider that rejects the
+        // shape, a timeout, prose instead of JSON -- returns null and leaves the
+        // deterministic decision in charge, which is what the keyword rules are
+        // for. The picture is not attached to this call: the planner reads the
+        // request, and a planner that needed a vision model would switch the user
+        // off their chosen model to decide something a sentence already says.
+        async function planImageTurn(text, context = {}) {
+            const lines = [
+                context.hasImage ? 'The user attached a picture to this message.' : 'The user attached no picture to this message.',
+                context.hasPreviousImage
+                    ? 'A picture the assistant drew earlier is already on screen in this chat.'
+                    : 'No earlier picture exists in this chat.',
+                context.mask ? 'The user also painted a region of the picture to change.' : '',
+                '',
+                'The request:',
+                text,
+            ].filter((line) => line !== '');
+            try {
+                const convo = [
+                    { role: 'system', content: IMAGE_PLANNER_PROMPT },
+                    { role: 'user', content: lines.join('\n') },
+                ];
+                const response = await callModel(convo, {}, context.signal || null);
+                return parseImagePlan(extractMessageText((response && response.message) || null));
+            } catch (error) {
+                if (error && error.name === 'AbortError') throw error;
+                return null;
+            }
+        }
+
+        // The prompt the image model will actually be given: the planner's
+        // rewrite when there is one, and the user's own words when there is not.
+        // A planner that answers without a prompt is not a reason to send an
+        // empty one.
+        async function plannedImagePrompt(text, context = {}) {
+            const plan = await planImageTurn(text, context);
+            return plan && plan.prompt ? plan.prompt : text;
         }
 
         // The source for an image edit. An attachment is re-encoded to fit the
@@ -5859,73 +5979,146 @@
             return dataUrl;
         }
 
-        // An attached image plus an edit request goes here, not to txt2img and
-        // not to a vision chat: those are the two paths that produced a poster
-        // of the car instead of a recoloured one.
-        // Edits mirror the generation fallback (generateImageSource): Puter
-        // first when it can draw, then the server's Nara route. Without that
-        // second backend the edit reported "NARA_IMAGE_MODEL" to a signed-in
-        // Puter user -- naming a backend they were not using -- and without
-        // Puter first, an edit cost the operator's Nara key that a free
-        // signed-in draw would not have.
-        async function editImageSource(promptText, sourceDataUrl, signal) {
-            const errors = { puterError: '', serverError: '' };
-            for (const backend of imageBackendOrder({ puterSignedIn: puterCanDraw() })) {
+        // What Puter is asked for, per kind of work.
+        //
+        // An edit and a generation are different requests, not the same one with
+        // an extra field. Edits carry the source picture through input_images,
+        // which Puter's docs name as the field that routes a request through the
+        // image *edit* endpoint; the single-image shorthand (input_image) is one
+        // step removed from that guarantee, and a shorthand that quietly fell
+        // back to text-to-image would hand back a plausible new picture where an
+        // edit was asked for -- a failure that looks like success, which is the
+        // worst kind. quality is set explicitly because Puter draws at "low"
+        // when nothing asks for better, and nothing did.
+        function puterImageArgs(kind, opts, sourceDataUrl) {
+            const args = { model: opts.model, quality: opts.quality };
+            if (kind === 'edit') args.input_images = [sourceDataUrl];
+            return args;
+        }
+
+        // One place that produces an image, so the composer, the variations
+        // button and the brush editor cannot drift apart.
+        //
+        // Puter first when it is signed in, then the server's own route: without
+        // that second backend a chat on a direct provider had no way to draw at
+        // all and reported it with Puter's "not signed in", which names the wrong
+        // problem entirely.
+        //
+        // A painted brush mask reverses that order, because a mask is the one
+        // thing only the server route can express -- Puter's image options have
+        // no mask field at all. That is what made the brush editor look broken to
+        // anyone signed in to Puter and holding no Nara key: it went straight at
+        // the route, and the route refused for want of a model alias. When the
+        // route does refuse, the brush is dropped and Puter is asked without it
+        // rather than returning no picture at all -- and the caller is told, on
+        // options.notes, so the drop is a sentence on screen instead of a
+        // silent difference in the result.
+        async function imageSourceFrom(kind, promptText, sourceDataUrl, signal, opts) {
+            const options = opts || {};
+            const errors = { puterError: '', serverError: '', refused: false };
+            const order = imageBackendOrder({ puterSignedIn: puterCanDraw(), serverFirst: !!options.mask });
+            for (const backend of order) {
                 if (backend === 'puter') {
-                    for (const model of IMAGE_MODELS) {
+                    if (options.mask && options.notes && errors.serverError) {
+                        options.notes.push('the brush mask was dropped — Puter cannot take one');
+                    }
+                    for (const model of options.models) {
                         try {
-                            const imgEl = await puter.ai.txt2img(promptText, { model, input_image: sourceDataUrl });
-                            if (imgEl && imgEl.src) return imgEl.src;
+                            const args = puterImageArgs(kind, { model, quality: IMAGE_QUALITY }, sourceDataUrl);
+                            const imgEl = await puter.ai.txt2img(promptText, args);
+                            if (imgEl && imgEl.src) return [imgEl.src];
                             errors.puterError = 'returned no image';
                         } catch (error) {
                             if (error && error.name === 'AbortError') throw error;
                             errors.puterError = String((error && error.message) || error);
-                            // Same rule as generation: a spent or refused account
-                            // answers the same for every model, so stop spending
-                            // calls to hear it again and let the other backend try.
+                            // Two answers are the same for every model, so asking
+                            // the rest can only buy them again: a spent account,
+                            // and a prompt the service refuses. The refusal is the
+                            // one worth naming, because no retry fixes it and the
+                            // user is the only one who can reword it.
+                            if (isModerationRefusal(error)) { errors.refused = true; break; }
                             if (isOutOfCreditsError(errors.puterError) || isAccountLevelFailure(errors.puterError, '')) break;
                         }
                     }
+                    // A refusal ends the whole chain, not just Puter's turn: the
+                    // next service is being asked the same question, and paying
+                    // an operator's key to hear it refused again is the opposite
+                    // of what the sentence on screen is telling the user to do.
+                    if (errors.refused) break;
                     continue;
                 }
                 try {
-                    const res = await fetch('/api/llm/images/edits', {
+                    // quality rides along on purpose: the server route fronts an
+                    // OpenAI-shaped images API, where it is the documented way to
+                    // ask for something better than the tier the alias defaults
+                    // to, and Puter is already being asked for the same thing.
+                    const body = kind === 'edit'
+                        ? { prompt: promptText, image: sourceDataUrl, quality: IMAGE_QUALITY, ...(options.mask ? { mask: options.mask } : {}) }
+                        : { prompt: promptText, quality: IMAGE_QUALITY, ...(options.count && options.count > 1 ? { n: options.count } : {}) };
+                    const res = await fetch(kind === 'edit' ? '/api/llm/images/edits' : '/api/llm/images/generations', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: promptText, image: sourceDataUrl }),
+                        body: JSON.stringify(body),
                         signal,
                     });
                     const data = await safeJson(res);
-                    if (!res.ok) throw new Error(data.error || 'the edit route refused the request');
-                    const url = imageUrlFrom(data);
-                    if (!url) throw new Error('the edit route returned no image');
-                    return url;
+                    if (!res.ok) throw new Error(data.error || 'the image route refused the request');
+                    const urls = imageUrlsFrom(data);
+                    if (!urls.length) throw new Error('the image route returned no image');
+                    return urls;
                 } catch (error) {
                     if (error && error.name === 'AbortError') throw error;
                     errors.serverError = String((error && error.message) || error);
+                    if (isModerationRefusal(error)) { errors.refused = true; break; }
                 }
             }
-            throw new Error(imageFailureMessage(errors, 'edit'));
+            // A refusal is the prompt's fault, so the message says what to change
+            // rather than naming backends that were never broken.
+            if (errors.refused) throw new Error(IMAGE_REFUSAL_ADVICE);
+            throw new Error(imageFailureMessage(errors, kind === 'edit' ? 'edit' : 'generate'));
         }
 
-        async function sendImageEdit(promptText, attachedFile, runId = generationId, controller = currentAbort) {
+        // An attached image plus an edit request goes here, not to txt2img and
+        // not to a vision chat: those are the two paths that produced a poster
+        // of the car instead of a recoloured one. options.mask is the painted
+        // brush region, and options.notes collects what the caller has to say
+        // about the backend that answered.
+        async function editImageSource(promptText, sourceDataUrl, signal, options) {
+            const opts = options || {};
+            const notes = Array.isArray(opts.notes) ? opts.notes : [];
+            const urls = await imageSourceFrom('edit', promptText, sourceDataUrl, signal, {
+                mask: opts.mask || '',
+                models: imageModelsFor('edit'),
+                notes,
+            });
+            return urls[0];
+        }
+
+        // The source is prepared by the caller because there are two of them: the
+        // picture that was attached, and the picture this chat already shows
+        // ("now make it look realistic"). The backend chain does not care which.
+        async function sendImageEdit(promptText, source, runId = generationId, controller = currentAbort, options = {}) {
             let bubble = null;
             let filled = false;
+            const notes = [];
+            const label = options.sourceLabel ? ' (edit of ' + options.sourceLabel + ')' : ' (edit of your image)';
             try {
                 usageCount++;
                 updateUsageDisplay();
-                const source = await imageEditSource(attachedFile, controller.signal);
-                if (!isActiveRun(runId, controller)) return;
                 bubble = createImageBubble();
-                const url = await editImageSource(promptText, source, controller.signal);
+                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes });
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
                 }
                 removeTypingIndicator();
-                fillImageBubble(bubble, promptText + ' (edit of your image)', url);
+                fillImageBubble(bubble, promptText + label, url);
                 filled = true;
-                showStatus('success', 'Edited image ready');
+                // A caveat is not a success, and a success is not a caveat: the
+                // mask being dropped is worth saying without pretending it did not
+                // happen, which is why the two are not the same sentence.
+                if (notes.length) showStatus('info', 'Edited image ready — ' + notes.join('; '));
+                else showStatus('success', 'Edited image ready');
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -5943,51 +6136,29 @@
             }
         }
 
-        // One place that produces an image, so the composer and the variations
-        // path cannot drift apart. Puter first when it is signed in, then the
-        // server's own route: without that second backend, a chat on a direct
-        // provider had no way to draw at all and reported it with Puter's
-        // "not signed in", which names the wrong problem entirely.
-        async function generateImageSource(promptText, signal) {
-            const errors = { puterError: '', serverError: '' };
-            for (const backend of imageBackendOrder({ puterSignedIn: puterCanDraw() })) {
-                if (backend === 'puter') {
-                    for (const model of IMAGE_MODELS) {
-                        try {
-                            const imgEl = await puter.ai.txt2img(promptText, { model });
-                            if (imgEl && imgEl.src) return imgEl.src;
-                            errors.puterError = 'returned no image';
-                        } catch (error) {
-                            if (error && error.name === 'AbortError') throw error;
-                            errors.puterError = String((error && error.message) || error);
-                            // A spent allowance, or an account-level refusal, is the
-                            // same answer for every model on the account -- so
-                            // trying the rest spends more calls to be told the same
-                            // thing. Move on to the next backend instead, which is a
-                            // different bill entirely.
-                            if (isOutOfCreditsError(errors.puterError) || isAccountLevelFailure(errors.puterError, '')) break;
-                        }
-                    }
-                    continue;
-                }
-                try {
-                    const res = await fetch('/api/llm/images/generations', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: promptText }),
-                        signal,
-                    });
-                    const data = await safeJson(res);
-                    if (!res.ok) throw new Error(data.error || 'the route refused the request');
-                    const url = imageUrlFrom(data);
-                    if (!url) throw new Error('the route returned no image');
-                    return url;
-                } catch (error) {
-                    if (error && error.name === 'AbortError') throw error;
-                    errors.serverError = String((error && error.message) || error);
-                }
+        async function generateImageSource(promptText, signal, options) {
+            const urls = await imageSourceFrom('generate', promptText, '', signal, {
+                models: imageModelsFor('generate'),
+                count: (options && options.count) || 1,
+            });
+            return urls[0];
+        }
+
+        // Several pictures for one prompt. The server route takes a count (the
+        // OpenAI-compatible images API caps it at ten, and some upstreams cap it
+        // at one), so whatever comes back short is drawn again the way a single
+        // picture always was. Puter has no count at all, which is why the top-up
+        // is a loop rather than a second parameter.
+        async function generateImageSources(promptText, count, signal) {
+            const wanted = Math.max(1, Math.min(4, Number(count) || 1));
+            const urls = await imageSourceFrom('generate', promptText, '', signal, {
+                models: imageModelsFor('generate'),
+                count: wanted,
+            });
+            while (urls.length < wanted) {
+                urls.push(await generateImageSource(promptText, signal));
             }
-            throw new Error(imageFailureMessage(errors));
+            return urls.slice(0, wanted);
         }
 
         async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort) {
@@ -6022,7 +6193,12 @@
                 // A failure inside two seconds never showed work — say so, so
                 // "no animation" reads as "instant refusal" (usually credits).
                 const instant = Date.now() - startedAt < 2000 ? 'The request failed instantly (often credits or access): ' : '';
-                if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                if (isModerationRefusal(error)) {
+                    // A refusal is a decision, not a fault, and it names nothing
+                    // technical: the one useful sentence is what to change.
+                    showStatus('error', 'Refused');
+                    addMessage('system', IMAGE_REFUSAL_ADVICE, { error: true });
+                } else if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
                     addMessage('system', outOfCreditsAdvice(), { error: true });
                 } else if (isAccountLevelFailure(msg, '')) {
                     addMessage('system', 'Image billing refused the account: ' + msg, { error: true });
@@ -6270,10 +6446,13 @@
                 bubble = createImageBubble();
                 const second = createHoloForge('Generating variation…');
                 bubble.appendChild(second);
-                for (let i = 0; i < 2; i++) {
+                // One request where the backend can take a count, topped up one at
+                // a time where it cannot -- the difference between two billed
+                // renders and one, for the same two pictures.
+                const urls = await generateImageSources(promptText, 2, controller.signal);
+                for (let i = 0; i < urls.length; i++) {
                     if (!isActiveRun(runId, controller)) throw abortError();
-                    const imageSrc = await generateImageSource(promptText, controller.signal);
-                    if (!isActiveRun(runId, controller)) throw abortError();
+                    const imageSrc = urls[i];
                     made.push(imageSrc);
                     const shimmers = bubble.querySelectorAll('.holo-forge');
                     const wrap = buildImageWrap(imageSrc, promptText);
@@ -6312,11 +6491,22 @@
         }
 
         function imageUrlFrom(data) {
-            const first = data && Array.isArray(data.data) && data.data[0];
-            if (!first) return '';
-            if (first.url) return first.url;
-            if (first.b64_json) return 'data:image/png;base64,' + first.b64_json;
-            return '';
+            return imageUrlsFrom(data)[0] || '';
+        }
+
+        // Every picture in a response, not just the first: an OpenAI-compatible
+        // images endpoint answers `n` requests with n entries, and reading only
+        // data[0] would silently deliver one picture where several were paid for.
+        function imageUrlsFrom(data) {
+            const list = data && Array.isArray(data.data) ? data.data : [];
+            return list
+                .map((item) => {
+                    if (!item) return '';
+                    if (item.url) return item.url;
+                    if (item.b64_json) return 'data:image/png;base64,' + item.b64_json;
+                    return '';
+                })
+                .filter(Boolean);
         }
 
         async function copyLightboxImage() {
@@ -6440,18 +6630,33 @@
             }
         }
 
+        // The painted mask, at the size of the picture it describes.
+        //
+        // editState.mask is deliberately small -- the canvas the brush paints on
+        // is capped at 640px so a stroke is a stroke and not a hairline -- and it
+        // used to be sent exactly as painted. A 640px mask beside a 3000px photo
+        // is a mask for a different picture, which a service can only read as a
+        // mistake (at best it is refused; at worst it lands on the wrong region).
+        function editMaskDataUrl() {
+            if (!editState || !editState.painted) return '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = editState.img.naturalWidth;
+                c.height = editState.img.naturalHeight;
+                c.getContext('2d').drawImage(editState.mask, 0, 0, c.width, c.height);
+                return c.toDataURL('image/png');
+            } catch {
+                return '';
+            }
+        }
+
         async function submitImageEdit() {
-            const prompt = document.getElementById('imageEditPrompt').value.trim();
-            if (!prompt) { showStatus('error', 'Describe the edit first'); return; }
+            const typed = document.getElementById('imageEditPrompt').value.trim();
+            if (!typed) { showStatus('error', 'Describe the edit first'); return; }
             if (!editState) { showStatus('error', 'Image is not ready yet'); return; }
             const srcData = editImageDataUrl();
             if (!srcData) { showStatus('error', 'That image host blocks editing (canvas is locked).'); return; }
-            let maskData = '';
-            try {
-                if (editState.painted) maskData = editState.mask.toDataURL('image/png');
-            } catch {
-                maskData = '';
-            }
+            const maskData = editMaskDataUrl();
             closeImageEdit();
             const controller = new AbortController();
             const runId = ++generationId;
@@ -6460,32 +6665,37 @@
             showTypingIndicator();
             let bubble = null;
             let filled = false;
+            const notes = [];
             try {
                 usageCount++;
                 updateUsageDisplay();
-                bubble = createImageBubble();
-                const res = await fetch('/api/llm/images/edits', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        prompt,
-                        image: srcData,
-                        ...(maskData ? { mask: maskData } : {}),
-                    }),
+                setActivity('Reading the request…');
+                // The brush editor asks the image model the same way the composer
+                // does. Two paraphrases of one request is two different pictures:
+                // "add horns" typed into the brush box and "add horns" typed into
+                // the composer used to reach the model in different words.
+                const prompt = await plannedImagePrompt(typed, {
+                    hasImage: true,
+                    hasPreviousImage: false,
+                    mask: !!maskData,
                     signal: controller.signal,
                 });
-                const data = await res.json().catch(() => ({}));
+                if (!isActiveRun(runId, controller)) return;
+                bubble = createImageBubble();
+                // Through the shared backend chain, so a signed-in Puter user with
+                // no Nara key gets a picture instead of "NARA_IMAGE_MODEL": the
+                // brush used to go straight at the server route, which was the
+                // whole reason a mask edit produced nothing for those accounts.
+                const url = await editImageSource(prompt, srcData, controller.signal, { mask: maskData, notes });
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
                 }
-                if (!res.ok) throw new Error(data.error || 'Edit failed');
-                const url = imageUrlFrom(data);
-                if (!url) throw new Error('Edit returned no image');
                 removeTypingIndicator();
                 fillImageBubble(bubble, prompt + ' (edit)', url);
                 filled = true;
-                showStatus('success', 'Edit ready');
+                if (notes.length) showStatus('info', 'Edit ready — ' + notes.join('; '));
+                else showStatus('success', 'Edit ready');
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
