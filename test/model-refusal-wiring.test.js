@@ -132,6 +132,7 @@ function harness({ models, answers, streamed = null }) {
     autoRetryEnabled: false,
     RATE_LIMIT_BASE_DELAY_MS: 1,
     localStorage: { setItem() {} },
+    rememberPreference: () => true,
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
     addMessage: (role, text) => notes.push(`${role}: ${text}`),
     // finalizePartial's DOM surface, observed so the tests can assert on it.

@@ -2651,9 +2651,32 @@
             box.checked = skillsEnabled;
         }
 
+        // Remembering a preference is a courtesy, and a browser may refuse it:
+        // Safari in private mode throws on setItem, and a full quota throws
+        // everywhere. Losing a remembered model or mode costs nothing.
+        //
+        // Letting the throw escape costs plenty, because three of these run from
+        // inside failure handling -- a model being dropped after a 404, a provider
+        // suspended after a billing refusal, a model swapped for one that can read
+        // images. There the throw replaced the real error with a storage one and
+        // left the recovery half done: the variable reassigned, the switch never
+        // finished.
+        //
+        // The conversation does not come through here. It has its own path, which
+        // evicts pictures and then old chats rather than shrugging, because losing
+        // a preference is a shrug and losing history is a loss.
+        function rememberPreference(key, value) {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
         function setSkillsEnabled(on) {
             skillsEnabled = !!on;
-            localStorage.setItem('freeopenaiSkills', skillsEnabled ? '1' : '0');
+            rememberPreference('freeopenaiSkills', skillsEnabled ? '1' : '0');
             updateSkillsToggle();
             showStatus('info', skillsEnabled ? 'Skills enabled for Plan and Build' : 'Skills disabled');
             if (skillsEnabled && selectedMode !== 'chat') ensureSkillsLoaded();
@@ -2672,7 +2695,7 @@
         function cycleMode() {
             const idx = MODES.findIndex((m) => m.id === selectedMode);
             selectedMode = MODES[(idx + 1) % MODES.length].id;
-            localStorage.setItem('freeopenaiMode', selectedMode);
+            rememberPreference('freeopenaiMode', selectedMode);
             updateModeChip();
             showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
             if (selectedMode !== 'chat') ensureSkillsLoaded();
@@ -3080,7 +3103,7 @@
                 return 'Mode is one of: ' + MODES.map((m) => m.id).join(', ') + '. Currently ' + selectedMode + '.';
             }
             selectedMode = wanted;
-            localStorage.setItem('freeopenaiMode', selectedMode);
+            rememberPreference('freeopenaiMode', selectedMode);
             updateModeChip();
             showStatus('info', 'Mode: ' + selectedMode.toUpperCase());
             return 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc;
@@ -3669,7 +3692,7 @@
             if (selectedProvider !== PUTER_PROVIDER) {
                 if (!providerModels.some((m) => m.id === modelId)) return;
                 selectedModel = modelId;
-                localStorage.setItem('provider:' + selectedProvider + ':model', modelId);
+                rememberPreference('provider:' + selectedProvider + ':model', modelId);
                 renderModelOptions();
                 updateModelLabel();
                 updateEffortPicker();
@@ -3689,7 +3712,7 @@
 
         function selectEffort(value) {
             selectedEffort = isValidEffort(value) ? value : DEFAULT_EFFORT;
-            localStorage.setItem('puterChatEffort', selectedEffort);
+            rememberPreference('puterChatEffort', selectedEffort);
             showStatus('success', selectedEffort ? 'Effort: ' + selectedEffort : 'Effort: model default');
         }
 
@@ -4940,7 +4963,7 @@
 
         async function selectProvider(id) {
             selectedProvider = id;
-            localStorage.setItem('puterChatProvider', id);
+            rememberPreference('puterChatProvider', id);
             if (id === PUTER_PROVIDER) {
                 providerModels = [];
                 selectedModel = isValidModel(localStorage.getItem('puterChatModel') || '')
@@ -5075,7 +5098,7 @@
             const next = nearestUsableModel(providerModels, refusedModelIds(modelsRefusedBy, selectedProvider), modelId);
             if (next) {
                 selectedModel = next;
-                localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
+                rememberPreference('provider:' + selectedProvider + ':model', selectedModel);
                 const why = typeof detail === 'string' && detail ? ' — ' + detail : '';
                 addMessage('system', modelId + ' refused (' + resummarizeRefusal(detail) + '), so the app switched to ' + next + why, { error: false });
                 showStatus('info', 'Switched to ' + selectedModel);
@@ -5117,7 +5140,7 @@
             if (!capable) return null;
             if (capable !== selectedModel) {
                 selectedModel = capable;
-                localStorage.setItem('provider:' + selectedProvider + ':model', selectedModel);
+                rememberPreference('provider:' + selectedProvider + ':model', selectedModel);
                 showStatus('info', 'Switched to ' + selectedModel + ' — it can read images');
                 renderModelOptions();
                 updateModelLabel();
@@ -6053,7 +6076,7 @@
 
         function setDrawWithPuter(on) {
             drawWithPuter = !!on;
-            try { localStorage.setItem(IMAGE_PUTER_KEY, drawWithPuter ? '1' : ''); } catch (e) {}
+            rememberPreference(IMAGE_PUTER_KEY, drawWithPuter ? '1' : '');
             const box = document.getElementById('imagePuterSwitch');
             if (box) box.checked = drawWithPuter;
             updateSessionSummary();
@@ -6076,7 +6099,7 @@
         function startPlanTurn() {
             if (selectedMode !== 'plan') {
                 selectedMode = 'plan';
-                try { localStorage.setItem('freeopenaiMode', selectedMode); } catch { /* private mode */ }
+                rememberPreference('freeopenaiMode', selectedMode);
                 updateModeChip();
             }
             // Plan mode carries skills, so the library is fetched now rather than
@@ -8630,7 +8653,7 @@
         }
 
         function saveUserPreferences() {
-            localStorage.setItem('puterChatModel', selectedModel);
+            rememberPreference('puterChatModel', selectedModel);
         }
 
         function updateUsageDisplay() {

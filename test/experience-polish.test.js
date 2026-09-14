@@ -85,6 +85,7 @@ test('a starter turns its subject on instead of describing it', () => {
     updateModeChip: () => { deps.chipRedrawn = true; },
     ensureSkillsLoaded: () => { deps.skillsLoaded = true; },
     localStorage: { setItem() { /* recorded below */ } },
+    rememberPreference: (key, value) => { deps.localStorage.setItem(key, value); return true; },
     showStatus: (kind, text) => statuses.push(`${kind}: ${text}`),
   };
   assertSandboxCovers(['startImageTurn', 'startPlanTurn'], deps);

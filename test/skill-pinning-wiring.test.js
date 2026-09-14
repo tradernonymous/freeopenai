@@ -120,7 +120,9 @@ test('the skills panel and the picker tell one story about the library', () => {
   assert.match(HTML, /<input type="checkbox" id="autoSkillsCheck" checked onchange="setSkillsEnabled\(this\.checked\)">/);
   // Two controls, one state: the checkbox and the stored flag cannot disagree.
   assert.match(sourceOf('updateSkillsToggle'), /box\.checked = skillsEnabled/);
-  assert.match(sourceOf('setSkillsEnabled'), /localStorage\.setItem\('freeopenaiSkills'/);
+  // Through the guard, not straight at localStorage: a browser that refuses
+  // storage must not throw out of a checkbox handler.
+  assert.match(sourceOf('setSkillsEnabled'), /rememberPreference\('freeopenaiSkills'/);
   assert.equal(HTML.includes('skillsToggle'), false, 'the old chip outlived the switch');
 });
 

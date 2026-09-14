@@ -114,6 +114,7 @@ function baseDeps(overrides = {}) {
     forgetRefusedModel: () => null,
     finalizePartial: () => {},
     localStorage: { setItem: (k, v) => writes.push([k, v]) },
+    rememberPreference: (k, v) => { writes.push([k, v]); return true; },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
     renderModelOptions() {},
     updateModelLabel() {},
