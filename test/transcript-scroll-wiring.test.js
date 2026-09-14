@@ -15,6 +15,11 @@ const {
   TRANSCRIPT_BOTTOM_SLACK_PX,
 } = require('../chatlib.js');
 const { HTML, loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
+const fs = require('node:fs');
+const path = require('node:path');
+// The resize/rotation policy now lives in the transcript module, so its source
+// is read there rather than from the page.
+const TRANSCRIPT_MODULE = fs.readFileSync(path.join(__dirname, '..', 'transcript-controller.js'), 'utf8');
 
 const NAMES = [
   'updateScrollBottomPill',
@@ -202,16 +207,19 @@ test('a jump to the bottom settles instead of landing at a stale maximum', () =>
 
 test('a rotation keeps a reader who was at the bottom at the bottom', () => {
   // Nothing tells the reader the re-layout happened; they just find themselves
-  // at the top of an old reply. The pin is read *before* the re-layout, because
-  // afterwards the answer is the wrong one: the layout itself fires a scroll
-  // event with a clamped position.
-  assert.match(HTML, /addEventListener\('resize', \(\) => \{\s*const wasPinned = transcriptPinned;/, 'a resize has to remember the pin from before the layout');
-  assert.match(HTML, /layoutSettlingUntil = Date\.now\(\) \+ \d+/);
-  assert.match(HTML, /if \(wasPinned\) \{[\s\S]{0,160}pinTranscriptToBottom\(\)/);
+  // at the top of an old reply. The transcript module owns the resize policy
+  // now: it remembers the pin before the re-layout, waits out the scroll
+  // events the layout itself fires, and rewrites the bottom on a settle timer
+  // so the write lands on the layout it describes.
+  assert.match(TRANSCRIPT_MODULE, /handleResize[\s\S]{0,400}wasPinned/, 'the controller has to remember the pin from before the layout');
+  assert.match(TRANSCRIPT_MODULE, /layoutSettlingUntil = Date\.now\(\) \+ \d+/);
+  assert.match(TRANSCRIPT_MODULE, /if \(wasPinned\) \{[\s\S]{0,160}pinToBottom\(\)/);
   // The scroll listener ignores the events the layout itself fires...
-  assert.match(HTML, /else if \(Date\.now\(\) < layoutSettlingUntil\) return;/);
+  assert.match(TRANSCRIPT_MODULE, /else if \(Date\.now\(\) < layoutSettlingUntil\) return;/);
   // ...and the write waits for the layout it describes.
-  assert.match(HTML, /clearTimeout\(resizeSettle\)[\s\S]{0,400}resizeSettle = 0/);
+  assert.match(TRANSCRIPT_MODULE, /if \(resizeTimer\) cancel\(resizeTimer\);[\s\S]{0,400}resizeTimer = 0/);
+  // And the page delegates to it rather than keeping a second copy.
+  assert.match(HTML, /transcriptController\.handleResize\(\)/);
 });
 
 test('the markup carries the id and the label the wiring looks for', () => {

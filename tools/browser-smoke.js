@@ -153,7 +153,10 @@ async function main() {
     await send('Network.enable');
     ws.addEventListener('message', (event) => {
       const message = JSON.parse(event.data);
-      if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails.text || 'runtime exception');
+      if (message.method === 'Runtime.exceptionThrown') {
+        const details = message.params.exceptionDetails;
+        errors.push((details.exception && details.exception.description) || details.text || 'runtime exception');
+      }
       if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error' && message.params.entry.source !== 'network') {
         errors.push(message.params.entry.text || 'console error');
       }

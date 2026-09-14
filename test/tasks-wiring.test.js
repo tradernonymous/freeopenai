@@ -40,6 +40,10 @@ function harness({ graph = newTaskGraph() } = {}) {
     modePrompt: () => 'Mode: build',
     renderSkillsPrompt: () => 'skills',
     buildChatHistory: () => [],
+    // Compact session reads a state flag the harness keeps off; buildConversation
+    // falls through to the full history when it is false.
+    compactSession: false,
+    compactChatHistory: () => [],
     messages: [],
     selectedMode: 'build',
   };

@@ -18,6 +18,9 @@ const NAMES = ['formatChars', 'runWorkspaceTool'];
 function harness({ files = {}, approve = true, capture = null } = {}) {
   const events = [];
   let saves = 0;
+  // The store is now per chat: the page reads the active chat's files
+  // through activeWorkspace() and writes back through setActiveWorkspace().
+  let store = { ...files };
   const deps = {
     // The real rules, not stubs, so this exercises the shipped pairing of the
     // page's wiring with chatlib's decisions.
@@ -25,7 +28,9 @@ function harness({ files = {}, approve = true, capture = null } = {}) {
     workspaceRead,
     workspaceWrite,
     normalizeWorkspacePath,
-    workspaceFiles: Object.assign({}, files),
+    // Mirrors the page's contract: setActiveWorkspace persists the store.
+    activeWorkspace: () => store,
+    setActiveWorkspace: (next) => { store = next; deps.saveWorkspaceFiles(); },
     askWorkspaceConfirm: async (text) => {
       if (capture) capture.push(text);
       return approve;
@@ -37,7 +42,7 @@ function harness({ files = {}, approve = true, capture = null } = {}) {
   return {
     deps,
     call: (name, args) => loaded.runWorkspaceTool(name, args),
-    files: () => deps.workspaceFiles,
+    files: () => store,
     saves: () => saves,
     events,
   };

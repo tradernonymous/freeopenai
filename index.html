@@ -9,6 +9,9 @@
     <title>FreeAi4U | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
     <script src="chatlib.js"></script>
+    <script src="provider-routing.js"></script>
+    <script src="transcript-controller.js"></script>
+    <script src="attachment-helpers.js"></script>
     <style>
         :root {
             --bg: #000000;
@@ -1924,6 +1927,13 @@
                         </div>
                         <input type="checkbox" id="compactNoticesCheck" onchange="setCompactNotices(this.checked)" aria-label="Hide tool and system notices">
                     </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Compact session</strong>
+                            <p class="settings-hint">Send a short recent history instead of the whole chat, to cut tokens per request. The visible conversation is untouched. Also <code>/compact on</code> in the composer.</p>
+                        </div>
+                        <input type="checkbox" id="compactCheck" onchange="setCompactSession(this.checked)" aria-label="Send a compact history">
+                    </div>
                     <h3 class="settings-section-title" id="settingsSectionSkills">Skills</h3>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
@@ -2192,14 +2202,22 @@
         // visible to other people and gone by the morning. Declared up here with
         // the rest of the page state, because the startup calls below already
         // render it and `let` is not readable before its own line.
-        const WORKSPACE_KEY = 'freeopenaiWorkspace';
+        // Workspace files are per chat, like a coding agent's session directory:
+        // a new chat starts empty, opening a chat brings its files back, and
+        // deleting a chat deletes them. One map of chat id -> files, with the
+        // pre-per-chat build's flat store carried in under 'legacy' once.
+        const WORKSPACE_KEY = 'freeopenaiWorkspaceByChat';
+        const WORKSPACE_LEGACY_KEY = 'freeopenaiWorkspace';
         let workspaceFiles = loadWorkspaceFiles();
 
         // The task list, kept between chats in this browser for exactly the same
         // reason. Unlike a commit or a file write it changes nothing outside the
         // conversation, so it is not put to the user each time -- the list is
         // visible and removable in Settings instead.
-        const TASK_KEY = 'freeopenaiTasks';
+        // The todo list is per chat for the same reason: a new chat resets the
+        // plan, and the old chat keeps what it had.
+        const TASK_KEY = 'freeopenaiTasksByChat';
+        const TASK_LEGACY_KEY = 'freeopenaiTasks';
         const TODOS_HIDDEN_KEY = 'freeopenaiTodosHidden';
         let taskGraph = loadTaskGraph();
 
@@ -2693,6 +2711,7 @@
                 return wasEmpty ? 'Already on a new chat.' : 'Started a new chat — this one stays in the sidebar.';
             }
             if (parsed.name === 'skill') return applySkillCommand(parsed.args);
+            if (parsed.name === 'compact') return applyCompactCommand(parsed.args);
             return null;
         }
 
@@ -2728,6 +2747,22 @@
             return 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc;
         }
 
+        function applyCompactCommand(args) {
+            const wanted = String(args || '').trim().toLowerCase();
+            if (wanted === 'on') {
+                setCompactSession(true);
+                return 'Compact session on — the model now receives a short recent history. The visible chat is unchanged.';
+            }
+            if (wanted === 'off') {
+                setCompactSession(false);
+                return 'Compact session off — the full history is sent again.';
+            }
+            if (wanted === 'status' || !wanted) {
+                return 'Compact session is ' + (compactSession ? 'on' : 'off') + '. `/compact on` sends a short recent history to save tokens; the visible chat never changes.';
+            }
+            return 'Usage: /compact on | off | status';
+        }
+
         async function runUseSkillTool(args) {
             const name = String(args.name || '').trim();
             if (!name) return 'Error: skill name is required';
@@ -2755,6 +2790,12 @@
         let generationId = 0;
         let autoRetryEnabled = true;
         let compactNotices = false;
+        // Compact session: send a short recent history instead of the full one.
+        // A context policy for token spend, not a destructive operation -- the
+        // visible transcript is untouched. Persisted so it survives a reload,
+        // because "cheaper until I say otherwise" is the useful shape of it.
+        const COMPACT_KEY = 'freeopenaiCompactSession';
+        let compactSession = localStorage.getItem(COMPACT_KEY) === '1';
         let turnStartedAt = 0;
         // Theme tables live with the other state, not beside the functions
         // that use them: applyTheme() runs during initializeApp(), so these
@@ -2764,6 +2805,18 @@
         const THEME_META = { dark: '#000000', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
+        // The extracted attachment module owns the pure file/image decisions.
+        // Keep the fallback names from chatlib so a cached or blocked module
+        // cannot make the composer unusable.
+        const attachmentHelpers = typeof FreeOpenAIAttachment !== 'undefined'
+            ? FreeOpenAIAttachment
+            : {
+                isDocumentFile,
+                isAttachableFile,
+                modelForImage,
+                withImageTurn,
+                storedImagePlan,
+            };
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -2776,8 +2829,25 @@
         // DOM.
         let transcriptPinned = true;
         let unreadWhileDetached = 0;
+        // The browser module is the state owner. The old local variables and
+        // branches below remain as a compatibility fallback for a cached page
+        // or a test harness that only loads chatlib.js.
+        const transcriptController = typeof FreeOpenAITranscript !== 'undefined'
+            ? FreeOpenAITranscript.createTranscriptController({
+                element: chatMessages,
+                pill: document.getElementById('scrollBottom'),
+                windowRef: window,
+                documentRef: document,
+                isTyping: () => isTyping,
+            })
+            : null;
+        if (transcriptController) transcriptController.attach();
 
         function updateScrollBottomPill() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.updateScrollBottomPill();
+                return;
+            }
             const pill = document.getElementById('scrollBottom');
             if (!pill) return;
             pill.classList.toggle('visible', !transcriptPinned);
@@ -2797,6 +2867,10 @@
         // re-checks the pin first so a reader who grabbed the scrollbar in
         // between keeps their place.
         function pinTranscriptToBottom() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.pinToBottom();
+                return;
+            }
             chatMessages.scrollTop = chatMessages.scrollHeight;
             if (typeof requestAnimationFrame !== 'function') return;
             let tries = 0;
@@ -2813,6 +2887,10 @@
         }
 
         function setTranscriptPinned(pinned) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.setPinned(pinned);
+                return;
+            }
             if (pinned === transcriptPinned) return;
             transcriptPinned = pinned;
             if (pinned) unreadWhileDetached = 0;
@@ -2823,6 +2901,9 @@
         // an arrival is allowed to drag the reader is a decision rather than an
         // accident of which function appended it.
         function appendToTranscript(el, source) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                return transcriptController.append(el, source);
+            }
             const detached = !transcriptPinned;
             chatMessages.appendChild(el);
             if (detached && announcesUnread(source)) unreadWhileDetached += 1;
@@ -2842,11 +2923,19 @@
         // Text growing inside a bubble that is already on screen: pinned keeps
         // up with it, detached is left where the reader put it.
         function scrollTranscript(source) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.scroll(source);
+                return;
+            }
             if (shouldFollowTranscript(source, transcriptPinned)) chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
         // Back to the newest output, and out of the detached state.
         function jumpToNewest() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.jumpToNewest();
+                return;
+            }
             unreadWhileDetached = 0;
             transcriptPinned = true;
             pinTranscriptToBottom();
@@ -2859,6 +2948,10 @@
         let layoutSettlingUntil = 0;
 
         chatMessages.addEventListener('scroll', () => {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.handleScroll();
+                return;
+            }
             const atBottom = transcriptAtBottom(chatMessages.scrollTop, chatMessages.scrollHeight, chatMessages.clientHeight);
             if (atBottom) unreadWhileDetached = 0;
             else if (Date.now() < layoutSettlingUntil) return;
@@ -2873,6 +2966,10 @@
         // arrives before it.
         let resizeSettle = 0;
         window.addEventListener('resize', () => {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.handleResize();
+                return;
+            }
             const wasPinned = transcriptPinned;
             layoutSettlingUntil = Date.now() + 600;
             if (resizeSettle) clearTimeout(resizeSettle);
@@ -2886,20 +2983,9 @@
             }, 150);
         });
 
-        // Some on-screen keyboards shrink the visual viewport without moving the
-        // layout viewport, which can strand the newest message under the keys.
-        // Two things follow: a pinned transcript stays pinned, and the body
-        // carries the keyboard state so the CSS can give up the status bar for
-        // the height instead. Guarded: the boot-test stub DOM has no
-        // visualViewport, so this is a no-op there.
-        if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
-            window.visualViewport.addEventListener('resize', () => {
-                const viewport = window.visualViewport;
-                const keyboard = !!(window.innerHeight && viewport.height < window.innerHeight - 120);
-                if (document.body && document.body.classList) document.body.classList.toggle('keyboard-open', keyboard);
-                if (transcriptPinned) chatMessages.scrollTop = chatMessages.scrollHeight;
-            });
-        }
+        // Keyboard-shrinks of the visual viewport (pinning the newest message
+        // above the keys, toggling the body's keyboard-open class) are owned by
+        // the transcript module, which attaches its own visualViewport listener.
         const chatInput = document.getElementById('chatInput');
         const sendButton = document.getElementById('sendButton');
         const modelTrigger = document.getElementById('modelTrigger');
@@ -3615,19 +3701,42 @@
             }
         }
 
+        // The active chat's files. Reading through this function means the
+        // tools always operate on the chat that is open; a chat with no files
+        // yet simply starts empty.
+        function activeWorkspace() {
+            const id = activeConversationId || 'legacy';
+            const current = workspaceFiles[id];
+            return current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+        }
+
+        function setActiveWorkspace(files) {
+            workspaceFiles = Object.assign({}, workspaceFiles);
+            workspaceFiles[activeConversationId || 'legacy'] = files;
+            saveWorkspaceFiles();
+        }
+
         function loadWorkspaceFiles() {
             try {
-                const parsed = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || '{}');
+                let parsed = {};
+                const raw = localStorage.getItem(WORKSPACE_KEY);
+                if (raw !== null) parsed = JSON.parse(raw) || {};
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.keys(parsed).length) {
+                    // The pre-per-chat build kept { path: text } under the old
+                    // key. Carry it in under 'legacy' rather than dropping it.
+                    parsed = JSON.parse(localStorage.getItem(WORKSPACE_LEGACY_KEY) || '{}') || {};
+                }
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-                // Re-checked on the way in: an entry written by an older build,
-                // or edited by hand, must not smuggle in a path the tools would
-                // refuse. The stored key is what the tools will look up, so a
-                // key that no longer normalises is dropped rather than renamed.
+                // A flat map of strings is that same old shape however it is
+                // found: its values are files, not per-chat maps.
+                if (Object.keys(parsed).length && Object.keys(parsed).every((k) => typeof parsed[k] === 'string')) {
+                    return { legacy: sanitizeWorkspace(parsed) };
+                }
                 const clean = {};
-                for (const path of Object.keys(parsed)) {
-                    if (normalizeWorkspacePath(path) === path && typeof parsed[path] === 'string') {
-                        clean[path] = parsed[path];
-                    }
+                for (const id of Object.keys(parsed)) {
+                    const files = parsed[id];
+                    if (!files || typeof files !== 'object' || Array.isArray(files)) continue;
+                    clean[id] = sanitizeWorkspace(files);
                 }
                 return clean;
             } catch (e) {
@@ -3636,9 +3745,26 @@
             }
         }
 
+        // Paths re-checked on the way in: an entry written by an older build,
+        // or edited by hand, must not smuggle in a path the tools would
+        // refuse. The stored key is what the tools will look up, so a key that
+        // no longer normalises is dropped rather than renamed.
+        function sanitizeWorkspace(parsed) {
+            const clean = {};
+            for (const path of Object.keys(parsed)) {
+                if (normalizeWorkspacePath(path) === path && typeof parsed[path] === 'string') {
+                    clean[path] = parsed[path];
+                }
+            }
+            return clean;
+        }
+
         function saveWorkspaceFiles() {
             try {
                 localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspaceFiles));
+                // Migrated once: the old flat store has been carried in, so
+                // keeping it would leave two copies that drift apart.
+                if (localStorage.getItem(WORKSPACE_LEGACY_KEY) !== null) localStorage.removeItem(WORKSPACE_LEGACY_KEY);
             } catch (e) {
                 // A full localStorage must not take the whole turn down with it.
                 showStatus('error', 'Could not save the workspace: ' + e.message);
@@ -3654,7 +3780,7 @@
         // put to the user first, and only a write that was approved is kept.
         async function runWorkspaceTool(name, args) {
             if (name === 'workspace_list_files') {
-                const listed = workspaceList(workspaceFiles, args.path);
+                const listed = workspaceList(activeWorkspace(), args.path);
                 if (listed.error) return 'Error: ' + listed.error;
                 if (!listed.entries.length) {
                     return listed.path ? 'No files under "' + listed.path + '".' : 'The workspace is empty.';
@@ -3666,12 +3792,12 @@
                     .join('\n');
             }
             if (name === 'workspace_read_file') {
-                const read = workspaceRead(workspaceFiles, args.path);
+                const read = workspaceRead(activeWorkspace(), args.path);
                 if (read.error) return 'Error: ' + read.error;
                 return read.content;
             }
             if (name === 'workspace_write_file') {
-                const written = workspaceWrite(workspaceFiles, args.path, args.content);
+                const written = workspaceWrite(activeWorkspace(), args.path, args.content);
                 // Size and path are known before asking, so the dialog can state
                 // exactly what will change instead of describing it vaguely.
                 if (written.error) return 'Error: ' + written.error;
@@ -3681,17 +3807,26 @@
                     'delete them from Settings.'
                 );
                 if (!approved) return 'The user declined this write. Do not try it again unless they ask.';
-                workspaceFiles = written.files;
-                saveWorkspaceFiles();
+                setActiveWorkspace(written.files);
                 return 'Wrote "' + written.path + '" (' + formatChars(written.chars) + '), ' +
                     written.totalFiles + ' file(s) in the workspace.';
             }
             return 'Error: unknown tool ' + name;
         }
 
+        // One map of chat id -> graph, so each chat keeps its own plan. The
+        // pre-per-chat build stored a single graph under the old key; it is
+        // carried into whatever chat is open first rather than dropped.
         function loadTaskGraph() {
             try {
-                return normalizeTaskGraph(JSON.parse(localStorage.getItem(TASK_KEY) || 'null'));
+                const raw = localStorage.getItem(TASK_KEY);
+                const map = raw === null ? {} : JSON.parse(raw);
+                if (map && typeof map === 'object' && !Array.isArray(map) && Object.keys(map).length) {
+                    const mine = map[activeConversationId];
+                    return mine ? normalizeTaskGraph(mine) : newTaskGraph();
+                }
+                const legacy = JSON.parse(localStorage.getItem(TASK_LEGACY_KEY) || 'null');
+                return legacy ? normalizeTaskGraph(legacy) : newTaskGraph();
             } catch (e) {
                 console.error('Failed to read the saved task list:', e);
                 return newTaskGraph();
@@ -3700,7 +3835,12 @@
 
         function saveTaskGraph() {
             try {
-                localStorage.setItem(TASK_KEY, JSON.stringify(taskGraph));
+                const raw = localStorage.getItem(TASK_KEY);
+                const map = raw === null ? {} : JSON.parse(raw);
+                const all = map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+                all[activeConversationId || 'legacy'] = taskGraph;
+                localStorage.setItem(TASK_KEY, JSON.stringify(all));
+                if (localStorage.getItem(TASK_LEGACY_KEY) !== null) localStorage.removeItem(TASK_LEGACY_KEY);
             } catch (e) {
                 showStatus('error', 'Could not save the task list: ' + e.message);
             }
@@ -3759,7 +3899,7 @@
             // for it to be wrong, and the panel is the one you can act on.
             if (status) {
                 status.textContent = totals.total
-                    ? renderTodoSummary(taskGraph) + ' — kept in this browser only, and carried between chats.'
+                    ? renderTodoSummary(taskGraph) + ' — kept in this browser only, private to this chat.'
                     : 'Empty. The plan the model records shows up beside the chat as it works.';
             }
 
@@ -4155,7 +4295,7 @@
             const list = document.getElementById('workspaceFileList');
             const status = document.getElementById('workspaceStatus');
             if (!list || !status) return;
-            const names = Object.keys(workspaceFiles).sort();
+            const names = Object.keys(activeWorkspace()).sort();
             list.innerHTML = '';
             if (!names.length) {
                 status.textContent = 'Empty. An empty scratch space of text files the model can read and write, kept in this browser only.';
@@ -4170,7 +4310,7 @@
                 name.textContent = path;
                 const size = document.createElement('span');
                 size.className = 'workspace-size';
-                size.textContent = formatChars(workspaceFiles[path].length);
+                size.textContent = formatChars(activeWorkspace()[path].length);
                 const download = document.createElement('button');
                 download.className = 'icon-btn-text';
                 download.textContent = 'Download';
@@ -4185,7 +4325,7 @@
         }
 
         function downloadWorkspaceFile(path) {
-            const text = workspaceFiles[path];
+            const text = activeWorkspace()[path];
             if (typeof text !== 'string') return;
             const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
             const link = document.createElement('a');
@@ -4196,11 +4336,11 @@
         }
 
         function deleteWorkspaceFile(path) {
-            if (!Object.prototype.hasOwnProperty.call(workspaceFiles, path)) return;
-            const next = Object.assign({}, workspaceFiles);
+            const current = activeWorkspace();
+            if (!Object.prototype.hasOwnProperty.call(current, path)) return;
+            const next = Object.assign({}, current);
             delete next[path];
-            workspaceFiles = next;
-            saveWorkspaceFiles();
+            setActiveWorkspace(next);
         }
 
         const githubShaCache = {};
@@ -4730,7 +4870,10 @@
             const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
             return [
                 { role: 'system', content: system },
-                ...buildChatHistory(messages.slice(0, -1)),
+                // Compact session swaps the budget, not the conversation: same
+                // rebuild, fewer turns, so the request is cheaper without the
+                // visible chat ever changing.
+                ...(compactSession ? compactChatHistory(messages.slice(0, -1)) : buildChatHistory(messages.slice(0, -1))),
                 {
                     role: 'user',
                     content: turnContext
@@ -5214,6 +5357,12 @@
         function clearAllHistory() {
             if (!confirm('Delete every saved chat? This cannot be undone.')) return;
             conversations = [];
+            try {
+                localStorage.removeItem(WORKSPACE_KEY);
+                localStorage.removeItem(TASK_KEY);
+                localStorage.removeItem(WORKSPACE_LEGACY_KEY);
+                localStorage.removeItem(TASK_LEGACY_KEY);
+            } catch { /* nothing to clear */ }
             activeConversationId = newConversationId();
             messages = [];
             usageCount = 0;
@@ -5348,7 +5497,13 @@
                 return;
             }
 
-            const generateImage = imageMode || detectsImageIntent(raw);
+            // One decision for the whole turn, from chatlib: an attached image
+            // makes any image request an edit of that image, never a fresh
+            // text-to-image generation -- which is how "change the color of my
+            // car" drew a poster of a car instead of editing the picture.
+            const imageActionTaken = imageAction(raw, !!attachedImageFile, imageMode);
+            const generateImage = imageActionTaken !== 'chat';
+            const editImage = imageActionTaken === 'edit' && attachedImageFile;
             if (imageMode) toggleImageMode();
 
             const attachedImageFile = pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.file : null;
@@ -5374,6 +5529,10 @@
             // Held so a failure can keep what the tool loop already paid for.
             let inFlightConvo = null;
 
+            if (editImage) {
+                await sendImageEdit(raw, attachedImageFile, runId, controller);
+                return;
+            }
             if (generateImage) {
                 await sendImageGeneration(raw, runId, controller);
                 return;
@@ -5677,6 +5836,65 @@
         function puterCanDraw() {
             return typeof puter !== 'undefined' && !!puter.ai &&
                 (!puter.auth || typeof puter.auth.isSignedIn !== 'function' || puter.auth.isSignedIn());
+        }
+
+        // The source for an image edit. An attachment is re-encoded to fit the
+        // endpoint; the request always carries the source, so the model is
+        // never asked to imagine what "the attached image" looked like.
+        async function imageEditSource(attachedFile, signal) {
+            if (!attachedFile) throw new Error('no image to edit');
+            const dataUrl = await imageDataUrlForRequest(attachedFile);
+            if (!dataUrl) throw new Error('that image could not be read — try a smaller one');
+            return dataUrl;
+        }
+
+        // An attached image plus an edit request goes here, not to txt2img and
+        // not to a vision chat: those are the two paths that produced a poster
+        // of the car instead of a recoloured one.
+        async function sendImageEdit(promptText, attachedFile, runId = generationId, controller = currentAbort) {
+            let bubble = null;
+            let filled = false;
+            const startedAt = Date.now();
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                const source = await imageEditSource(attachedFile, controller.signal);
+                if (!isActiveRun(runId, controller)) return;
+                bubble = createImageBubble();
+                const res = await fetch('/api/llm/images/edits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: promptText, image: source }),
+                    signal: controller.signal,
+                });
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'the edit route refused the request');
+                const url = imageUrlFrom(data);
+                if (!url) throw new Error('the edit route returned no image');
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
+                removeTypingIndicator();
+                fillImageBubble(bubble, promptText + ' (edit of your image)', url);
+                filled = true;
+                showStatus('success', 'Edited image ready');
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Edit stopped');
+                    return;
+                }
+                console.error('Image edit failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                const instant = Date.now() - startedAt < 2000 ? 'The request failed instantly (often a missing NARA_IMAGE_MODEL): ' : '';
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error editing image: ' + instant + msg, { error: true });
+            } finally {
+                releaseRun(controller);
+            }
         }
 
         // One place that produces an image, so the composer and the variations
@@ -6799,6 +7017,7 @@
             if (cnc) cnc.checked = compactNotices;
             if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
             applyTheme(localStorage.getItem('puterChatTheme') || 'dark');
+            applyCompactSession();
             updateModelLabel();
             updateEffortPicker();
         }
@@ -6816,6 +7035,21 @@
             } catch { /* stub DOM */ }
             const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactNoticesCheck');
             if (box) box.checked = compactNotices;
+        }
+
+        // The settings half of compact. Kept beside setCompactNotices so both
+        // context controls read the same way, and made to agree with the state
+        // whoever changed it -- the command and the checkbox are one switch.
+        function setCompactSession(on) {
+            compactSession = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem(COMPACT_KEY, compactSession ? '1' : '0'); } catch { /* private mode */ }
+            applyCompactSession();
+            showStatus('info', compactSession ? 'Compact session on — fewer tokens sent' : 'Compact session off');
+        }
+
+        function applyCompactSession() {
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactCheck');
+            if (box) box.checked = compactSession;
         }
 
         // Server limits, shown in Settings so the enforced numbers live in one
@@ -7105,6 +7339,12 @@
             }
             writeConversations();
             renderHistoryList();
+            // The session belongs to the chat that is now open: its todos and
+            // workspace replace whatever the startup read under no id.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
             // The chat reopened with whatever it had pinned; a brand-new one has none.
             syncActiveSkillsFromConversation();
             syncDismissedSuggestionsFromConversation();
@@ -7234,7 +7474,33 @@
             messages = convo.messages;
             renderActiveConversation();
             writeConversations();
+            // The chat's own session comes with it: its todos and workspace.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
             if (isNarrowScreen()) toggleHistory(false, false);
+        }
+
+        // A deleted chat's session state must not sit in storage forever: its
+        // todos and workspace files go with it.
+        function forgetConversationState(id) {
+            if (!id) return;
+            try {
+                const ws = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || '{}');
+                if (ws && typeof ws === 'object' && !Array.isArray(ws) && Object.prototype.hasOwnProperty.call(ws, id)) {
+                    delete ws[id];
+                    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
+                }
+            } catch { /* nothing to forget */ }
+            try {
+                const tg = JSON.parse(localStorage.getItem(TASK_KEY) || '{}');
+                if (tg && typeof tg === 'object' && !Array.isArray(tg) && Object.prototype.hasOwnProperty.call(tg, id)) {
+                    delete tg[id];
+                    localStorage.setItem(TASK_KEY, JSON.stringify(tg));
+                }
+            } catch { /* nothing to forget */ }
+            if (readMemoryOwner === id) { readMemory = null; readMemoryOwner = ''; }
         }
 
         function startNewConversation() {
@@ -7248,6 +7514,12 @@
             messages = [];
             usageCount = 0;
             updateUsageDisplay();
+            // A new chat is a new session: the todo list and the workspace
+            // start empty with it, and the previous chat keeps what it had.
+            taskGraph = newTaskGraph();
+            renderTaskList();
+            workspaceFiles = {};
+            renderWorkspaceFiles();
             renderActiveConversation();
             writeConversations();
             if (isNarrowScreen()) toggleHistory(false, false);
@@ -7259,6 +7531,9 @@
             if (!convo) return;
             if (convo.messages.length && !confirm('Delete "' + convo.title + '"? This cannot be undone.')) return;
             conversations = conversations.filter((c) => c.id !== id);
+            // The chat's todos and workspace files are its session; they go
+            // with it instead of sitting in storage forever.
+            forgetConversationState(id);
             if (id === activeConversationId) {
                 const next = sortConversations(conversations)[0];
                 if (next) {
@@ -7268,6 +7543,11 @@
                     activeConversationId = newConversationId();
                     messages = [];
                 }
+                // The surviving chat's session is now the active one.
+                taskGraph = loadTaskGraph();
+                renderTaskList();
+                workspaceFiles = loadWorkspaceFiles();
+                renderWorkspaceFiles();
                 renderActiveConversation();
             }
             writeConversations();

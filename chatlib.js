@@ -569,6 +569,7 @@ const CHAT_COMMANDS = [
   { name: 'skills', usage: '/skills', desc: 'Show what this chat is using' },
   { name: 'mode', usage: '/mode chat | plan | build', desc: 'Switch mode' },
   { name: 'clear', usage: '/clear', desc: 'Start a new chat — this one stays in the sidebar' },
+  { name: 'compact', usage: '/compact on | off | status', desc: 'Reduce sent history for this session without changing the visible chat' },
 ];
 
 // What a line typed into the composer means:
@@ -815,15 +816,48 @@ function isAttachableFile(filename) {
 
 // Catches plain-language image requests ("generate an image of a fox",
 // "draw me a logo") typed into normal chat, without requiring the user to
-// notice the dedicated image-mode toggle first. Deliberately conservative —
-// requires an image-ish noun right after the verb (optionally through
-// "me"/"us"/"a"/"an") — so it doesn't fire on prose that merely mentions
-// "image" elsewhere, e.g. "make a plan for my image website".
+// notice the dedicated image-mode toggle first. The first pattern is deliberately
+// strict; the second accepts a useful noun later in the phrase ("create a
+// futuristic scene for...") without treating "make a plan for my image website"
+// as a drawing request.
 const IMAGE_INTENT_PATTERN =
-  /^(?:please\s+)?(generate|create|draw|make|design|paint|render)\s+(?:me\s+|us\s+)?(?:an?\s+)?(image|picture|photo|photograph|illustration|graphic|logo|icon|artwork|drawing|sketch|wallpaper|poster|banner|avatar)\b/i;
+  /^(?:please\s+)?(generate|create|draw|make|design|paint|render|illustrate|visualize|produce|compose)\s+(?:me\s+|us\s+)?(?:an?\s+)?(image|picture|photo|photograph|illustration|graphic|logo|icon|artwork|drawing|sketch|wallpaper|poster|banner|avatar|visual|scene|character|landscape|art)\b/i;
+const IMAGE_EDIT_PATTERN =
+  /\b(edit|modify|alter|recolor|recolour|retouch|transform|replace|remove|add|change|turn|swap)\b[\s\S]{0,100}\b(color|colour|background|object|person|car|vehicle|text|logo|style|lighting|image|photo|picture)\b/i;
+const IMAGE_EDIT_REVERSE_PATTERN =
+  /\b(color|colour|background|object|person|car|vehicle|text|logo|style|lighting|image|photo|picture)\b[\s\S]{0,100}\b(change|edit|modify|alter|recolor|recolour|retouch|transform|replace|remove|add|turn|swap)\b/i;
 
 function detectsImageIntent(text) {
-  return IMAGE_INTENT_PATTERN.test(String(text).trim());
+  const value = String(text || '').trim();
+  if (IMAGE_INTENT_PATTERN.test(value)) return true;
+  if (!/\b(generate|create|draw|make|design|paint|render|illustrate|visualize|produce|compose)\b/i.test(value)) return false;
+  const imageWords = /\b(image|picture|photo|photograph|illustration|graphic|logo|icon|artwork|drawing|sketch|wallpaper|poster|banner|avatar|visual|scene|character|landscape|art)\b/i;
+  if (!imageWords.test(value)) return false;
+  // A prose noun that appears after a planning/software noun is not an image
+  // request: "make a plan for my image website" is about a website. A request
+  // whose image noun comes first remains valid: "create an image for my site".
+  const imageAt = value.search(imageWords);
+  const proseAt = value.search(/\b(plan|website|web\s+app|spreadsheet|budget|api|function|component|code|documentation)\b/i);
+  if (proseAt >= 0 && proseAt < imageAt) return false;
+  return true;
+}
+
+function detectsImageEditIntent(text) {
+  const value = String(text || '').trim();
+  return IMAGE_EDIT_PATTERN.test(value) || IMAGE_EDIT_REVERSE_PATTERN.test(value);
+}
+
+// The action is explicit so an attached-image edit can never fall through to a
+// fresh text-to-image request or to an ordinary chat turn. `forced` is the image
+// toggle; an attached image plus an edit verb wins over it because preserving the
+// source is the user's stronger instruction.
+function imageAction(text, hasImage = false, forced = false) {
+  // An attached source is the stronger instruction: any image request that
+  // arrives with it must be image-to-image, never a fresh text-only generation.
+  // A plain vision question still falls through to chat.
+  if (hasImage && (detectsImageEditIntent(text) || detectsImageIntent(text) || forced)) return 'edit';
+  if (forced) return 'generate';
+  return detectsImageIntent(text) ? 'generate' : 'chat';
 }
 
 // Applies **bold**, *italic*, `inline code`, fenced code blocks, -/1. lists and
@@ -2185,7 +2219,19 @@ function buildChatHistory(messages, limit = MAX_HISTORY_MESSAGES, budget = HISTO
   return recent;
 }
 
+// Compact session mode is deliberately a context policy, not a destructive
+// conversation operation. The visible transcript and local history stay intact;
+// only the next provider request receives a smaller, recent exchange. Keeping
+// this as a named helper makes the token-saving tradeoff inspectable and testable.
+const COMPACT_HISTORY_MESSAGES = 6;
+const COMPACT_HISTORY_TOKEN_BUDGET = 10000;
+
+function compactChatHistory(messages, budget = COMPACT_HISTORY_TOKEN_BUDGET) {
+  return buildChatHistory(messages, COMPACT_HISTORY_MESSAGES, budget);
+}
+
 // A tool result that comes back enormous -- a generated bundle, a long page, a
+
 // CSV -- is paid for again on every remaining round of the turn, because each
 // round re-sends the conversation. Clipping it once, with the loss stated, tells
 // the model there is more without buying the same bytes a dozen times over.
@@ -3351,6 +3397,8 @@ if (typeof module !== 'undefined' && module.exports) {
     isAttachableFile,
     renderMarkdownLite,
     detectsImageIntent,
+    detectsImageEditIntent,
+    imageAction,
     VISION_MODEL_IDS,
     DEFAULT_VISION_MODEL,
     isVisionCapable,
@@ -3448,6 +3496,9 @@ if (typeof module !== 'undefined' && module.exports) {
     conversationToMarkdown,
     MAX_HISTORY_MESSAGES,
     buildChatHistory,
+    COMPACT_HISTORY_MESSAGES,
+    COMPACT_HISTORY_TOKEN_BUDGET,
+    compactChatHistory,
     SYSTEM_PROMPT,
     PUTER_PROVIDER,
     normalizeProviderReply,
