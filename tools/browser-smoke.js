@@ -203,6 +203,22 @@ async function main() {
             actionsScrolls: actions.scrollWidth > actions.clientWidth + 1,
             attach: place(el('#attachTrigger')),
             sessionChip: place(el('#sessionChip')),
+            // Every control in the strip, and whether it is actually on the
+            // screen. Existence was all this used to check, which is how three
+            // dead CSS clamps went unnoticed: the phone rules for the model name
+            // and the effort picker were written at a lower specificity than the
+            // desktop ones, so a 360px screen rendered desktop widths, the strip
+            // overflowed by 80px, and the mode chip sat entirely past the right
+            // edge with no scrollbar to suggest it was there.
+            strip: ['#sessionChip', '.model-trigger', '#providerSelect', '#effortChip', '#modeChip']
+              .map((selector) => {
+                const node = el(selector);
+                if (!node || getComputedStyle(node).display === 'none') return null;
+                const at = place(node);
+                const r = node.getBoundingClientRect();
+                return { id: selector, inView: at.inView, width: Math.round(r.width), height: Math.round(r.height) };
+              })
+              .filter(Boolean),
             // The pickers that made this row too long are gone; one coming back
             // is the regression this notices.
             imageProviderSelect: !!el('#imageProviderSelect'),
@@ -400,6 +416,18 @@ async function main() {
       if (c.skillToggles) throw new Error(name + ' still has the skill chips in the composer');
       if (!c.sessionChip) throw new Error(name + ' has no way to reach the session panel from the composer');
       if (c.actionsScrolls) throw new Error(name + ' lets the actions group scroll');
+      // A control the layout has pushed off the screen is a control that is not
+      // there. The strip may scroll, but nothing in it may be unreachable: at
+      // 360px this caught the mode chip sitting wholly past the right edge.
+      const stranded = c.strip.filter((control) => !control.inView);
+      if (stranded.length) {
+        throw new Error(name + ' pushes composer controls off the screen: ' + JSON.stringify(stranded));
+      }
+      // And each one stays a real target. 30px is under the 38px a landscape
+      // phone uses and the 44px portrait does, so it only fires if a control has
+      // collapsed rather than merely tightened.
+      const tiny = c.strip.filter((control) => control.height < 30 || control.width < 24);
+      if (tiny.length) throw new Error(name + ' collapses composer controls: ' + JSON.stringify(tiny));
       if (!c.attach) throw new Error(name + ' has no attach button');
       if (!c.attach.inView) throw new Error(name + ' puts the attach button off screen: ' + JSON.stringify(c.attach));
       const sameRow = Math.abs(c.settings.top - c.actions.top) <= 2;

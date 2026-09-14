@@ -1635,6 +1635,8 @@
             #refreshBtn { display: none; }
             #viewChat .chat-bar-title span:last-child { display: none; }
             .model-trigger span#modelLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .composer-controls .model-trigger #modelLabel,
+            .composer-model-controls #modelLabel { max-width: 84px; }
             .chat-messages { padding: 14px 12px; gap: 22px; }
             .message { max-width: 96%; }
             .message.user { max-width: 88%; }
@@ -1652,8 +1654,13 @@
                 font-size: 16px;
             }
             /* A phone header can't hold "Effort: extra high" and still leave room
-               for the menu button, so the picker shows the level alone. */
+               for the menu button, so the picker shows the level alone.
+               Written against .composer-controls on purpose: the unconditional
+               rule for these two is `.composer-controls .effort-select,
+               .composer-controls #providerSelect`, and a bare `.effort-select`
+               here lost to it on specificity at every width. */
             .effort-select { max-width: 92px; padding: 6px 4px; }
+            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 92px; padding: 6px 4px; }
             /* One row, one height. A 44px select beside a 30px chip is most of
                what made a phone toolbar look assembled rather than designed, so
                every control in the row is a finger target. min-height beats the
@@ -1803,7 +1810,10 @@
             #viewChat .chat-bar-title .dot,
             #viewChat .chat-bar-title span { display: none; }
             .effort-select { max-width: 76px; }
+            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 76px; }
             .model-trigger span#modelLabel { max-width: 68px; }
+            .composer-controls .model-trigger #modelLabel,
+            .composer-model-controls #modelLabel { max-width: 68px; }
             /* The mode chip joined the composer row; on a 360px screen its
                desktop padding is what pushes the input too small. */
             .mode-chip { padding: 4px 8px; font-size: 10px; }
@@ -1814,6 +1824,37 @@
                the header tightens around it instead. */
             .chat-bar-actions { gap: 0; }
             .chat-bar-actions .icon-btn { width: 28px; height: 28px; }
+        }
+
+        /* Phones, upright -- all of them, not just the narrow ones.
+           Five controls at their full size want 383px of row. A 390px phone, the
+           most common width there is, gives the row 350px, so the mode chip sat
+           entirely past the right edge with no scrollbar to suggest it was there.
+           The threshold is content, not a round number: row width is the viewport
+           less 40px of padding, so anything under about 423px overflows, and 440px
+           covers every phone in portrait (320 through 430) with room to spare.
+
+           Tightening first, wrapping second. Padding and the decorative glyph on
+           the model button go; the labels stay, because "Chat" and "Session" are
+           the whole content of those chips, and the chevron stays because it is
+           what says the button opens. That gets the common case onto one row at no
+           cost in height. Hiding a control instead was the wrong trade: the
+           provider picker is the only way to change service, and the model
+           dropdown lists models alone. */
+        @media (max-width: 440px) {
+            .session-chip, .mode-chip, .effort-chip { padding-inline: 6px; }
+            .composer-model-controls { gap: 3px; }
+            .composer-model-controls .model-trigger > svg:first-of-type { display: none; }
+            .composer-controls .model-trigger { gap: 4px; }
+        }
+
+        /* And when tightening is not enough -- a long provider name, a model name
+           that will not shorten -- the row wraps rather than hiding its tail.
+           Height is the axis with room in portrait, where the composer is a
+           quarter of the screen. The min-height keeps this away from the landscape
+           layout, where height is the scarce one and the row has width to spare. */
+        @media (max-width: 440px) and (min-height: 521px) {
+            .composer-settings { flex-wrap: wrap; overflow-x: visible; row-gap: 6px; }
         }
 
         /* A 1440px desktop used to be "not wide enough for history + skills +
@@ -1849,6 +1890,7 @@
             .chat-messages { padding: 12px; gap: 16px; }
             .composer { padding: 6px; border-radius: 18px; }
             .composer-model-controls { gap: 2px; }
+            .composer-controls .model-trigger #modelLabel,
             .composer-model-controls #modelLabel { max-width: 92px; }
             .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
             .session-chip, .mode-chip { padding-inline: 8px; }
@@ -1865,6 +1907,20 @@
             .chat-shell.history-hidden .history-sidebar { width: 34%; max-width: 300px; }
             .session-panel,
             .chat-shell.session-hidden .session-panel { width: 34%; max-width: 300px; }
+        }
+
+        /* One row again, for a landscape phone wide enough to hold it.
+           The shared small-screen layer splits the actions off onto their own
+           line, and it is right to: on a 360px screen six controls in one row
+           pushed attach and send off the edge. Landscape has the opposite
+           problem. There the row needs 421px and has 808px, so the split buys
+           nothing and costs 44px of height -- a quarter of the transcript, in
+           the orientation where height is the scarce axis.
+           The 641px floor keeps the split for a landscape phone that really is
+           narrow, where the original reasoning still applies. */
+        @media (max-height: 520px) and (orientation: landscape) and (min-width: 641px) {
+            .composer-controls { flex-wrap: nowrap; }
+            .composer-settings { flex: 1 1 auto; }
         }
     </style>
 </head>
