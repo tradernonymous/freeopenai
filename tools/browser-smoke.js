@@ -396,6 +396,96 @@ async function main() {
       }
     }
 
+    // The shape a prompt will be drawn at is shown while it can still be
+    // changed, in the row that already exists. Driven through the real
+    // textarea, so this is the shipped handler and not a description of it.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: url + '-size-hint' });
+    await waitFor(() => evaluate('!!document.getElementById("chatInput")'), 'size hint page');
+    await sleep(300);
+    const sizeHint = await evaluate(`(() => {
+      // The mode is set, not toggled: two cases in a row that both want it on
+      // would otherwise cancel each other out and the second would test a state
+      // nobody asked for.
+      const type = (text, wantMode) => {
+        if (imageMode !== wantMode) toggleImageMode();
+        chatInput.value = text;
+        chatInput.dispatchEvent(new Event('input'));
+        const hint = document.getElementById('sizeHint');
+        const row = hint.getBoundingClientRect();
+        const input = chatInput.getBoundingClientRect();
+        return {
+          hidden: hint.hidden, text: hint.textContent, title: hint.title,
+          besideInput: Math.abs(row.top - input.top) < input.height,
+          onScreen: row.left >= -1 && row.right <= innerWidth + 1,
+        };
+      };
+      const out = {
+        wide: type('draw a 16:9 banner for the shop front', true),
+        spelled: type('a 1536x1024 photo of a harbour', true),
+        plain: type('draw a fox', true),
+        chat: type('a 16:9 banner for the shop front', false),
+        cleared: type('', false),
+      };
+      // Put the page back the way it was found.
+      chatInput.value = '';
+      chatInput.dispatchEvent(new Event('input'));
+      if (chatInput.placeholder !== 'Ask anything...') toggleImageMode();
+      return out;
+    })()`);
+    console.log('size hint: ' + JSON.stringify(sizeHint));
+    if (sizeHint.wide.hidden || sizeHint.wide.text !== '16:9') {
+      throw new Error('a 16:9 prompt did not show 16:9: ' + JSON.stringify(sizeHint.wide));
+    }
+    if (!/1536x864/.test(sizeHint.wide.title)) {
+      throw new Error('the hint did not say which pixels 16:9 means: ' + JSON.stringify(sizeHint.wide));
+    }
+    if (!sizeHint.wide.besideInput || !sizeHint.wide.onScreen) {
+      throw new Error('the hint is not in the input row: ' + JSON.stringify(sizeHint.wide));
+    }
+    if (sizeHint.spelled.hidden || sizeHint.spelled.text !== '3:2') {
+      throw new Error('a spelled-out size was not read: ' + JSON.stringify(sizeHint.spelled));
+    }
+    for (const quiet of ['plain', 'chat', 'cleared']) {
+      if (!sizeHint[quiet].hidden) {
+        throw new Error(quiet + ' promised a shape it will not send: ' + JSON.stringify(sizeHint[quiet]));
+      }
+    }
+
+    // The same hint on the screen with the least room for it: it sits in the
+    // input row beside a textarea that has to keep typing room, so the row is the
+    // thing to look at rather than the pill.
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 640, deviceScaleFactor: 1, mobile: true });
+    await send('Page.navigate', { url: url + '-size-hint-phone' });
+    await waitFor(() => evaluate('!!document.getElementById("chatInput")'), 'phone size hint page');
+    await sleep(300);
+    const phoneHint = await evaluate(`(() => {
+      if (imageMode !== true) toggleImageMode();
+      chatInput.value = 'draw a 16:9 banner for the shop front';
+      chatInput.dispatchEvent(new Event('input'));
+      const hint = document.getElementById('sizeHint');
+      const row = document.querySelector('.composer-input-row').getBoundingClientRect();
+      const box = hint.getBoundingClientRect();
+      const send = document.getElementById('sendButton').getBoundingClientRect();
+      return {
+        text: hint.textContent, hidden: hint.hidden,
+        inRow: box.width > 0 && box.top >= row.top - 1 && box.bottom <= row.bottom + 1,
+        typingRoom: Math.round(chatInput.getBoundingClientRect().width),
+        sendInView: send.right <= innerWidth + 1 && send.left >= -1,
+        overflow: document.documentElement.scrollWidth > innerWidth + 1,
+      };
+    })()`);
+    console.log('size hint on a 360px phone: ' + JSON.stringify(phoneHint));
+    if (phoneHint.hidden || phoneHint.text !== '16:9') {
+      throw new Error('the size hint is not shown on a phone: ' + JSON.stringify(phoneHint));
+    }
+    if (!phoneHint.inRow || !phoneHint.sendInView || phoneHint.overflow) {
+      throw new Error('the size hint breaks the composer on a phone: ' + JSON.stringify(phoneHint));
+    }
+    if (phoneHint.typingRoom < 120) {
+      throw new Error('the size hint leaves no room to type: ' + JSON.stringify(phoneHint));
+    }
+
     // The panels float, so opening one must not resize the conversation, must
     // not sit on the composer, and must not land on its neighbour.
     for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {

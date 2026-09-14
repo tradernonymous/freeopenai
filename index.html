@@ -1221,6 +1221,17 @@
             transition: var(--transition);
         }
         .composer-input-row { display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+        /* The size the prompt asks for, shown while it can still be changed.
+           Until now the only place it appeared was the status line after the
+           picture arrived -- one turn too late to do anything about. */
+        .size-hint {
+            flex-shrink: 0; align-self: flex-end; margin-bottom: 3px;
+            padding: 3px 8px; border-radius: var(--ctl-r);
+            background: var(--ctl-bg); border: 1px solid var(--ctl-edge);
+            color: var(--text-dim); font-size: 11px; font-weight: 500;
+            line-height: 1.4; white-space: nowrap;
+        }
+        .size-hint[hidden] { display: none; }
         /* The controls are two groups rather than one long row: the actions
            (attach, draw) and the settings that answer "with what". On a wide
            screen they sit side by side, which is all the old single row was;
@@ -1959,7 +1970,11 @@
                         <div class="skill-bar" id="skillBar" hidden aria-label="Skills pinned to this chat"></div>
                         <div class="composer">
                             <div class="composer-input-row">
-                                <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this)" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                                <textarea class="composer-input" id="chatInput" placeholder="Ask anything..." rows="1" enterkeyhint="send" oninput="autoResize(this); updateImageSizeHint()" onkeydown="handleKeyDown(event)" aria-label="Message input"></textarea>
+                                <!-- The shape these words will be drawn at, read the way
+                                     the request reads it. In this row on purpose: a hint
+                                     that costs a row of height is a control. -->
+                                <span class="size-hint" id="sizeHint" hidden></span>
                                 <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                             </div>
                             <div class="composer-controls" aria-label="Chat controls">
@@ -5870,11 +5885,62 @@
             sendPrompt(userText);
         }
 
+        // What shape the words in the composer will be drawn at.
+        //
+        // The size a request carries is read out of the prompt, and the only
+        // place that showed it was the status line *after* the picture arrived --
+        // one turn too late to do anything about, which is exactly how "I asked
+        // for a size and got a square" survived being noticed. This is the same
+        // reading, shown while it can still be changed.
+        //
+        // Two things keep it honest. It appears only for a turn the app would
+        // treat as image work, which is the same question the request asks before
+        // it sends a size anywhere; and with a *picture* attached it reads only a
+        // spelled-out size, because an attached picture is what forces the turn to
+        // be an edit and an edit ignores shape words. A hint that offered a shape
+        // the request would not send would be worse than no hint at all.
+        //
+        // The one case it cannot know is a chat that already shows a picture and
+        // has nothing attached: that turn may be an edit (a shape word dropped) or
+        // a generation (a shape word read). It reads words there, and the status
+        // line says what actually happened either way.
+        function imageAttachmentIsPending() {
+            return !!(pendingAttachment && pendingAttachment.kind === 'image');
+        }
+
+        function imageWorkIsPossible(text) {
+            if (!text) return false;
+            return !!pendingAttachment || imageAction(text, imageAttachmentIsPending(), imageMode) !== 'chat';
+        }
+
+        function updateImageSizeHint() {
+            const hint = document.getElementById('sizeHint');
+            if (!hint) return;
+            const text = chatInput ? String(chatInput.value || '') : '';
+            const size = imageWorkIsPossible(text)
+                ? imageSizeFromPrompt(text, { words: !imageAttachmentIsPending() })
+                : null;
+            if (!size) {
+                hint.hidden = true;
+                hint.textContent = '';
+                hint.removeAttribute('title');
+                return;
+            }
+            const pixels = imageSizeBody(size);
+            hint.textContent = size.label;
+            hint.title = 'Drawn at ' + pixels + ' — name a shape ("16:9", "1024x1024") to change it';
+            hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels);
+            hint.hidden = false;
+        }
+
         function toggleImageMode() {
             imageMode = !imageMode;
             imageModeBtn.classList.toggle('active', imageMode);
             imageModeBtn.setAttribute('aria-pressed', String(imageMode));
             chatInput.placeholder = imageMode ? 'Describe an image to generate...' : 'Ask anything...';
+            // The toggle decides whether a turn is image work, and that decides
+            // whether the size in these words is going to be used at all.
+            updateImageSizeHint();
         }
 
         // The three first-run starters on the hero.
@@ -6022,6 +6088,7 @@
                 addMessage('user', raw);
                 chatInput.value = '';
                 chatInput.style.height = '36px';
+                updateImageSizeHint();
                 if (commandReply) addMessage('system', commandReply);
                 persistMessages();
                 return;
@@ -6061,6 +6128,7 @@
             setSkillSuggestion(null);
             chatInput.value = '';
             chatInput.style.height = '36px';
+            updateImageSizeHint();
             setComposerBusy(true);
             const runId = ++generationId;
             const controller = new AbortController();
@@ -6128,19 +6196,19 @@
                         return;
                     }
                     if (!isActiveRun(runId, controller)) return;
-                    await sendImageEdit(imagePrompt, source, runId, controller);
+                    await sendImageEdit(imagePrompt, source, runId, controller, { sizeFrom: raw });
                     return;
                 }
                 // No attachment, so the edit is of the picture this chat already
                 // shows. Named on screen, so the result is not a surprise.
                 if (previousImage) {
                     addMessage('system', 'Editing the last image in this chat.');
-                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image' });
+                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image', sizeFrom: raw });
                     return;
                 }
             }
             if (actionTaken === 'generate') {
-                await sendImageGeneration(imagePrompt, runId, controller);
+                await sendImageGeneration(imagePrompt, runId, controller, { sizeFrom: raw });
                 return;
             }
 
@@ -6593,7 +6661,13 @@
             // An edit reads only what was spelled out. Shape words are left to
             // generations, because "make the poster blue" is about a picture that
             // already exists and reshaping it would crop what was not asked about.
-            const size = imageSizeFromPrompt(promptText, { words: kind !== 'edit' });
+            //
+            // Read from the user's own words when the caller passes them, because
+            // the prompt that reaches the image model may be the planner's rewrite
+            // of it -- and a rewrite that drops the ratio is not a reason to draw
+            // something else. This is also the text the composer's size hint reads,
+            // so what the hint promises and what the request sends cannot disagree.
+            const size = imageSizeFromPrompt(options.sizeFrom || promptText, { words: kind !== 'edit' });
             // Which service the conversation is on, when it is not Puter. Sent as a
             // preference rather than a pin: the route asks that service first and
             // keeps the rest of its order behind it, so a model that turns out not
@@ -6692,6 +6766,7 @@
             const urls = await imageSourceFrom('edit', promptText, sourceDataUrl, signal, {
                 mask: opts.mask || '',
                 notes,
+                sizeFrom: opts.sizeFrom,
                 outcome: opts.outcome,
             });
             return urls[0];
@@ -6721,7 +6796,7 @@
                 usageCount++;
                 updateUsageDisplay();
                 bubble = createImageBubble();
-                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes: outcome.notes, outcome });
+                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes: outcome.notes, sizeFrom: options.sizeFrom, outcome });
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
@@ -6756,6 +6831,7 @@
             const urls = await imageSourceFrom('generate', promptText, '', signal, {
                 count: opts.count || 1,
                 notes: opts.notes,
+                sizeFrom: opts.sizeFrom,
                 outcome: opts.outcome,
             });
             return urls[0];
@@ -6772,6 +6848,7 @@
             const urls = await imageSourceFrom('generate', promptText, '', signal, {
                 count: wanted,
                 notes: opts.notes,
+                sizeFrom: opts.sizeFrom,
                 outcome: opts.outcome,
             });
             while (urls.length < wanted) {
@@ -6780,7 +6857,7 @@
             return urls.slice(0, wanted);
         }
 
-        async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort) {
+        async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort, options = {}) {
             let bubble = null;
             let filled = false;
             const outcome = { notes: [] };
@@ -6790,7 +6867,7 @@
                 updateUsageDisplay();
 
                 bubble = createImageBubble();
-                const imageSrc = await generateImageSource(promptText, controller.signal, { outcome });
+                const imageSrc = await generateImageSource(promptText, controller.signal, { sizeFrom: options.sizeFrom, outcome });
 
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
@@ -8082,6 +8159,9 @@
             attachmentName.textContent = '';
             attachmentThumb.hidden = true;
             attachmentThumb.src = '';
+            // An attachment is what makes the next turn an edit rather than a
+            // generation, and an edit reads only a spelled-out size.
+            updateImageSizeHint();
         }
 
         function loadUserPreferences() {
