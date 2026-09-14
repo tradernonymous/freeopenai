@@ -4772,6 +4772,33 @@
                 : 'Every step of a turn uses ' + selectedModel);
         }
 
+        // The models the current service lists. Puter's catalogue is the built-in
+        // one and never loads over the network, so providerModels is empty there
+        // and anything that ranks models has to read MODELS instead.
+        function routableModels() {
+            return selectedProvider === PUTER_PROVIDER ? MODELS : providerModels;
+        }
+
+        // The model to run the image planner on, or null to leave it where it is.
+        //
+        // The planner is a classifier: one message in, a few fields out. Sending
+        // it to a flagship pays the conversation's per-token price for a routing
+        // decision, and on Puter that is credits from an allowance that does not
+        // roll over. The user's own routing switch governs it, because it is the
+        // same trade it already describes.
+        function routeForPlanner() {
+            return routeClassifier({
+                mode: routingMode,
+                model: selectedModel,
+                models: routableModels(),
+                // Puter publishes no prices, so several of its models tie as
+                // "the small one"; the app's own default breaks that tie rather
+                // than whichever id sorts first.
+                preferred: selectedProvider === PUTER_PROVIDER ? DEFAULT_MODEL : '',
+                refused: refusedModelIds(modelsRefusedBy, selectedProvider),
+            });
+        }
+
         // The model to ask for one step, or null to leave the step on the model
         // the user chose. One function so the loop cannot disagree with itself
         // about which steps are worth moving.
@@ -5233,7 +5260,11 @@
         // step, or null to use the model the user chose.
         async function callModel(convo, extra = {}, signal = null, askModel = null) {
             if (selectedProvider === PUTER_PROVIDER) {
-                return chatWithEffortFallback(selectedModel, (opts) =>
+                // askModel is honoured here too. It used to be ignored on this
+                // branch, so every routed step ran on the model the user chose --
+                // on the one provider where a step is paid for in credits from a
+                // fixed monthly allowance, which is where routing was worth most.
+                return chatWithEffortFallback(askModel || selectedModel, (opts) =>
                     puter.ai.chat(convo, { ...opts, ...extra })
                 );
             }
@@ -6694,7 +6725,11 @@
                     { role: 'system', content: IMAGE_PLANNER_PROMPT },
                     { role: 'user', content: lines.join('\n') },
                 ];
-                const response = await callModel(convo, {}, context.signal || null);
+                // A planner that fails is no plan and the keyword decision
+                // stands, so a cheap model here risks nothing the caller does not
+                // already handle.
+                const route = routeForPlanner();
+                const response = await callModel(convo, {}, context.signal || null, route ? route.model : null);
                 return parseImagePlan(extractMessageText((response && response.message) || null));
             } catch (error) {
                 if (error && error.name === 'AbortError') throw error;

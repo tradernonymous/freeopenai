@@ -3569,6 +3569,49 @@ function routeStep({ stage, mode = 'auto', model, models = [], needsTools = fals
   return { model: best.m.id, from: model, why: best.rank.why, free: best.rank.tier === 0 };
 }
 
+// The model to run a classifier on, or null to leave it on the user's own.
+//
+// The image planner reads one message and answers with a few fields: whether the
+// turn is a drawing, an edit or a chat, and the prompt to draw. That is a
+// classification, not the conversation, and a small model does it about as well
+// as a flagship -- so asking the flagship spends the conversation's per-token
+// price on a routing decision. On Puter that price is credits from a fixed
+// monthly allowance that does not roll over, which is why it earns a rule.
+//
+// Ranked exactly as a tool step is, so the app has one idea of "cheaper". Two
+// differences: a classifier is handed no tools, so a model that cannot take them
+// is still fine; and it is not a step of the conversation, so it is not limited
+// to the 'work' stage the way routeStep is.
+//
+// `preferred` breaks ties toward a named model -- the app's own default -- when
+// it ranks no worse than the winner. Puter publishes no prices, so several of its
+// models tie at "the small one in the family" and an alphabetical winner would be
+// whichever old id sorts first rather than the one the app already trusts.
+//
+// null means nothing here is clearly cheaper than what the user chose, and the
+// caller keeps that rather than guessing.
+function routeClassifier({ mode = 'auto', model, models = [], preferred = '', refused = [] } = {}) {
+  if (mode !== 'auto') return null;
+  if (!model) return null;
+  const skip = new Set((refused || []).map((id) => String(id)));
+  const ranked = (models || [])
+    .filter((m) => m && isUsableChatModelId(m.id) && !skip.has(String(m.id)) && emitsText(m))
+    .map((m) => ({ m, rank: routeRank(m) }))
+    .filter((row) => row.rank)
+    .sort((a, b) =>
+      a.rank.tier - b.rank.tier || a.rank.cost - b.rank.cost || String(a.m.id).localeCompare(String(b.m.id)));
+  if (!ranked.length) return null;
+  let best = ranked[0];
+  const wanted = ranked.find((row) => String(row.m.id) === String(preferred));
+  if (wanted && wanted.rank.tier <= best.rank.tier && wanted.rank.cost <= best.rank.cost) best = wanted;
+  // Already on something at least as cheap: moving it would report a saving that
+  // does not exist, and would swap the user's model for no reason.
+  const own = ranked.find((row) => String(row.m.id) === String(model));
+  if (own && own.rank.tier <= best.rank.tier && own.rank.cost <= best.rank.cost) return null;
+  if (String(best.m.id) === String(model)) return null;
+  return { model: best.m.id, from: model, why: best.rank.why, free: best.rank.tier === 0 };
+}
+
 // The four ways a routed step can fail at the job -- all observable, none
 // guessed: it refused, it came back with nothing, its tool arguments were not
 // usable JSON, or it asked again for something it already had. Any of them means
@@ -4204,6 +4247,20 @@ function stripStoredImages(conversations, protectId = '') {
   });
 }
 
+// Renders a conversation as markdown for the clipboard. Tool-activity lines
+// and error notices are the app talking to itself, so they stay out -- what
+// gets pasted into an issue or a doc should be the exchange, nothing else.
+function conversationToMarkdown(messages, title) {
+  const lines = title ? ['# ' + title, ''] : [];
+  for (const message of messages || []) {
+    if (!message || message.type === 'system') continue;
+    const text = String(message.content == null ? '' : message.content).trim();
+    if (!text) continue;
+    lines.push(message.type === 'user' ? '## You' : '## Assistant', '', text, '');
+  }
+  return lines.join('\n').trim();
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     TRANSCRIPT_BOTTOM_SLACK_PX,
@@ -4409,6 +4466,7 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
     conversationToMarkdown,
+    conversationToMarkdown,
     MAX_HISTORY_MESSAGES,
     buildChatHistory,
     COMPACT_HISTORY_MESSAGES,
@@ -4441,6 +4499,7 @@ if (typeof module !== 'undefined' && module.exports) {
     routeCost,
     routeRank,
     routeStep,
+    routeClassifier,
     routedStepFailure,
     describeRoute,
     describeProviderModel,
