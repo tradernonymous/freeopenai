@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const dns = require('dns');
 const pkg = require('./package.json');
 const {
@@ -3027,6 +3028,112 @@ const mime = {
   '.ico': 'image/x-icon',
 };
 
+// --- Sending a static file ---
+//
+// The whole UI is one 520KB index.html plus a 208KB chatlib.js, and both went
+// out uncompressed on every single load: 728KB of text, most of it whitespace and
+// the long comments this codebase is written in. Both compress about eight to one.
+//
+// Two things are fixed here, and they answer different questions.
+//
+//   Encoding -- brotli when the client takes it, gzip otherwise. 728KB becomes
+//   154KB, which on a phone is the difference between a slow load and a quick one,
+//   and it is the user's own mobile data either way. Compressing 520KB is not free,
+//   so each encoding is produced once and kept; the file's mtime and size are the
+//   cache key, so a deploy invalidates it without anyone having to remember to.
+//
+//   Revalidation -- an ETag. 'no-cache' is right for this app and is not what it
+//   sounds like: it means revalidate before reuse, not never store. But with no
+//   validator to revalidate *with*, every reload was a full download of bytes the
+//   browser already had. With one, an unchanged deploy answers 304 and sends no
+//   body at all.
+//
+// Vary is not optional. Without it any shared cache in front of this may hand a
+// brotli body to a client that cannot read it.
+const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|json|xml)|image\/svg)/;
+const COMPRESS_FLOOR = 1024;
+const encodedCache = new Map();
+
+function acceptedEncoding(req) {
+  const header = String((req.headers && req.headers['accept-encoding']) || '').toLowerCase();
+  // Parsed rather than pattern-matched, because `;q=0` is a refusal: it is the
+  // one case where naming an encoding means the opposite of asking for it, and a
+  // regex that misses it would send a body the client cannot read.
+  const offered = new Set();
+  for (const part of header.split(',')) {
+    const [name, ...params] = part.trim().split(';').map((bit) => bit.trim());
+    if (!name) continue;
+    const q = params.map((bit) => /^q=(.*)$/.exec(bit)).find(Boolean);
+    if (q && Number(q[1]) === 0) continue;
+    offered.add(name);
+  }
+  if (offered.has('br')) return 'br';
+  if (offered.has('gzip')) return 'gzip';
+  return '';
+}
+
+function encodedVariants(file, stat, data) {
+  const fresh = stat ? stat.mtimeMs + ':' + stat.size : '';
+  const hit = encodedCache.get(file);
+  if (hit && hit.key === fresh) return hit;
+  const entry = {
+    key: fresh,
+    etag: '"' + crypto.createHash('sha1').update(data).digest('base64url') + '"',
+    identity: data,
+  };
+  if (fresh) encodedCache.set(file, entry);
+  return entry;
+}
+
+function sendStatic(req, res, file, data, stat, contentType) {
+  const variants = encodedVariants(file, stat, data);
+  // A matching validator means the browser already holds this exact body, so
+  // there is nothing to send and nothing to compress.
+  const inm = req.headers && req.headers['if-none-match'];
+  if (inm && String(inm).split(',').some((tag) => tag.trim() === variants.etag)) {
+    res.writeHead(304, { ETag: variants.etag, 'Cache-Control': 'no-cache', Vary: 'Accept-Encoding' });
+    res.end();
+    return;
+  }
+  const headers = {
+    'Content-Type': contentType,
+    // Static files revalidate rather than being reused blind: the whole UI ships
+    // in index.html, so a cached copy silently runs yesterday's code. The ETag
+    // above is what makes that revalidation cost nothing.
+    'Cache-Control': 'no-cache',
+    ETag: variants.etag,
+    Vary: 'Accept-Encoding',
+  };
+  let body = variants.identity;
+  const wanted = COMPRESSIBLE.test(contentType) && data.length >= COMPRESS_FLOOR ? acceptedEncoding(req) : '';
+  if (wanted) {
+    if (!variants[wanted]) {
+      try {
+        variants[wanted] = wanted === 'br'
+          // Text this size at the default quality of 11 costs far more time than
+          // the last few percent is worth, and the result is cached either way.
+          ? zlib.brotliCompressSync(data, {
+              params: {
+                [zlib.constants.BROTLI_PARAM_QUALITY]: 5,
+                [zlib.constants.BROTLI_PARAM_SIZE_HINT]: data.length,
+              },
+            })
+          : zlib.gzipSync(data, { level: 6 });
+      } catch {
+        // A compressor that fails is not a reason to fail the request.
+        variants[wanted] = null;
+      }
+    }
+    if (variants[wanted]) {
+      body = variants[wanted];
+      headers['Content-Encoding'] = wanted;
+    }
+  }
+  headers['Content-Length'] = body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 function resolveSafePath(root, urlPath) {
   let clean = urlPath.split('?')[0].split('#')[0];
   if (clean === '/') clean = '/index.html';
@@ -3115,21 +3222,23 @@ function createRequestHandler(root) {
           res.end('Not found');
           return;
         }
-        fs.readFile(path.join(root, 'index.html'), (e2, html) => {
+        const shell = path.join(root, 'index.html');
+        fs.readFile(shell, (e2, html) => {
           if (e2) {
             res.writeHead(404);
             res.end('Not found');
             return;
           }
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-          res.end(req.method === 'HEAD' ? undefined : html);
+          fs.stat(shell, (e3, shellStat) => {
+            sendStatic(req, res, shell, html, e3 ? null : shellStat, 'text/html; charset=utf-8');
+          });
         });
         return;
       }
-      // Static files never cache: the whole UI ships in index.html, so a
-      // cached copy silently runs yesterday's code after a deploy.
-      res.writeHead(200, { 'Content-Type': mime[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-      res.end(req.method === 'HEAD' ? undefined : data);
+      fs.stat(file, (statErr, stat) => {
+        sendStatic(req, res, file, data, statErr ? null : stat,
+          mime[path.extname(file)] || 'application/octet-stream');
+      });
     });
   };
 }
