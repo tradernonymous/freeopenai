@@ -653,6 +653,30 @@ const LLM_PROVIDERS = {
       'nemotron-3.5-lightning-free',
       'stepfun-3.7-flash',
     ],
+    // Where a picture can come from, on the same key. Declared here rather than
+    // inside the image route because the capabilities are the provider's, not
+    // the route's: this is the table an operator reads to find out what they
+    // have to set for what.
+    image: {
+      shape: 'openai-images',
+      baseUrl: 'https://api-images.bynara.id',
+      baseUrlEnv: 'NARA_IMAGES_BASE_URL',
+      modelEnv: 'NARA_IMAGE_MODEL',
+      // The size every request is drawn at when the caller asks for none. Kept,
+      // and read per store rather than globally, so an operator's setting for
+      // Nara cannot decide what OpenRouter or HuggingFace is asked for.
+      sizeEnv: 'NARA_IMAGE_SIZE',
+      // A source picture arrives as multipart file parts on the edits endpoint.
+      edit: 'multipart',
+      // Dimensions are an upstream contract: only these pass, and anything else
+      // is refused by us with the list rather than being rewritten silently.
+      sizes: [
+        { label: 'Square (1:1)', value: '1024x1024' },
+        { label: 'Facebook cover (wide, 1640×856)', value: '1640x856' },
+        { label: 'Portrait (4:5)', value: '1024x1280' },
+        { label: 'Landscape banner (2:1)', value: '2048x1024' },
+      ],
+    },
   },
   openrouter: {
     label: 'OpenRouter',
@@ -709,6 +733,27 @@ const LLM_PROVIDERS = {
     freeOnly: process.env.OPENROUTER_FREE_ONLY !== '0',
     // Optional attribution headers OpenRouter documents for its leaderboards.
     headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeAi4U' }),
+    // The dedicated Image API (launched 2026-06-23): 30+ models behind one
+    // OpenAI-shaped endpoint, and the same key that chats here draws here.
+    //
+    // Two paths are tried on purpose. OpenRouter's own docs name
+    // /api/v1/images in one page and /api/v1/images/generations in another, so
+    // a 404 moves to the other rather than failing a draw over a path the
+    // service itself describes two ways.
+    image: {
+      shape: 'openai-images',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      baseUrlEnv: 'OPENROUTER_IMAGES_BASE_URL',
+      path: '/images/generations',
+      altPath: '/images',
+      // Image-to-image rides the generations endpoint as a reference, which is
+      // what makes "change the sky" work here the way it works on Nara.
+      edit: 'references',
+      modelEnv: 'OPENROUTER_IMAGE_MODEL',
+      // Cheap and good at following an instruction to change one thing; the
+      // gpt-image line is the alternative several operators will prefer.
+      defaultModel: 'google/gemini-2.5-flash-image',
+    },
   },
   nvidia: {
     label: 'NVIDIA',
@@ -736,6 +781,22 @@ const LLM_PROVIDERS = {
         'openai/gpt-oss-20b',
         'nvidia/nemotron-3-ultra-550b-a55b',
       ],
+    },
+    // NVIDIA sells image generation, so an NVIDIA key here should draw.
+    //
+    // Two shapes, in this order. The hosted FLUX models answer the NVCF GenAI
+    // shape at ai.api.nvidia.com ({prompt} in, {artifacts:[{base64}]} out), and
+    // a self-hosted visual-genai NIM documents an OpenAI-compatible images API
+    // instead. Which one a given NVIDIA_IMAGES_BASE_URL speaks is the
+    // operator's deployment, not something this app can know, so both are
+    // tried and the second is reached on a 404.
+    image: {
+      shape: 'nvidia-genai',
+      altShape: 'openai-images',
+      baseUrl: 'https://ai.api.nvidia.com/v1',
+      baseUrlEnv: 'NVIDIA_IMAGES_BASE_URL',
+      modelEnv: 'NVIDIA_IMAGE_MODEL',
+      defaultModel: 'black-forest-labs/flux.1-schnell',
     },
   },
   // Hugging Face Inference Providers: one OpenAI-compatible router
@@ -904,6 +965,17 @@ const LLM_PROVIDERS = {
       "CohereLabs/tiny-aya-earth",
       "CohereLabs/tiny-aya-fire",
     ],
+    // Text-to-image is not on the OpenAI-compatible router: it is the task
+    // route, {inputs, parameters} in and raw image bytes out. The model is a
+    // repo id, so HF_IMAGE_MODEL picks which one (FLUX.1-schnell by default:
+    // fast, and one of the models HF's own docs lead with).
+    image: {
+      shape: 'hf-inference',
+      baseUrl: 'https://router.huggingface.co/hf-inference',
+      baseUrlEnv: 'HF_IMAGES_BASE_URL',
+      modelEnv: 'HF_IMAGE_MODEL',
+      defaultModel: 'black-forest-labs/FLUX.1-schnell',
+    },
   },
   mistral: {
     label: 'Mistral',
@@ -952,6 +1024,14 @@ const LLM_PROVIDERS = {
       'hf.co/unsloth/north-mini-code-1.0-GGUF:latest',
       'deepseek-r1:14b',
     ],
+    // A local server may well have an image model pulled, and this app has no
+    // catalogue that says which -- so this is opt-in by name. Without it,
+    // Ollama is simply not a candidate for drawing, which is what keeps a
+    // local chat server from being picked over a provider that really can.
+    image: {
+      shape: 'openai-images',
+      modelEnv: 'OLLAMA_IMAGE_MODEL',
+    },
   },
   // Google Antigravity through CLIProxyAPI (deploy/cliproxyapi), which owns the
   // Google accounts -- they are signed in once locally and carried to the
@@ -1038,6 +1118,13 @@ const LLM_PROVIDERS = {
       'agentrouter/claude-opus-5',
       'agentrouter/gpt-5.6-sol',
     ],
+    // The gateway fronts plenty of upstreams that sell images, and it speaks
+    // OpenAI, so whatever image model it has connected is reachable through it
+    // -- named by the operator, because the gateway's catalogue is its own.
+    image: {
+      shape: 'openai-images',
+      modelEnv: 'OMNIROUTE_IMAGE_MODEL',
+    },
   },
   // The three below are speech and search services. Probing them directly:
   //
@@ -1390,12 +1477,405 @@ async function llmFetch(req, res) {
   sendJson(res, 200, { url: parsed.href, title, text: text.slice(0, 8000) });
 }
 
-// Image generation and edits live on Nara's separate images host. Keys stay
-// server-side: the browser sends prompt + image data, never credentials.
-// Generations take a plain JSON body; edits need multipart with the source
-// image (and optional mask) as data URLs, rebuilt here into file parts.
-function naraImagesBase() {
-  return process.env.NARA_IMAGES_BASE_URL || 'https://api-images.bynara.id';
+// ---------------------------------------------------------------------------
+// Image generation, for every provider that sells it.
+//
+// This route used to be Nara-only, which meant an operator with an OpenRouter,
+// NVIDIA or HuggingFace key could chat on it and not draw: the one image route
+// answered "Image generation needs NARA_IMAGE_MODEL", naming a service they had
+// not configured. Puter draws in the browser and is always asked first; this is
+// the server side of the chain, and it now reaches whichever configured provider
+// can actually make a picture.
+//
+// That matters most for a deployment with no Puter sign-in at all (a
+// login-gated deploy): there Puter's SDK is unreachable, so the server route is
+// the only way to draw, and it was the only way to draw *with Nara*.
+//
+// Keys stay server-side: the browser sends prompt + image data, never
+// credentials. Each provider declares how it draws in its own entry (see the
+// `image` block on LLM_PROVIDERS), and what differs between them is one of three
+// request shapes:
+//
+//   openai-images  {model, prompt, ...} -> {data:[{b64_json|url}]}
+//   hf-inference   {inputs, parameters} -> raw image bytes
+//   nvidia-genai   {prompt, ...} -> {artifacts:[{base64}]}
+//
+// Every answer is normalized to the OpenAI images shape (data[].b64_json), which
+// is what the browser already reads -- one reader for three services is one
+// place a picture can go missing.
+//
+// Nara serves images from a host of its own rather than the router that carries
+// its chat, which is why a store may declare a base URL of its own and the
+// variable that overrides it -- see imageBaseFor below.
+//
+// The order image requests fall back through, best first. Nara leads because it
+// is what this route has always fronted: an operator who has it configured sees
+// exactly the behaviour they had, and one who does not gets their next key.
+// Ollama and OmniRoute are last because their image models are named by the
+// operator rather than published, so they can only be offered when asked for.
+const IMAGE_PROVIDER_ORDER = ['nara', 'openrouter', 'nvidia', 'huggingface', 'omniroute', 'ollama'];
+
+// Which model name to ask for: the request's own, then the operator's variable,
+// then the store's default. A store with no default (Ollama, OmniRoute) is
+// therefore only usable once the operator names one -- which is the point, since
+// nothing here can know what a local server or a gateway has loaded.
+function imageModelFor(store, explicit) {
+  const named = String(explicit || '').trim();
+  if (named) return named;
+  const fromEnv = store.modelEnv ? String(process.env[store.modelEnv] || '').trim() : '';
+  if (fromEnv) return fromEnv;
+  return String(store.defaultModel || '').trim();
+}
+
+// One provider, ready to draw -- or the sentence that says why it cannot.
+function imageCandidateFor(id, options) {
+  const declared = LLM_PROVIDERS[id];
+  const store = declared && declared.image ? declared.image : null;
+  if (!store) return { error: 'No image service is wired up as "' + id + '".' };
+  // providerConfig is what resolves a key and a base URL for the chat path, and
+  // an image is billed to the same key: reading the environment a second way
+  // here is how a provider that chats fine reports "not configured" for drawing.
+  const provider = providerConfig(id);
+  if (!provider) return { error: declared.label + ' is not configured — set ' + declared.envVar + '.' };
+  if (provider.keyError) return { error: provider.keyError };
+  // The request's own model name is honoured only next to the provider it was
+  // meant for. On its own it is whatever the browser last used somewhere else,
+  // and an id from another catalogue is a 404 dressed up as a bad request.
+  const model = imageModelFor(store, options && options.explicitModel);
+  if (!model) {
+    return { error: declared.label + ' has no image model named — set ' + (store.modelEnv || declared.envVar) + '.' };
+  }
+  return { id, store, model, provider };
+}
+
+// Every provider that could draw for this request, best first.
+//
+// A named provider is the whole list. Naming one is a decision, and quietly
+// spending a second operator's key because the first said no is not a retry --
+// it is a different choice made on their behalf. Two things name one: the
+// request's own `provider`, and the operator's IMAGE_PROVIDER, which is a
+// deployment saying "this is the service I pay for".
+//
+// Nothing named means fall through, and that is what makes this route cover
+// every provider instead of the first one that happens to be configured: an
+// OpenRouter key draws without NARA_API_KEY, a HuggingFace key draws without
+// either, and so on down the order. Ollama and OmniRoute come last because
+// their model names are the operator's to supply, so they can only ever be
+// reached when one was.
+function imageDrawOrder(requested, explicitModel) {
+  const named = String(requested || process.env.IMAGE_PROVIDER || '').trim();
+  if (named) {
+    const provider = LLM_PROVIDERS[named];
+    if (!provider || !provider.image) {
+      return { error: 'Unknown image provider "' + named + '". Wired up: ' + IMAGE_PROVIDER_ORDER.join(', ') + '.' };
+    }
+    return { candidates: [imageCandidateFor(named, { explicitModel })] };
+  }
+  const candidates = [];
+  for (const id of IMAGE_PROVIDER_ORDER) {
+    const candidate = imageCandidateFor(id, {});
+    if (!candidate.error) candidates.push(candidate);
+  }
+  if (!candidates.length) return { error: imageUnavailableMessage() };
+  return { candidates };
+}
+
+// Which providers could draw right now, in the order they would be tried, and
+// what each is missing when it could not. The page reads this instead of
+// guessing: a picker that offers a service the server cannot reach is a picker
+// that turns a working setup into a failure the user has to debug.
+function imageProvidersReport() {
+  const rows = [];
+  for (const id of IMAGE_PROVIDER_ORDER) {
+    const provider = LLM_PROVIDERS[id];
+    const store = provider && provider.image ? provider.image : null;
+    if (!store) continue;
+    const candidate = imageCandidateFor(id, {});
+    rows.push({
+      id,
+      label: provider.label,
+      ready: !candidate.error,
+      model: candidate.model || '',
+      reason: candidate.error || '',
+      // Only the store that states its dimensions has any: everywhere else a
+      // size is a preference the upstream may or may not know.
+      sizes: (store.sizes || []).map((s) => s.value),
+      edits: store.edit === 'multipart' ? 'mask' : store.edit === 'references' ? 'reference' : 'none',
+    });
+  }
+  return rows;
+}
+
+// What to say when nothing can draw, in the form an operator can act on: every
+// provider that could, and the one variable each is missing. Naming only the
+// first would send them round the loop one key at a time.
+function imageUnavailableMessage() {
+  const rows = [];
+  for (const id of IMAGE_PROVIDER_ORDER) {
+    const provider = LLM_PROVIDERS[id];
+    if (!provider || !provider.image) continue;
+    if (!providerIsConfigured(provider)) rows.push(id + ' (add ' + provider.envVar + ')');
+    else rows.push(id + ' (set ' + provider.image.modelEnv + ')');
+  }
+  return (
+    'No image provider is ready. ' +
+    rows.join('; ') +
+    '. And Puter draws in the browser with no configuration at all when the visitor is signed in.'
+  );
+}
+
+// Where the picture endpoint lives. A store that names a host means it: Nara
+// serves images from a different host than its chat, HuggingFace's text-to-image
+// is a different path than its router, and neither wants the /v1 the chat URL is
+// normalised with. Only a store that names nothing falls back to the chat URL,
+// and there it is normalised the same way the chat path normalises it.
+function imageBaseFor(id, provider, store) {
+  const override = store.baseUrlEnv ? String(process.env[store.baseUrlEnv] || '').trim() : '';
+  const declared = override || store.baseUrl;
+  if (declared) return declared.replace(/\/+$/, '');
+  return normalizeProviderBaseUrl(id, provider.baseUrl);
+}
+
+// The pictures in whatever an images endpoint answered with. Both fields are
+// legitimate -- b64_json is what an OpenAI-shaped API returns when it is asked
+// not to publish the file, url is what several fronts return instead -- and a
+// reader that knows only one of them reports "no image" for a picture that
+// arrived. Entries without either are dropped rather than counted.
+function imageUrlsIn(payload) {
+  const rows = payload && Array.isArray(payload.data) ? payload.data : [];
+  const urls = [];
+  for (const row of rows) {
+    if (!row) continue;
+    if (typeof row.b64_json === 'string' && row.b64_json) {
+      urls.push('data:' + (row.media_type || 'image/png') + ';base64,' + row.b64_json);
+    } else if (typeof row.url === 'string' && row.url) {
+      urls.push(row.url);
+    }
+  }
+  return urls;
+}
+
+// A refusal is the prompt's fault, and that is the one failure worth not asking
+// the next provider about: it is being handed the same prompt, so it can only
+// answer the same way, and the user is the only one who can reword it.
+//
+// Two things arrive under this name: a moderation flag (Puter reports
+// errorCode 'moderation_flagged' rather than prose) and the plain sentences the
+// other fronts use for the same decision.
+function imageLooksRefused(status, text) {
+  const message = String(text || '');
+  if (/moderation_flagged|image_generation_user_error/i.test(message)) return true;
+  if (/content policy|safety (system|filter)|moderation|prohibited|violates? (our|the) (polic|usage)|not allowed to (generate|create)/i.test(message)) return true;
+  return status === 451;
+}
+
+// What to say when nobody could draw. Naming each service and what it said is
+// the difference between a user who can fix a key and one who can only retry:
+// "every provider failed" is the same sentence for six different problems.
+function imageDrawFailureMessage(what, failures) {
+  if (!failures.length) return what + ' failed: no image provider was ready to try.';
+  if (failures.length === 1) return what + ' failed on ' + failures[0].label + ': ' + failures[0].reason;
+  return (
+    what + ' failed on every provider that could draw: ' +
+    failures.map((f) => f.label + ' (' + f.reason + ')').join('; ') + '.'
+  );
+}
+
+// 'WIDTHxHEIGHT' -> { w, h }. A size this cannot read is not sent anywhere:
+// guessing a dimension for a service that asked for something else is how a
+// request gets refused for a reason nobody typed.
+function sizeParts(size) {
+  const m = /^(\d{2,5})\s*[x×]\s*(\d{2,5})$/.exec(String(size || '').trim());
+  if (!m) return null;
+  return { w: Number(m[1]), h: Number(m[2]) };
+}
+
+// The ratios the services that take one actually use, so 1640x856 is sent as
+// 16:9 rather than as a pixel pair no ratio field will accept.
+const IMAGE_ASPECT_RATIOS = [
+  { label: '1:1', dims: [1024, 1024] },
+  { label: '16:9', dims: [1640, 856] },
+  { label: '4:5', dims: [1024, 1280] },
+  { label: '2:1', dims: [2048, 1024] },
+  { label: '3:2', dims: [1536, 1024] },
+  { label: '2:3', dims: [1024, 1536] },
+];
+
+function aspectForSize(size) {
+  const parts = sizeParts(size);
+  if (!parts) return '';
+  for (const entry of IMAGE_ASPECT_RATIOS) {
+    if (entry.dims[0] === parts.w && entry.dims[1] === parts.h) return entry.label;
+  }
+  return '';
+}
+
+// The multipart body an OpenAI-shaped edits endpoint wants: file parts for the
+// picture and its mask, fields for the rest. Built per attempt because the
+// boundary is the framing, and a retry must not reuse the framing of a request
+// that was refused.
+function imageEditMultipart(args) {
+  const { image, mask, prompt, model, extra } = args;
+  const boundary = '----freeopenai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const parts = [];
+  const filePart = (name, filename, file) => {
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
+    parts.push(file.bytes);
+    parts.push(Buffer.from('\r\n'));
+  };
+  const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  filePart('image', 'image.png', image);
+  if (mask) filePart('mask', 'mask.png', mask);
+  field('prompt', prompt);
+  field('model', model);
+  for (const [name, value] of Object.entries(extra)) field(name, value);
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+  return { boundary, body: Buffer.concat(parts) };
+}
+
+// One request, in whichever shape the chosen provider speaks, normalized to the
+// OpenAI images payload the browser already reads.
+//
+// A shape is a list of attempts, and a 404 moves to the next one. That is for
+// the two cases where the shape is not knowable from here: OpenRouter's own
+// docs give its image path two ways (/api/v1/images and
+// /api/v1/images/generations), and an NVIDIA_IMAGES_BASE_URL may be a self-hosted
+// NIM (OpenAI-compatible images) or the hosted FLUX endpoints (NVCF GenAI). One
+// 404 each, then the answer that works -- rather than a draw that fails because
+// this app guessed the wrong third-party detail.
+//
+// quality and n are preferences, not requirements: both are documented on the
+// OpenAI-shaped API, but a front is free to know only some of them, and Nara is
+// strict enough that a dimension it does not list is a 400 rather than a
+// rewrite. So a 400 that arrives while a preference was sent buys exactly one
+// more attempt without it. A 400 is never billed, which is what makes that free.
+async function drawImage(args) {
+  const { id, provider, store, model, kind, prompt, image, mask, source, options, headers, signal } = args;
+  const base = imageBaseFor(id, provider, store);
+  // A keyless local server (Ollama) sends no auth header at all rather than a
+  // bare "Bearer ", which some fronts read as a malformed token. A provider's
+  // own headers ride along for the same reason they do on the chat path: they
+  // are the service's, not the route's, and a draw is billed the same way.
+  const auth = { ...(provider.key ? { Authorization: 'Bearer ' + provider.key } : {}), ...(headers || {}) };
+  // The request's size, or the operator's default for this one service. Per
+  // store, not global: 1024x1024 is Nara's and nothing else's business.
+  const fallbackSize = store.sizeEnv ? String(process.env[store.sizeEnv] || '').trim() : '';
+  const requestedSize = String(options.size || '').trim() || fallbackSize;
+  // A store that lists its sizes has agreed to them: the one it was handed was
+  // checked against that list before it got here, so it is a field. A store that
+  // lists none has said nothing about size, and then a size is a preference like
+  // the others -- sent, and dropped on a 400 rather than losing the picture over
+  // a setting nobody promised to understand.
+  const declaredSize = Array.isArray(store.sizes) && store.sizes.length ? requestedSize : '';
+  // Only what a service is free not to know about.
+  const extra = {};
+  if (options.quality) extra.quality = options.quality;
+  if (options.n > 1) extra.n = options.n;
+  if (requestedSize && !declaredSize) extra.size = requestedSize;
+
+  const postJson = (url, body, withExtra) => fetch(url, {
+    method: 'POST',
+    signal,
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExtra ? { ...body, ...extra } : body),
+  });
+
+  // The OpenAI-shaped request, used by Nara, OpenRouter, a gateway (OmniRoute),
+  // a local server (Ollama) and a self-hosted NVIDIA NIM. An edit rides either
+  // the edits endpoint as multipart, or the same generations endpoint as a
+  // reference -- which of the two is the store's `edit` mode.
+  const openaiAttempt = (path) => (withExtra) => {
+    const body = { model, prompt };
+    if (declaredSize) body.size = declaredSize;
+    if (kind === 'edits' && store.edit === 'references' && source) {
+      body.input_references = [{ type: 'image_url', image_url: { url: source } }];
+    }
+    return postJson(base + path, body, withExtra);
+  };
+  const multipartAttempt = (withExtra) => {
+    const fields = withExtra ? { ...(declaredSize ? { size: declaredSize } : {}), ...extra } : (declaredSize ? { size: declaredSize } : {});
+    const built = imageEditMultipart({ image, mask, prompt, model, extra: fields });
+    return fetch(base + (store.editPath || '/images/edits'), {
+      method: 'POST',
+      signal,
+      headers: { ...auth, 'Content-Type': 'multipart/form-data; boundary=' + built.boundary },
+      body: built.body,
+    });
+  };
+
+  let attempts;
+  if (store.shape === 'nvidia-genai') {
+    attempts = [
+      (withExtra) => {
+        // The hosted FLUX models: {prompt} in, {artifacts:[{base64}]} out.
+        const body = { prompt, mode: 'base' };
+        const aspect = aspectForSize(requestedSize);
+        if (aspect) body.aspect_ratio = aspect;
+        if (withExtra && extra.n > 1) body.n = extra.n;
+        return postJson(base + '/genai/' + model, body, false);
+      },
+      // A self-hosted visual-genai NIM documents an OpenAI-compatible images API
+      // instead of that shape, so a 404 moves here.
+      openaiAttempt('/images/generations'),
+    ];
+  } else if (store.shape === 'hf-inference') {
+    // The task route, not the router: {inputs, parameters} in, image bytes out.
+    attempts = [(withExtra) => {
+      const parameters = {};
+      const parts = sizeParts(requestedSize);
+      if (parts) { parameters.width = parts.w; parameters.height = parts.h; }
+      if (withExtra && extra.n > 1) parameters.num_images = extra.n;
+      return postJson(base + '/models/' + model, { inputs: prompt, parameters }, false);
+    }];
+  } else if (kind === 'edits' && store.edit === 'multipart') {
+    attempts = [multipartAttempt];
+  } else {
+    // Two paths where a service describes its own endpoint two ways.
+    attempts = [store.path || '/images/generations', store.altPath].filter(Boolean).map(openaiAttempt);
+  }
+
+  let response = null;
+  const send = async (withExtra) => {
+    for (const attempt of attempts) {
+      response = await attempt(withExtra);
+      if (response.status !== 404) return;
+    }
+  };
+  await send(true);
+  if (Object.keys(extra).length && response && response.status === 400) {
+    // A 400 is never billed, which is what makes this second attempt free. The
+    // first answer is the one kept when the second fails too: dropping a
+    // preference answers "was it the preference?", and when the answer is no, the
+    // sentence worth reporting is the refusal the service actually wrote.
+    console.warn('image ' + kind + ': ' + provider.label + ' refused a request carrying ' + Object.keys(extra).join(', ') + ' — retrying without them');
+    const refusedWithPreferences = response;
+    await send(false);
+    if (!response || response.status >= 400) {
+      if (response && response.body) await response.body.cancel().catch(() => {});
+      response = refusedWithPreferences;
+    }
+  }
+
+  // Bytes or JSON, whichever this service answers with: hf-inference returns the
+  // picture itself, the others return a document that carries it.
+  const mediaType = String(response.headers.get('content-type') || '').split(';')[0].trim();
+  if (/^image\//i.test(mediaType)) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return {
+      status: response.status,
+      data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: bytes.toString('base64'), media_type: mediaType }] },
+    };
+  }
+  const payload = await response.json().catch(() => null);
+  // The NVCF shape ({artifacts:[{base64}]}) is normalized here rather than at
+  // the caller, so there is one place a picture could be misread.
+  if (payload && !payload.data) {
+    const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
+    if (artifact && artifact.base64) {
+      return { status: response.status, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
+    }
+  }
+  return { status: response.status, data: payload };
 }
 
 // The largest source picture an edit will carry, in bytes. The browser already
@@ -1438,14 +1918,41 @@ async function imageBytesFor(value, label) {
   return { contentType: /^image\//i.test(contentType) ? contentType : 'image/png', bytes };
 }
 
+// Where a picture is made, for whichever provider can make one.
+//
+// This route used to be Nara's and only Nara's: an operator holding an
+// OpenRouter, NVIDIA or HuggingFace key could chat on it and not draw, and the
+// one image route answered "Image generation needs NARA_IMAGE_MODEL" -- naming
+// a service they had not configured at all. It now walks the image order and
+// takes the first service that answers with a picture, so every provider that
+// can draw actually draws.
+//
+// Puter is not in that order and does not need to be. It draws in the browser
+// for the visitor's own account rather than the operator's key, so it is asked
+// first and this route is only reached when it cannot answer.
+//
+// The body is the same whatever the provider: a prompt, plus for an edit the
+// source picture and the optional mask. `provider` and `model` may name a
+// service, and naming one is honoured exactly -- no falling through behind a
+// choice the user made on purpose.
 async function llmImage(req, res, kind) {
-  const key = process.env.NARA_API_KEY;
   const what = kind === 'edits' ? 'Image editing' : 'Image generation';
-  if (!key) return sendJson(res, 400, { error: what + ' needs a Nara key (NARA_API_KEY).' });
   readJsonBody(req, 12 * 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    // Resolved before anything else is read: a request that cannot be served
+    // should say so in its first sentence rather than after a 12MB upload.
+    const order = imageDrawOrder(body.provider, body.model);
+    if (order.error) return sendJson(res, 400, { error: order.error });
+    const options = {
+      size: String(body.size || '').trim(),
+      quality: body.quality ? String(body.quality) : '',
+      // One prompt cannot reasonably ask for more than ten pictures -- that is
+      // the ceiling the OpenAI images API documents, and some upstreams cap at
+      // one, which is why whatever comes back short is drawn again by the caller.
+      n: Number(body.n) > 1 ? Math.min(10, Math.floor(Number(body.n))) : 1,
+    };
     // A render legitimately takes a while, but not forever. Without a deadline a
     // stalled image service keeps this request open until the hosting platform's
     // own ceiling answers it, and that arrives as an opaque failure rather than
@@ -1454,130 +1961,110 @@ async function llmImage(req, res, kind) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
     try {
-      const headers = { Authorization: `Bearer ${key}` };
-      // quality and n are preferences, not requirements: each is documented on
-      // the OpenAI-shaped images API this route fronts, but a front is free to
-      // know only some of them -- and this one is strict, refusing a size outside
-      // its fixed set with a 400 rather than rewriting it. So a 400 while a
-      // preference was sent buys exactly one more attempt without it. The picture
-      // the user asked for beats a setting that was only ever a preference, the
-      // second attempt's answer is the one reported if that fails too, and a 400
-      // is never billed, which is what makes the retry free. size is not in here:
-      // it is validated below, so by the time it is sent the upstream has already
-      // agreed to it.
-      const optionals = {};
-      if (body.quality) optionals.quality = body.quality;
-      // Kept as it arrived: the JSON route sends n as a number, the same way an
-      // images API expects to read it, and the multipart route stringifies it in
-      // its own field writer.
-      if (body.n) optionals.n = body.n;
-      // Dimensions are an upstream contract (this endpoint forwards to
-      // api-images.bynara.id): only validated, standard sizes pass; anything
-      // else is refused clearly rather than being rewritten silently. Checked
-      // once, here, so an edit and a generation agree about what is allowed
-      // instead of one of them discovering it as a 400 from upstream.
-      const SUPPORTED_IMAGE_SIZES = [
-        { label: 'Square (1:1)', value: '1024x1024' },
-        { label: 'Facebook cover (wide, 1640×856)', value: '1640x856' },
-        { label: 'Portrait (4:5)', value: '1024x1280' },
-        { label: 'Landscape banner (2:1)', value: '2048x1024' },
-      ];
-      const sizeValue = body.size || process.env.NARA_IMAGE_SIZE || '';
-      const sizeValid = SUPPORTED_IMAGE_SIZES.some((s) => s.value === sizeValue);
-      if (body.size && !sizeValid) {
-        return sendJson(res, 400, { error: 'Image size ' + sizeValue + ' is not supported. Supported: ' + SUPPORTED_IMAGE_SIZES.map((s) => s.value).join(', ') + '.' });
-      }
-      let send = null;
-      let upstream;
+      // The source picture is read once, before any provider is asked. A link
+      // has to be fetched, and a mask has to match the picture it describes, so
+      // both are resolved up front: an unreadable link is a 400 with the reason,
+      // rather than a malformed body sent upstream to be guessed at.
+      let image = null;
+      let mask = null;
+      let source = '';
       if (kind === 'edits') {
-        const model = body.model || process.env.NARA_IMAGE_MODEL;
-        if (!model) {
-          return sendJson(res, 400, { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' });
-        }
         if (!body.image) return sendJson(res, 400, { error: 'image is required' });
-        // Read the bytes first: a link has to be fetched, and the mask has to
-        // match the picture it describes, so both are resolved before any part
-        // is written. A link that cannot be read is a 400 with the reason, not a
-        // malformed multipart body sent upstream to be guessed at.
-        let image;
-        let mask = null;
         try {
           image = await imageBytesFor(body.image, 'source');
           if (body.mask) mask = await imageBytesFor(body.mask, 'mask');
         } catch (e) {
           return sendJson(res, 400, { error: e.message });
         }
-        // Built per attempt, because the body is the thing that changes: the
-        // boundary is regenerated with it so a retry cannot reuse the framing of
-        // the request that was refused.
-        send = (extra) => {
-          const boundary = '----freeopenai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-          const parts = [];
-          const filePart = (name, filename, file) => {
-            parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
-            parts.push(file.bytes);
-            parts.push(Buffer.from('\r\n'));
-          };
-          const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
-          filePart('image', 'image.png', image);
-          if (mask) filePart('mask', 'mask.png', mask);
-          field('prompt', prompt);
-          field('model', model);
-          if (sizeValue) field('size', sizeValue);
-          for (const [name, value] of Object.entries(extra)) field(name, value);
-          parts.push(Buffer.from(`--${boundary}--\r\n`));
-          return fetch(naraImagesBase() + '/v1/images/edits', {
-            method: 'POST',
-            signal: controller.signal,
-            headers: { ...headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary },
-            body: Buffer.concat(parts),
-          });
-        };
-      } else {
-        // The alias is required, the same way it is for an edit: the upstream
-        // answers "Image model is required" to a body without one, and that
-        // sentence arrives here as a 400 that looks like our bug. Falling back
-        // to the operator's configured alias keeps the client from having to
-        // know Nara's model names.
-        const model = body.model || process.env.NARA_IMAGE_MODEL;
-        if (!model) {
-          return sendJson(res, 400, { error: 'Image generation needs NARA_IMAGE_MODEL set to an image-capable alias.' });
+        // A service that takes a reference rather than a file part wants a URL.
+        // The bytes were just read, so this is the same picture either way -- and
+        // passing the caller's own link through instead would have the far side
+        // fetch from a host it may not be able to reach.
+        source = 'data:' + image.contentType + ';base64,' + image.bytes.toString('base64');
+      }
+      const failures = [];
+      const notes = [];
+      for (const candidate of order.candidates) {
+        // A painted mask is a file part or it is nothing. Handing one to a
+        // service that takes a reference would edit the whole picture while the
+        // user watches a region they drew being ignored, so the mask is dropped
+        // here and said out loud instead of being quietly wasted.
+        let useMask = mask;
+        if (mask && candidate.store.edit !== 'multipart') {
+          useMask = null;
+          const dropped = 'the brush mask was dropped — ' + candidate.provider.label + ' edits the whole picture only';
+          if (!notes.includes(dropped)) notes.push(dropped);
         }
-        send = (extra) => fetch(naraImagesBase() + '/v1/images/generations', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        let drawn;
+        try {
+          drawn = await drawImage({
+            id: candidate.id,
+            provider: candidate.provider,
+            store: candidate.store,
+            model: candidate.model,
+            kind,
             prompt,
-            model,
-            // sizeValue, not body.size: the operator's NARA_IMAGE_SIZE is a
-            // default for exactly this request, and a variable that only
-            // validated would be a setting that never reached the service.
-            ...(sizeValue ? { size: sizeValue } : {}),
-            ...extra,
-          }),
-        });
+            image,
+            mask: useMask,
+            source,
+            options,
+            headers: typeof candidate.provider.headers === 'function' ? candidate.provider.headers(req) : null,
+            signal: controller.signal,
+          });
+        } catch (e) {
+          if (e && e.name === 'AbortError') throw e;
+          // A socket failure is a fact about this service -- a host that does
+          // not resolve, a port with nothing behind it -- and the next provider
+          // is a real chance of a picture, so this is recorded and stepped past.
+          failures.push({ label: candidate.provider.label, reason: e.message + fetchFailureReason(e) });
+          continue;
+        }
+        if (drawn.status >= 200 && drawn.status < 300) {
+          if (imageUrlsIn(drawn.data).length) {
+            // Which service drew rides back with the picture. It is the one fact
+            // about an image that cannot be recovered afterwards, and the page
+            // says it rather than leaving the user to guess who to thank.
+            sendJson(res, 200, {
+              ...drawn.data,
+              provider: candidate.id,
+              providerLabel: candidate.provider.label,
+              model: candidate.model,
+              ...(notes.length ? { notes } : {}),
+            });
+            return;
+          }
+          // A 200 carrying no picture is this service not doing the job, which is
+          // exactly what the next provider is for.
+          failures.push({ label: candidate.provider.label, reason: 'answered without a picture', status: 502 });
+          continue;
+        }
+        const detail = describeProviderError(drawn.status, drawn.data, candidate.provider);
+        // A refusal is the prompt's fault, and the next provider is handed the
+        // same prompt: paying a second key to hear it refused again is the
+        // opposite of what the sentence will tell the user to do.
+        if (imageLooksRefused(drawn.status, detail)) {
+          return sendJson(res, 422, { error: detail, refused: true, provider: candidate.id });
+        }
+        // Everything else -- a key not allowed, a model this account cannot
+        // reach, a bill, a 5xx -- is a fact about *that* service rather than
+        // about the request, so the order continues with the next one.
+        failures.push({ label: candidate.provider.label, reason: detail, status: drawn.status });
       }
-      upstream = await send(optionals);
-      // One more try, without the preferences, when the refusal may have been
-      // theirs. Guarded on there being something to drop, so an ordinary 400
-      // (a bad alias, a refusal) is reported as it arrives rather than re-sent.
-      if (Object.keys(optionals).length && upstream.status === 400) {
-        console.warn('image ' + kind + ': upstream refused a request carrying ' + Object.keys(optionals).join(', ') + ' — retrying without them');
-        upstream = await send({});
-      }
-      const data = await upstream.json().catch(() => null);
-      if (!upstream.ok || !data) {
-        return sendJson(res, upstream.status || 502, { error: describeProviderError(upstream.status || 502, data, { label: 'Nara' }) });
-      }
-      sendJson(res, 200, data);
+      // One provider tried means its status is the answer: a 400 is a 400, and a
+      // 403 is a 403, both of which say far more than the 502 that stands in for
+      // "somewhere in a chain of services something went wrong".
+      const status = failures.length === 1 && failures[0].status >= 400 ? failures[0].status : 502;
+      sendJson(res, status, {
+        error: imageDrawFailureMessage(what, failures),
+        tried: failures.map((f) => f.label),
+      });
     } catch (e) {
       if (e && e.name === 'AbortError') {
         return sendJson(res, 504, {
           error:
-            what + ' timed out: Nara did not respond within ' +
+            what + ' timed out: no image service answered within ' +
             Math.round(budget / 1000) +
-            's — the image service is slow or unreachable, not your prompt. Try again.',
+            's — the service is slow or unreachable, not your prompt. Try again.',
         });
       }
       sendJson(res, 502, { error: e.message });
@@ -1585,6 +2072,20 @@ async function llmImage(req, res, kind) {
       clearTimeout(timer);
     }
   });
+}
+
+// The image services this deployment can actually draw with, in the order they
+// would be tried, each with what it is missing when it cannot. The page reads
+// this instead of guessing: a picker that offers a service the server has no key
+// for turns a working setup into a failure the user then has to debug.
+function llmImageProviders(req, res) {
+  sendJson(res, 200, {
+    // Puter is not a server provider -- it draws in the browser on the visitor's
+    // own account -- so it is reported here only so the picker can offer it in
+    // the same list, and marked as what it is.
+    browser: { id: 'puter', label: 'Puter', ready: false, note: 'Draws in your browser, billed to your Puter account when signed in.' },
+    providers: imageProvidersReport(),
+  }, { 'Cache-Control': 'no-store' });
 }
 
 // Providers disagree on error shape: some nest a message under error, some
@@ -2324,6 +2825,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);
     if (urlPath === '/api/llm/limits' && req.method === 'GET') return llmLimits(req, res);
     if (urlPath === '/api/llm/chat' && req.method === 'POST') return llmChat(req, res);
+    if (urlPath === '/api/llm/images/providers' && req.method === 'GET') return llmImageProviders(req, res);
     if (urlPath === '/api/llm/images/generations' && req.method === 'POST') return llmImage(req, res, 'generations');
     if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
     if (urlPath === '/api/llm/websearch' && req.method === 'GET') return llmWebsearch(req, res);

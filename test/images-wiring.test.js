@@ -31,13 +31,18 @@ const NAMES = [
   'editImageSource',
   'imageSourceFrom',
   'puterImageArgs',
+  'imageBackendsForTurn',
 ];
 
-function harness({ signedIn = false, puterResult = null, route = null } = {}) {
+function harness({ signedIn = false, puterResult = null, route = null, chosen = 'auto', ready = {} } = {}) {
   const calls = { puter: [], puterOpts: [], puterPrompts: [], fetch: [] };
   const deps = {
     // The real decisions, so the wiring is tested against the shipped rules.
     imageBackendOrder,
+    // The picker's state, as the page holds it: 'auto' is the chain, any other
+    // id is a service the user named and means.
+    imageProviderChoice: chosen,
+    imageProviderInfo: ready,
     imageFailureMessage,
     imageModelsFor,
     IMAGE_QUALITY,
@@ -76,8 +81,8 @@ function harness({ signedIn = false, puterResult = null, route = null } = {}) {
   return {
     deps,
     calls,
-    generate: (prompt, signal) => loaded.generateImageSource(prompt, signal),
-    generateMany: (prompt, count, signal) => loaded.generateImageSources(prompt, count, signal),
+    generate: (prompt, signal, outcome) => loaded.generateImageSource(prompt, signal, outcome),
+    generateMany: (prompt, count, signal, outcome) => loaded.generateImageSources(prompt, count, signal, outcome),
     edit: (prompt, source, signal, options) => loaded.editImageSource(prompt, source, signal, options),
   };
 }

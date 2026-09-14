@@ -104,7 +104,12 @@ test('generations proxies prompt JSON upstream and returns the payload', async (
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a red circle' });
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { data: [{ url: 'https://img.test/1.png' }] });
+    // The upstream's own payload is passed through, with the picture in it, and
+    // the service that drew named alongside -- which is the one fact about a
+    // picture that cannot be recovered from the picture itself.
+    const body = await res.json();
+    assert.deepEqual(body.data, [{ url: 'https://img.test/1.png' }]);
+    assert.equal(body.provider, 'nara');
     assert.deepEqual(JSON.parse(seenBody), { prompt: 'a red circle', model: 'img-alias-1' });
   } finally {
     app.close(); upstream.close();
@@ -177,6 +182,8 @@ test('edits refuses a source that is neither a data URL nor a link', async () =>
     const res = await post(app, '/api/llm/images/edits', { prompt: 'x', image: 'not-an-image' });
     // A 400 with the reason, not a malformed multipart body sent upstream to be
     // guessed at -- and not a 502, which would blame the provider for our input.
+    // The status is kept even though the route tries providers in turn: one
+    // provider tried means its answer is the answer.
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /data URL or an http\(s\) link/);
   } finally {

@@ -27,4 +27,17 @@ module.exports = [
       'no-undef': 'error',
     },
   },
+  {
+    // Loaded into the page by a <script> tag rather than required, so these are
+    // the browser's globals and not a typo. Listed per file rather than added to
+    // every file, because a node module reaching for `document` really is a bug.
+    files: ['transcript-controller.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        requestAnimationFrame: 'readonly',
+      },
+    },
+  },
 ];

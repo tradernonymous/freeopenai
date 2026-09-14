@@ -1762,6 +1762,7 @@
                             <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
                             </button>
+                            <select class="effort-select" id="imageProviderSelect" aria-label="Image provider" title="Which service draws — Puter uses your own account, the others use a key on the server" onchange="selectImageProvider(this.value)" hidden></select>
                             <button class="skills-toggle" type="button" id="skillsToggle" onclick="toggleSkills()" aria-pressed="true" title="Automatically apply relevant skills in Plan and Build modes">Auto-skills on</button>
                             <div style="position: relative;">
                                 <button class="skills-toggle" type="button" id="skillTrigger" onclick="event.stopPropagation(); toggleSkillMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Skills" title="Add a skill to this chat — it stays on for every later request">Skills</button>
@@ -2787,6 +2788,11 @@
         let puterReady = false;
         let lastFocusedBeforeModal = null;
         let imageMode = false;
+        // Which service draws. 'auto' is the chain that putters between Puter and
+        // the server route; anything else is the user naming one service and
+        // meaning it -- so nothing falls through behind an explicit choice.
+        let imageProviderChoice = 'auto';
+        let imageProviderInfo = {};
         let currentAbort = null;
         let generationId = 0;
         let autoRetryEnabled = true;
@@ -3011,6 +3017,7 @@
         const attachmentName = document.getElementById('attachmentName');
         const attachmentThumb = document.getElementById('attachmentThumb');
         const imageModeBtn = document.getElementById('imageModeBtn');
+        const imageProviderSelect = document.getElementById('imageProviderSelect');
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
@@ -3055,6 +3062,10 @@
                 puter.auth.onAuthStateChanged((user) => {
                     currentUser = user;
                     updateAuthUI();
+                    // Signing in is what makes Puter one of the services that can
+                    // draw, so the image picker is rebuilt when it changes rather
+                    // than showing a list that was true at page load.
+                    loadImageProviders();
                 });
             }
 
@@ -3080,6 +3091,7 @@
             // model, rather than waiting for the user to open Settings.
             refreshGithubStatus();
             loadProviders();
+            loadImageProviders();
             showStatus('success', 'Connected');
         }
 
@@ -4408,6 +4420,60 @@
             // Switching provider can change whether a Puter account is needed.
             updateAuthUI();
             showStatus('success', 'Provider: ' + id);
+        }
+
+        // Which service draws, and whether it can.
+        //
+        // The server knows which image providers it holds a key for; the browser
+        // knows whether Puter is signed in. Neither can answer for the other, so
+        // the list is one and the ready flag is decided on the side that can
+        // actually tell -- a picker offering a service nobody can reach is how a
+        // working setup turns into a failure the user then has to debug.
+        async function loadImageProviders() {
+            try {
+                const report = await safeJson(await fetch('/api/llm/images/providers'));
+                const rows = (report && Array.isArray(report.providers) ? report.providers : []).filter((p) => p.ready);
+                imageProviderInfo = Object.fromEntries(rows.map((p) => [p.id, p]));
+                const options = [{ id: 'auto', label: 'Auto' }];
+                if (puterCanDraw()) options.push({ id: 'puter', label: 'Puter' });
+                rows.forEach((p) => options.push({ id: p.id, label: p.label }));
+                // One service is not a choice, and the default already finds it.
+                if (options.length < 2) {
+                    imageProviderSelect.hidden = true;
+                    return;
+                }
+                const saved = localStorage.getItem('freeopenaiImageProvider');
+                imageProviderChoice = options.some((o) => o.id === saved) ? saved : 'auto';
+                imageProviderSelect.innerHTML = '';
+                options.forEach((option) => {
+                    const opt = document.createElement('option');
+                    opt.value = option.id;
+                    opt.textContent = option.label;
+                    imageProviderSelect.appendChild(opt);
+                });
+                imageProviderSelect.value = imageProviderChoice;
+                imageProviderSelect.hidden = false;
+            } catch {
+                imageProviderSelect.hidden = true;
+            }
+        }
+
+        function selectImageProvider(id) {
+            imageProviderChoice = id;
+            localStorage.setItem('freeopenaiImageProvider', id);
+            const label = id === 'auto' ? 'Auto (Puter first)' : ((imageProviderInfo[id] && imageProviderInfo[id].label) || id);
+            showStatus('success', 'Image provider: ' + label);
+        }
+
+        // The drawer's name for this turn: 'auto' means the chain, any other id
+        // means that one service and nothing behind it. Naming one is a decision
+        // -- spending a second operator's key because the first said no would be
+        // a different choice made on the user's behalf.
+        function imageBackendsForTurn(options) {
+            const chosen = imageProviderChoice;
+            if (chosen === 'puter') return ['puter'];
+            if (chosen && chosen !== 'auto') return ['server'];
+            return imageBackendOrder({ puterSignedIn: puterCanDraw(), serverFirst: !!(options && options.mask) });
         }
 
         // Providers whose account was refused outright. Kept for the session so
@@ -6015,18 +6081,31 @@
         // silent difference in the result.
         async function imageSourceFrom(kind, promptText, sourceDataUrl, signal, opts) {
             const options = opts || {};
+            // Where the caller's notes and the drawing service's name go. The
+            // caller's own `outcome` is preferred so the object it reads after
+            // this returns is the one that was written to -- a report that lands
+            // on a copy nobody reads is the same as no report at all.
+            const outcome = options.outcome && Array.isArray(options.outcome.notes) ? options.outcome : options;
+            if (!Array.isArray(outcome.notes)) outcome.notes = [];
             const errors = { puterError: '', serverError: '', refused: false };
-            const order = imageBackendOrder({ puterSignedIn: puterCanDraw(), serverFirst: !!options.mask });
+            const order = imageBackendsForTurn(options);
+            // Only a named server provider travels in the body. 'auto' is the
+            // server's own chain, and pinning a provider the server does not hold
+            // a key for would turn a chain that works into a single 400.
+            const namedProvider = order[0] === 'server' && imageProviderInfo[imageProviderChoice] ? imageProviderChoice : '';
             for (const backend of order) {
                 if (backend === 'puter') {
-                    if (options.mask && options.notes && errors.serverError) {
-                        options.notes.push('the brush mask was dropped — Puter cannot take one');
+                    if (options.mask && errors.serverError) {
+                        outcome.notes.push('the brush mask was dropped — Puter cannot take one');
                     }
                     for (const model of options.models) {
                         try {
                             const args = puterImageArgs(kind, { model, quality: IMAGE_QUALITY }, sourceDataUrl);
                             const imgEl = await puter.ai.txt2img(promptText, args);
-                            if (imgEl && imgEl.src) return [imgEl.src];
+                            if (imgEl && imgEl.src) {
+                                outcome.drewWith = 'Puter';
+                                return [imgEl.src];
+                            }
                             errors.puterError = 'returned no image';
                         } catch (error) {
                             if (error && error.name === 'AbortError') throw error;
@@ -6055,6 +6134,7 @@
                     const body = kind === 'edit'
                         ? { prompt: promptText, image: sourceDataUrl, quality: IMAGE_QUALITY, ...(options.mask ? { mask: options.mask } : {}) }
                         : { prompt: promptText, quality: IMAGE_QUALITY, ...(options.count && options.count > 1 ? { n: options.count } : {}) };
+                    if (namedProvider) body.provider = namedProvider;
                     const res = await fetch(kind === 'edit' ? '/api/llm/images/edits' : '/api/llm/images/generations', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -6065,6 +6145,14 @@
                     if (!res.ok) throw new Error(data.error || 'the image route refused the request');
                     const urls = imageUrlsFrom(data);
                     if (!urls.length) throw new Error('the image route returned no image');
+                    // Which service drew, and any caveat it had to report (a
+                    // dropped brush mask). Both are the server's answers to
+                    // questions the user asked with a request, so they are said
+                    // out loud rather than inferred from the picture.
+                    outcome.drewWith = data.providerLabel || namedProvider || 'the server';
+                    if (Array.isArray(data.notes)) data.notes.forEach((note) => {
+                        if (!outcome.notes.includes(note)) outcome.notes.push(note);
+                    });
                     return urls;
                 } catch (error) {
                     if (error && error.name === 'AbortError') throw error;
@@ -6090,8 +6178,21 @@
                 mask: opts.mask || '',
                 models: imageModelsFor('edit'),
                 notes,
+                outcome: opts.outcome,
             });
             return urls[0];
+        }
+
+        // What the status line says about a picture that arrived: which service
+        // drew it, and anything it had to report about itself (a brush mask it
+        // could not take). One sentence, in the one place a user looks after
+        // pressing send -- the alternative is a picture with no provenance and a
+        // caveat nobody ever read.
+        function imageOutcomeStatus(base, outcome) {
+            const parts = [];
+            if (outcome && outcome.drewWith) parts.push(outcome.drewWith);
+            if (outcome && Array.isArray(outcome.notes)) parts.push(...outcome.notes);
+            return parts.length ? base + ' — ' + parts.join('; ') : base;
         }
 
         // The source is prepared by the caller because there are two of them: the
@@ -6100,13 +6201,13 @@
         async function sendImageEdit(promptText, source, runId = generationId, controller = currentAbort, options = {}) {
             let bubble = null;
             let filled = false;
-            const notes = [];
+            const outcome = { notes: [] };
             const label = options.sourceLabel ? ' (edit of ' + options.sourceLabel + ')' : ' (edit of your image)';
             try {
                 usageCount++;
                 updateUsageDisplay();
                 bubble = createImageBubble();
-                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes });
+                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes: outcome.notes, outcome });
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
@@ -6117,8 +6218,8 @@
                 // A caveat is not a success, and a success is not a caveat: the
                 // mask being dropped is worth saying without pretending it did not
                 // happen, which is why the two are not the same sentence.
-                if (notes.length) showStatus('info', 'Edited image ready — ' + notes.join('; '));
-                else showStatus('success', 'Edited image ready');
+                if (outcome.notes.length) showStatus('info', imageOutcomeStatus('Edited image ready', outcome));
+                else showStatus('success', imageOutcomeStatus('Edited image ready', outcome));
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -6137,9 +6238,12 @@
         }
 
         async function generateImageSource(promptText, signal, options) {
+            const opts = options || {};
             const urls = await imageSourceFrom('generate', promptText, '', signal, {
                 models: imageModelsFor('generate'),
-                count: (options && options.count) || 1,
+                count: opts.count || 1,
+                notes: opts.notes,
+                outcome: opts.outcome,
             });
             return urls[0];
         }
@@ -6149,14 +6253,17 @@
         // at one), so whatever comes back short is drawn again the way a single
         // picture always was. Puter has no count at all, which is why the top-up
         // is a loop rather than a second parameter.
-        async function generateImageSources(promptText, count, signal) {
+        async function generateImageSources(promptText, count, signal, options) {
+            const opts = options || {};
             const wanted = Math.max(1, Math.min(4, Number(count) || 1));
             const urls = await imageSourceFrom('generate', promptText, '', signal, {
                 models: imageModelsFor('generate'),
                 count: wanted,
+                notes: opts.notes,
+                outcome: opts.outcome,
             });
             while (urls.length < wanted) {
-                urls.push(await generateImageSource(promptText, signal));
+                urls.push(await generateImageSource(promptText, signal, { outcome: opts.outcome }));
             }
             return urls.slice(0, wanted);
         }
@@ -6164,13 +6271,14 @@
         async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort) {
             let bubble = null;
             let filled = false;
+            const outcome = { notes: [] };
             const startedAt = Date.now();
             try {
                 usageCount++;
                 updateUsageDisplay();
 
                 bubble = createImageBubble();
-                const imageSrc = await generateImageSource(promptText, controller.signal);
+                const imageSrc = await generateImageSource(promptText, controller.signal, { outcome });
 
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
@@ -6179,7 +6287,7 @@
                 removeTypingIndicator();
                 fillImageBubble(bubble, promptText, imageSrc);
                 filled = true;
-                showStatus('success', 'Image ready');
+                showStatus('success', imageOutcomeStatus('Image ready', outcome));
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -6440,6 +6548,7 @@
             showTypingIndicator();
             let bubble = null;
             const made = [];
+            const outcome = { notes: [] };
             try {
                 usageCount++;
                 updateUsageDisplay();
@@ -6449,7 +6558,7 @@
                 // One request where the backend can take a count, topped up one at
                 // a time where it cannot -- the difference between two billed
                 // renders and one, for the same two pictures.
-                const urls = await generateImageSources(promptText, 2, controller.signal);
+                const urls = await generateImageSources(promptText, 2, controller.signal, { outcome });
                 for (let i = 0; i < urls.length; i++) {
                     if (!isActiveRun(runId, controller)) throw abortError();
                     const imageSrc = urls[i];
@@ -6466,7 +6575,7 @@
                 }
                 removeTypingIndicator();
                 finishImageContent(bubble, promptText + ' (variations)', made);
-                showStatus('success', 'Variations ready');
+                showStatus('success', imageOutcomeStatus('Variations ready', outcome));
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble) {
@@ -6665,7 +6774,7 @@
             showTypingIndicator();
             let bubble = null;
             let filled = false;
-            const notes = [];
+            const outcome = { notes: [] };
             try {
                 usageCount++;
                 updateUsageDisplay();
@@ -6686,7 +6795,7 @@
                 // no Nara key gets a picture instead of "NARA_IMAGE_MODEL": the
                 // brush used to go straight at the server route, which was the
                 // whole reason a mask edit produced nothing for those accounts.
-                const url = await editImageSource(prompt, srcData, controller.signal, { mask: maskData, notes });
+                const url = await editImageSource(prompt, srcData, controller.signal, { mask: maskData, notes: outcome.notes, outcome });
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
@@ -6694,8 +6803,8 @@
                 removeTypingIndicator();
                 fillImageBubble(bubble, prompt + ' (edit)', url);
                 filled = true;
-                if (notes.length) showStatus('info', 'Edit ready — ' + notes.join('; '));
-                else showStatus('success', 'Edit ready');
+                if (outcome.notes.length) showStatus('info', imageOutcomeStatus('Edit ready', outcome));
+                else showStatus('success', imageOutcomeStatus('Edit ready', outcome));
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
