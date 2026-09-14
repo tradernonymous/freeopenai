@@ -254,13 +254,52 @@ async function main() {
       switchView('gallery');
       const image = document.querySelector('#galleryGrid img');
       const gallery = { stored: !!(entry.images && entry.images.length), jpeg: !!(entry.images && entry.images[0] && entry.images[0].url.startsWith('data:image/jpeg')), rendered: !!image };
-      return { detached, jumped, settleGaps, attachment, gallery };
+
+      // A real sendMessage() on a stubbed model call: the whole body runs, so
+      // a use-before-declaration or a broken handler kills the probe instead
+      // of shipping a composer that silently does nothing (that exact bug once
+      // passed every unit test -- it only shows when the function executes).
+      // The smoke server has no AUTH_USER_*, so needsPuterLogin() is true for
+      // a fresh visitor; a signed-in deployment with its own login does not
+      // demand Puter, which is the state simulated here.
+      const providerOriginal = selectedProvider;
+      const runOriginal = runChatWithTools;
+      const loginOriginal = loginRequired;
+      selectedProvider = 'smoke-direct';
+      loginRequired = true;
+      runChatWithTools = async () => ({
+        message: { role: 'assistant', content: 'smoke reply text' },
+        exhausted: false,
+        finishReason: 'stop',
+      });
+      const input = document.getElementById('chatInput');
+      input.value = 'smoke send probe';
+      let sendError = '';
+      try { await sendMessage(); } catch (e) { sendError = String(e && e.message || e); }
+      try {
+        selectedProvider = providerOriginal;
+        runChatWithTools = runOriginal;
+        loginRequired = loginOriginal;
+      } catch { /* restore best-effort */ }
+      const sent = messages.map((m) => m.type + ':' + (m.content || '')).join('|');
+      const send = {
+        error: sendError,
+        inputCleared: input.value === '',
+        userEcho: sent.includes('user:smoke send probe'),
+        botReply: sent.includes('bot:smoke reply text'),
+        transcriptShows: document.getElementById('chatMessages').textContent.includes('smoke reply text'),
+      };
+      return { detached, jumped, settleGaps, attachment, gallery, send };
     })()`);
     console.log('behaviour: ' + JSON.stringify(behavior));
     if (behavior.detached.before !== behavior.detached.after || !behavior.detached.pill || behavior.detached.label !== '1 new') {
       throw new Error('detached transcript did not preserve position and announce one new item');
     }
     if (behavior.jumped.gap > 120 || behavior.jumped.pill) throw new Error('jump-to-newest did not settle at the bottom');
+    if (behavior.send.error) throw new Error('sendMessage threw in the browser: ' + behavior.send.error);
+    if (!behavior.send.inputCleared || !behavior.send.userEcho || !behavior.send.botReply || !behavior.send.transcriptShows) {
+      throw new Error('the composer did not complete a send: ' + JSON.stringify(behavior.send));
+    }
     if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
     if (!behavior.gallery.stored || !behavior.gallery.jpeg || !behavior.gallery.rendered) throw new Error('generated image did not survive into the Gallery');
 

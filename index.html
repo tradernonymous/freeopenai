@@ -5497,6 +5497,17 @@
                 return;
             }
 
+            // Attachment state must be read before the image decision: these
+            // consts are declared above imageAction on purpose — using a let/
+            // const before its declaration is a ReferenceError (the TDZ), and
+            // that exact bug once made Enter and the send button dead.
+            const attachedImageFile = pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.file : null;
+            const hadAttachment = !!pendingAttachment;
+            let outgoing = raw;
+            if (pendingAttachment && pendingAttachment.kind === 'text') {
+                outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
+            }
+
             // One decision for the whole turn, from chatlib: an attached image
             // makes any image request an edit of that image, never a fresh
             // text-to-image generation -- which is how "change the color of my
@@ -5505,13 +5516,6 @@
             const generateImage = imageActionTaken !== 'chat';
             const editImage = imageActionTaken === 'edit' && attachedImageFile;
             if (imageMode) toggleImageMode();
-
-            const attachedImageFile = pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.file : null;
-            const hadAttachment = !!pendingAttachment;
-            let outgoing = raw;
-            if (pendingAttachment && pendingAttachment.kind === 'text') {
-                outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
-            }
 
             addMessage('user', raw);
             clearAttachment();
