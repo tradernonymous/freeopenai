@@ -45,11 +45,15 @@ test('the attach menu is fixed to the viewport, and its trigger cannot scroll aw
   const settingsAt = HTML.indexOf('class="composer-settings"');
   const trigger = HTML.indexOf('id="attachTrigger"');
   const menu = HTML.indexOf('id="attachMenu"');
-  const imageBtn = HTML.indexOf('id="imageModeBtn"');
+  const chip = HTML.indexOf('id="sessionChip"');
   assert.ok(actionsAt !== -1 && settingsAt > actionsAt, 'the actions group must come first');
   assert.ok(trigger > actionsAt && trigger < settingsAt, 'the attach trigger left the actions group');
   assert.ok(menu > trigger && menu < settingsAt, 'the menu must still live beside its trigger');
-  assert.ok(imageBtn > trigger && imageBtn < settingsAt, 'draw must stay beside attach, not scroll with the settings');
+  // The session chip is a setting, not an action: it opens a surface, it does
+  // not send anything. It belongs on the scrolling side with the model chip, and
+  // the actions group is attach's alone now that draw is a switch in the panel.
+  assert.ok(chip > settingsAt, 'the session chip left the settings group');
+  assert.equal(HTML.includes('id="imageModeBtn"'), false, 'draw is a switch in the session panel now');
 });
 
 test('opening the menu places it, and a resize re-places it', () => {

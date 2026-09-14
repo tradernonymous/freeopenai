@@ -202,10 +202,12 @@ async function main() {
             settingsScrolls: settings.scrollWidth > settings.clientWidth + 1,
             actionsScrolls: actions.scrollWidth > actions.clientWidth + 1,
             attach: place(el('#attachTrigger')),
-            image: place(el('#imageModeBtn')),
-            // The picker that made this row too long is gone; a second one coming
-            // back is the regression this notices.
+            sessionChip: place(el('#sessionChip')),
+            // The pickers that made this row too long are gone; one coming back
+            // is the regression this notices.
             imageProviderSelect: !!el('#imageProviderSelect'),
+            imageModeButton: !!el('#imageModeBtn'),
+            skillToggles: !!el('#skillsToggle') || !!el('#skillTrigger'),
           };
         })();
         const messages = document.getElementById('chatMessages');
@@ -236,25 +238,23 @@ async function main() {
           closeThemeMenu();
           return out;
         })();
-        // The two side panels are pop-ups, not columns. That claim is only
-        // worth anything if the conversation does not move when they open, if
-        // they stay off the composer, and if they cannot land on each other --
-        // so all three are measured here rather than asserted in a stylesheet.
+        // The session surface is one pop-up with three sections, not two columns
+        // and not three switches in the composer. That claim is only worth
+        // anything if the conversation does not move when it opens, if it stays
+        // off the composer, and if its sections really are one at a time -- so
+        // all three are measured here rather than asserted in a stylesheet.
         //
         // Both states are measured after the 200ms slide has finished: read a
         // frame too early and an opening panel still reports the position and
         // opacity it is leaving, which is how a check like this passes while
         // the panel sits on top of Send.
-        const panels = await (async () => {
+        const session = await (async () => {
           const shell = el('#viewChat .chat-shell');
-          if (!shell || typeof toggleTodos !== 'function' || typeof toggleSkillRail !== 'function') return null;
+          if (!shell || typeof toggleSessionPanel !== 'function' || typeof showSessionTab !== 'function') return null;
           const settle = () => new Promise((done) => setTimeout(done, 300));
           const card = el('#viewChat .chat-card');
           const width = () => (card ? Math.round(card.getBoundingClientRect().width) : null);
-          const open = () => ({
-            todos: !shell.classList.contains('todos-hidden'),
-            skills: !shell.classList.contains('skills-hidden'),
-          });
+          const isOpen = () => !shell.classList.contains('session-hidden');
           const box = (selector) => {
             const node = el(selector);
             if (!node) return null;
@@ -266,42 +266,55 @@ async function main() {
           const composer = box('.composer');
           const bar = box('#viewChat .chat-bar');
           const sidebar = box('#historySidebar');
-          const restore = open();
+          const restore = isOpen();
 
           // Closed first: a panel that is merely transparent would still be
           // eating the clicks meant for the transcript.
-          toggleTodos(false, false);
-          toggleSkillRail(false, false);
+          toggleSessionPanel(false, false);
           await settle();
-          const shut = { todo: box('#todoSidebar'), rail: box('#skillRail') };
+          const shut = box('#sessionPanel');
           const closedWidth = width();
 
-          // Then both asked for at once. On a card with room for the two gutters
-          // they stay open together; on one without, the fit rule puts the newer
-          // request first and the older panel away.
-          toggleTodos(true, false);
-          toggleSkillRail(true, false);
+          // Then open. One surface means there is no fit rule left to consult and
+          // nothing for it to land on, so all that is measured is where it is.
+          toggleSessionPanel(true, false);
           await settle();
-          const shown = { todo: box('#todoSidebar'), rail: box('#skillRail') };
-          // On a phone the panels are takeovers, and a takeover without a scrim
-          // is a trap: the drawer covers half the screen and the half it does
-          // not cover still looks tappable.
-          const scrim = { todo: box('#todoScrim'), rail: box('#skillScrim') };
-          const kept = open();
+          const shown = box('#sessionPanel');
+          // On a phone the panel is a takeover, and a takeover without a scrim is
+          // a trap: the drawer covers most of the screen and what it leaves still
+          // looks tappable.
+          const scrim = box('#sessionScrim');
+          const kept = isOpen();
           const openWidth = width();
 
-          toggleTodos(!!restore.todos, false);
-          toggleSkillRail(!!restore.skills, false);
+          // One section at a time, and the tab that says so agrees with the
+          // section that is painted.
+          const sections = ['skills', 'tasks', 'image'];
+          const tabs = sections.map((name) => {
+            showSessionTab(name, false);
+            const drawn = sections.filter((other) => {
+              const node = el('#sessionSection' + other.charAt(0).toUpperCase() + other.slice(1));
+              return !!node && getComputedStyle(node).display !== 'none';
+            });
+            const btn = el('#sessionTab' + name.charAt(0).toUpperCase() + name.slice(1));
+            return { tab: name, drawn, pressed: btn ? btn.getAttribute('aria-pressed') : null };
+          });
+
+          toggleSessionPanel(!!restore, false);
           await settle();
+
+          // The panel has two doors -- the chip in the composer and the button in
+          // the bar -- and at least one of them has to be on screen at every
+          // size, or the surface is unreachable and everything in it is dead.
+          const doors = [el('#sessionChip'), el('#sessionToggle')].filter(Boolean).map((node) => {
+            const r = node.getBoundingClientRect();
+            return r.width > 0 && r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1;
+          });
 
           return {
             closedWidth, openWidth, kept, restored: restore, bar, sidebar,
-            hidden: { todo: shut.todo, rail: shut.rail },
-            shown, scrim,
-            bothAtOnce: kept.todos && kept.skills,
-            overlapEachOther: overlaps(shown.todo, shown.rail),
-            todoOverComposer: overlaps(shown.todo, composer),
-            railOverComposer: overlaps(shown.rail, composer),
+            hidden: shut, shown, scrim, tabs, doors,
+            overComposer: overlaps(shown, composer),
             viewportWidth: innerWidth,
             viewportHeight: innerHeight,
           };
@@ -319,7 +332,7 @@ async function main() {
           composerControls,
           themeButton,
           appearance,
-          panels,
+          session,
           overflow: document.documentElement.scrollWidth > innerWidth + 1,
           messageGap: messages.scrollHeight - messages.scrollTop - messages.clientHeight,
         };
@@ -380,11 +393,15 @@ async function main() {
       const c = shot.composerControls;
       if (!c) throw new Error(name + ' has no composer controls at all');
       if (c.imageProviderSelect) throw new Error(name + ' still offers a second image provider picker');
+      // The three controls the session panel absorbed are gone from the row. A
+      // one-chip row is the point: fewer things to find, and the two every
+      // message needs cannot be pushed off the edge by the ones nobody touches.
+      if (c.imageModeButton) throw new Error(name + ' still has a draw button beside attach');
+      if (c.skillToggles) throw new Error(name + ' still has the skill chips in the composer');
+      if (!c.sessionChip) throw new Error(name + ' has no way to reach the session panel from the composer');
       if (c.actionsScrolls) throw new Error(name + ' lets the actions group scroll');
-      for (const [which, place] of [['attach', c.attach], ['draw', c.image]]) {
-        if (!place) throw new Error(name + ' has no ' + which + ' button');
-        if (!place.inView) throw new Error(name + ' puts the ' + which + ' button off screen: ' + JSON.stringify(place));
-      }
+      if (!c.attach) throw new Error(name + ' has no attach button');
+      if (!c.attach.inView) throw new Error(name + ' puts the attach button off screen: ' + JSON.stringify(c.attach));
       const sameRow = Math.abs(c.settings.top - c.actions.top) <= 2;
       if (sameRow && c.attach.right > c.settings.left + 1) {
         throw new Error(name + ' overlaps the settings with the actions: ' + JSON.stringify(c));
@@ -392,7 +409,7 @@ async function main() {
       // A phone fits the settings on a second row rather than beside the
       // actions, and that second row is the whole reason the actions stay put.
       if (Number(shot.viewport.split('x')[0]) <= 640 && sameRow) {
-        throw new Error(name + ' keeps one row on a phone, which is what pushed attach and draw off the edge: ' + JSON.stringify(c));
+        throw new Error(name + ' keeps one row on a phone, which is what pushed attach off the edge: ' + JSON.stringify(c));
       }
     }
 
@@ -486,82 +503,75 @@ async function main() {
       throw new Error('the size hint leaves no room to type: ' + JSON.stringify(phoneHint));
     }
 
-    // The panels float, so opening one must not resize the conversation, must
-    // not sit on the composer, and must not land on its neighbour.
+    // The session panel floats, so opening it must not resize the conversation
+    // and must not sit on the composer. One surface means the overlap rule the
+    // two cards needed has nothing left to arbitrate.
     for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {
-      const p = shot.panels;
+      const p = shot.session;
       const viewportWidth = Number(shot.viewport.split('x')[0]);
       const viewportHeight = Number(shot.viewport.split('x')[1]);
-      if (!p) throw new Error(name + ' has no side panels at all');
+      if (!p) throw new Error(name + ' has no session panel at all');
       if (p.closedWidth !== p.openWidth) {
-        throw new Error(name + ' resizes the conversation when a panel opens: ' + p.closedWidth + ' -> ' + p.openWidth);
+        throw new Error(name + ' resizes the conversation when the panel opens: ' + p.closedWidth + ' -> ' + p.openWidth);
       }
       // A pop-up or a takeover? The same breakpoint the stylesheet uses: a
-      // small width or a short viewport turns the panels into drawers.
+      // small width or a short viewport turns the panel into a drawer.
       const desktopShaped = viewportWidth > 640 && viewportHeight > 520;
-      if (p.overlapEachOther) {
-        throw new Error(name + ' has its two panels on top of each other: ' + JSON.stringify(p.shown));
+      if (!p.kept) throw new Error(name + ' refused to open the session panel');
+      if (!p.doors.some(Boolean)) {
+        throw new Error(name + ' leaves the session panel with nothing to open it: ' + JSON.stringify(p.doors));
       }
-      if (desktopShaped && (p.railOverComposer || p.todoOverComposer)) {
-        throw new Error(name + ' has a panel over the composer: ' + JSON.stringify({ todo: p.todoOverComposer, rail: p.railOverComposer, composer: shot.composer }));
+      const box = p.shown;
+      if (!box || box.width < 180) throw new Error(name + ' draws an unusably small session panel: ' + JSON.stringify(box));
+      if (box.opacity < 0.9) throw new Error(name + ' claims the panel is open but paints it at ' + box.opacity);
+      if (box.pointer === 'none') throw new Error(name + ' opens the panel and then ignores clicks on it');
+      if (box.left < -1 || box.right > viewportWidth + 1 || box.top < -1 || box.bottom > viewportHeight + 1) {
+        throw new Error(name + ' puts the session panel off screen: ' + JSON.stringify(box));
       }
-      // Closing one is the whole point of the toggle coming back, so the panel
-      // that is open after both were requested has to be on screen -- measured
-      // after the slide, not during it.
-      const openOnes = [['todo', p.shown.todo, p.kept.todos], ['rail', p.shown.rail, p.kept.skills]].filter(([, , isOpen]) => isOpen);
-      if (!openOnes.length) throw new Error(name + ' refused to open either panel');
-      for (const [which, box] of openOnes) {
-        if (!box || box.width < 180) throw new Error(name + ' draws an unusably small ' + which + ' panel: ' + JSON.stringify(box));
-        if (box.opacity < 0.9) throw new Error(name + ' claims the ' + which + ' panel is open but paints it at ' + box.opacity);
-        if (box.pointer === 'none') throw new Error(name + ' opens the ' + which + ' panel and then ignores clicks on it');
-        if (box.left < -1 || box.right > viewportWidth + 1 || box.top < -1 || box.bottom > viewportHeight + 1) {
-          throw new Error(name + ' puts the ' + which + ' panel off screen: ' + JSON.stringify(box));
+      // The three sections really are one at a time, and the pressed tab is the
+      // one on screen. A surface whose tabs all draw at once is a column of
+      // everything, which is what this consolidation was meant to end.
+      for (const tab of p.tabs) {
+        if (tab.drawn.length !== 1 || tab.drawn[0] !== tab.tab) {
+          throw new Error(name + ' draws the wrong session sections for ' + tab.tab + ': ' + JSON.stringify(tab));
         }
-        // A panel that floats beside the chat must stop above the composer, so
-        // Send stays reachable with a list open. A drawer is a different shape
-        // and answers a different question -- it covers the composer on purpose,
-        // behind a scrim that has to be there.
-        if (desktopShaped) {
-          if (box.bottom > shot.composer.top) {
-            throw new Error(name + ' runs the ' + which + ' panel into the composer: ' + JSON.stringify({ panelBottom: box.bottom, composerTop: shot.composer.top }));
-          }
-          // And it sits under the bar, never over it: the toggle that closes it
-          // lives up there.
-          if (box.top < p.bar.bottom - 1) {
-            throw new Error(name + ' runs the ' + which + ' panel over the bar: ' + JSON.stringify({ panelTop: box.top, barBottom: p.bar.bottom }));
-          }
-          // Beside the chat means beside the chat *list* too: a panel over the
-          // Chats column cannot be dismissed from a list nobody can reach.
-          if (which === 'rail' && p.sidebar && p.sidebar.width > 0 && box.left < p.sidebar.right - 1) {
-            throw new Error(name + ' puts the skills panel over the chat list: ' + JSON.stringify({ panelLeft: box.left, sidebarRight: p.sidebar.right }));
-          }
-        } else {
-          const scrim = which === 'todo' ? p.scrim.todo : p.scrim.rail;
-          if (!scrim || scrim.opacity < 0.1 || scrim.pointer === 'none') {
-            throw new Error(name + ' opens a ' + which + ' drawer with nothing guarding the rest of the screen: ' + JSON.stringify(scrim));
-          }
-          if (scrim.width < viewportWidth * 0.5) {
-            throw new Error(name + ' leaves most of the screen live behind the ' + which + ' drawer: ' + JSON.stringify(scrim));
-          }
+        if (tab.pressed !== 'true') {
+          throw new Error(name + ' leaves the ' + tab.tab + ' tab unpressed while showing it');
         }
       }
-      // The other one is put away: gone, not merely faint, and out of reach.
-      for (const [which, box, isOpen] of [['todo', p.shown.todo, p.kept.todos], ['rail', p.shown.rail, p.kept.skills]]) {
-        if (isOpen || !box) continue;
-        const clear = box.opacity === 0 || box.right <= 0 || box.left >= viewportWidth;
-        if (!clear || box.pointer !== 'none') {
-          throw new Error(name + ' leaves the closed ' + which + ' panel in the way: ' + JSON.stringify(box));
+      // A panel that floats beside the chat must stop above the composer, so
+      // Send stays reachable with a list open. A drawer is a different shape and
+      // answers a different question -- it covers the composer on purpose,
+      // behind a scrim that has to be there.
+      if (desktopShaped) {
+        if (p.overComposer) {
+          throw new Error(name + ' runs the session panel into the composer: ' + JSON.stringify({ panelBottom: box.bottom, composerTop: shot.composer.top }));
+        }
+        // And it sits under the bar, never over it: the button that closes it
+        // lives up there.
+        if (box.top < p.bar.bottom - 1) {
+          throw new Error(name + ' runs the session panel over the bar: ' + JSON.stringify({ panelTop: box.top, barBottom: p.bar.bottom }));
+        }
+      } else {
+        const scrim = p.scrim;
+        if (!scrim || scrim.opacity < 0.1 || scrim.pointer === 'none') {
+          throw new Error(name + ' opens the drawer with nothing guarding the rest of the screen: ' + JSON.stringify(scrim));
+        }
+        if (scrim.width < viewportWidth * 0.5) {
+          throw new Error(name + ' leaves most of the screen live behind the drawer: ' + JSON.stringify(scrim));
+        }
+        // A portrait phone has no room beside anything, so the drawer is a
+        // takeover. A landscape one is wide enough for a narrower strip, which
+        // is exactly what the landscape block narrows it to.
+        if (viewportWidth <= 400 && box.width < viewportWidth * 0.6) {
+          throw new Error(name + ' drawer is not a takeover: ' + JSON.stringify(box));
         }
       }
-      // Wide enough for both, both stay open -- that is the whole point of the
-      // measurement the toggles consult.
-      if (viewportWidth >= 1600 && !p.bothAtOnce) {
-        throw new Error(name + ' opens only one panel despite having room for both');
-      }
-      // On a phone they are takeovers: full height, flush to their edge.
-      if (viewportWidth <= 400) {
-        for (const [which, box] of [['todo', p.shown.todo], ['rail', p.shown.rail]]) {
-          if (box.width < viewportWidth * 0.6) throw new Error(name + ' ' + which + ' drawer is not a takeover: ' + JSON.stringify(box));
+      // The closed state is gone, not merely faint, and out of reach.
+      if (p.hidden) {
+        const clear = p.hidden.opacity === 0 || p.hidden.right <= 0 || p.hidden.left >= viewportWidth;
+        if (!clear || p.hidden.pointer !== 'none') {
+          throw new Error(name + ' leaves the closed panel in the way: ' + JSON.stringify(p.hidden));
         }
       }
     }

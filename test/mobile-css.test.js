@@ -68,21 +68,21 @@ test('CSS and JS name the same small screen, and the JS adds nothing of its own'
   assert.doesNotMatch(fn[0], /hover:\s*none/, 'the CSS has no pointer test here, so the JS must not invent one');
 });
 
-test('a landscape phone gets the off-canvas panels, not a third of the screen', () => {
+test('a landscape phone gets the off-canvas drawers, not a third of the screen', () => {
   // The off-canvas shape is shared by both small screens, so it lives in the
   // shared block; the landscape block only narrows the share of the width.
   assert.match(SMALL, /\.history-sidebar\s*\{[^}]*position:\s*absolute; top: 0; bottom: 0; left: 0/);
   assert.match(SMALL, /\.chat-shell\.history-hidden \.history-sidebar\s*\{[^}]*translateX\(-102%\)/);
-  assert.match(SMALL, /\.todo-sidebar\s*\{[^}]*position:\s*absolute; top: 0; bottom: 0; right: 0/);
-  assert.match(SMALL, /\.chat-shell\.todos-hidden \.todo-sidebar\s*\{[^}]*translateX\(102%\)/);
+  assert.match(SMALL, /\.session-panel\s*\{[^}]*position:\s*absolute; top: 0; bottom: 0; right: 0/);
+  assert.match(SMALL, /\.chat-shell\.session-hidden \.session-panel\s*\{[^}]*translateX\(102%\)/);
   assert.match(SMALL, /\.history-scrim\s*\{[^}]*display:\s*block/);
-  assert.match(SMALL, /\.todo-scrim\s*\{[^}]*display:\s*block/);
+  assert.match(SMALL, /\.session-scrim\s*\{[^}]*display:\s*block/);
   assert.match(SMALL, /\.chat-shell\.history-hidden \.history-scrim\s*\{[^}]*pointer-events:\s*none/);
-  assert.match(SMALL, /\.chat-shell\.todos-hidden \.todo-scrim\s*\{[^}]*pointer-events:\s*none/);
+  assert.match(SMALL, /\.chat-shell\.session-hidden \.session-scrim\s*\{[^}]*pointer-events:\s*none/);
 
   assert.ok(LANDSCAPE.length > 0, 'the landscape block is gone -- re-point this test');
   assert.match(LANDSCAPE, /\.history-sidebar,[\s\S]*?width: 34%/);
-  assert.match(LANDSCAPE, /\.todo-sidebar,[\s\S]*?width: 32%/);
+  assert.match(LANDSCAPE, /\.session-panel,[\s\S]*?width: 34%/);
 });
 
 test('every field resists the iOS focus zoom, in both orientations', () => {
@@ -115,7 +115,7 @@ test('every control in the composer row is one height on a small screen', () => 
   // A 44px select beside a 40px model chip beside a 30px automatic chip: three
   // heights in one row is most of what made a phone toolbar look assembled
   // rather than designed.
-  const row = ['.model-trigger', '.effort-chip', '.mode-chip', '.skills-toggle', '.effort-select', '#providerSelect'];
+  const row = ['.model-trigger', '.effort-chip', '.mode-chip', '.session-chip', '.effort-select', '#providerSelect'];
   const covered = rules(SMALL)
     .filter((r) => /min-height:\s*var\(--touch\)/.test(r.body))
     .flatMap((r) => r.selectors);

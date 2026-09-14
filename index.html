@@ -60,12 +60,9 @@
                tall the bar is or how big a finger target must be. */
             --bar-h: 44px;
             --touch: 44px;
-            /* The history rail's width, so the floating panels can sit beside
-               the chat list instead of on top of it. */
-            --history-w: 224px;
             /* The reading measure. The transcript window still spans the screen
-               -- the panels sit beside it, and code, tables and images use the
-               width -- but prose set 1400px wide loses the reader on every
+               -- the session panel sits over its edge, and code, tables and
+               images use the width -- but prose set 1400px wide loses the reader on every
                line. The message column and the composer share this number, so
                the input sits under the text it is answering. */
             --measure: 760px;
@@ -282,28 +279,33 @@
         .palette-item.selected { background: var(--accent-bg); color: var(--accent); }
         .palette-item .k { margin-left: auto; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
-        .history-scrim, .todo-scrim, .skill-scrim { display: none; }
+        .history-scrim, .session-scrim { display: none; }
 
-        /* The todo list and the skills card are glass pop-ups beside the chat
-           window, not columns of the layout.
+        /* The session surface: the one panel this app opens over the chat.
 
-           As columns they took 500px between them, which is what squeezed the
-           transcript on every laptop and what the app resolved by hiding the
-           skills card entirely between 1101px and 1499px -- "no room for a
-           third column". Floating, they cost the conversation nothing: the chat
-           card spans the window, the panels sit over its edges, and opening or
-           closing one no longer reflows the text being read. A list of the
-           work left to do is only useful while the work is visible, and that is
-           now true at every width instead of at three of them.
+           It holds what is true of *this conversation* -- the skills it applied
+           or has pinned, the plan the model recorded, and whether the next
+           message is read as a drawing. Those three used to be two cards in the
+           gutters plus three controls in the composer, which is four places to
+           look for one idea; as one surface the composer and the chat bar need
+           one control each.
+
+           As columns the two lists took 500px between them, which is what
+           squeezed the transcript on every laptop and what the app resolved by
+           hiding the skills card entirely between 1101px and 1499px -- "no room
+           for a third column". Floating, it costs the conversation nothing: the
+           chat card spans the window, the panel sits over its edge, and opening
+           or closing it no longer reflows the text being read. A list of the
+           work left to do is only useful while the work is visible.
 
            This is also the one place a backdrop blur earns its cost. The chat
            bar is refused one because it is opaque and there is nothing behind
            it to see; here there is a scrolling transcript behind the panel,
            which is exactly the case a blur exists for. */
-        .skill-rail, .todo-sidebar {
+        .session-panel {
             position: absolute; z-index: 25;
-            /* Under the bar, not over it: the two toggles that close these
-               panels live in that bar, and a pop-up covering the button that
+            /* Under the bar, not over it: the control that closes this panel
+               lives in that bar, and a pop-up covering the button that
                dismisses it is a trap. */
             top: calc(var(--bar-h) + 10px);
             /* And above the composer, which is the other version of the same
@@ -311,7 +313,7 @@
                like a wall. The floor is measured from the composer rather than
                guessed, because its height follows the input. */
             bottom: var(--panel-floor, 10px);
-            width: 272px; margin: 0;
+            right: 10px; width: 300px; margin: 0;
             display: flex; flex-direction: column;
             border: 1px solid var(--border-strong);
             border-radius: var(--r-lg);
@@ -320,27 +322,59 @@
             -webkit-backdrop-filter: blur(18px) saturate(1.6);
             box-shadow: var(--lift-lg), 0 16px 40px rgba(0, 0, 0, .35);
             overflow: hidden;
-            transition: transform 200ms cubic-bezier(.4, 0, .2, 1), left 160ms ease, opacity 160ms ease;
+            transition: transform 200ms cubic-bezier(.4, 0, .2, 1), opacity 160ms ease;
         }
-        /* Beside the chat, not over the chat list. The card's left edge is the
-           history rail's own width, so the inset is that width plus the same
-           10px gap every other edge uses; closing the history rail moves the
-           panel into the space it gave back. */
-        .skill-rail { left: calc(var(--history-w) + 10px); }
-        /* Closing the history rail gives its width back, and the panel moves
-           into it. A custom property rather than a second rule, so the drawer
-           shapes further down can still say `left: 0` and win. */
-        .chat-shell.history-hidden { --history-w: 0px; }
-        .todo-sidebar { right: 10px; width: 300px; }
         /* Out of the way means out of reach. A panel that is merely transparent
            is an invisible wall: the transcript underneath it would keep taking
            clicks for a list nobody can see. */
-        .chat-shell.skills-hidden .skill-rail,
-        .chat-shell.todos-hidden .todo-sidebar {
+        .chat-shell.session-hidden .session-panel {
             opacity: 0; pointer-events: none;
+            transform: translateX(calc(100% + 20px));
         }
-        .chat-shell.skills-hidden .skill-rail { transform: translateX(calc(-100% - 20px)); }
-        .chat-shell.todos-hidden .todo-sidebar { transform: translateX(calc(100% + 20px)); }
+        /* One surface, three sections, and a segmented control rather than a
+           stack: the panel has a fixed height, so stacked, whichever section sat
+           lowest would always be the one below the fold. */
+        .session-tabs {
+            display: flex; gap: 3px; flex-shrink: 0; padding: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .session-tab {
+            flex: 1; height: 26px; padding: 0 6px;
+            border: 1px solid transparent; border-radius: var(--r-sm);
+            background: transparent; color: var(--text-dim);
+            font: inherit; font-size: 11px; font-weight: 600;
+            cursor: pointer; transition: var(--transition);
+        }
+        .session-tab:hover { background: var(--surface-2); color: var(--text); }
+        .session-tab:focus-visible { outline: none; box-shadow: var(--glow); }
+        .session-tab[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+        /* One section at a time, and the section is the one scroll region: the
+           picker and the log below it move together rather than fighting over
+           the same 300px with two nested scrollbars. */
+        .session-section { display: none; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+        .session-section.active { display: block; }
+        /* A labelled switch, which is what an on/off setting looks like when it
+           stops being an unlabelled icon in a toolbar. */
+        .session-switch {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px 4px; font-size: 12px; color: var(--text);
+        }
+        .session-switch label { flex: 1; min-width: 0; cursor: pointer; }
+        .session-switch input { flex-shrink: 0; accent-color: var(--accent); }
+        .session-hint { margin: 0; padding: 0 12px 10px; font-size: 11px; line-height: 1.7; color: var(--text-muted); }
+        .session-subhead {
+            display: flex; align-items: center; gap: 6px;
+            margin: 0; padding: 10px 12px 4px;
+            font-size: 10px; font-weight: 600; letter-spacing: .05em;
+            text-transform: uppercase; color: var(--text-muted);
+        }
+        .session-subhead .todo-count { margin-left: auto; font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 500; }
+        .session-panel .model-dropdown-search { margin: 0 8px 6px; }
+        .session-panel .model-dropdown-list { overflow: visible; padding: 0 8px; }
+        /* The section is the one scroll region. Neither list keeps a scrollbar of
+           its own: two nested scrollers inside 300px is a maze, and the inner one
+           would be the only part dragging the mouse could reach. */
+        .session-section .rail-list, .session-section .todo-list { flex: none; overflow: visible; }
         .rail-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
         .rail-empty { padding: 10px 8px; font-size: 11.5px; line-height: 1.7; color: var(--text-muted); }
         .skill-row {
@@ -367,15 +401,14 @@
             padding: 7px 10px; font-size: 10.5px; color: var(--text-muted); line-height: 1.6;
         }
 
-        .todo-head, .rail-head {
+        .rail-head {
             display: flex; align-items: center; gap: 6px;
             padding: 8px 10px 8px 12px; height: 44px; flex-shrink: 0;
             border-bottom: 1px solid var(--border);
             font-size: 13px; font-weight: 600; color: var(--text-dim);
             white-space: nowrap;
         }
-        .todo-head .todo-count { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--text-muted); }
-        .todo-head .icon-btn, .rail-head .icon-btn { width: 24px; height: 24px; }
+        .rail-head .icon-btn { width: 24px; height: 24px; }
         .rail-head .rail-count { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--text-muted); }
         /* A hairline that fills as tasks finish. The number in the header says
            the same thing, but a bar is what tells you at a glance whether the
@@ -1005,9 +1038,9 @@
         .mask-canvas { width: 100%; border-radius: var(--r-sm); border: 1px solid var(--border); background: #000; touch-action: none; cursor: crosshair; display: block; }
         .mask-prompt { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; font: inherit; font-size: 13px; outline: none; margin-top: 10px; }
         /* One shape for every chip in the toolbar: same height, same radius,
-           same fill, same hover. `.model-trigger` and `.skills-toggle` are
+           same fill, same hover. `.model-trigger` and `.session-chip` are
            declared elsewhere and join in by using the same tokens. */
-        .effort-chip, .mode-chip, .skills-toggle {
+        .effort-chip, .mode-chip, .session-chip {
             height: var(--ctl-h); padding: 0 10px;
             border-radius: var(--ctl-r);
             background: var(--ctl-bg);
@@ -1018,10 +1051,10 @@
             cursor: pointer; white-space: nowrap;
             transition: var(--transition);
         }
-        .effort-chip:hover, .mode-chip:hover, .skills-toggle:hover {
+        .effort-chip:hover, .mode-chip:hover, .session-chip:hover {
             background: var(--ctl-bg-hover); color: var(--text); border-color: var(--border-strong);
         }
-        .effort-chip:focus-visible, .mode-chip:focus-visible, .skills-toggle:focus-visible,
+        .effort-chip:focus-visible, .mode-chip:focus-visible, .session-chip:focus-visible,
         .composer-attach:focus-visible, .composer-send:focus-visible, .icon-btn:focus-visible {
             outline: none; box-shadow: var(--glow); border-color: var(--accent);
         }
@@ -1250,10 +1283,11 @@
         .composer-settings > * { flex-shrink: 0; }
         .composer-controls .model-trigger { max-width: 220px; }
         .composer-controls .model-trigger #modelLabel { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
-        /* Shape comes from the shared chip rule above; only the selected state
-           is its own. */
-        .skills-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
-        .skills-toggle[aria-pressed="false"] { opacity: .65; }
+        /* Shape comes from the shared chip rule above; only the state is its
+           own. The chip is one button for the whole session surface, so all it
+           can say is open or closed -- and open is the lit one, because that is
+           the state you can see on screen anyway. */
+        .session-chip[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
 
         /* Skills pinned to this chat, above the composer. Hidden when there are
            none: a permanent empty row is worse than no row. */
@@ -1621,7 +1655,7 @@
                every control in the row is a finger target. min-height beats the
                height the desktop tokens set, which is why it works on the chips
                without a second rule for each of them. */
-            .model-trigger, .effort-chip, .mode-chip, .skills-toggle,
+            .model-trigger, .effort-chip, .mode-chip, .session-chip,
             .effort-select, #providerSelect { min-height: var(--touch); }
             .effort-select option { font-size: 14px; }
             .model-trigger { padding: 6px 6px; }
@@ -1653,46 +1687,26 @@
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
-            /* The todo card takes the same treatment from the other edge: 375px
-               has room for the chat or the plan, never both. Flush and square
-               here -- a floating card floating over the whole screen is just a
-               screen with a border on it. */
-            .todo-sidebar {
+            /* The session panel takes the same treatment from the right edge:
+               375px has room for the chat or the panel, never both. Flush and
+               square here -- a floating card floating over the whole screen is
+               just a screen with a border on it. */
+            .session-panel {
                 position: absolute; top: 0; bottom: 0; right: 0; z-index: 40;
                 width: 84%; max-width: 320px; margin: 0;
                 border-radius: 0; border-width: 0 0 0 1px;
                 box-shadow: 0 0 40px rgba(0, 0, 0, .5);
                 transform: translateX(0); transition: transform 180ms ease;
             }
-            .chat-shell.todos-hidden .todo-sidebar {
+            .chat-shell.session-hidden .session-panel {
                 width: 84%; opacity: 1; transform: translateX(102%);
                 border-left-color: var(--border);
             }
-            .todo-scrim {
+            .session-scrim {
                 display: block; position: absolute; inset: 0; z-index: 39;
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
-            .chat-shell.todos-hidden .todo-scrim { opacity: 0; pointer-events: none; }
-            /* The skills card takes the same treatment from the other edge. On a
-               phone it used to be a 212px column of a 390px screen, which is
-               how it ended up starting hidden and staying hard to reach; a
-               drawer it can open and close is the shape that fits. */
-            .skill-rail {
-                position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
-                width: 84%; max-width: 320px;
-                border-radius: 0; border-width: 0 1px 0 0;
-                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
-                transform: translateX(0); transition: transform 180ms ease;
-            }
-            .chat-shell.skills-hidden .skill-rail {
-                width: 84%; opacity: 1; transform: translateX(-102%);
-                border-right-color: var(--border);
-            }
-            .skill-scrim {
-                display: block; position: absolute; inset: 0; z-index: 39;
-                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
-            }
-            .chat-shell.skills-hidden .skill-scrim { opacity: 0; pointer-events: none; }
+            .chat-shell.session-hidden .session-scrim { opacity: 0; pointer-events: none; }
             /* A phone row is a finger target, so it grows and the delete button
                stops being hover-only -- there is no hover to reveal it with.
                The reveal itself lives in the (hover: none) block below, since
@@ -1833,11 +1847,11 @@
             .composer-model-controls { gap: 2px; }
             .composer-model-controls #modelLabel { max-width: 92px; }
             .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
-            .skills-toggle, .mode-chip { padding-inline: 8px; }
+            .session-chip, .mode-chip { padding-inline: 8px; }
             /* Height is the scarce axis here, so the whole strip -- input,
                round buttons and every chip -- goes one notch under the 44px
                finger target together, rather than one control at a time. */
-            .model-trigger, .effort-chip, .mode-chip, .skills-toggle,
+            .model-trigger, .effort-chip, .mode-chip, .session-chip,
             .effort-select, #providerSelect { min-height: 38px; }
             .composer-input { min-height: 32px; }
             .composer-send, .composer-attach { width: 38px; height: 38px; }
@@ -1845,10 +1859,8 @@
             .modal { max-height: 90vh; }
             .history-sidebar,
             .chat-shell.history-hidden .history-sidebar { width: 34%; max-width: 300px; }
-            .todo-sidebar,
-            .chat-shell.todos-hidden .todo-sidebar { width: 32%; max-width: 300px; }
-            .skill-rail,
-            .chat-shell.skills-hidden .skill-rail { width: 34%; max-width: 300px; }
+            .session-panel,
+            .chat-shell.session-hidden .session-panel { width: 34%; max-width: 300px; }
         }
     </style>
 </head>
@@ -1877,18 +1889,6 @@
                         <div class="history-list" id="historyList"></div>
                     </aside>
                     <div class="history-scrim" id="historyScrim" onclick="toggleHistory(false)"></div>
-                    <div class="skill-scrim" id="skillScrim" onclick="toggleSkillRail(false)"></div>
-                    <aside class="skill-rail" id="skillRail" aria-label="Skills used in this chat">
-                        <div class="rail-head">
-                            <span>Skills</span>
-                            <span class="rail-count" id="skillRailCount">none</span>
-                            <button class="icon-btn" type="button" onclick="toggleSkillRail(false)" aria-label="Hide the skills card" title="Hide">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>
-                            </button>
-                        </div>
-                        <div class="rail-list" id="skillRailList" aria-live="polite"></div>
-                        <div class="rail-foot" id="skillRailFoot">Tap one to pin it to this chat, or a pinned one to let it go.</div>
-                    </aside>
                 <div class="chat-card">
                     <div class="chat-tabs" id="chatTabs" hidden></div>
                     <div class="chat-bar">
@@ -1900,13 +1900,13 @@
                             <span>FreeAi4U</span>
                         </div>
                         <div class="chat-bar-actions">
-                            <button class="icon-btn" id="skillRailToggle" title="Skills used in this chat" aria-label="Toggle the skills card" aria-pressed="true" onclick="toggleSkillRail()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/></svg>
-                                <span class="signed-in-dot" id="skillRailBadge"></span>
-                            </button>
-                            <button class="icon-btn" id="todoToggle" title="Todo list" aria-label="Toggle the todo list" aria-pressed="true" onclick="toggleTodos()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><polyline points="3 6 4.5 7.5 7 5"/><polyline points="3 12 4.5 13.5 7 11"/><polyline points="3 18 4.5 19.5 7 17"/></svg>
-                                <span class="signed-in-dot" id="todoBadge"></span>
+                            <!-- One button for what used to be two: the plan the
+                                 model recorded and the skills that shaped the
+                                 reply are both this conversation's own state,
+                                 so they live behind one surface and one dot. -->
+                            <button class="icon-btn" id="sessionToggle" title="Session — skills, plan and image for this chat" aria-label="Toggle the session panel" aria-pressed="false" aria-controls="sessionPanel" onclick="toggleSessionPanel()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h8"/><path d="M18 6h2"/><path d="M4 12h2"/><path d="M12 12h8"/><path d="M4 18h8"/><path d="M18 18h2"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></svg>
+                                <span class="signed-in-dot" id="sessionBadge"></span>
                             </button>
                             <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
@@ -1978,10 +1978,10 @@
                                 <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                             </div>
                             <div class="composer-controls" aria-label="Chat controls">
-                                <!-- Two groups, not one row of six. On a phone the
+                                <!-- Two groups, not one row of four. On a phone the
                                      actions keep their own line and only the
-                                     settings scroll beneath them, so attach and
-                                     draw cannot slide off the edge. -->
+                                     settings scroll beneath them, so attach cannot
+                                     slide off the edge. -->
                                 <div class="composer-actions">
                                 <div style="position: relative;">
                                     <button class="composer-attach" type="button" id="attachTrigger" onclick="event.stopPropagation(); toggleAttachMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Attach" title="Attach an image, document, or file">
@@ -2015,19 +2015,15 @@
                                 </div>
                                 <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
                             </div>
-                            <button class="composer-attach" type="button" id="imageModeBtn" onclick="toggleImageMode()" aria-pressed="false" aria-label="Generate an image" title="Generate an image instead of chatting">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                            </button>
                                 </div>
                                 <div class="composer-settings">
-                            <button class="skills-toggle" type="button" id="skillsToggle" onclick="toggleSkills()" aria-pressed="true" title="Automatically apply relevant skills in Plan and Build modes">Auto-skills on</button>
-                            <div style="position: relative;">
-                                <button class="skills-toggle" type="button" id="skillTrigger" onclick="event.stopPropagation(); toggleSkillMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Skills" title="Add a skill to this chat — it stays on for every later request">Skills</button>
-                                <div class="model-dropdown" id="skillMenu" role="listbox" aria-label="Installed skills">
-                                    <input type="text" class="model-dropdown-search" id="skillSearch" placeholder="Filter skills…" aria-label="Filter skills" autocomplete="off" oninput="filterSkillOptions(this.value)">
-                                    <div class="model-dropdown-list" id="skillMenuList"></div>
-                                </div>
-                            </div>
+                            <!-- One chip where there were three controls. The two
+                                 that left were the ones you set once and then
+                                 never touched again -- which skills apply, and
+                                 whether the next wording is read as a drawing --
+                                 and they now live in the panel with the plan
+                                 they shape. -->
+                            <button class="session-chip" type="button" id="sessionChip" onclick="toggleSessionPanel()" aria-expanded="false" aria-controls="sessionPanel" aria-label="Session — skills, plan and image for this chat" title="Skills, plan and image for this chat">Session</button>
                             <div class="composer-model-controls">
                                 <div style="position: relative;">
                                     <button class="model-trigger" id="modelTrigger" aria-label="Select model" aria-haspopup="listbox" aria-expanded="false">
@@ -2061,22 +2057,60 @@
                     </div>
                 </div>
 
-                    <aside class="todo-sidebar" id="todoSidebar" aria-label="Todo list">
-                        <div class="todo-head">
-                            <span>Todos</span>
-                            <span class="todo-count" id="todoCount">empty</span>
-                            <button class="icon-btn" type="button" onclick="toggleTodos(false)" aria-label="Hide the todo list" title="Hide">
+                    <!-- The session surface: everything that is true of this
+                         conversation rather than of the app. It replaces the
+                         skills card, the todo card, and the three composer
+                         controls that switched them, so the chat bar and the
+                         composer each carry one button for it. -->
+                    <div class="session-scrim" id="sessionScrim" onclick="toggleSessionPanel(false)"></div>
+                    <aside class="session-panel" id="sessionPanel" aria-label="Session — skills, plan and image for this chat">
+                        <div class="rail-head">
+                            <span>Session</span>
+                            <span class="rail-count" id="sessionCount">nothing on yet</span>
+                            <button class="icon-btn" type="button" onclick="toggleSessionPanel(false)" aria-label="Close the session panel" title="Close">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
                             </button>
                         </div>
-                        <div class="todo-progress" id="todoProgress" role="progressbar" aria-label="Todos finished" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="todo-progress-fill" id="todoProgressFill"></div></div>
-                        <div class="todo-list" id="todoList" aria-live="polite"></div>
-                        <div class="todo-foot">
-                            <button type="button" onclick="clearTaskList()" title="Remove every finished task">Clear finished</button>
-                            <button type="button" class="danger" onclick="clearTaskList(true)" title="Remove every task">Clear all</button>
+                        <div class="session-tabs" aria-label="Session sections">
+                            <button class="session-tab" type="button" id="sessionTabSkills" aria-pressed="true" onclick="showSessionTab('skills')">Skills</button>
+                            <button class="session-tab" type="button" id="sessionTabTasks" aria-pressed="false" onclick="showSessionTab('tasks')">Plan</button>
+                            <button class="session-tab" type="button" id="sessionTabImage" aria-pressed="false" onclick="showSessionTab('image')">Image</button>
                         </div>
+
+                        <section class="session-section active" id="sessionSectionSkills" aria-label="Skills for this chat">
+                            <div class="session-switch">
+                                <label for="autoSkillsCheck">Apply relevant skills automatically</label>
+                                <input type="checkbox" id="autoSkillsCheck" checked onchange="setSkillsEnabled(this.checked)">
+                            </div>
+                            <p class="session-hint">In Plan and Build the router picks skills per request. What it used shows up below, marked automatic, so an odd answer can be traced to a method rather than guessed at.</p>
+                            <input type="text" class="model-dropdown-search" id="skillSearch" placeholder="Filter skills…" aria-label="Filter skills" autocomplete="off" oninput="filterSkillOptions(this.value)">
+                            <div class="model-dropdown-list" id="skillMenuList" role="listbox" aria-label="Installed skills"></div>
+                            <h4 class="session-subhead">Used in this chat</h4>
+                            <div class="rail-list" id="skillRailList" aria-live="polite"></div>
+                            <div class="rail-foot" id="skillRailFoot">Tap one to pin it to this chat, or a pinned one to let it go.</div>
+                        </section>
+
+                        <section class="session-section" id="sessionSectionTasks" aria-label="The plan for this chat">
+                            <div class="todo-progress" id="todoProgress" role="progressbar" aria-label="Todos finished" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="todo-progress-fill" id="todoProgressFill"></div></div>
+                            <h4 class="session-subhead"><span>Plan</span><span class="todo-count" id="todoCount">empty</span></h4>
+                            <div class="todo-list" id="todoList" aria-live="polite"></div>
+                            <div class="todo-foot">
+                                <button type="button" onclick="clearTaskList()" title="Remove every finished task">Clear finished</button>
+                                <button type="button" class="danger" onclick="clearTaskList(true)" title="Remove every task">Clear all</button>
+                            </div>
+                        </section>
+
+                        <section class="session-section" id="sessionSectionImage" aria-label="Image settings for this chat">
+                            <div class="session-switch">
+                                <label for="imageModeSwitch">Read the next message as a drawing</label>
+                                <input type="checkbox" id="imageModeSwitch" onchange="setImageMode(this.checked)">
+                            </div>
+                            <p class="session-hint">Asking for a picture works without this — “draw a cat” is understood either way. This forces it, for when the wording could go both ways.</p>
+                            <h4 class="session-subhead">Shape</h4>
+                            <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
+                            <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
+                        </section>
                     </aside>
-                    <div class="todo-scrim" id="todoScrim" onclick="toggleTodos(false)"></div>
                 </div>
             </div>
 
@@ -2153,7 +2187,7 @@
                         </div>
                         <div class="workspace-list" id="taskListRows" aria-label="Recorded tasks"></div>
                         <div style="margin-top: 8px;">
-                            <button class="icon-btn-text" onclick="toggleTodos(true)">Show the panel</button>
+                            <button class="icon-btn-text" onclick="openSessionPanel('tasks')">Show the panel</button>
                             <button class="icon-btn-text danger" onclick="clearTaskList(true)">Clear the task list</button>
                         </div>
                     </div>
@@ -2453,18 +2487,8 @@
         // before any of the functions below run.
         const SMALL_SCREEN_QUERY = '(max-width: 640px), (max-height: 520px) and (orientation: landscape)';
 
-        // The reading measure, the two floating panels, and the insets between
-        // them. Below this the two pop-ups overlap each other as well as the
-        // text, which is a worse state than either of them being shut -- so
-        // opening one puts the other away.
-        //
-        // The width of the card is what is measured, not the window: the history
-        // rail is a column the reader can close, and closing it is exactly what
-        // makes room for both.
-        const PANELS_BESIDE_MEASURE_PX = 760 + 272 + 300 + 20;
-
-        // The one watcher that keeps a floating panel above the composer, and the
-        // flag that stops a second one being attached on every call.
+        // The one watcher that keeps the floating panel above the composer, and
+        // the flag that stops a second one being attached on every call.
         let panelFloorObserver = null;
         let panelFloorWatching = false;
 
@@ -2504,7 +2528,6 @@
         // plan, and the old chat keeps what it had.
         const TASK_KEY = 'freeopenaiTasksByChat';
         const TASK_LEGACY_KEY = 'freeopenaiTasks';
-        const TODOS_HIDDEN_KEY = 'freeopenaiTodosHidden';
         let taskGraph = loadTaskGraph();
 
         // Which skills have answered in each conversation, so the card beside the
@@ -2512,8 +2535,17 @@
         // and not global: "the router picked ponytail here" is a fact about this
         // chat, and a shared counter would show a stranger's habits as yours.
         const SKILL_USE_KEY = 'freeopenaiSkillUse';
-        const SKILLS_HIDDEN_KEY = 'freeopenaiSkillsHidden';
         let skillUseLog = loadSkillUseLog();
+
+        // The one panel over the chat -- skills, the plan, and whether the next
+        // message is read as a drawing -- remembers whether it was left open and
+        // which of its three sections was showing. One key each rather than one
+        // per card: the panel is one thing, and restoring half of it would open
+        // it on a section nobody chose.
+        const SESSION_HIDDEN_KEY = 'freeopenaiSessionHidden';
+        const SESSION_TAB_KEY = 'freeopenaiSessionTab';
+        const SESSION_TABS = ['skills', 'tasks', 'image'];
+        let sessionTab = SESSION_TABS[0];
 
         // Whether the reasoning summary is shown at all. On by default, because
         // seeing what a reasoning model is doing is the reason to use one; off is
@@ -2536,15 +2568,17 @@
         let skillsCatalog = []; // { source, name, description } rows
         let skillsEnabled = localStorage.getItem('freeopenaiSkills') !== '0';
 
+        // A checkbox in the session panel now, not a chip in the composer. It is
+        // a preference you set once, and it was sitting in the row of things you
+        // touch on every message.
         function updateSkillsToggle() {
-            const toggle = document.getElementById('skillsToggle');
-            if (!toggle) return;
-            toggle.setAttribute('aria-pressed', String(skillsEnabled));
-            toggle.textContent = skillsEnabled ? 'Auto-skills on' : 'Auto-skills off';
+            const box = document.getElementById('autoSkillsCheck');
+            if (!box) return;
+            box.checked = skillsEnabled;
         }
 
-        function toggleSkills() {
-            skillsEnabled = !skillsEnabled;
+        function setSkillsEnabled(on) {
+            skillsEnabled = !!on;
             localStorage.setItem('freeopenaiSkills', skillsEnabled ? '1' : '0');
             updateSkillsToggle();
             showStatus('info', skillsEnabled ? 'Skills enabled for Plan and Build' : 'Skills disabled');
@@ -2607,7 +2641,7 @@
             // The library may have arrived after the first keystrokes, so the
             // offer is recomputed now that there is something to offer from.
             updateSkillSuggestion();
-            if (isSkillMenuOpen()) renderSkillMenuOptions();
+            renderSkillMenuOptions();
             list.innerHTML = '';
             for (const [src, names] of Object.entries(bySrc)) {
                 for (const name of names) {
@@ -2848,16 +2882,17 @@
             const { names, dropped } = activateSkill(activeSkillNames, row.name);
             if (names.length === before) return false;
             setActiveSkillNames(names);
-            if (isSkillMenuOpen()) renderSkillMenuOptions();
+            renderSkillMenuOptions();
             addMessage('system', 'Pinned "' + row.name + '" to this chat' + (dropped ? ' — turned off "' + dropped + '" to make room' : '') + '. It applies to every later request here; × on the chip removes it.');
             return true;
         }
 
         // --- The skill picker ---
-        function isSkillMenuOpen() {
-            return skillMenu.classList.contains('open');
-        }
-
+        //
+        // A list inside the session panel rather than a floating dropdown. It
+        // was a popup anchored under a composer chip, positioned from the rect
+        // of a control that scrolls sideways on a phone -- and the panel it
+        // would have to anchor to is now the surface that holds it.
         function renderSkillMenuOptions() {
             skillMenuList.innerHTML = '';
             if (!skillsCatalog.length) {
@@ -2918,63 +2953,6 @@
             } else if (empty) {
                 empty.hidden = shown > 0;
             }
-        }
-
-        // Placed from the trigger's own rect, like the other two popups: the
-        // controls row scrolls sideways on a phone, and a menu positioned inside
-        // it would be clipped out of sight.
-        function positionSkillMenu() {
-            if (!isSkillMenuOpen()) return;
-            const spot = placeDropdown(
-                skillTrigger.getBoundingClientRect(),
-                { width: window.innerWidth, height: window.innerHeight }
-            );
-            skillMenu.style.width = spot.width + 'px';
-            skillMenu.style.maxWidth = spot.width + 'px';
-            skillMenu.style.maxHeight = spot.maxHeight + 'px';
-            skillMenu.style.left = spot.left + 'px';
-            skillMenu.style.right = 'auto';
-            skillMenu.style.top = spot.openUp ? 'auto' : spot.top + 'px';
-            skillMenu.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
-        }
-
-        function toggleSkillMenu() {
-            if (isSkillMenuOpen()) closeSkillMenu();
-            else openSkillMenu();
-        }
-
-        async function openSkillMenu() {
-            closeModelDropdown();
-            closeAttachMenu();
-            await ensureSkillsLoaded();
-            renderSkillMenuOptions();
-            skillMenu.classList.add('open');
-            positionSkillMenu();
-            skillSearch.hidden = skillsCatalog.length <= 8;
-            skillSearch.value = '';
-            filterSkillOptions('');
-            if (!skillSearch.hidden) skillSearch.focus();
-            skillTrigger.setAttribute('aria-expanded', 'true');
-        }
-
-        function closeSkillMenu() {
-            skillMenu.classList.remove('open');
-            skillTrigger.setAttribute('aria-expanded', 'false');
-        }
-
-        function focusSkillOption(index) {
-            const opts = Array.from(skillMenuList.querySelectorAll('.skill-option:not([hidden])'));
-            if (!opts.length) return;
-            const i = ((index % opts.length) + opts.length) % opts.length;
-            opts[i].focus();
-        }
-
-        function handleSkillMenuKeydown(e) {
-            const opts = Array.from(skillMenuList.querySelectorAll('.skill-option:not([hidden])'));
-            const current = opts.indexOf(document.activeElement);
-            if (e.key === 'ArrowDown') { e.preventDefault(); focusSkillOption(current + 1); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); focusSkillOption(current - 1); }
-            else if (e.key === 'Escape') { e.preventDefault(); closeSkillMenu(); skillTrigger.focus(); }
         }
 
         // --- Commands ---
@@ -3299,7 +3277,6 @@
         const attachmentChip = document.getElementById('attachmentChip');
         const attachmentName = document.getElementById('attachmentName');
         const attachmentThumb = document.getElementById('attachmentThumb');
-        const imageModeBtn = document.getElementById('imageModeBtn');
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
@@ -3307,8 +3284,6 @@
         const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
         const attachTrigger = document.getElementById('attachTrigger');
         const attachMenu = document.getElementById('attachMenu');
-        const skillTrigger = document.getElementById('skillTrigger');
-        const skillMenu = document.getElementById('skillMenu');
         const skillMenuList = document.getElementById('skillMenuList');
         const skillSearch = document.getElementById('skillSearch');
         const skillBar = document.getElementById('skillBar');
@@ -3327,8 +3302,7 @@
         refreshLoginRequirement();
         renderWorkspaceFiles();
         renderTaskList();
-        restoreTodosVisibility();
-        restoreSkillRailVisibility();
+        restoreSessionPanel();
         watchPanelFloor();
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
@@ -3478,43 +3452,34 @@
             window.addEventListener('resize', () => {
                 positionModelDropdown();
                 positionAttachMenu();
-                positionSkillMenu();
             });
             document.addEventListener('click', () => {
                 closeModelDropdown();
                 closeAttachMenu();
-                closeSkillMenu();
                 closeImageDownloadMenu();
                 closeThemeMenu();
             });
 
-            // Escape puts the floating panels away, the way it closes everything
-            // else this app opens. It yields to whatever is layered above them --
+            // Escape puts the session panel away, the way it closes everything
+            // else this app opens. It yields to whatever is layered above it --
             // a modal, the palette, or a reply that is still being generated,
             // which Escape stops -- so one keystroke never means two things.
+            //
+            // Unlike a dropdown, a click elsewhere does not dismiss it: the plan
+            // is meant to be read while the work happens, and a panel that shut
+            // every time you clicked the chat would be no use for that. On a
+            // phone the scrim behind it is the tap-out.
             document.addEventListener('keydown', (e) => {
                 if (e.key !== 'Escape' || isTyping) return;
                 if (document.querySelector('.modal-overlay.open')) return;
                 const palette = document.getElementById('paletteOverlay');
                 if (palette && !palette.hidden) return;
-                const shell = document.querySelector('#viewChat .chat-shell');
-                if (!shell) return;
-                let putAway = false;
-                if (!shell.classList.contains('skills-hidden')) { toggleSkillRail(false); putAway = true; }
-                if (!shell.classList.contains('todos-hidden')) { toggleTodos(false); putAway = true; }
-                if (putAway) e.preventDefault();
+                const shell = sessionShell();
+                if (!shell || shell.classList.contains('session-hidden')) return;
+                toggleSessionPanel(false);
+                e.preventDefault();
             });
 
-            skillTrigger.addEventListener('keydown', (e) => {
-                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    openSkillMenu().then(() => focusSkillOption(0));
-                } else if (e.key === 'Escape' && isSkillMenuOpen()) {
-                    e.preventDefault();
-                    closeSkillMenu();
-                }
-            });
-            skillMenu.addEventListener('keydown', handleSkillMenuKeydown);
             document.addEventListener('keydown', handleModalKeydown);
 
             defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
@@ -4286,12 +4251,11 @@
             const status = document.getElementById('taskStatus');
             const progress = document.getElementById('todoProgress');
             const fill = document.getElementById('todoProgressFill');
-            const badge = document.getElementById('todoBadge');
             const tasks = orderTodos(taskGraph);
             const totals = todoProgress(taskGraph);
 
             if (count) count.textContent = totals.total ? totals.done + '/' + totals.total : 'empty';
-            if (badge) badge.style.display = totals.open ? '' : 'none';
+            updateSessionSummary();
             if (progress && fill) {
                 progress.setAttribute('aria-valuemax', String(totals.total));
                 progress.setAttribute('aria-valuenow', String(totals.done));
@@ -4418,60 +4382,140 @@
             }
         }
 
-        // force true shows, false hides, undefined toggles. persist false is for
-        // restoring a stored choice, which must not be written back.
-        // Two panels, two gutters, one window: declared with the rest of the
-        // state, because the startup block decides whether a panel begins open
-        // and reads this before any of the functions below have run.
-        function panelsFitTogether() {
-            if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
-            const card = document.querySelector('#viewChat .chat-card');
-            if (!card || typeof card.getBoundingClientRect !== 'function') return false;
-            // Unmeasurable answers "no": the cost of guessing wrong the other
-            // way is two panels on top of each other.
-            return card.getBoundingClientRect().width >= PANELS_BESIDE_MEASURE_PX;
+        // --- The session panel: the one surface over the chat ---
+        //
+        // Skills, the plan, and whether the next message is read as a drawing.
+        // They are one panel because they are one kind of fact: not settings of
+        // the app (those are behind the menu, in Settings) but the state of
+        // *this conversation*. Three surfaces became one, which is what lets the
+        // chat bar and the composer carry one control each instead of four
+        // between them.
+        function sessionShell() {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            return shell && typeof shell.classList.contains === 'function' ? shell : null;
         }
 
-        function toggleTodos(force, persist = true) {
-            const shell = document.querySelector('#viewChat .chat-shell');
+        // force true shows, false hides, undefined toggles. persist false is for
+        // restoring a stored choice, which must not be written back.
+        function toggleSessionPanel(force, persist = true) {
+            const shell = sessionShell();
             if (!shell) return;
-            const hidden = force === undefined ? !shell.classList.contains('todos-hidden') : !force;
-            shell.classList.toggle('todos-hidden', hidden);
-            const btn = document.getElementById('todoToggle');
-            if (btn) btn.setAttribute('aria-pressed', String(!hidden));
-            if (!hidden && !shell.classList.contains('skills-hidden') && !panelsFitTogether()) toggleSkillRail(false, false);
+            const hidden = force === undefined ? !shell.classList.contains('session-hidden') : !force;
+            shell.classList.toggle('session-hidden', hidden);
+            for (const [id, pressed] of [['sessionToggle', true], ['sessionChip', false]]) {
+                const btn = document.getElementById(id);
+                if (!btn) continue;
+                btn.setAttribute('aria-expanded', String(!hidden));
+                if (pressed) btn.setAttribute('aria-pressed', String(!hidden));
+            }
+            // Opening has to draw the section it opens on. The lists are kept up
+            // to date as the chat moves, but the picker is fetched on demand,
+            // and a pop-up showing whatever was in the DOM two chats ago is
+            // worse than one showing nothing.
+            if (!hidden) {
+                showSessionTab(sessionTab, false);
+                renderSkillMenuOptions();
+                updateSessionSummary();
+            }
             if (!persist) return;
             try {
-                localStorage.setItem(TODOS_HIDDEN_KEY, hidden ? '1' : '');
+                localStorage.setItem(SESSION_HIDDEN_KEY, hidden ? '1' : '');
             } catch {
                 // A browser refusing storage shouldn't break the toggle itself.
             }
         }
 
-        function restoreTodosVisibility() {
-            let stored = null;
-            try {
-                stored = localStorage.getItem(TODOS_HIDDEN_KEY);
-            } catch {
-                stored = null;
+        // Which of the three sections is showing. The tab buttons and the panel's
+        // own `data-session-tab` both follow from it, so the markup and the CSS
+        // agree about what is open without either owning the answer.
+        function showSessionTab(tab, persist = true) {
+            const wanted = SESSION_TABS.includes(tab) ? tab : SESSION_TABS[0];
+            sessionTab = wanted;
+            const shell = sessionShell();
+            if (shell) shell.dataset.sessionTab = wanted;
+            for (const name of SESSION_TABS) {
+                const cap = name.charAt(0).toUpperCase() + name.slice(1);
+                const btn = document.getElementById('sessionTab' + cap);
+                const section = document.getElementById('sessionSection' + cap);
+                const on = name === wanted;
+                if (btn) btn.setAttribute('aria-pressed', String(on));
+                if (section) section.classList.toggle('active', on);
             }
-            // A pop-up starts closed, at every size.
-            //
-            // This panel used to start open on a desktop, which made sense while
-            // it was a column that held its own space. Floating over the
-            // transcript, open-on-load is just something covering the answer
-            // before it has been read -- so being open is now a choice, and the
-            // header button is one tap. A choice already made is still honoured
-            // on every screen size.
-            const hidden = stored === null || stored === undefined ? true : stored === '1';
-            toggleTodos(!hidden, false);
+            // Skills is the one section with something to fetch: a chat that
+            // never needed a skill never asked for the library, so the picker
+            // would otherwise open on an apology.
+            if (wanted === 'skills' && !skillsCatalog.length) {
+                ensureSkillsLoaded().then(() => {
+                    renderSkillMenuOptions();
+                    filterSkillOptions(skillSearch.value);
+                });
+            }
+            if (!persist) return;
+            try {
+                localStorage.setItem(SESSION_TAB_KEY, wanted);
+            } catch {
+                // Private mode: the tab still changes, it just does not stick.
+            }
         }
 
-        // --- The skills card, on the other side of the chat ---
+        function restoreSessionPanel() {
+            let stored = null;
+            let tab = null;
+            try {
+                stored = localStorage.getItem(SESSION_HIDDEN_KEY);
+                tab = localStorage.getItem(SESSION_TAB_KEY);
+            } catch {
+                stored = null;
+                tab = null;
+            }
+            if (SESSION_TABS.includes(tab)) sessionTab = tab;
+            showSessionTab(sessionTab, false);
+            // Closed by default, at every size. Floating over the conversation it
+            // is something you open; open-on-load would cover an answer nobody
+            // has read yet. A choice already made is still honoured.
+            const hidden = stored === null || stored === undefined ? true : stored === '1';
+            toggleSessionPanel(!hidden, false);
+        }
+
+        // Opening at a named section, for the two places that mean one rather
+        // than just "open the panel": the hero's "Add a skill" and the Settings
+        // row that points at the plan.
+        function openSessionPanel(tab) {
+            if (SESSION_TABS.includes(tab)) showSessionTab(tab);
+            toggleSessionPanel(true);
+        }
+
+        // The panel head, and the dot on the two buttons that open it.
+        //
+        // Both surfaces say the same thing, which is the point: the panel is
+        // closed most of the time, so "there is something in here" has to be
+        // legible without opening it. One dot replaced the two the two cards
+        // kept, which is one place to look and one place to be wrong.
+        function sessionSkillCount() {
+            const key = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            return Object.keys(skillUseLog[key] || {}).length;
+        }
+
+        function updateSessionSummary() {
+            const count = document.getElementById('sessionCount');
+            const badge = document.getElementById('sessionBadge');
+            const pinned = activeSkillNames.length;
+            const used = sessionSkillCount();
+            const totals = todoProgress(taskGraph);
+            const parts = [];
+            if (used) parts.push(used + ' skill' + (used === 1 ? '' : 's') + (pinned ? ', ' + pinned + ' pinned' : ''));
+            else if (pinned) parts.push(pinned + ' pinned');
+            if (totals.total) parts.push(totals.done + '/' + totals.total + ' tasks');
+            if (imageMode) parts.push('drawing');
+            if (count) count.textContent = parts.length ? parts.join(' · ') : 'nothing on yet';
+            if (badge) badge.style.display = totals.open || pinned || imageMode ? '' : 'none';
+        }
+
+        // --- What this chat is actually running on ---
         //
         // The router's choices are invisible by design: a skill rides along as
         // extra context and leaves no trace in the reply. Which is exactly why
-        // the card exists -- "it answered my question oddly" should be traceable
+        // this log exists -- "it answered my question oddly" should be traceable
         // to a method somebody, or something, switched on.
         function loadSkillUseLog() {
             try {
@@ -4534,15 +4578,12 @@
 
         function renderSkillRail() {
             const list = document.getElementById('skillRailList');
-            const count = document.getElementById('skillRailCount');
-            const badge = document.getElementById('skillRailBadge');
             if (!list) return;
             const id = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
             const bucket = skillUseLog[id] || {};
             const rows = Object.entries(bucket).sort((a, b) =>
                 (Number(b[1].pinned) - Number(a[1].pinned)) || (b[1].turns - a[1].turns) || a[0].localeCompare(b[0]));
-            if (count) count.textContent = rows.length ? rows.length + ' skill' + (rows.length === 1 ? '' : 's') : 'none';
-            if (badge) badge.style.display = rows.length ? '' : 'none';
+            updateSessionSummary();
             list.innerHTML = '';
             if (!rows.length) {
                 const empty = document.createElement('div');
@@ -4615,36 +4656,6 @@
                 return;
             }
             dropSkillUseRow(name);
-        }
-
-        function toggleSkillRail(force, persist = true) {
-            const shell = document.querySelector('#viewChat .chat-shell');
-            if (!shell) return;
-            const hidden = force === undefined ? !shell.classList.contains('skills-hidden') : !force;
-            shell.classList.toggle('skills-hidden', hidden);
-            const btn = document.getElementById('skillRailToggle');
-            if (btn) btn.setAttribute('aria-pressed', String(!hidden));
-            if (!hidden && !shell.classList.contains('todos-hidden') && !panelsFitTogether()) toggleTodos(false, false);
-            if (!persist) return;
-            try {
-                localStorage.setItem(SKILLS_HIDDEN_KEY, hidden ? '1' : '');
-            } catch {
-                // As with the other panels: storage refusing must not break the
-                // toggle itself.
-            }
-        }
-
-        function restoreSkillRailVisibility() {
-            let stored = null;
-            try {
-                stored = localStorage.getItem(SKILLS_HIDDEN_KEY);
-            } catch {
-                stored = null;
-            }
-            // Closed by default, like the todo panel and for the same reason:
-            // floating over the conversation, it is something you open.
-            const hidden = stored === null || stored === undefined ? true : stored === '1';
-            toggleSkillRail(!hidden, false);
         }
 
         // --- Sending a work step to a cheaper model, or not ---
@@ -5915,33 +5926,50 @@
 
         function updateImageSizeHint() {
             const hint = document.getElementById('sizeHint');
-            if (!hint) return;
+            // The panel shows the same reading while it is open, so the size of
+            // the picture you are about to ask for is visible in the place that
+            // also holds the switch that decides whether it is drawn at all.
+            const shape = document.getElementById('sessionImageShape');
+            if (!hint && !shape) return;
             const text = chatInput ? String(chatInput.value || '') : '';
             const size = imageWorkIsPossible(text)
                 ? imageSizeFromPrompt(text, { words: !imageAttachmentIsPending() })
                 : null;
+            const pixels = size ? imageSizeBody(size) : '';
+            if (shape) {
+                shape.textContent = size
+                    ? 'These words are drawn at ' + size.label + ' — ' + pixels + '.'
+                    : 'No shape named — the service picks.';
+            }
+            if (!hint) return;
             if (!size) {
                 hint.hidden = true;
                 hint.textContent = '';
                 hint.removeAttribute('title');
                 return;
             }
-            const pixels = imageSizeBody(size);
             hint.textContent = size.label;
             hint.title = 'Drawn at ' + pixels + ' — name a shape ("16:9", "1024x1024") to change it';
             hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels);
             hint.hidden = false;
         }
 
-        function toggleImageMode() {
-            imageMode = !imageMode;
-            imageModeBtn.classList.toggle('active', imageMode);
-            imageModeBtn.setAttribute('aria-pressed', String(imageMode));
+        // A labelled switch in the session panel rather than an icon in the
+        // composer. The composer loses a control and the setting gains a name,
+        // which is the trade this surface makes everywhere: what you touch every
+        // message stays in the composer, what you decide once does not.
+        function setImageMode(on) {
+            imageMode = !!on;
+            const box = document.getElementById('imageModeSwitch');
+            if (box) box.checked = imageMode;
             chatInput.placeholder = imageMode ? 'Describe an image to generate...' : 'Ask anything...';
-            // The toggle decides whether a turn is image work, and that decides
+            // The switch decides whether a turn is image work, and that decides
             // whether the size in these words is going to be used at all.
             updateImageSizeHint();
+            updateSessionSummary();
         }
+
+        function toggleImageMode() { setImageMode(!imageMode); }
 
         // The three first-run starters on the hero.
         //
@@ -5977,12 +6005,13 @@
         async function startSkillBrowse() {
             showStatus('info', 'Loading the skill library…');
             try {
-                await openSkillMenu();
+                await ensureSkillsLoaded();
             } catch (error) {
                 showStatus('error', 'The skill library could not be opened — try again in a moment');
-                console.error('Skill menu failed to open:', error);
+                console.error('Skill library failed to load:', error);
                 return;
             }
+            openSessionPanel('skills');
             const count = skillsCatalog.length;
             if (count) showStatus('success', `${count} skills — pick one to pin it to this chat`);
             else showStatus('error', skillsStatusText || 'The skill library is empty — set GITHUB_TOKEN to raise GitHub\'s hourly limit');
@@ -6667,7 +6696,31 @@
             // of it -- and a rewrite that drops the ratio is not a reason to draw
             // something else. This is also the text the composer's size hint reads,
             // so what the hint promises and what the request sends cannot disagree.
-            const size = imageSizeFromPrompt(options.sizeFrom || promptText, { words: kind !== 'edit' });
+            let size = imageSizeFromPrompt(options.sizeFrom || promptText, { words: kind !== 'edit' });
+            // For edits, when no size is spelled out, preserve the source image's
+            // own dimensions -- "make the sky purple" is about a picture that
+            // already exists, and reshaping it would crop what was not asked about.
+            // A generation with no dimensions falls through to the service default
+            // (a square nobody asked for); an edit never should.
+            if (kind === 'edit' && !size && sourceDataUrl) {
+                try {
+                    const dims = await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+                        img.onerror = () => reject(new Error('could not measure source'));
+                        img.src = sourceDataUrl;
+                    });
+                    if (dims.width >= 64 && dims.height >= 64) {
+                        size = {
+                            id: 'source',
+                            label: imageRatioLabel(dims.width, dims.height),
+                            width: dims.width,
+                            height: dims.height,
+                            ratio: { w: dims.width, h: dims.height },
+                        };
+                    }
+                } catch { /* service default is the only fallback left */ }
+            }
             // Which service the conversation is on, when it is not Puter. Sent as a
             // preference rather than a pin: the route asks that service first and
             // keeps the rest of its order behind it, so a model that turns out not

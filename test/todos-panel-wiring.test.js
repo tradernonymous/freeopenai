@@ -1,10 +1,11 @@
-// The todo panel as shipped, run against a small DOM stub.
+// The session panel as shipped, run against a small DOM stub.
 //
 // The rules are unit-tested in todos.test.js; this file is about the wiring --
-// that the page actually draws the list in the panel, that a click goes through
-// the same status rule the model's tool uses, and that the panel is reachable on
-// a phone. A render function nothing calls, or a class nothing toggles, is a
-// feature that looks finished in a diff and is not there at runtime.
+// that the page actually draws the plan in the panel, that a click goes through
+// the same status rule the model's tool uses, and that what used to be two cards
+// in the gutters is one surface whose sections cannot all be drawn at once. A
+// render function nothing calls, or a class nothing toggles, is a feature that
+// looks finished in a diff and is not there at runtime.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,16 +26,19 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-// The two toggles are extracted together with the fit test they both consult:
-// the interesting rule is not that each one flips its own class, it is that the
-// second one opened on a card too narrow for both has to yield.
+// The panel's open/close/tab machinery is extracted together, because the
+// interesting rules are the ones between them: that opening draws the section it
+// opens on, that only one section is ever drawn, and that a restored choice is
+// honoured without being written back as if the user had just made it.
 const NAMES = [
   'renderTaskList',
-  'panelsFitTogether',
-  'toggleTodos',
-  'restoreTodosVisibility',
-  'toggleSkillRail',
-  'restoreSkillRailVisibility',
+  'sessionShell',
+  'toggleSessionPanel',
+  'restoreSessionPanel',
+  'showSessionTab',
+  'openSessionPanel',
+  'updateSessionSummary',
+  'sessionSkillCount',
   'uiSetTaskStatus',
   'deleteTask',
   'todoMark',
@@ -91,6 +95,18 @@ function stubEl(tag = 'div') {
       return walk(node.children);
     },
   };
+  // classList over className. The tab switcher is the only thing that needs it,
+  // and `toggle(name, on)` is how it says which section is showing.
+  node.classList = {
+    contains: (c) => String(node.className || '').split(/\s+/).includes(c),
+    add: (c) => { if (!node.classList.contains(c)) node.className = (node.className ? node.className + ' ' : '') + c; },
+    remove: (c) => { node.className = String(node.className || '').split(/\s+/).filter((x) => x && x !== c).join(' '); },
+    toggle: (c, on) => {
+      const want = on === undefined ? !node.classList.contains(c) : !!on;
+      if (want) node.classList.add(c); else node.classList.remove(c);
+      return want;
+    },
+  };
   // The renderer clears by assigning innerHTML = ''. On a stub that has to
   // actually drop the children, or the second render just adds a second copy
   // and every assertion reads the first one.
@@ -114,10 +130,11 @@ function stubDocument(ids = {}) {
   };
 }
 
-// classList over a className string, which is all the toggle needs.
+// classList over a className string, which is all the panel toggle needs.
 function stubShell(hidden = false) {
-  const classes = new Set(hidden ? ['todos-hidden'] : []);
+  const classes = new Set(hidden ? ['session-hidden'] : []);
   return {
+    dataset: {},
     classList: {
       contains: (c) => classes.has(c),
       toggle: (c, on) => { if (on) classes.add(c); else classes.delete(c); return on; },
@@ -126,22 +143,26 @@ function stubShell(hidden = false) {
   };
 }
 
-// Both panels default to closed, so the classes start empty and a test says what
-// it wants open by calling the real toggle.
+// The panel defaults to closed on its first section, so a test says what it
+// wants open by calling the real toggle.
 function harness({
   graph = newTaskGraph(),
   stored = null,
-  storedSkills = null,
-  narrow = false,
+  storedTab = null,
   shell = null,
-  cardWidth = 1400,
+  catalogue = [],
+  skillNames = [],
+  skillUse = {},
+  imageModeOn = false,
+  conversationId = 'c1',
 } = {}) {
   const document = stubDocument();
   const saved = [];
   const statuses = [];
-  // Keyed, because the two panels persist under different names -- one slot
-  // would make opening the skills card look like closing the todo list.
-  const store = { data: { freeopenaiTodosHidden: stored, freeopenaiSkillsHidden: storedSkills } };
+  // Keyed, because the panel persists two different things: whether it is open
+  // and which section it was left on. One slot would make reopening on the plan
+  // look like reopening closed.
+  const store = { data: { freeopenaiSessionHidden: stored, freeopenaiSessionTab: storedTab } };
   const deps = {
     // The real rules, not stubs: this exercises the shipped pairing.
     orderTodos,
@@ -159,27 +180,36 @@ function harness({
       getItem: (k) => store.data[k] ?? null,
       setItem: (k, v) => { store.data[k] = v; },
     },
-    TODOS_HIDDEN_KEY: 'freeopenaiTodosHidden',
-    SKILLS_HIDDEN_KEY: 'freeopenaiSkillsHidden',
-    PANELS_BESIDE_MEASURE_PX: 760 + 272 + 300 + 20,
-    isNarrowScreen: () => narrow,
+    SESSION_HIDDEN_KEY: 'freeopenaiSessionHidden',
+    SESSION_TAB_KEY: 'freeopenaiSessionTab',
+    SESSION_TABS: ['skills', 'tasks', 'image'],
+    sessionTab: 'skills',
+    // The two page-scope names the summary reads. Neither is written by the
+    // panel, so a test can set the world and read what the panel says about it.
+    imageMode: imageModeOn,
+    activeSkillNames: skillNames,
+    activeConversationId: conversationId,
+    skillUseLog: skillUse,
+    skillsCatalog: catalogue,
+    skillSearch: { value: '' },
+    ensureSkillsLoaded: () => Promise.resolve(catalogue),
+    // The picker's own renderers are covered by the skills tests; here they are
+    // a seam, so the panel's job -- showing one section at a time -- is what is
+    // measured.
+    renderSkillMenuOptions: () => {},
+    filterSkillOptions: () => {},
     saveTaskGraph: () => saved.push(JSON.parse(JSON.stringify(deps.taskGraph))),
     showStatus: (kind, text) => statuses.push(kind + ': ' + text),
     shell: shell || stubShell(),
-    card: { getBoundingClientRect: () => ({ width: deps.cardWidth }) },
-    cardWidth,
   };
-  // The shell and the card are the only querySelectors the toggles make.
-  document.querySelector = (sel) => {
-    if (sel === '#viewChat .chat-shell') return deps.shell;
-    if (sel === '#viewChat .chat-card') return deps.card;
-    return null;
-  };
+  // The shell is the only querySelector the panel makes.
+  document.querySelector = (sel) => (sel === '#viewChat .chat-shell' ? deps.shell : null);
   const loaded = loadFromIndex(NAMES, deps);
   return { deps, document, saved, statuses, store, loaded };
 }
 
 const rows = (document) => document.getElementById('todoList').children;
+const cls = (document, id) => String(document.getElementById(id).className || '');
 
 test('the extracted source is the shipped one, and the sandbox covers it', () => {
   assertScannerCanRead(NAMES);
@@ -213,8 +243,9 @@ test('the panel is drawn where it lives, in the order the work happens', () => {
   assert.equal(h.document.getElementById('todoProgressFill').style.width, (1 / 3) * 100 + '%');
   assert.equal(h.document.getElementById('todoProgress').getAttribute('aria-valuenow'), '1');
   assert.equal(h.document.getElementById('todoProgress').getAttribute('aria-valuemax'), '3');
-  // A badge for open work, so the panel can be closed and still say something.
-  assert.notEqual(h.document.getElementById('todoBadge').style.display, 'none');
+  // And the dot on the buttons that open the panel, so a closed panel with open
+  // work still says something.
+  assert.notEqual(h.document.getElementById('sessionBadge').style.display, 'none');
 });
 
 test('an empty list explains itself rather than rendering nothing', () => {
@@ -225,7 +256,7 @@ test('an empty list explains itself rather than rendering nothing', () => {
   assert.match(drawn[0].textContent, /No todos yet/);
   assert.equal(h.document.getElementById('todoCount').textContent, 'empty');
   assert.equal(h.document.getElementById('todoProgressFill').style.width, '0%');
-  assert.equal(h.document.getElementById('todoBadge').style.display, 'none', 'nothing open, no badge');
+  assert.equal(h.document.getElementById('sessionBadge').style.display, 'none', 'nothing open, no badge');
 });
 
 test('ticking a row goes through the same rule the model\u2019s tool uses', () => {
@@ -265,77 +296,119 @@ test('a task that is not ready yet cannot be ticked off from the panel either', 
 test('the panel opens and closes, and the choice sticks', () => {
   const shell = stubShell(false);
   const h = harness({ shell });
-  h.loaded.toggleTodos(false);
-  assert.ok(shell.classList.contains('todos-hidden'));
-  assert.equal(h.document.getElementById('todoToggle').getAttribute('aria-pressed'), 'false');
-  assert.equal(h.store.data.freeopenaiTodosHidden, '1', 'closed is remembered');
-  h.loaded.toggleTodos();
-  assert.ok(!shell.classList.contains('todos-hidden'));
-  assert.equal(h.store.data.freeopenaiTodosHidden, '', 'and so is open');
+  h.loaded.toggleSessionPanel(false);
+  assert.ok(shell.classList.contains('session-hidden'));
+  assert.equal(h.document.getElementById('sessionToggle').getAttribute('aria-pressed'), 'false');
+  assert.equal(h.document.getElementById('sessionChip').getAttribute('aria-expanded'), 'false');
+  assert.equal(h.store.data.freeopenaiSessionHidden, '1', 'closed is remembered');
+  h.loaded.toggleSessionPanel();
+  assert.ok(!shell.classList.contains('session-hidden'));
+  assert.equal(h.document.getElementById('sessionToggle').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.document.getElementById('sessionChip').getAttribute('aria-expanded'), 'true');
+  assert.equal(h.store.data.freeopenaiSessionHidden, '', 'and so is open');
 });
 
-test('both panels start closed, at every size, and a stored choice wins', () => {
-  // Closed is the default everywhere now. As columns these panels held their own
-  // space and open-on-load cost nothing; floating, open-on-load is a card
+test('the panel starts closed, draws its first section, and honours both stored choices', () => {
+  // Closed is the default everywhere. As columns these cards held their own
+  // space and open-on-load cost nothing; floating, open-on-load is a surface
   // covering an answer nobody has read yet, so being open is a choice.
-  for (const narrow of [true, false]) {
-    const shell = stubShell(false);
-    const rail = harness({ shell, narrow });
-    rail.loaded.restoreTodosVisibility();
-    rail.loaded.restoreSkillRailVisibility();
-    assert.ok(shell.classList.contains('todos-hidden'), 'closed by default on ' + (narrow ? 'a phone' : 'a laptop'));
-    assert.ok(shell.classList.contains('skills-hidden'), 'the skills card too, on ' + (narrow ? 'a phone' : 'a laptop'));
-    // And nothing was written back: a default is not a choice.
-    assert.equal(rail.store.data.freeopenaiTodosHidden, null, 'restoring must not persist a default');
-    assert.equal(rail.store.data.freeopenaiSkillsHidden, null, 'restoring must not persist a default');
-  }
+  const shell = stubShell(false);
+  const h = harness({ shell });
+  h.loaded.restoreSessionPanel();
+  assert.ok(shell.classList.contains('session-hidden'), 'closed by default');
+  // Nothing was written back: a default is not a choice.
+  assert.equal(h.store.data.freeopenaiSessionHidden, null, 'restoring must not persist a default');
+  assert.equal(h.store.data.freeopenaiSessionTab, null, 'nor a default section');
+  assert.equal(h.deps.sessionTab, 'skills');
+  assert.match(cls(h.document, 'sessionSectionSkills'), /active/);
+  assert.doesNotMatch(cls(h.document, 'sessionSectionTasks'), /active/);
 
-  // Once chosen, honoured everywhere: overriding it was why the history
-  // sidebar's setting never appeared to stick on mobile.
-  const chosenShell = stubShell(true);
-  const chosen = harness({ shell: chosenShell, narrow: false, stored: '' });
-  chosen.loaded.restoreTodosVisibility();
-  assert.ok(!chosenShell.classList.contains('todos-hidden'), 'a stored "open" survives a wide screen');
+  // Once chosen, honoured: a panel left open on the plan reopens on the plan.
+  const openShell = stubShell(true);
+  const open = harness({ shell: openShell, stored: '', storedTab: 'tasks' });
+  open.loaded.restoreSessionPanel();
+  assert.ok(!openShell.classList.contains('session-hidden'), 'a stored "open" survives');
+  assert.equal(open.deps.sessionTab, 'tasks');
+  assert.equal(open.document.getElementById('sessionTabTasks').getAttribute('aria-pressed'), 'true');
+  assert.equal(open.document.getElementById('sessionTabSkills').getAttribute('aria-pressed'), 'false');
+  assert.match(cls(open.document, 'sessionSectionTasks'), /active/);
 
-  const storedShell = stubShell(false);
-  const kept = harness({ shell: storedShell, narrow: false, stored: '1', storedSkills: '' });
-  kept.loaded.restoreTodosVisibility();
-  kept.loaded.restoreSkillRailVisibility();
-  assert.ok(storedShell.classList.contains('todos-hidden'), 'a stored "closed" survives');
-  assert.ok(!storedShell.classList.contains('skills-hidden'), 'and the two choices are independent');
+  // A stored section that no longer exists is not a reason to draw nothing.
+  const stale = harness({ storedTab: 'nonsense' });
+  stale.loaded.restoreSessionPanel();
+  assert.equal(stale.deps.sessionTab, 'skills');
 });
 
-test('two floating panels will not sit on top of each other', () => {
-  // The rule that replaced the width budget: there is no budget any more, only a
-  // measurement. On a card wide enough for both gutters, opening the second
-  // leaves the first alone.
-  const roomy = stubShell(false);
-  const wide = harness({ shell: roomy, cardWidth: 1400 });
-  wide.loaded.toggleTodos(true);
-  wide.loaded.toggleSkillRail(true);
-  assert.ok(!roomy.classList.contains('todos-hidden'), 'both fit, so both stay open');
-  assert.ok(!roomy.classList.contains('skills-hidden'));
+test('the three sections are one surface, and only one is drawn at a time', () => {
+  const shell = stubShell(false);
+  const h = harness({ shell });
+  h.loaded.toggleSessionPanel(true);
+  assert.ok(!shell.classList.contains('session-hidden'));
 
-  // On a card that cannot hold both, the panel that was already open wins and
-  // the newcomer steps aside -- without recording that as the user's choice.
-  const tight = stubShell(false);
-  const narrow = harness({ shell: tight, cardWidth: 900 });
-  narrow.loaded.toggleTodos(true);
-  assert.ok(!tight.classList.contains('todos-hidden'), 'the first one opens normally');
-  const before = narrow.store.data.freeopenaiTodosHidden;
-  narrow.loaded.toggleSkillRail(true);
-  assert.ok(!tight.classList.contains('skills-hidden'), 'the requested panel still opens');
-  assert.ok(tight.classList.contains('todos-hidden'), 'and the one that would overlap yields');
-  // Yielding is not a choice: it must not overwrite what the user last said
-  // about the panel that got out of the way, or a reload would honour the
-  // overlap rather than the preference.
-  assert.equal(narrow.store.data.freeopenaiTodosHidden, before, 'yielding stores nothing');
-  assert.equal(narrow.store.data.freeopenaiSkillsHidden, '', 'the request itself is');
+  for (const tab of ['image', 'tasks', 'skills']) {
+    h.loaded.showSessionTab(tab);
+    const cap = tab.charAt(0).toUpperCase() + tab.slice(1);
+    assert.equal(h.deps.sessionTab, tab);
+    assert.equal(shell.dataset.sessionTab, tab, 'the shell says which section is showing');
+    assert.equal(h.document.getElementById('sessionTab' + cap).getAttribute('aria-pressed'), 'true');
+    const drawn = ['skills', 'tasks', 'image']
+      .filter((name) => /active/.test(cls(h.document, 'sessionSection' + name.charAt(0).toUpperCase() + name.slice(1))));
+    assert.deepEqual(drawn, [tab], 'exactly one section is drawn');
+    for (const other of ['skills', 'tasks', 'image'].filter((n) => n !== tab)) {
+      assert.equal(h.document.getElementById('sessionTab' + other.charAt(0).toUpperCase() + other.slice(1)).getAttribute('aria-pressed'), 'false');
+    }
+  }
+  assert.equal(h.store.data.freeopenaiSessionTab, 'skills', 'the section is remembered');
+});
 
-  // The measurement is the card's width, so the same window closes the door when
-  // the card is narrow and opens it when the card is wide.
-  assert.equal(narrow.loaded.panelsFitTogether(), false);
-  assert.equal(wide.loaded.panelsFitTogether(), true);
+test('opening at a named section, for the two places that mean one', () => {
+  const shell = stubShell(false);
+  const h = harness({ shell });
+  h.loaded.openSessionPanel('tasks');
+  assert.ok(!shell.classList.contains('session-hidden'), 'it opens');
+  assert.equal(h.deps.sessionTab, 'tasks', 'on the section that was asked for');
+  assert.equal(h.store.data.freeopenaiSessionTab, 'tasks');
+});
+
+test('one line and one dot summarise what the panel holds', () => {
+  // Nothing used, nothing recorded: the panel says so rather than being blank,
+  // and the dot stays off.
+  const quiet = harness();
+  quiet.loaded.updateSessionSummary();
+  assert.equal(quiet.document.getElementById('sessionCount').textContent, 'nothing on yet');
+  assert.equal(quiet.document.getElementById('sessionBadge').style.display, 'none');
+
+  // Skills the router applied are a fact about this chat, and they count even
+  // when nothing is pinned.
+  const used = harness({ skillUse: { c1: { ponytail: { pinned: false, turns: 2 } } } });
+  used.loaded.updateSessionSummary();
+  assert.equal(used.document.getElementById('sessionCount').textContent, '1 skill');
+  // A skill the router applied on its own is a record, not something waiting on
+  // you -- so it is worth a line and not worth lighting the dot.
+  assert.equal(used.document.getElementById('sessionBadge').style.display, 'none');
+
+  // A pinned skill, a recorded plan and a forced drawing are all reasons the dot
+  // lights: the panel is closed most of the time, and "there is something in
+  // here" has to be legible without opening it.
+  let graph = addTask(newTaskGraph(), { title: 'Ship it' }).graph;
+  graph = setTaskStatus(graph, 't1', 'done').graph;
+  const busy = harness({
+    graph,
+    skillNames: ['ponytail'],
+    skillUse: { c1: { ponytail: { pinned: true, turns: 3 } } },
+    imageModeOn: true,
+  });
+  busy.loaded.updateSessionSummary();
+  const line = busy.document.getElementById('sessionCount').textContent;
+  assert.match(line, /1 skill, 1 pinned/);
+  assert.match(line, /1\/1 tasks/);
+  assert.match(line, /drawing/);
+  assert.equal(busy.document.getElementById('sessionBadge').style.display, '');
+
+  // Another chat's habits are not this chat's summary.
+  const elsewhere = harness({ skillUse: { 'other-chat': { ponytail: { pinned: false, turns: 9 } } } });
+  elsewhere.loaded.updateSessionSummary();
+  assert.equal(elsewhere.document.getElementById('sessionCount').textContent, 'nothing on yet');
 });
 
 test('the reasoning scratchpad is one moving line while it streams, then a summary', () => {
@@ -365,36 +438,50 @@ test('the reasoning scratchpad is one moving line while it streams, then a summa
   assert.equal(bubble.dataset.rawReasoning, 'First I look at the file, then I check the tests.');
 });
 
-test('the panels are glass pop-ups beside the chat, and drawers on a phone', () => {
-  // Markup: the todo card, its count, its progress bar and its toggle all exist,
-  // along with the skills card on the other side.
-  for (const id of ['todoSidebar', 'todoList', 'todoCount', 'todoProgress', 'todoProgressFill', 'todoToggle', 'todoScrim', 'skillRail', 'skillRailList', 'skillRailCount', 'skillRailToggle', 'skillScrim']) {
+test('the session surface is one glass pop-up, and a drawer on a phone', () => {
+  // Markup: one panel, three sections, and the plan's list, count and progress
+  // bar inside it rather than in a card of its own.
+  for (const id of [
+    'sessionPanel', 'sessionScrim', 'sessionToggle', 'sessionChip', 'sessionCount', 'sessionBadge',
+    'sessionTabSkills', 'sessionTabTasks', 'sessionTabImage',
+    'sessionSectionSkills', 'sessionSectionTasks', 'sessionSectionImage',
+    'skillRailList', 'skillMenuList', 'skillSearch', 'autoSkillsCheck',
+    'todoList', 'todoCount', 'todoProgress', 'todoProgressFill', 'imageModeSwitch', 'sessionImageShape',
+  ]) {
     assert.ok(HTML.includes('id="' + id + '"'), 'index.html is missing #' + id);
   }
-  // The shell carries the class each toggle flips -- a toggle for a class
-  // nobody sets is a button that does nothing.
+  // And the two cards and the three composer controls it absorbed are gone, ids
+  // included: a leftover id is a second source of truth waiting to be wired up.
+  for (const gone of [
+    'skillRail', 'todoSidebar', 'skillRailToggle', 'todoToggle', 'todoBadge', 'skillRailBadge',
+    'skillRailCount', 'todoScrim', 'skillScrim', 'skillsToggle', 'skillTrigger', 'skillMenu',
+    'imageModeBtn',
+  ]) {
+    assert.equal(HTML.includes('id="' + gone + '"'), false, '#' + gone + ' outlived the consolidation');
+  }
+  // The shell carries the class the toggle flips -- a toggle for a class nobody
+  // sets is a button that does nothing.
   assert.match(HTML, /class="chat-shell[^"]*"/);
-  assert.match(HTML, /\.chat-shell\.todos-hidden \.todo-sidebar/);
-  assert.match(HTML, /\.chat-shell\.skills-hidden \.skill-rail/);
+  assert.match(HTML, /\.chat-shell\.session-hidden \.session-panel/);
+  // The panel is still one thing, not two: the width-budget rule that used to
+  // arbitrate between two pop-ups has nothing left to arbitrate.
+  assert.doesNotMatch(HTML, /panelsFitTogether|PANELS_BESIDE_MEASURE_PX/);
 
-  // The desktop shape is a glass pop-up beside the chat, not a column of the
-  // layout. As columns the two of them took 500px, which is what squeezed the
-  // transcript and what the app paid for by hiding the skills card entirely
-  // between 1101px and 1499px; floating, they cost the conversation nothing and
-  // opening a list no longer reflows the text being read.
-  const panel = HTML.slice(HTML.indexOf('\n        .skill-rail, .todo-sidebar {'), HTML.indexOf('.rail-list {'));
+  // The desktop shape is a glass pop-up over the chat, not a column of the
+  // layout. The two lists used to cost 500px of the transcript between them.
+  const panel = HTML.slice(HTML.indexOf('\n        .session-panel {'), HTML.indexOf('\n        /* Out of the way means out of reach'));
   assert.match(panel, /position: absolute; z-index: 25;/);
-  assert.match(panel, /top: calc\(var\(--bar-h\) \+ 10px\);/, 'a pop-up that covers the button that dismisses it is a trap');
-  // And it stops above the composer. `bottom: 10px` put the todo card over
-  // Send: the composer's right edge and the card's left edge crossed, so the
-  // one control every turn needs was behind a panel.
+  assert.match(panel, /top: calc\(var\(--bar-h\) \+ 10px\)/, 'a pop-up that covers the button that dismisses it is a trap');
+  // And it stops above the composer. `bottom: 10px` put the todo card over Send:
+  // the composer's right edge and the card's left edge crossed, so the one
+  // control every turn needs was behind a panel.
   assert.match(panel, /bottom: var\(--panel-floor, 10px\)/);
   assert.match(HTML, /function syncPanelFloor\(\)/, 'nothing measures the composer');
   const floor = HTML.slice(HTML.indexOf('function syncPanelFloor()'), HTML.indexOf('function watchPanelFloor()'));
   assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
   assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
   assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
-  assert.match(HTML, /restoreSkillRailVisibility\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
+  assert.match(HTML, /restoreSessionPanel\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
   assert.match(panel, /background: var\(--glass\)/);
   assert.match(panel, /backdrop-filter: blur\(18px\)/, 'the pop-up has to be glass');
   assert.match(panel, /-webkit-backdrop-filter: blur\(18px\)/, 'or Safari gets an opaque slab');
@@ -403,39 +490,56 @@ test('the panels are glass pop-ups beside the chat, and drawers on a phone', () 
   assert.match(panel, /transition: transform/);
   // Out of the layout means no width to give back and no flex item either.
   assert.doesNotMatch(panel, /flex-shrink/, 'a floating panel is not a layout column');
-  assert.doesNotMatch(panel, /margin: 10px/, 'the inset comes from top/bottom/left/right now');
+  // One scroll region: the section scrolls, and neither list keeps a scrollbar
+  // of its own. Two nested scrollers inside 300px is a maze.
+  assert.match(HTML, /\.session-section \{ display: none; flex: 1; min-height: 0; overflow-y: auto;/);
+  assert.match(HTML, /\.session-section\.active \{ display: block; \}/);
+  assert.match(HTML, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
   // Hidden has to mean gone, not merely invisible: a transparent panel still
   // swallows the clicks meant for the transcript underneath it.
-  const putAway = HTML.slice(HTML.indexOf('.chat-shell.skills-hidden .skill-rail,'), HTML.indexOf('.rail-list {'));
+  const putAway = HTML.slice(HTML.indexOf('.chat-shell.session-hidden .session-panel {'), HTML.indexOf('.session-tabs {'));
   assert.match(putAway, /opacity: 0; pointer-events: none;/);
-  assert.match(putAway, /translateX\(calc\(-100% - 20px\)\)/);
   assert.match(putAway, /translateX\(calc\(100% \+ 20px\)\)/);
 
   // Both small screens -- a portrait phone and a short landscape one -- turn the
-  // todo card into an off-canvas drawer from the right, flush and square: there
-  // is no room for a card beside anything. That shape is shared, so it lives in
-  // the one small-screen block; the landscape block only narrows how much of the
+  // panel into an off-canvas drawer from the right, flush and square: there is
+  // no room for a card beside anything. That shape is shared, so it lives in the
+  // one small-screen block; the landscape block only narrows how much of the
   // width the drawer takes.
   const small = HTML.slice(
     HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape)'),
     HTML.indexOf('@media (max-width: 380px)'),
   );
-  assert.match(small, /\.todo-sidebar \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
-  assert.match(small, /\.chat-shell\.todos-hidden \.todo-sidebar \{[\s\S]*?translateX\(102%\)/);
-  // The skills card gets the matching drawer from the other edge, with a scrim
-  // of its own. It used to be a 212px column of a 390px screen -- which is why
-  // it started hidden on a phone and was hard to reach there.
-  assert.match(small, /\.skill-rail \{[\s\S]*?position: absolute; top: 0; bottom: 0; left: 0[\s\S]*?transform: translateX\(0\)/);
-  assert.match(small, /\.chat-shell\.skills-hidden \.skill-rail \{[\s\S]*?translateX\(-102%\)/);
-  assert.match(small, /\.skill-scrim \{[\s\S]*?display: block/);
-  assert.match(small, /\.chat-shell\.skills-hidden \.skill-scrim \{ opacity: 0; pointer-events: none; \}/);
+  assert.match(small, /\.session-panel \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
+  assert.match(small, /\.chat-shell\.session-hidden \.session-panel \{[\s\S]*?translateX\(102%\)/);
+  assert.match(small, /\.session-scrim \{[\s\S]*?display: block/);
+  assert.match(small, /\.chat-shell\.session-hidden \.session-scrim \{ opacity: 0; pointer-events: none; \}/);
   const landscape = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
-  assert.match(landscape, /\.todo-sidebar,[\s\S]*?width: 32%/);
-  assert.match(landscape, /\.skill-rail,[\s\S]*?width: 34%/);
-  // The width-budget rule is gone, because there is no width budget any more: a
-  // floating panel has nothing to argue over, so the skills card and its toggle
-  // are available at every desktop size instead of three of them.
-  assert.doesNotMatch(HTML, /#skillRailToggle \{ display: none; \}/, 'the skills card is hidden at some desktop width again');
+  assert.match(landscape, /\.session-panel,[\s\S]*?width: 34%/);
+  // Nothing is hidden at any desktop size any more: one pop-up has no width to
+  // argue over, so it is available at every one of them.
+  assert.doesNotMatch(HTML, /#sessionToggle \{ display: none; \}/, 'the panel is hidden at some desktop width again');
+});
+
+test('the composer and the chat bar each carry one control for the surface', () => {
+  // The two header buttons became one, and the composer's three image/skill
+  // controls became one chip in the settings group.
+  assert.match(HTML, /id="sessionToggle"/);
+  assert.match(HTML, /id="sessionChip"/);
+  assert.match(HTML, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
+  // The actions group is down to attach alone, so a phone keeps it on screen
+  // with nothing scrolling beside it.
+  const actions = HTML.slice(HTML.indexOf('<div class="composer-actions">'), HTML.indexOf('<div class="composer-settings">'));
+  assert.match(actions, /id="attachTrigger"/);
+  assert.doesNotMatch(actions, /id="imageModeBtn"|toggleImageMode/);
+  assert.equal(HTML.includes('id="skillsToggle"'), false);
+  // The switch that replaced the draw button is a labelled checkbox, and the
+  // hero starter that turns it on is still the discoverable path to it.
+  assert.match(HTML, /<label for="imageModeSwitch">Read the next message as a drawing<\/label>/);
+  assert.match(HTML, /<input type="checkbox" id="imageModeSwitch" onchange="setImageMode\(this\.checked\)">/);
+  assert.match(HTML, /onclick="startImageTurn\(\)"/);
+  const hero = HTML.slice(HTML.indexOf('function startImageTurn()'), HTML.indexOf('function startPlanTurn()'));
+  assert.match(hero, /if \(!imageMode\) toggleImageMode\(\);/);
 });
 
 test('every control in the toolbar is built from the same four values', () => {
@@ -446,7 +550,7 @@ test('every control in the toolbar is built from the same four values', () => {
   for (const token of ['--ctl-h', '--ctl-r', '--ctl-bg', '--ctl-bg-hover']) {
     assert.ok(root.includes(token + ':'), 'missing ' + token);
   }
-  for (const group of ['\.effort-chip, \.mode-chip, \.skills-toggle', '\.composer-attach, \.composer-send']) {
+  for (const group of ['\\.effort-chip, \\.mode-chip, \\.session-chip', '\\.composer-attach, \\.composer-send']) {
     const block = HTML.slice(HTML.indexOf(group.replace(/\\/g, '')), HTML.indexOf('}', HTML.indexOf(group.replace(/\\/g, ''))));
     assert.match(block, /border-radius: var\(--ctl-r\)|var\(--ctl-r\)/, group + ' must use the shared radius');
   }
@@ -480,7 +584,7 @@ test('the reasoning summary can be switched off, and the setting reaches old rep
   assert.match(toggle, /querySelectorAll\('\.message\.bot'\)/);
 });
 
-test('the skills card records what applied, per conversation', () => {
+test('the skills panel records what applied, per conversation', () => {
   // Written on the turn, from what actually rode along -- not from what was
   // pinned, which would claim credit for skills the router never used.
   assert.match(HTML, /logSkillsUsed\(activeConversationId, activeSkills\)/);
@@ -491,7 +595,7 @@ test('the skills card records what applied, per conversation', () => {
   assert.match(HTML, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
   // A skill that is no longer installed cannot be pinned, so tapping it drops
   // the row rather than offering something that cannot work.
-  const tap = HTML.slice(HTML.indexOf('function dropSkillUseRow'), HTML.indexOf('function toggleSkillRail'));
+  const tap = HTML.slice(HTML.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
   assert.match(tap, /if \(isPinned\) \{ removePinnedSkill\(name\); return; \}/);
   assert.match(tap, /no longer installed/);
   // But an empty catalogue is not a missing skill: a chat that never needed a

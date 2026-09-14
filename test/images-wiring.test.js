@@ -24,6 +24,7 @@ const {
   imageSizeBody,
   imageRatioBody,
   describeDrawnSize,
+  imageRatioLabel,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -74,6 +75,18 @@ function harness({
     // Measuring a picture is a decode, which this test has no DOM for: the
     // dimensions it would have read are the input instead.
     imageDimensionsOf: async () => dims,
+    imageRatioLabel,
+    // The browser's Image constructor is used to measure a source picture's
+    // dimensions before an edit request: the stub simulates it with the dims
+    // the test already provides.
+    Image: class {
+      constructor() { this.naturalWidth = 0; this.naturalHeight = 0; }
+      set src(v) {
+        this.naturalWidth = dims.width;
+        this.naturalHeight = dims.height;
+        if (this.onload) this.onload();
+      }
+    },
     puter: {
       ai: {
         txt2img: async (prompt, opts) => {
