@@ -50,7 +50,7 @@
   <tr>
     <td width="33%" valign="top">
       <h3>💬 Chat</h3>
-      Ask anything and get a streamed, markdown-rendered reply at compact density, set to a <b>760px reading measure</b> inside a window you can actually see the edges of. Scroll up while a reply is still being written and it stays where you put it — a count of what arrived appears above the composer, and one tap takes you back down. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and dark/light plus tokyonight/gruvbox/auto themes in the header.
+      Ask anything and get a streamed, markdown-rendered reply at compact density, set to a <b>760px reading measure</b> inside a window you can actually see the edges of. Scroll up while a reply is still being written and it stays where you put it — a count of what arrived appears above the composer, and one tap takes you back down. Web research rides every turn — the model searches (DuckDuckGo + Wikipedia) and reads pages itself, citing sources, instead of guessing or sticking to your repos. Starts on a prompt hero with suggestion cards, copy or retry any response, Ctrl+P palette for models and actions, turn stats (model · seconds · chars) in the status bar, and System/Light/Dark plus tokyonight and gruvbox theme packs in the header — on every screen size, including the smallest phone.
     </td>
     <td width="33%" valign="top">
       <h3>🔐 Sign in with Puter</h3>
@@ -393,6 +393,7 @@ How auto-application works: each request's text is scored against every skill's 
 - `GET /api/skills` — the installed catalogue (source, name, description)
 - `GET /api/skills/content?name=<skill>` — one skill's full SKILL.md
 - `SKILLS_CACHE_TTL_MS` — cache lifetime override (default 6h)
+- **`GITHUB_TOKEN`** — *set this if the picker ever looks empty.* The catalogue is read from each repo's git tree, and GitHub allows **60 unauthenticated tree requests an hour per address**. Eleven sources spend that in about five refreshes, and the budget is per address — so on a container host, an office or a VPN it is shared with everyone behind it, and the library goes quiet part way through the day. A token raises the same limit to 5000, and you already have a GitHub account if you are using the repo tools. The refusal is now logged once per refresh with the variable named, instead of leaving a picker that is simply empty.
 - Add your own in `SKILL_SOURCES` (chatlib.js): `dir` is the folder holding the skills and `pick: [...]` narrows a big repo to a chosen few. Nesting and root-level `SKILL.md` files are handled; the name comes from the folder holding the file.
 
 ### 🐙 Working with GitHub
@@ -573,6 +574,14 @@ When a question fails part-way through a tool loop, the answers it already colle
 
 <a name="image-providers"></a>
 
+### 🎨 Appearance
+
+The palette is a near-neutral grey ladder rather than white-on-black: the chrome (the chat rail, the top bar, the status bar) sits one step **darker** than the conversation, and the composer and the user's bubble sit one step **above** it — `#171717` / `#212121` / `#303030` in dark, `#f9f9f9` / `#ffffff` / `#f4f4f4` in light. Nothing is pure black in dark mode and nothing is pure white in light mode, which is what stops a long transcript from reading as a headlamp, and the composer is lifted off the transcript rather than sharing its grey.
+
+The header's sun/moon button opens a picker with **System / Light / Dark** plus the two theme packs (Tokyo Night, Gruvbox). It names the three the way ChatGPT does instead of cycling, because a cycle is the wrong shape for five: reaching Gruvbox from Tokyo Night meant passing through every other theme on the way. System follows the OS and keeps following it while the tab is open. The choice is stored as `puterChatTheme` in your browser, and the browser's own chrome colour (`<meta name="theme-color">`) follows it, so the status bar is not a black frame around a grey app.
+
+**The toggle is on every screen size.** It used to be the first control dropped below 380px, on the reasoning that Ctrl+P still reaches it — which is no reasoning at all on a phone, where the appearance of the app is the one setting you cannot get to any other way. On a phone the picker opens as a sheet at the bottom of the screen; on a desktop it is a dropdown anchored under the button, right-aligned and pulled back inside the viewport. `npm run smoke` now asserts, at 360, 390, 844×390 and 1440 wide, that the toggle is visible, on screen, that the picker opens onto the viewport with all five rows usable, and that every icon button in the header is the same size at that width.
+
 ### 🖼️ Image providers
 
 Every provider this app chats on can also draw, because they are all asked the same question through the same route. Puter is asked first — it draws in the *browser* on the visitor's own account, so it costs the operator nothing and needs no configuration at all — and the server's `/api/llm/images/{generations,edits}` is asked when Puter is not signed in, or when it says no. Behind that route is an order: **Nara → OpenRouter → NVIDIA → HuggingFace → OmniRoute → Ollama**. The first configured service that answers with a picture wins, and anything that is not a refusal — a key that is not allowed, a model the account cannot reach, a bill, a 5xx, a dead socket — moves to the next one. A *refusal* stops the whole chain, because every service is being handed the same prompt and paying a second key to hear it refused again is not a retry.
@@ -594,6 +603,15 @@ Every answer is normalized to the OpenAI images payload, because that is what th
 **`size`, `quality` and `n` are preferences unless the store declares otherwise.** Nara's `sizes` list is a contract, so a size from it is sent as a field; everywhere else a size is a preference, and a 400 that arrives while one was sent buys exactly one more attempt without it. A 400 is never billed, which is what makes that retry free, and the picture the user asked for beats a setting that was only ever a preference.
 
 **The route says who drew.** Every successful response carries `provider`, `providerLabel` and the `model` alongside the pictures, because that is the one fact about an image that cannot be recovered from the image afterwards. The page turns it into the status line (`Image ready — OpenRouter`), and `GET /api/llm/images/providers` reports which services are ready, with which model, and what each is missing when it is not — so the picker never offers a service the server cannot reach, and a failure names variables that would actually fix it.
+
+**Saving a picture saves the picture you got.** The Download button on an image (in the message row, and again in the lightbox) offers **PNG, JPG or PDF**, and all three re-encode at the bitmap's own pixel dimensions — never a fixed square, never a "reasonable" 1024px. That was the bug: a picture drawn at 1536×1024 could only be saved as a 1024×1024, because the lightbox's `<a download>` could hand back the bytes it was given and nothing else. The menu prints the true size above the format list (`Save at 1536 × 1024`), so asking for a size and not getting it is visible *before* you save rather than after.
+
+- **PNG** keeps alpha; **JPG** (quality 0.92) is smaller; **PDF** is one page, A4 in whichever orientation suits the picture, with the image centred inside a margin and never scaled up — a 512px picture printed at 200% claims a resolution it has not got.
+- The PDF embeds the JPEG untouched as a `/DCTDecode` stream rather than re-encoding it: an image that has already been through one lossy pass should not take a second one on the way to the printer. It is written by hand — five objects, a fixed-width xref table — because that is smaller than the dependency.
+- The filename carries the dimensions: `freeai4u-a-neon-tokyo-street-1536x1024.jpg`. Whether the picture came back at the size you asked for is the first thing a folder listing should answer.
+- A picture hosted on another site cannot be read into a canvas without CORS. Rather than refusing the save, the app hands the URL to the browser and says so — `opens as-is instead of converting to PDF` in the status line.
+
+The generation overlay was rebuilt at the same time. It used to count seconds toward a fifty-five second budget and grow a progress ring toward it; both were fiction, since a generation that finishes in nine seconds and one that times out at fifty-five drew the same bar. What is left is a machine resolving — a floor grid drifting toward the viewer, three rings turning against each other, a volumetric sweep, motes rising through the well, a hexagonal iris opening and closing — with a stage word cycling on its own stagger rather than a `setInterval`. Under `prefers-reduced-motion` it holds still and shows one word, instead of inheriting the page-wide 1ms animation duration, which turns an infinite animation into a strobe.
 
 ### 🔀 Moving a request that a provider stopped answering
 

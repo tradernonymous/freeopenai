@@ -3856,6 +3856,159 @@ function nextStreamCadence(lastRenderMs, current = STREAM_RENDER_MIN_MS) {
   return now;
 }
 
+// --- Saving a generated picture ---
+//
+// The picture the model drew is saved at the size it was drawn, which is the
+// whole point of having asked for a size: re-encoding it to a fixed square (or
+// to a "reasonable" 1024px) would hand back a different picture from the one on
+// screen. So the render is a pass-through at the bitmap's own dimensions, and
+// the menu names those dimensions so the size is visible before the save.
+const IMAGE_DOWNLOAD_FORMATS = [
+  { id: 'png', label: 'PNG', ext: 'png', mime: 'image/png', hint: 'Lossless, best for edits' },
+  { id: 'jpg', label: 'JPG', ext: 'jpg', mime: 'image/jpeg', hint: 'Smaller file' },
+  { id: 'pdf', label: 'PDF', ext: 'pdf', mime: 'application/pdf', hint: 'One print-ready page' },
+];
+
+// 'jpeg' is what most people type and 'jpe' is what Windows used to write; both
+// are JPG here, and anything the table does not know is PNG rather than a
+// silent failure to save.
+function imageDownloadFormat(id) {
+  const wanted = String(id || '').toLowerCase();
+  const alias = wanted === 'jpeg' || wanted === 'jpe' ? 'jpg' : wanted;
+  return IMAGE_DOWNLOAD_FORMATS.find((format) => format.id === alias) || IMAGE_DOWNLOAD_FORMATS[0];
+}
+
+// The prompt, reduced to something a file system will accept. Long prompts are
+// cut at a word boundary and never trim to nothing: an empty stem would leave a
+// file called "-.png".
+function imageDownloadStem(promptText) {
+  const slug = String(promptText || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]+/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 48)
+    .replace(/-+$/, '');
+  return slug || 'image';
+}
+
+// The dimensions are in the name on purpose: whether the picture came back at
+// the size that was asked for is the first thing a folder listing should answer.
+function imageDownloadFilename(promptText, format, width, height) {
+  const spec = imageDownloadFormat(format);
+  const w = Math.round(Number(width) || 0);
+  const h = Math.round(Number(height) || 0);
+  const size = w > 0 && h > 0 ? `-${w}x${h}` : '';
+  return `freeai4u-${imageDownloadStem(promptText)}${size}.${spec.ext}`;
+}
+
+// A4 at 72dpi, whichever way up suits the picture, with a margin wide enough to
+// print. Kept in points so the numbers below are a real page and not a screen.
+const PDF_PAGE_PT = { width: 595.28, height: 841.89 };
+const PDF_MARGIN_PT = 24;
+
+// Where the picture lands on that page. Scaled down to fit, centred, and never
+// blown up: a 512px image printed at 200% claims a resolution it does not have.
+function pdfPageFor(imageWidth, imageHeight) {
+  const pixels = {
+    width: Math.max(1, Math.round(Number(imageWidth) || 0)),
+    height: Math.max(1, Math.round(Number(imageHeight) || 0)),
+  };
+  // Pages are portrait by default; a picture wider than it is tall gets a
+  // landscape sheet, or it would print as a stamp in the middle of an A4 page.
+  const landscape = pixels.width > pixels.height;
+  const width = landscape ? PDF_PAGE_PT.height : PDF_PAGE_PT.width;
+  const height = landscape ? PDF_PAGE_PT.width : PDF_PAGE_PT.height;
+  const boxWidth = Math.max(1, width - PDF_MARGIN_PT * 2);
+  const boxHeight = Math.max(1, height - PDF_MARGIN_PT * 2);
+  const scale = Math.min(boxWidth / pixels.width, boxHeight / pixels.height, 1);
+  const drawWidth = pixels.width * scale;
+  const drawHeight = pixels.height * scale;
+  return {
+    pixels,
+    width,
+    height,
+    imageWidth: drawWidth,
+    imageHeight: drawHeight,
+    x: (width - drawWidth) / 2,
+    y: (height - drawHeight) / 2,
+  };
+}
+
+// A one-page PDF holding the picture.
+//
+// Written by hand rather than pulled in as a dependency: the whole document is
+// five objects, and the JPEG goes in untouched as a /DCTDecode stream, so the
+// bytes that were drawn are the bytes that print. The caller supplies a JPEG
+// because that is what the canvas gives back, and re-encoding it here would be
+// a second lossy pass over an image that has already had one.
+//
+// The xref offsets are the part that has to be right rather than approximately
+// right: a reader repairs a bad table or refuses the file, so every object
+// records the byte length it was written at and the table is built from those.
+// A PDF's text sections are bytes, not characters, and everything written here
+// is Latin-1 -- so one character is one byte, which is the assumption /Length
+// and every xref offset is computed from. TextEncoder would encode UTF-8 and
+// quietly make a non-ASCII character three bytes long, moving every offset in
+// the file without changing the table that describes them.
+function pdfBytes(text) {
+  const source = String(text);
+  const out = new Uint8Array(source.length);
+  for (let i = 0; i < source.length; i++) out[i] = source.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function buildImagePdf(jpegBytes, imageWidth, imageHeight) {
+  const jpeg = jpegBytes instanceof Uint8Array ? jpegBytes : new Uint8Array(jpegBytes || []);
+  const page = pdfPageFor(imageWidth, imageHeight);
+  const num = (value) => {
+    const rounded = Math.round(Number(value) * 100) / 100;
+    return Number.isFinite(rounded) ? String(rounded) : '0';
+  };
+  const chunks = [];
+  let length = 0;
+  const push = (value) => {
+    const bytes = typeof value === 'string' ? pdfBytes(value) : value;
+    chunks.push(bytes);
+    length += bytes.length;
+  };
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const offsets = [];
+  const begin = (n) => {
+    offsets[n] = length;
+    push(`${n} 0 obj\n`);
+  };
+
+  begin(1);
+  push('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  begin(2);
+  push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  begin(3);
+  push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>\nendobj\n`);
+  const content = `q\n${num(page.imageWidth)} 0 0 ${num(page.imageHeight)} ${num(page.x)} ${num(page.y)} cm\n/Im0 Do\nQ\n`;
+  begin(4);
+  push(`<< /Length ${content.length} >>\nstream\n${content}endstream\nendobj\n`);
+  begin(5);
+  push(`<< /Type /XObject /Subtype /Image /Width ${page.pixels.width} /Height ${page.pixels.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`);
+  push(jpeg);
+  push('\nendstream\nendobj\n');
+
+  const startxref = length;
+  let xref = `xref\n0 ${offsets.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i++) xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  push(xref);
+  push(`trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
+
+  const out = new Uint8Array(length);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
+}
+
 const STORED_IMAGE_MAX_EDGE = 1024;
 const STORED_IMAGE_MAX_CHARS = 300000;
 
@@ -3912,6 +4065,15 @@ if (typeof module !== 'undefined' && module.exports) {
     STREAM_RENDER_MIN_MS,
     STREAM_RENDER_MAX_MS,
     nextStreamCadence,
+    IMAGE_DOWNLOAD_FORMATS,
+    imageDownloadFormat,
+    imageDownloadStem,
+    imageDownloadFilename,
+    PDF_PAGE_PT,
+    PDF_MARGIN_PT,
+    pdfPageFor,
+    pdfBytes,
+    buildImagePdf,
     STORED_IMAGE_MAX_EDGE,
     STORED_IMAGE_MAX_CHARS,
     storedImagePlan,

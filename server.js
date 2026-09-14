@@ -2592,6 +2592,20 @@ function normalizePricing(model) {
 const SKILLS_TTL_MS = 6 * 60 * 60 * 1000; // 6h: skills change on human timescales
 let skillsCache = { fetchedAt: 0, skills: [] };
 let skillsFetch = null;
+let skillsRateLimited = false;
+
+// GitHub's tree API allows 60 unauthenticated requests an hour per address, and
+// the catalogue spends one per source -- so on a shared address (a container
+// host, an office, a VPN) the library goes quiet part way through the day and
+// comes back empty, with nothing anywhere saying why. A token raises the same
+// budget to 5000, and GITHUB_TOKEN is a one-line setting next to the OAuth app
+// the GitHub tools already need.
+function githubApiHeaders() {
+  const headers = { 'User-Agent': 'freeopenai-app', Accept: 'application/vnd.github+json' };
+  const token = String(process.env.GITHUB_TOKEN || '').trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
 function skillsTtlMs() {
   const n = Number(process.env.SKILLS_CACHE_TTL_MS);
@@ -2631,10 +2645,16 @@ async function fetchSkillEntries(source) {
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch(`https://api.github.com/repos/${source.repo}/git/trees/${source.branch}?recursive=1`, {
-      headers: { 'User-Agent': 'freeopenai-app', Accept: 'application/vnd.github+json' },
+      headers: githubApiHeaders(),
       signal: controller.signal,
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      // 403 is how GitHub says "rate limit" on this endpoint, and 429 is the
+      // explicit form of the same thing. Either way the library is about to look
+      // empty for a reason that has nothing to do with the app.
+      if (res.status === 403 || res.status === 429) skillsRateLimited = true;
+      return [];
+    }
     const data = await res.json();
     return skillEntriesFromTree(data.tree, source);
   } catch {
@@ -2674,6 +2694,12 @@ async function loadSkills(force = false) {
     // catalogue serving.
     if (skills.length) skillsCache = { fetchedAt: Date.now(), skills };
     else if (skillsCache.skills.length) skillsCache.fetchedAt = Date.now();
+    else if (skillsRateLimited) {
+      // The one failure an operator can actually fix, so it is said out loud
+      // rather than left as a skill picker that is simply empty.
+      console.warn('[skills] GitHub refused the tree request (rate limit) — set GITHUB_TOKEN to raise the hourly allowance.');
+    }
+    skillsRateLimited = false;
     return skillsCache.skills;
   })().finally(() => { skillsFetch = null; });
   return skillsFetch;
@@ -3012,6 +3038,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  githubApiHeaders,
   resolveSafePath,
   isAssetPath,
   LLM_PROVIDERS,
