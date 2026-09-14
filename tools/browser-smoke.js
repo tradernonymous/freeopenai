@@ -174,9 +174,9 @@ async function main() {
       await send('Page.navigate', { url: url + '-' + name });
       await waitFor(() => evaluate('!!document.getElementById("viewChat") && typeof addMessage === "function"'), name + ' page');
       await sleep(400);
-      const result = await evaluate(`(() => {
+      const result = await evaluate(`(async () => {
         const el = (selector) => document.querySelector(selector);
-        const rect = (selector) => { const node = el(selector); if (!node) return null; const box = node.getBoundingClientRect(); return { left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height) }; };
+        const rect = (selector) => { const node = el(selector); if (!node) return null; const box = node.getBoundingClientRect(); return { left: Math.round(box.left), right: Math.round(box.right), top: Math.round(box.top), bottom: Math.round(box.bottom), width: Math.round(box.width), height: Math.round(box.height) }; };
         const style = (selector, prop) => { const node = el(selector); return node ? getComputedStyle(node)[prop] : null; };
         const messages = document.getElementById('chatMessages');
         const header = [...document.querySelectorAll('.chat-bar-actions .icon-btn')]
@@ -206,6 +206,76 @@ async function main() {
           closeThemeMenu();
           return out;
         })();
+        // The two side panels are pop-ups, not columns. That claim is only
+        // worth anything if the conversation does not move when they open, if
+        // they stay off the composer, and if they cannot land on each other --
+        // so all three are measured here rather than asserted in a stylesheet.
+        //
+        // Both states are measured after the 200ms slide has finished: read a
+        // frame too early and an opening panel still reports the position and
+        // opacity it is leaving, which is how a check like this passes while
+        // the panel sits on top of Send.
+        const panels = await (async () => {
+          const shell = el('#viewChat .chat-shell');
+          if (!shell || typeof toggleTodos !== 'function' || typeof toggleSkillRail !== 'function') return null;
+          const settle = () => new Promise((done) => setTimeout(done, 300));
+          const card = el('#viewChat .chat-card');
+          const width = () => (card ? Math.round(card.getBoundingClientRect().width) : null);
+          const open = () => ({
+            todos: !shell.classList.contains('todos-hidden'),
+            skills: !shell.classList.contains('skills-hidden'),
+          });
+          const box = (selector) => {
+            const node = el(selector);
+            if (!node) return null;
+            const r = node.getBoundingClientRect();
+            const cs = getComputedStyle(node);
+            return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), width: Math.round(r.width), height: Math.round(r.height), opacity: Number(cs.opacity), pointer: cs.pointerEvents, position: cs.position };
+          };
+          const overlaps = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+          const composer = box('.composer');
+          const bar = box('#viewChat .chat-bar');
+          const sidebar = box('#historySidebar');
+          const restore = open();
+
+          // Closed first: a panel that is merely transparent would still be
+          // eating the clicks meant for the transcript.
+          toggleTodos(false, false);
+          toggleSkillRail(false, false);
+          await settle();
+          const shut = { todo: box('#todoSidebar'), rail: box('#skillRail') };
+          const closedWidth = width();
+
+          // Then both asked for at once. On a card with room for the two gutters
+          // they stay open together; on one without, the fit rule puts the newer
+          // request first and the older panel away.
+          toggleTodos(true, false);
+          toggleSkillRail(true, false);
+          await settle();
+          const shown = { todo: box('#todoSidebar'), rail: box('#skillRail') };
+          // On a phone the panels are takeovers, and a takeover without a scrim
+          // is a trap: the drawer covers half the screen and the half it does
+          // not cover still looks tappable.
+          const scrim = { todo: box('#todoScrim'), rail: box('#skillScrim') };
+          const kept = open();
+          const openWidth = width();
+
+          toggleTodos(!!restore.todos, false);
+          toggleSkillRail(!!restore.skills, false);
+          await settle();
+
+          return {
+            closedWidth, openWidth, kept, restored: restore, bar, sidebar,
+            hidden: { todo: shut.todo, rail: shut.rail },
+            shown, scrim,
+            bothAtOnce: kept.todos && kept.skills,
+            overlapEachOther: overlaps(shown.todo, shown.rail),
+            todoOverComposer: overlaps(shown.todo, composer),
+            railOverComposer: overlaps(shown.rail, composer),
+            viewportWidth: innerWidth,
+            viewportHeight: innerHeight,
+          };
+        })();
         return {
           viewport: innerWidth + 'x' + innerHeight,
           documentWidth: document.documentElement.scrollWidth,
@@ -218,6 +288,7 @@ async function main() {
           header,
           themeButton,
           appearance,
+          panels,
           overflow: document.documentElement.scrollWidth > innerWidth + 1,
           messageGap: messages.scrollHeight - messages.scrollTop - messages.clientHeight,
         };
@@ -268,6 +339,86 @@ async function main() {
       const widths = new Set(shot.header.map((b) => b.w));
       if (heights.size > 1 || widths.size > 1) {
         throw new Error(name + ' header controls are not one size: ' + JSON.stringify(shot.header));
+      }
+    }
+
+    // The panels float, so opening one must not resize the conversation, must
+    // not sit on the composer, and must not land on its neighbour.
+    for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {
+      const p = shot.panels;
+      const viewportWidth = Number(shot.viewport.split('x')[0]);
+      const viewportHeight = Number(shot.viewport.split('x')[1]);
+      if (!p) throw new Error(name + ' has no side panels at all');
+      if (p.closedWidth !== p.openWidth) {
+        throw new Error(name + ' resizes the conversation when a panel opens: ' + p.closedWidth + ' -> ' + p.openWidth);
+      }
+      // A pop-up or a takeover? The same breakpoint the stylesheet uses: a
+      // small width or a short viewport turns the panels into drawers.
+      const desktopShaped = viewportWidth > 640 && viewportHeight > 520;
+      if (p.overlapEachOther) {
+        throw new Error(name + ' has its two panels on top of each other: ' + JSON.stringify(p.shown));
+      }
+      if (desktopShaped && (p.railOverComposer || p.todoOverComposer)) {
+        throw new Error(name + ' has a panel over the composer: ' + JSON.stringify({ todo: p.todoOverComposer, rail: p.railOverComposer, composer: shot.composer }));
+      }
+      // Closing one is the whole point of the toggle coming back, so the panel
+      // that is open after both were requested has to be on screen -- measured
+      // after the slide, not during it.
+      const openOnes = [['todo', p.shown.todo, p.kept.todos], ['rail', p.shown.rail, p.kept.skills]].filter(([, , isOpen]) => isOpen);
+      if (!openOnes.length) throw new Error(name + ' refused to open either panel');
+      for (const [which, box] of openOnes) {
+        if (!box || box.width < 180) throw new Error(name + ' draws an unusably small ' + which + ' panel: ' + JSON.stringify(box));
+        if (box.opacity < 0.9) throw new Error(name + ' claims the ' + which + ' panel is open but paints it at ' + box.opacity);
+        if (box.pointer === 'none') throw new Error(name + ' opens the ' + which + ' panel and then ignores clicks on it');
+        if (box.left < -1 || box.right > viewportWidth + 1 || box.top < -1 || box.bottom > viewportHeight + 1) {
+          throw new Error(name + ' puts the ' + which + ' panel off screen: ' + JSON.stringify(box));
+        }
+        // A panel that floats beside the chat must stop above the composer, so
+        // Send stays reachable with a list open. A drawer is a different shape
+        // and answers a different question -- it covers the composer on purpose,
+        // behind a scrim that has to be there.
+        if (desktopShaped) {
+          if (box.bottom > shot.composer.top) {
+            throw new Error(name + ' runs the ' + which + ' panel into the composer: ' + JSON.stringify({ panelBottom: box.bottom, composerTop: shot.composer.top }));
+          }
+          // And it sits under the bar, never over it: the toggle that closes it
+          // lives up there.
+          if (box.top < p.bar.bottom - 1) {
+            throw new Error(name + ' runs the ' + which + ' panel over the bar: ' + JSON.stringify({ panelTop: box.top, barBottom: p.bar.bottom }));
+          }
+          // Beside the chat means beside the chat *list* too: a panel over the
+          // Chats column cannot be dismissed from a list nobody can reach.
+          if (which === 'rail' && p.sidebar && p.sidebar.width > 0 && box.left < p.sidebar.right - 1) {
+            throw new Error(name + ' puts the skills panel over the chat list: ' + JSON.stringify({ panelLeft: box.left, sidebarRight: p.sidebar.right }));
+          }
+        } else {
+          const scrim = which === 'todo' ? p.scrim.todo : p.scrim.rail;
+          if (!scrim || scrim.opacity < 0.1 || scrim.pointer === 'none') {
+            throw new Error(name + ' opens a ' + which + ' drawer with nothing guarding the rest of the screen: ' + JSON.stringify(scrim));
+          }
+          if (scrim.width < viewportWidth * 0.5) {
+            throw new Error(name + ' leaves most of the screen live behind the ' + which + ' drawer: ' + JSON.stringify(scrim));
+          }
+        }
+      }
+      // The other one is put away: gone, not merely faint, and out of reach.
+      for (const [which, box, isOpen] of [['todo', p.shown.todo, p.kept.todos], ['rail', p.shown.rail, p.kept.skills]]) {
+        if (isOpen || !box) continue;
+        const clear = box.opacity === 0 || box.right <= 0 || box.left >= viewportWidth;
+        if (!clear || box.pointer !== 'none') {
+          throw new Error(name + ' leaves the closed ' + which + ' panel in the way: ' + JSON.stringify(box));
+        }
+      }
+      // Wide enough for both, both stay open -- that is the whole point of the
+      // measurement the toggles consult.
+      if (viewportWidth >= 1600 && !p.bothAtOnce) {
+        throw new Error(name + ' opens only one panel despite having room for both');
+      }
+      // On a phone they are takeovers: full height, flush to their edge.
+      if (viewportWidth <= 400) {
+        for (const [which, box] of [['todo', p.shown.todo], ['rail', p.shown.rail]]) {
+          if (box.width < viewportWidth * 0.6) throw new Error(name + ' ' + which + ' drawer is not a takeover: ' + JSON.stringify(box));
+        }
       }
     }
 
@@ -359,6 +510,43 @@ async function main() {
     }
     if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
     if (!behavior.gallery.stored || !behavior.gallery.jpeg || !behavior.gallery.rendered) throw new Error('generated image did not survive into the Gallery');
+
+    // The keyboard has to be able to see where it is. A real Tab, dispatched
+    // through the browser rather than a scripted .focus(), because :focus-visible
+    // is exactly what a scripted focus does not match -- so a test that focuses
+    // an element by hand can pass while every ring in the app is invisible.
+    await evaluate('document.activeElement && document.activeElement.blur && document.activeElement.blur()');
+    const focusRings = [];
+    for (let i = 0; i < 4; i++) {
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+      await sleep(60);
+      focusRings.push(await evaluate(`(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) return { focused: false };
+        const style = getComputedStyle(el);
+        const box = el.getBoundingClientRect();
+        return {
+          focused: true,
+          tag: el.tagName,
+          id: el.id || el.className || '',
+          ring: style.boxShadow !== 'none' || (style.outlineStyle !== 'none' && style.outlineWidth !== '0px'),
+          onScreen: box.width > 0 && box.height > 0 && box.left >= -1 && box.right <= innerWidth + 1,
+        };
+      })()`));
+    }
+    console.log('focus rings: ' + JSON.stringify(focusRings));
+    // A Tab past the last control in the document hands focus to the browser's
+    // own chrome, and activeElement reads as the body. That is the browser's
+    // cycle rather than a hole in the app, so those stops are counted but not
+    // judged. What has to hold is that the app is keyboard-reachable at all,
+    // that what it focuses is on screen, and that it draws a ring.
+    const tabbable = focusRings.filter((stop) => stop.focused);
+    if (tabbable.length < 2) throw new Error('the keyboard cannot reach the app: ' + JSON.stringify(focusRings));
+    for (const stop of tabbable) {
+      if (!stop.onScreen) throw new Error('Tab focused an element that is not on screen: ' + JSON.stringify(stop));
+      if (!stop.ring) throw new Error('the focused element draws no focus ring: ' + JSON.stringify(stop));
+    }
 
     // A pinned skill has to survive a reload *and* keep the chip that turns it
     // off. A pin that still applies with nothing on screen is a setting the user

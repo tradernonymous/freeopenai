@@ -25,10 +25,16 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
+// The two toggles are extracted together with the fit test they both consult:
+// the interesting rule is not that each one flips its own class, it is that the
+// second one opened on a card too narrow for both has to yield.
 const NAMES = [
   'renderTaskList',
+  'panelsFitTogether',
   'toggleTodos',
   'restoreTodosVisibility',
+  'toggleSkillRail',
+  'restoreSkillRailVisibility',
   'uiSetTaskStatus',
   'deleteTask',
   'todoMark',
@@ -120,11 +126,22 @@ function stubShell(hidden = false) {
   };
 }
 
-function harness({ graph = newTaskGraph(), stored = null, narrow = false, shell = null } = {}) {
+// Both panels default to closed, so the classes start empty and a test says what
+// it wants open by calling the real toggle.
+function harness({
+  graph = newTaskGraph(),
+  stored = null,
+  storedSkills = null,
+  narrow = false,
+  shell = null,
+  cardWidth = 1400,
+} = {}) {
   const document = stubDocument();
   const saved = [];
   const statuses = [];
-  const store = { value: stored };
+  // Keyed, because the two panels persist under different names -- one slot
+  // would make opening the skills card look like closing the todo list.
+  const store = { data: { freeopenaiTodosHidden: stored, freeopenaiSkillsHidden: storedSkills } };
   const deps = {
     // The real rules, not stubs: this exercises the shipped pairing.
     orderTodos,
@@ -139,17 +156,25 @@ function harness({ graph = newTaskGraph(), stored = null, narrow = false, shell 
     taskGraph: graph,
     document,
     localStorage: {
-      getItem: () => store.value,
-      setItem: (k, v) => { store.value = v; },
+      getItem: (k) => store.data[k] ?? null,
+      setItem: (k, v) => { store.data[k] = v; },
     },
     TODOS_HIDDEN_KEY: 'freeopenaiTodosHidden',
+    SKILLS_HIDDEN_KEY: 'freeopenaiSkillsHidden',
+    PANELS_BESIDE_MEASURE_PX: 760 + 272 + 300 + 20,
     isNarrowScreen: () => narrow,
     saveTaskGraph: () => saved.push(JSON.parse(JSON.stringify(deps.taskGraph))),
     showStatus: (kind, text) => statuses.push(kind + ': ' + text),
     shell: shell || stubShell(),
+    card: { getBoundingClientRect: () => ({ width: deps.cardWidth }) },
+    cardWidth,
   };
-  // The shell lookup is the one querySelector the toggle makes.
-  document.querySelector = (sel) => (sel === '#viewChat .chat-shell' ? deps.shell : null);
+  // The shell and the card are the only querySelectors the toggles make.
+  document.querySelector = (sel) => {
+    if (sel === '#viewChat .chat-shell') return deps.shell;
+    if (sel === '#viewChat .chat-card') return deps.card;
+    return null;
+  };
   const loaded = loadFromIndex(NAMES, deps);
   return { deps, document, saved, statuses, store, loaded };
 }
@@ -243,29 +268,74 @@ test('the panel opens and closes, and the choice sticks', () => {
   h.loaded.toggleTodos(false);
   assert.ok(shell.classList.contains('todos-hidden'));
   assert.equal(h.document.getElementById('todoToggle').getAttribute('aria-pressed'), 'false');
-  assert.equal(h.store.value, '1', 'closed is remembered');
+  assert.equal(h.store.data.freeopenaiTodosHidden, '1', 'closed is remembered');
   h.loaded.toggleTodos();
   assert.ok(!shell.classList.contains('todos-hidden'));
-  assert.equal(h.store.value, '', 'and so is open');
+  assert.equal(h.store.data.freeopenaiTodosHidden, '', 'and so is open');
 });
 
-test('a phone starts with the panel out of the way, and a stored choice wins', () => {
-  const narrowShell = stubShell(false);
-  const narrow = harness({ shell: narrowShell, narrow: true, stored: null });
-  narrow.loaded.restoreTodosVisibility();
-  assert.ok(narrowShell.classList.contains('todos-hidden'), 'closed by default on a phone');
-
-  const wideShell = stubShell(false);
-  const wide = harness({ shell: wideShell, narrow: false });
-  wide.loaded.restoreTodosVisibility();
-  assert.ok(!wideShell.classList.contains('todos-hidden'), 'open by default on a laptop');
+test('both panels start closed, at every size, and a stored choice wins', () => {
+  // Closed is the default everywhere now. As columns these panels held their own
+  // space and open-on-load cost nothing; floating, open-on-load is a card
+  // covering an answer nobody has read yet, so being open is a choice.
+  for (const narrow of [true, false]) {
+    const shell = stubShell(false);
+    const rail = harness({ shell, narrow });
+    rail.loaded.restoreTodosVisibility();
+    rail.loaded.restoreSkillRailVisibility();
+    assert.ok(shell.classList.contains('todos-hidden'), 'closed by default on ' + (narrow ? 'a phone' : 'a laptop'));
+    assert.ok(shell.classList.contains('skills-hidden'), 'the skills card too, on ' + (narrow ? 'a phone' : 'a laptop'));
+    // And nothing was written back: a default is not a choice.
+    assert.equal(rail.store.data.freeopenaiTodosHidden, null, 'restoring must not persist a default');
+    assert.equal(rail.store.data.freeopenaiSkillsHidden, null, 'restoring must not persist a default');
+  }
 
   // Once chosen, honoured everywhere: overriding it was why the history
   // sidebar's setting never appeared to stick on mobile.
   const chosenShell = stubShell(true);
-  const chosen = harness({ shell: chosenShell, narrow: false, stored: '1' });
+  const chosen = harness({ shell: chosenShell, narrow: false, stored: '' });
   chosen.loaded.restoreTodosVisibility();
-  assert.ok(chosenShell.classList.contains('todos-hidden'), 'a stored "closed" survives a wide screen');
+  assert.ok(!chosenShell.classList.contains('todos-hidden'), 'a stored "open" survives a wide screen');
+
+  const storedShell = stubShell(false);
+  const kept = harness({ shell: storedShell, narrow: false, stored: '1', storedSkills: '' });
+  kept.loaded.restoreTodosVisibility();
+  kept.loaded.restoreSkillRailVisibility();
+  assert.ok(storedShell.classList.contains('todos-hidden'), 'a stored "closed" survives');
+  assert.ok(!storedShell.classList.contains('skills-hidden'), 'and the two choices are independent');
+});
+
+test('two floating panels will not sit on top of each other', () => {
+  // The rule that replaced the width budget: there is no budget any more, only a
+  // measurement. On a card wide enough for both gutters, opening the second
+  // leaves the first alone.
+  const roomy = stubShell(false);
+  const wide = harness({ shell: roomy, cardWidth: 1400 });
+  wide.loaded.toggleTodos(true);
+  wide.loaded.toggleSkillRail(true);
+  assert.ok(!roomy.classList.contains('todos-hidden'), 'both fit, so both stay open');
+  assert.ok(!roomy.classList.contains('skills-hidden'));
+
+  // On a card that cannot hold both, the panel that was already open wins and
+  // the newcomer steps aside -- without recording that as the user's choice.
+  const tight = stubShell(false);
+  const narrow = harness({ shell: tight, cardWidth: 900 });
+  narrow.loaded.toggleTodos(true);
+  assert.ok(!tight.classList.contains('todos-hidden'), 'the first one opens normally');
+  const before = narrow.store.data.freeopenaiTodosHidden;
+  narrow.loaded.toggleSkillRail(true);
+  assert.ok(!tight.classList.contains('skills-hidden'), 'the requested panel still opens');
+  assert.ok(tight.classList.contains('todos-hidden'), 'and the one that would overlap yields');
+  // Yielding is not a choice: it must not overwrite what the user last said
+  // about the panel that got out of the way, or a reload would honour the
+  // overlap rather than the preference.
+  assert.equal(narrow.store.data.freeopenaiTodosHidden, before, 'yielding stores nothing');
+  assert.equal(narrow.store.data.freeopenaiSkillsHidden, '', 'the request itself is');
+
+  // The measurement is the card's width, so the same window closes the door when
+  // the card is narrow and opens it when the card is wide.
+  assert.equal(narrow.loaded.panelsFitTogether(), false);
+  assert.equal(wide.loaded.panelsFitTogether(), true);
 });
 
 test('the reasoning scratchpad is one moving line while it streams, then a summary', () => {
@@ -295,10 +365,10 @@ test('the reasoning scratchpad is one moving line while it streams, then a summa
   assert.equal(bubble.dataset.rawReasoning, 'First I look at the file, then I check the tests.');
 });
 
-test('the panels are cards beside the chat, and drawers on a phone', () => {
+test('the panels are glass pop-ups beside the chat, and drawers on a phone', () => {
   // Markup: the todo card, its count, its progress bar and its toggle all exist,
   // along with the skills card on the other side.
-  for (const id of ['todoSidebar', 'todoList', 'todoCount', 'todoProgress', 'todoProgressFill', 'todoToggle', 'todoScrim', 'skillRail', 'skillRailList', 'skillRailCount', 'skillRailToggle']) {
+  for (const id of ['todoSidebar', 'todoList', 'todoCount', 'todoProgress', 'todoProgressFill', 'todoToggle', 'todoScrim', 'skillRail', 'skillRailList', 'skillRailCount', 'skillRailToggle', 'skillScrim']) {
     assert.ok(HTML.includes('id="' + id + '"'), 'index.html is missing #' + id);
   }
   // The shell carries the class each toggle flips -- a toggle for a class
@@ -307,19 +377,39 @@ test('the panels are cards beside the chat, and drawers on a phone', () => {
   assert.match(HTML, /\.chat-shell\.todos-hidden \.todo-sidebar/);
   assert.match(HTML, /\.chat-shell\.skills-hidden \.skill-rail/);
 
-  // The desktop shape is a floating card, not a wall of the layout: inset,
-  // rounded, raised. It still takes width rather than covering the transcript,
-  // because a list of the remaining work is useless if reading it hides the
-  // work -- so it is a flex child and never position: absolute (which is also
-  // the shape that made the attach menu open invisibly inside a scroll box).
-  const todoCard = HTML.slice(HTML.indexOf('\n        .todo-sidebar {'), HTML.indexOf('.todo-head, .rail-head {'));
-  assert.ok(!/position: absolute/.test(todoCard), 'the desktop card is a layout column, not an overlay');
-  assert.match(todoCard, /margin: 10px 10px 10px 0/);
-  assert.match(todoCard, /border-radius: var\(--r-lg\)/);
-  assert.match(todoCard, /box-shadow: var\(--lift-lg\)/);
-  const skillCard = HTML.slice(HTML.indexOf('.skill-rail {'), HTML.indexOf('.rail-list {'));
-  assert.ok(!/position: absolute/.test(skillCard), 'the skills card follows the same shape');
-  assert.match(skillCard, /margin: 10px 0 10px 10px/);
+  // The desktop shape is a glass pop-up beside the chat, not a column of the
+  // layout. As columns the two of them took 500px, which is what squeezed the
+  // transcript and what the app paid for by hiding the skills card entirely
+  // between 1101px and 1499px; floating, they cost the conversation nothing and
+  // opening a list no longer reflows the text being read.
+  const panel = HTML.slice(HTML.indexOf('\n        .skill-rail, .todo-sidebar {'), HTML.indexOf('.rail-list {'));
+  assert.match(panel, /position: absolute; z-index: 25;/);
+  assert.match(panel, /top: calc\(var\(--bar-h\) \+ 10px\);/, 'a pop-up that covers the button that dismisses it is a trap');
+  // And it stops above the composer. `bottom: 10px` put the todo card over
+  // Send: the composer's right edge and the card's left edge crossed, so the
+  // one control every turn needs was behind a panel.
+  assert.match(panel, /bottom: var\(--panel-floor, 10px\)/);
+  assert.match(HTML, /function syncPanelFloor\(\)/, 'nothing measures the composer');
+  const floor = HTML.slice(HTML.indexOf('function syncPanelFloor()'), HTML.indexOf('function watchPanelFloor()'));
+  assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
+  assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
+  assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
+  assert.match(HTML, /restoreSkillRailVisibility\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
+  assert.match(panel, /background: var\(--glass\)/);
+  assert.match(panel, /backdrop-filter: blur\(18px\)/, 'the pop-up has to be glass');
+  assert.match(panel, /-webkit-backdrop-filter: blur\(18px\)/, 'or Safari gets an opaque slab');
+  assert.match(panel, /border-radius: var\(--r-lg\)/);
+  assert.match(panel, /box-shadow: var\(--lift-lg\), 0 16px 40px/);
+  assert.match(panel, /transition: transform/);
+  // Out of the layout means no width to give back and no flex item either.
+  assert.doesNotMatch(panel, /flex-shrink/, 'a floating panel is not a layout column');
+  assert.doesNotMatch(panel, /margin: 10px/, 'the inset comes from top/bottom/left/right now');
+  // Hidden has to mean gone, not merely invisible: a transparent panel still
+  // swallows the clicks meant for the transcript underneath it.
+  const putAway = HTML.slice(HTML.indexOf('.chat-shell.skills-hidden .skill-rail,'), HTML.indexOf('.rail-list {'));
+  assert.match(putAway, /opacity: 0; pointer-events: none;/);
+  assert.match(putAway, /translateX\(calc\(-100% - 20px\)\)/);
+  assert.match(putAway, /translateX\(calc\(100% \+ 20px\)\)/);
 
   // Both small screens -- a portrait phone and a short landscape one -- turn the
   // todo card into an off-canvas drawer from the right, flush and square: there
@@ -332,11 +422,20 @@ test('the panels are cards beside the chat, and drawers on a phone', () => {
   );
   assert.match(small, /\.todo-sidebar \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
   assert.match(small, /\.chat-shell\.todos-hidden \.todo-sidebar \{[\s\S]*?translateX\(102%\)/);
+  // The skills card gets the matching drawer from the other edge, with a scrim
+  // of its own. It used to be a 212px column of a 390px screen -- which is why
+  // it started hidden on a phone and was hard to reach there.
+  assert.match(small, /\.skill-rail \{[\s\S]*?position: absolute; top: 0; bottom: 0; left: 0[\s\S]*?transform: translateX\(0\)/);
+  assert.match(small, /\.chat-shell\.skills-hidden \.skill-rail \{[\s\S]*?translateX\(-102%\)/);
+  assert.match(small, /\.skill-scrim \{[\s\S]*?display: block/);
+  assert.match(small, /\.chat-shell\.skills-hidden \.skill-scrim \{ opacity: 0; pointer-events: none; \}/);
   const landscape = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
   assert.match(landscape, /\.todo-sidebar,[\s\S]*?width: 32%/);
-  // With no room for a third column the skills card yields first: it is
-  // information, and the same facts are a tap away in the picker.
-  assert.match(HTML, /@media \(min-width: 1101px\) and \(max-width: 1499px\) \{\s*\.skill-rail, #skillRailToggle \{ display: none; \}/);
+  assert.match(landscape, /\.skill-rail,[\s\S]*?width: 34%/);
+  // The width-budget rule is gone, because there is no width budget any more: a
+  // floating panel has nothing to argue over, so the skills card and its toggle
+  // are available at every desktop size instead of three of them.
+  assert.doesNotMatch(HTML, /#skillRailToggle \{ display: none; \}/, 'the skills card is hidden at some desktop width again');
 });
 
 test('every control in the toolbar is built from the same four values', () => {
