@@ -1646,11 +1646,16 @@
                too doubled the dead zone under the composer on every phone. */
             .chat-input-area { padding: 10px 10px 10px; }
             .status-bar { padding: 0 12px; }
-            /* iOS zooms any focused field under 16px, which turns a dropdown
+            /* iOS zooms any focused *field* under 16px, which turns a dropdown
                into a zoomed viewport. Every field in the page, not just the
                composer's: the settings and GitHub ones only got the guard in
-               portrait, so a landscape phone still zoomed. */
-            .composer-input, .model-trigger, .effort-select, #providerSelect,
+               portrait, so a landscape phone still zoomed.
+               Fields only. .model-trigger used to be in this list and is a
+               <button> -- iOS zooms for input, select and textarea, never for a
+               button -- so the guard did nothing there except make the widest
+               control in the row a third wider than it needed to be, on every
+               phone. Its own dropdown holds a real input, and that still has it. */
+            .composer-input, .effort-select, #providerSelect,
             .settings-row select, .github-browser-row select, .github-browser-row input,
             #githubFileContent, .model-dropdown-search, .palette input, .mask-prompt {
                 font-size: 16px;
@@ -1670,16 +1675,22 @@
             .effort-select, #providerSelect { min-height: var(--touch); }
             .effort-select option { font-size: 14px; }
             .model-trigger { padding: 6px 6px; }
-            /* The model picker is the reason the control row exists, and here it
-               sat behind four chips in a scroller nothing says is a scroller.
-               It goes first; the rest still scroll. */
+            /* Attach first, then the model, then the rest. Attach is the control
+               a thumb reaches for most and it now leads the row, where the
+               left edge makes it the easiest thing to hit. */
+            .composer-actions { order: -2; }
             .composer-model-controls { order: -1; }
-            /* Two rows, and the split matters: the actions keep their own line,
-               so attach and draw cannot scroll off the edge, while the settings
-               keep the scrolling. In one row of six on a 360px screen the two
-               buttons every message needs were the first to leave. */
+            /* One row that wraps, not two rows that are fixed. The old split gave
+               the actions a line of their own so attach could not be pushed off
+               the edge -- true, and it spent 44px of height on one button with
+               most of the row empty beside it. Wrapping does the same job without
+               the waste: nothing is ever pushed off, because a row that runs out
+               of width starts another line instead. */
             .composer-controls { flex-wrap: wrap; row-gap: 6px; }
-            .composer-settings { flex: 1 1 100%; }
+            /* Full width, so the row owns the line under the input rather than
+               sharing it. Whether its own contents wrap or shrink is decided at
+               440px below, where the widths are actually known. */
+            .composer-settings { flex: 1 1 100%; row-gap: 6px; overflow-x: visible; }
             .history-sidebar {
                 position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
                 width: 78%; max-width: 300px;
@@ -1734,9 +1745,10 @@
                dropped it into the flow, on top of the first line of code. An
                absolutely positioned element hosts ::after perfectly well. */
             .msg-action-btn, .history-delete,
-            .icon-btn, .menu-trigger-btn, .model-trigger, .mode-chip { position: relative; }
+            .icon-btn, .menu-trigger-btn, .model-trigger, .mode-chip, .composer-attach { position: relative; }
             .msg-action-btn::after, .history-delete::after, .code-copy-btn::after,
-            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after, .mode-chip::after {
+            .icon-btn::after, .menu-trigger-btn::after, .model-trigger::after, .mode-chip::after,
+            .composer-attach::after {
                 content: ''; position: absolute;
                 top: 50%; left: 50%; transform: translate(-50%, -50%);
                 width: max(100%, 44px); height: max(100%, 44px);
@@ -1845,13 +1857,65 @@
             .composer-controls .model-trigger { gap: 4px; }
         }
 
-        /* And when tightening is not enough -- a long provider name, a model name
-           that will not shorten -- the row wraps rather than hiding its tail.
-           Height is the axis with room in portrait, where the composer is a
-           quarter of the screen. The min-height keeps this away from the landscape
-           layout, where height is the scarce one and the row has width to spare. */
-        @media (max-width: 440px) and (min-height: 521px) {
-            .composer-settings { flex-wrap: wrap; overflow-x: visible; row-gap: 6px; }
+        /* Six controls at full size want 385px and a 390px phone gives the row
+           350px, so the row is tightened before it is allowed to wrap. Attach draws
+           at 34px while keeping its 44px target through the ::after rule above, and
+           the model name clamps harder -- together about 26px, which is most of the
+           gap. What is still over wraps, which is why none of this has to be exact:
+           a longer provider name costs a second line, not a hidden control. */
+        @media (max-width: 440px) {
+            /* Narrower, not smaller. The row needs the width back, but a 34px
+               square beside 44px chips reads as a control that did not line up;
+               34x44 keeps the top and bottom edges of the row straight while
+               still giving back 10px. The ::after below carries the finger
+               target out to 44px in both directions. */
+            .composer-attach { width: 34px; height: var(--touch); }
+            .composer-settings, .composer-controls { column-gap: 3px; }
+            /* Six controls at full size want 385px and a 390px phone gives the row
+               350px. A fixed clamp on the model name cannot answer that: too wide
+               and the row wraps, too narrow and it truncates a name that had room.
+               So the name gives up exactly the width the row is short by, and
+               nothing else in the row has to move.
+
+               It is the right control to squeeze because it is the only one that
+               degrades gracefully -- it already ellipsises, and the full list is a
+               tap away in its own dropdown. A chip reading "Cha…" would not.
+
+               min-width: 0 on every step of the chain is the whole trick: a flex
+               item defaults to min-width: auto and refuses to shrink under its
+               content, so without it the row wraps while the name sits at its
+               natural width claiming it cannot help. */
+            /* nowrap, and that is the point: a wrapping flex line does not shrink
+               to stay one line, it wraps and leaves the items at their natural
+               width. Shrinking is what keeps this a single row, so wrapping has to
+               be off for it to happen at all. Nothing can be pushed off the edge
+               either way -- with shrink the row cannot overflow in the first place. */
+            .composer-settings { flex-wrap: nowrap; }
+            /* The model button takes the leftover, rather than claiming its content
+               width and hoping something shrinks. flex-basis: 0 is what makes that
+               deterministic: it starts at nothing and grows into whatever the
+               fixed-size controls have not used, so the row is exactly one line at
+               every width and the name is as long as there is room for.
+               Letting shrink sort it out instead did not work -- shrink is weighted
+               by content width, and the pressure landed on the provider select,
+               which collapsed to 10px while the model button overflowed its own
+               group. Everything else here keeps its size for that reason. */
+            .composer-settings > .composer-model-controls { flex: 1 1 auto; min-width: 0; }
+            /* The flex item here is the wrapper that hosts the dropdown, not the
+               button inside it -- so the wrapper is what flexes, and the button
+               fills it. Aiming this at .model-trigger read correctly and did
+               nothing at all: the button is not a child of the row. */
+            .composer-model-controls > .model-trigger-wrap { flex: 1 1 0; min-width: 0; display: flex; }
+            .model-trigger-wrap > .model-trigger { flex: 1 1 auto; min-width: 0; max-width: none; }
+            .composer-controls .model-trigger #modelLabel { max-width: none; min-width: 0; }
+            .composer-controls #providerSelect,
+            .composer-controls .effort-select { flex-shrink: 0; }
+            .composer-settings > .session-chip,
+            .composer-settings > .mode-chip,
+            .composer-settings > .composer-actions { flex-shrink: 0; }
+            /* The chevron is the affordance, not content: it says the button opens,
+               so it keeps its size while the label gives way. */
+            .composer-model-controls .model-trigger > svg { flex-shrink: 0; }
         }
 
         /* A 1440px desktop used to be "not wide enough for history + skills +
@@ -2034,11 +2098,15 @@
                                 <button class="composer-send" type="button" id="sendButton" disabled onclick="isTyping ? stopGeneration() : sendMessage()" aria-label="Send message">→</button>
                             </div>
                             <div class="composer-controls" aria-label="Chat controls">
-                                <!-- Two groups, not one row of four. On a phone the
-                                     actions keep their own line and only the
-                                     settings scroll beneath them, so attach cannot
-                                     slide off the edge. -->
-                                <div class="composer-actions">
+                                <!-- One list, attach first. It used to be a group of
+                                     its own on a line of its own, which on a phone
+                                     spent 44px of height on one button with most of
+                                     the row empty beside it. In the same row it sits
+                                     where a thumb already is -- hard left, next to
+                                     the model -- and what does not fit wraps as one
+                                     list instead of two. -->
+                                <div class="composer-settings">
+                            <div class="composer-actions">
                                 <div style="position: relative;">
                                     <button class="composer-attach" type="button" id="attachTrigger" onclick="event.stopPropagation(); toggleAttachMenu();" aria-haspopup="listbox" aria-expanded="false" aria-label="Attach" title="Attach an image, document, or file">
                                     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2072,7 +2140,7 @@
                                 <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
                             </div>
                                 </div>
-                                <div class="composer-settings">
+
                             <!-- One chip where there were three controls. The two
                                  that left were the ones you set once and then
                                  never touched again -- which skills apply, and
@@ -2081,7 +2149,7 @@
                                  they shape. -->
                             <button class="session-chip" type="button" id="sessionChip" onclick="toggleSessionPanel()" aria-expanded="false" aria-controls="sessionPanel" aria-label="Session — skills, plan and image for this chat" title="Skills, plan and image for this chat">Session</button>
                             <div class="composer-model-controls">
-                                <div style="position: relative;">
+                                <div class="model-trigger-wrap" style="position: relative;">
                                     <button class="model-trigger" id="modelTrigger" aria-label="Select model" aria-haspopup="listbox" aria-expanded="false">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
                                         <span id="modelLabel">Model</span>

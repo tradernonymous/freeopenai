@@ -39,16 +39,21 @@ test('the attach menu is fixed to the viewport, and its trigger cannot scroll aw
   assert.ok(actions, '.composer-actions is gone -- re-point this test');
   assert.doesNotMatch(actions[0], /overflow/, 'the actions group must never scroll');
 
-  // And the trigger really is inside the group that does not scroll, while the
-  // settings live in the one that does.
-  const actionsAt = HTML.indexOf('class="composer-actions"');
+  // The actions group is nested inside the settings row now, as its first child,
+  // so attach leads one flat row instead of owning a line of its own. The menu
+  // still travels with its trigger, which is the part that matters here.
   const settingsAt = HTML.indexOf('class="composer-settings"');
+  const actionsAt = HTML.indexOf('class="composer-actions"');
   const trigger = HTML.indexOf('id="attachTrigger"');
   const menu = HTML.indexOf('id="attachMenu"');
   const chip = HTML.indexOf('id="sessionChip"');
-  assert.ok(actionsAt !== -1 && settingsAt > actionsAt, 'the actions group must come first');
-  assert.ok(trigger > actionsAt && trigger < settingsAt, 'the attach trigger left the actions group');
-  assert.ok(menu > trigger && menu < settingsAt, 'the menu must still live beside its trigger');
+  assert.ok(settingsAt !== -1 && actionsAt > settingsAt, 'the actions group must sit inside the settings row');
+  assert.ok(trigger > actionsAt, 'the attach trigger left the actions group');
+  assert.ok(menu > trigger && menu < chip, 'the menu must still live beside its trigger');
+  // Attach comes before every other control in the row, which is the layout: it
+  // is the one a thumb reaches for most, so it sits at the left edge.
+  assert.ok(trigger < chip, 'attach must lead the row');
+  assert.ok(trigger < HTML.indexOf('id="modelTrigger"'), 'attach must come before the model picker');
   // The session chip is a setting, not an action: it opens a surface, it does
   // not send anything. It belongs on the scrolling side with the model chip, and
   // the actions group is attach's alone now that draw is a switch in the panel.

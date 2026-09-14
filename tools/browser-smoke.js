@@ -193,6 +193,7 @@ async function main() {
             const r = node.getBoundingClientRect();
             return {
               left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top),
+              height: Math.round(r.height),
               inView: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1,
             };
           };
@@ -202,6 +203,12 @@ async function main() {
             settingsScrolls: settings.scrollWidth > settings.clientWidth + 1,
             actionsScrolls: actions.scrollWidth > actions.clientWidth + 1,
             attach: place(el('#attachTrigger')),
+            attachTarget: (() => {
+              const node = el('#attachTrigger');
+              if (!node) return null;
+              const after = getComputedStyle(node, '::after');
+              return { w: Math.round(parseFloat(after.width) || 0), h: Math.round(parseFloat(after.height) || 0) };
+            })(),
             sessionChip: place(el('#sessionChip')),
             // Every control in the strip, and whether it is actually on the
             // screen. Existence was all this used to check, which is how three
@@ -210,13 +217,20 @@ async function main() {
             // desktop ones, so a 360px screen rendered desktop widths, the strip
             // overflowed by 80px, and the mode chip sat entirely past the right
             // edge with no scrollbar to suggest it was there.
-            strip: ['#sessionChip', '.model-trigger', '#providerSelect', '#effortChip', '#modeChip']
+            strip: ['#attachTrigger', '#sessionChip', '.model-trigger', '#providerSelect', '#effortChip', '#modeChip']
               .map((selector) => {
                 const node = el(selector);
                 if (!node || getComputedStyle(node).display === 'none') return null;
                 const at = place(node);
                 const r = node.getBoundingClientRect();
-                return { id: selector, inView: at.inView, width: Math.round(r.width), height: Math.round(r.height) };
+                return {
+                  id: selector, inView: at.inView,
+                  left: Math.round(r.left),
+                  // Centre rather than top: attach draws smaller than the chips and
+                  // is centred against them, so its top differs on the same line.
+                  centreY: Math.round(r.top + r.height / 2),
+                  width: Math.round(r.width), height: Math.round(r.height),
+                };
               })
               .filter(Boolean),
             // The pickers that made this row too long are gone; one coming back
@@ -414,9 +428,12 @@ async function main() {
       }
     }
 
-    // Attach and draw are the two controls every message needs, and on a phone
-    // they used to scroll off the right edge of a one-row strip. They now have a
-    // group of their own that cannot scroll; the settings scroll beside them.
+    // Attach is the control every message needs, and it now leads the row: hard
+    // left, next to the model, where a thumb already is. It used to sit in a group
+    // on a line of its own, which kept it from being pushed off the edge and spent
+    // 44px of a phone's height on one button with the row empty beside it. What
+    // replaces that guarantee is below -- the row cannot overflow, because the
+    // model name gives up exactly the width the row is short by.
     for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {
       const c = shot.composerControls;
       if (!c) throw new Error(name + ' has no composer controls at all');
@@ -427,7 +444,13 @@ async function main() {
       if (c.imageModeButton) throw new Error(name + ' still has a draw button beside attach');
       if (c.skillToggles) throw new Error(name + ' still has the skill chips in the composer');
       if (!c.sessionChip) throw new Error(name + ' has no way to reach the session panel from the composer');
-      if (c.actionsScrolls) throw new Error(name + ' lets the actions group scroll');
+      // actionsScrolls is still measured and no longer asserted. The actions group
+      // is one button with overflow: visible, so it cannot scroll -- and its
+      // scrollWidth now reads 5px over on a phone because the 44px finger target
+      // is a ::after box drawn wider than the 34px glyph, deliberately. The
+      // concern this guarded -- attach being scrolled out of reach -- is covered
+      // directly now: the row may not overflow, may not split over lines, and
+      // every control in it must be on screen.
       // A control the layout has pushed off the screen is a control that is not
       // there. The strip may scroll, but nothing in it may be unreachable: at
       // 360px this caught the mode chip sitting wholly past the right edge.
@@ -440,16 +463,35 @@ async function main() {
       // collapsed rather than merely tightened.
       const tiny = c.strip.filter((control) => control.height < 30 || control.width < 24);
       if (tiny.length) throw new Error(name + ' collapses composer controls: ' + JSON.stringify(tiny));
+      // Attach draws at 34px on a phone to buy the row its width back, so the
+      // finger target is the ::after box rather than the button. A shrunken glyph
+      // with a shrunken target would be the wrong trade. Only where a finger is
+      // the pointer: the desktop layout has no ::after and does not need one.
+      const [vw, vh] = shot.viewport.split('x').map(Number);
+      const touchSized = vw <= 640 || vh <= 520;
+      if (touchSized && c.attach.height < 44) {
+        const target = c.attachTarget || { w: 0, h: 0 };
+        if (target.w < 44 || target.h < 44) {
+          throw new Error(name + ' shrank the attach button without keeping its 44px target: ' + JSON.stringify({ button: c.attach, target }));
+        }
+      }
       if (!c.attach) throw new Error(name + ' has no attach button');
       if (!c.attach.inView) throw new Error(name + ' puts the attach button off screen: ' + JSON.stringify(c.attach));
-      const sameRow = Math.abs(c.settings.top - c.actions.top) <= 2;
-      if (sameRow && c.attach.right > c.settings.left + 1) {
-        throw new Error(name + ' overlaps the settings with the actions: ' + JSON.stringify(c));
+      // Attach leads the row. This is the layout, so it is asserted rather than
+      // assumed: anything to the left of it means the order has been rearranged.
+      const leftOfAttach = c.strip.filter((control) => control.id !== '#attachTrigger' && control.left < c.attach.left);
+      if (leftOfAttach.length) {
+        throw new Error(name + ' no longer leads the row with attach: ' + JSON.stringify(leftOfAttach));
       }
-      // A phone fits the settings on a second row rather than beside the
-      // actions, and that second row is the whole reason the actions stay put.
-      if (Number(shot.viewport.split('x')[0]) <= 640 && sameRow) {
-        throw new Error(name + ' keeps one row on a phone, which is what pushed attach off the edge: ' + JSON.stringify(c));
+      // And one row, on one line. The old layout guaranteed attach stayed put by
+      // giving it a line of its own; this one guarantees it by making the row
+      // unable to overflow, so the guarantee has to be checked directly.
+      if (c.settingsScrolls) {
+        throw new Error(name + ' overflows the composer row instead of shrinking the model name: ' + JSON.stringify(c));
+      }
+      const lines = [...new Set(c.strip.map((control) => control.centreY))];
+      if (lines.length > 1) {
+        throw new Error(name + ' splits the composer row over ' + lines.length + ' lines: ' + JSON.stringify(c.strip));
       }
     }
 

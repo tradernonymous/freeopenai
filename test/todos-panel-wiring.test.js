@@ -529,9 +529,10 @@ test('the composer and the chat bar each carry one control for the surface', () 
   assert.match(HTML, /id="sessionToggle"/);
   assert.match(HTML, /id="sessionChip"/);
   assert.match(HTML, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
-  // The actions group is down to attach alone, so a phone keeps it on screen
-  // with nothing scrolling beside it.
-  const actions = HTML.slice(HTML.indexOf('<div class="composer-actions">'), HTML.indexOf('<div class="composer-settings">'));
+  // The actions group is down to attach alone, and it now leads the settings row
+  // rather than holding a line of its own -- so the slice runs from the group to
+  // the first control after it.
+  const actions = HTML.slice(HTML.indexOf('<div class="composer-actions">'), HTML.indexOf('id="sessionChip"'));
   assert.match(actions, /id="attachTrigger"/);
   assert.doesNotMatch(actions, /id="imageModeBtn"|toggleImageMode/);
   assert.equal(HTML.includes('id="skillsToggle"'), false);
