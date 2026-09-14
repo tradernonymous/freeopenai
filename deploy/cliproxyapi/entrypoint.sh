@@ -20,10 +20,12 @@
 # in the spike: blanked tokens healed to full models + 200s with no clicks).
 #
 # Railway's private network (the .railway.internal names) hands the app an IPv6
-# ULA address (fd12::/8), so the bind is "::" (dual-stack) rather than an
-# IPv4-only address: the app resolves the name, connects to the IPv6 address,
-# and must find something listening there. CPA_HOST overrides when a future
-# deployment needs something else.
+# ULA address (fd12::/8). Go listens dual-stack on an empty host, which covers
+# both that and IPv4, so the default here is deliberately empty. Do NOT set a
+# bare "::": this proxy concatenates host and port itself ("::" + 8317 becomes
+# the invalid ":::8317" and the server never starts -- found by the local
+# Docker boot test). CPA_HOST overrides when a future deployment needs a
+# concrete address.
 set -e
 
 CONFIG_FILE="${CPA_CONFIG_FILE:-/app/data/config.yaml}"
@@ -42,7 +44,7 @@ import os
 auth_dir = os.environ.get("CPA_AUTH_DIR", "/app/data/auth")
 config_file = os.environ.get("CPA_CONFIG_FILE", "/app/data/config.yaml")
 port = int(os.environ.get("PORT", "8317") or 8317)
-host = os.environ.get("CPA_HOST", "::")
+host = os.environ.get("CPA_HOST", "")
 api_keys = [k.strip() for k in os.environ.get("CPA_API_KEYS", "").split(",") if k.strip()]
 
 with open(config_file, "w", encoding="utf-8") as f:

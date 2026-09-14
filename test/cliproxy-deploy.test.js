@@ -109,14 +109,26 @@ test('the old seed shape (an object with an accounts array) is accepted too', { 
 test('the generated config pins host, port, auth dir and key', { skip: canRun ? false : 'no sh/python3 on this machine' }, (t) => {
   const h = harness(t);
 
-  h.run({ PORT: '9999', CPA_HOST: '::', CPA_API_KEYS: 'k1,k2', CPA_ACCOUNTS_JSON: '[]' });
+  h.run({ PORT: '9999', CPA_HOST: '127.0.0.1', CPA_API_KEYS: 'k1,k2', CPA_ACCOUNTS_JSON: '[]' });
 
   const cfg = fs.readFileSync(h.config, 'utf8');
-  assert.match(cfg, /host: "::"/, 'dual-stack bind for Railway private networking');
+  assert.match(cfg, /host: "127\.0\.0\.1"/, 'an explicit bind override is honoured verbatim');
   assert.match(cfg, /port: 9999/, 'Railway injects PORT and it must be honoured');
   assert.match(cfg, new RegExp(h.authDir.replace(/\\/g, '\\\\')));
   assert.match(cfg, /- "k1"/);
   assert.match(cfg, /- "k2"/);
+});
+
+test('the default bind is empty (Go dual-stack), never a bare ::', { skip: canRun ? false : 'no sh/python3 on this machine' }, (t) => {
+  // A bare "::" is concatenated with the port into the invalid ":::8317"
+  // and the server never starts (caught by the local Docker boot test), so
+  // the default must stay empty, which Go binds dual-stack.
+  const h = harness(t);
+
+  h.run({ PORT: '8317', CPA_API_KEYS: 'k1', CPA_ACCOUNTS_JSON: '[]' });
+
+  const cfg = fs.readFileSync(h.config, 'utf8');
+  assert.match(cfg, /host: ""/);
 });
 
 test('a missing seed variable is survivable, not fatal', { skip: canRun ? false : 'no sh/python3 on this machine' }, (t) => {

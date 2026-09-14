@@ -19,7 +19,7 @@ thing between the internet and your Google quota.
 | `PORT` | Railway injects this itself; the entrypoint honours it, default `8317` |
 | `CPA_API_KEYS` | bearer key(s) for `/v1/*`, comma-separated if several |
 | `CPA_ACCOUNTS_JSON` | seed array (see below) — live Google refresh tokens, treat as a secret |
-| `CPA_HOST` | *(unset)* — bind override; default `::` (dual-stack, see entrypoint.sh) |
+| `CPA_HOST` | *(unset)* — bind override; default empty (Go listens dual-stack, covering Railway's IPv6 private network and IPv4) |
 | `CPA_AUTH_DIR` / `CPA_CONFIG_FILE` | *(unset)* — path overrides; defaults `/app/data/auth`, `/app/data/config.yaml` |
 
 ## Seeding accounts
