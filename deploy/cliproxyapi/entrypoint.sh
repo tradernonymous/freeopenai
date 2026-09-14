@@ -57,7 +57,32 @@ with open(config_file, "w", encoding="utf-8") as f:
 
 raw = os.environ.get("CPA_ACCOUNTS_JSON", "")
 if raw.strip():
-    seed = json.loads(raw)
+    seed = None
+    # Pasted variables pick up wrapping fast: surrounding quotes from the
+    # dashboard, a stray newline from the editor. Unwrap one layer at a time
+    # rather than rejecting the whole seed for a framing character.
+    candidates = [raw.strip()]
+    s = candidates[0]
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        candidates.append(s[1:-1].strip())
+    errors = []
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+            if isinstance(parsed, (dict, list)):
+                seed = parsed
+                break
+            errors.append("parsed to %s, not an array or object" % type(parsed).__name__)
+        except Exception as e:
+            errors.append(str(e))
+    if seed is None:
+        # Survivable, like a missing seed: the proxy starts with zero
+        # accounts and says "unknown provider", which beats a crash loop
+        # that looks like a broken image. The head of the value (structure,
+        # never tokens -- those start dozens of characters in) names the
+        # paste problem from the deploy log alone.
+        print("[entrypoint] WARNING: CPA_ACCOUNTS_JSON is not valid JSON (%s; length %d, starts %r). Fix the value and redeploy; starting with zero accounts." % (errors[-1], len(raw), raw.strip()[:3]))
+        seed = []
     accounts = seed.get("accounts", seed) if isinstance(seed, dict) else seed
     count = 0
     for a in accounts:

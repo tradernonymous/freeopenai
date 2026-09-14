@@ -141,3 +141,25 @@ test('a missing seed variable is survivable, not fatal', { skip: canRun ? false 
   assert.equal(h.binArgs(), `-config ${h.config}`, 'it must still run the proxy');
   assert.match(out, /CPA_ACCOUNTS_JSON is empty/, 'and say what is missing');
 });
+
+test('a mangled seed value warns and still starts, instead of crash-looping', { skip: canRun ? false : 'no sh/python3 on this machine' }, (t) => {
+  const h = harness(t);
+  // The Railway dashboard keeps pasted wrapping (stray quotes, editors add
+  // newlines). That must never take the service down: warn with the head of
+  // the value -- structure, never tokens -- and start with zero accounts.
+  const out = h.run({ PORT: '8317', CPA_API_KEYS: 'k1', CPA_ACCOUNTS_JSON: '"[{\\"email\\":\\"a\\"}"' });
+
+  assert.equal(h.binArgs(), `-config ${h.config}`, 'it must still run the proxy');
+  assert.match(out, /not valid JSON/, 'and name the paste problem');
+  assert.match(out, /0 Google account/, 'with the same zero-account warning as a missing seed');
+});
+
+test('a seed wrapped in one layer of quotes is unwrapped, not rejected', { skip: canRun ? false : 'no sh/python3 on this machine' }, (t) => {
+  const h = harness(t);
+  const inner = JSON.stringify([{ email: 'q@example.com', refreshToken: '1//0g-q' }]);
+
+  h.run({ PORT: '8317', CPA_API_KEYS: 'k1', CPA_ACCOUNTS_JSON: `"${inner}"` });
+
+  const doc = JSON.parse(fs.readFileSync(path.join(h.authDir, 'antigravity-q@example.com.json'), 'utf8'));
+  assert.equal(doc.refresh_token, '1//0g-q');
+});
