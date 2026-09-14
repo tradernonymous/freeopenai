@@ -32,12 +32,35 @@ if [ -n "${ACCOUNTS_FILE}" ]; then
   if [ -n "${AG_ACCOUNTS_JSON}" ]; then
     printf '%s' "${AG_ACCOUNTS_JSON}" > "${ACCOUNTS_FILE}"
     echo "[entrypoint] seeded ${ACCOUNTS_FILE} from AG_ACCOUNTS_JSON ($(wc -c < "${ACCOUNTS_FILE}") bytes)"
+  elif [ -s "${ACCOUNTS_FILE}" ]; then
+    echo "[entrypoint] AG_ACCOUNTS_JSON is empty — keeping the accounts already in ${ACCOUNTS_FILE}"
   else
-    # Not fatal: the proxy still starts and answers every request with its own
-    # "Quota Exhausted ... all accounts failed", which is a recognisable symptom
-    # rather than a crash loop nobody can read.
-    echo "[entrypoint] AG_ACCOUNTS_JSON is empty — starting with whatever accounts ${ACCOUNTS_FILE} holds"
+    echo "[entrypoint] AG_ACCOUNTS_JSON is empty and ${ACCOUNTS_FILE} does not exist yet"
   fi
+fi
+
+# The proxy starts just as happily with zero accounts, and only then says
+# "Quota Exhausted: All accounts failed" on every request — a symptom that reads
+# like a networking fault from the app's side (it did: a healthy deploy log plus
+# a 429 sent us looking at private-network DNS). Counting the refresh tokens in
+# the file here, with plain grep so no runtime (node/bun) is needed, turns the
+# real problem into a line that names itself in the deploy logs.
+ACCOUNT_COUNT=0
+if [ -n "${ACCOUNTS_FILE}" ] && [ -s "${ACCOUNTS_FILE}" ]; then
+  ACCOUNT_COUNT=$(grep -o '"refreshToken"' "${ACCOUNTS_FILE}" 2>/dev/null | wc -l | tr -d '[:space:]')
+fi
+
+if [ "${ACCOUNT_COUNT}" -gt 0 ]; then
+  echo "[entrypoint] ${ACCOUNT_COUNT} Google account(s) ready in ${ACCOUNTS_FILE}"
+else
+  echo "[entrypoint] ==============================================================="
+  echo "[entrypoint] WARNING: 0 Google accounts loaded — every request will"
+  echo "[entrypoint]   answer 429 \"Quota Exhausted: All accounts failed\"."
+  echo "[entrypoint]   Fix: run the proxy locally (bunx antigravity-proxy@0.7.0),"
+  echo "[entrypoint]   sign in at http://localhost:3000, then paste the contents"
+  echo "[entrypoint]   of antigravity-accounts.json into the AG_ACCOUNTS_JSON"
+  echo "[entrypoint]   variable and redeploy. See deploy/antigravity-proxy/README.md"
+  echo "[entrypoint] ==============================================================="
 fi
 
 exec bun run src/server.ts
