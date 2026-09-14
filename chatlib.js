@@ -412,6 +412,36 @@ function filterToolsBySkills(tools, activeSkills) {
 // overview carries the method; the model can ask for the full text via
 // use_skill if it needs the detailed sections.
 //
+function filterToolsBySkills(tools, activeSkills) {
+  if (!Array.isArray(tools)) return tools;
+  const declaring = (Array.isArray(activeSkills) ? activeSkills : [])
+    .filter((s) => s && Array.isArray(s.allowedTools) && s.allowedTools.length);
+  if (!declaring.length) return tools;
+  const allow = new Set();
+  for (const s of declaring) for (const n of s.allowedTools) allow.add(String(n).toLowerCase());
+  return tools.filter((t) => {
+    const name = t && t.function && t.function.name;
+    return name ? allow.has(String(name).toLowerCase()) : true;
+  });
+}
+
+// Dynamic context injection (`!` commands) for a skill that needs current
+// workspace state. Spike gate: aborts when no workspace root is present,
+// rather than inventing a non-existent repo.
+const SKILL_COMMAND_ALLOWLIST = ['git status --short', 'git diff --stat', 'git log --oneline -5'];
+function extractWorkspaceState(workspaceRoot = '.') {
+  try {
+    const fs = require('fs');
+    const { execSync } = require('child_process');
+    const root = fs.existsSync(workspaceRoot) ? workspaceRoot : '.';
+    const stat = execSync('git status --short', { cwd: root, encoding: 'utf8', maxBuffer: 64000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const diff = execSync('git diff --stat', { cwd: root, encoding: 'utf8', maxBuffer: 64000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return `Workspace (${root}): status — ${stat ? stat.split('\\n').slice(0, 5).join('; ') : '(clean)'}; diff stat — ${diff || '(none)'}.`;
+  } catch {
+    return null;
+  }
+}
+
 // A pinned skill (see below) is marked, and the header changes with it: "this
 // request" is the wrong instruction for something the user asked to apply to the
 // whole chat, and the model follows that instruction literally.
@@ -3447,6 +3477,8 @@ if (typeof module !== 'undefined' && module.exports) {
     stemSkillToken,
     pickSkills,
     renderSkillsPrompt,
+    SKILL_COMMAND_ALLOWLIST,
+    extractWorkspaceState,
     filterToolsBySkills,
     USE_SKILL_TOOL,
     isUseSkillTool,
