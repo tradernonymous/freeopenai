@@ -313,7 +313,19 @@ async function main() {
               return !!node && getComputedStyle(node).display !== 'none';
             });
             const btn = el('#sessionTab' + name.charAt(0).toUpperCase() + name.slice(1));
-            return { tab: name, drawn, pressed: btn ? btn.getAttribute('aria-pressed') : null };
+            // The controls in this section, and whether they are actually on the
+            // screen. A switch that decides whether a picture spends Puter credits
+            // is only a decision if it can be reached.
+            const controls = [...document.querySelectorAll('#sessionPanel .session-section.active input[type="checkbox"]')]
+              .map((node) => {
+                const r = node.getBoundingClientRect();
+                return {
+                  id: node.id || '?',
+                  inView: r.width > 0 && r.left >= -1 && r.right <= innerWidth + 1
+                    && r.top >= -1 && r.bottom <= innerHeight + 1,
+                };
+              });
+            return { tab: name, drawn, controls, pressed: btn ? btn.getAttribute('aria-pressed') : null };
           });
 
           toggleSessionPanel(!!restore, false);
@@ -546,6 +558,11 @@ async function main() {
       // small width or a short viewport turns the panel into a drawer.
       const desktopShaped = viewportWidth > 640 && viewportHeight > 520;
       if (!p.kept) throw new Error(name + ' refused to open the session panel');
+      const imageTab = (p.tabs || []).find((tab) => tab.tab === 'image');
+      const puterSwitch = imageTab && (imageTab.controls || []).some((c) => c.id === 'imagePuterSwitch');
+      if (!puterSwitch) {
+        throw new Error(name + ' has no Draw-with-Puter switch in the image section: ' + JSON.stringify(imageTab));
+      }
       if (!p.doors.some(Boolean)) {
         throw new Error(name + ' leaves the session panel with nothing to open it: ' + JSON.stringify(p.doors));
       }
@@ -565,6 +582,10 @@ async function main() {
         }
         if (tab.pressed !== 'true') {
           throw new Error(name + ' leaves the ' + tab.tab + ' tab unpressed while showing it');
+        }
+        const unreachable = (tab.controls || []).filter((control) => !control.inView);
+        if (unreachable.length) {
+          throw new Error(name + ' puts ' + tab.tab + ' controls out of reach: ' + JSON.stringify(unreachable));
         }
       }
       // A panel that floats beside the chat must stop above the composer, so
