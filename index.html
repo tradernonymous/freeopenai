@@ -1634,9 +1634,11 @@
                past a 375px screen. The browser's own reload still covers it. */
             #refreshBtn { display: none; }
             #viewChat .chat-bar-title span:last-child { display: none; }
-            .model-trigger span#modelLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .composer-controls .model-trigger #modelLabel,
-            .composer-model-controls #modelLabel { max-width: 84px; }
+            /* Same reason: `.composer-controls .model-trigger #modelLabel` is what
+               the wide rule uses, so this has to be too. */
+            .composer-controls .model-trigger #modelLabel {
+                max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
             .chat-messages { padding: 14px 12px; gap: 22px; }
             .message { max-width: 96%; }
             .message.user { max-width: 88%; }
@@ -1655,11 +1657,9 @@
             }
             /* A phone header can't hold "Effort: extra high" and still leave room
                for the menu button, so the picker shows the level alone.
-               Written against .composer-controls on purpose: the unconditional
-               rule for these two is `.composer-controls .effort-select,
-               .composer-controls #providerSelect`, and a bare `.effort-select`
-               here lost to it on specificity at every width. */
-            .effort-select { max-width: 92px; padding: 6px 4px; }
+               Written against .composer-controls because the unconditional rule
+               is, and a media query adds no specificity: a bare `.effort-select`
+               here lost to it at every width, which is what it used to be. */
             .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 92px; padding: 6px 4px; }
             /* One row, one height. A 44px select beside a 30px chip is most of
                what made a phone toolbar look assembled rather than designed, so
@@ -1809,11 +1809,8 @@
                phone with no way to open it. */
             #viewChat .chat-bar-title .dot,
             #viewChat .chat-bar-title span { display: none; }
-            .effort-select { max-width: 76px; }
             .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 76px; }
-            .model-trigger span#modelLabel { max-width: 68px; }
-            .composer-controls .model-trigger #modelLabel,
-            .composer-model-controls #modelLabel { max-width: 68px; }
+            .composer-controls .model-trigger #modelLabel { max-width: 68px; }
             /* The mode chip joined the composer row; on a 360px screen its
                desktop padding is what pushes the input too small. */
             .mode-chip { padding: 4px 8px; font-size: 10px; }
@@ -1890,8 +1887,7 @@
             .chat-messages { padding: 12px; gap: 16px; }
             .composer { padding: 6px; border-radius: 18px; }
             .composer-model-controls { gap: 2px; }
-            .composer-controls .model-trigger #modelLabel,
-            .composer-model-controls #modelLabel { max-width: 92px; }
+            .composer-controls .model-trigger #modelLabel { max-width: 92px; }
             .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
             .session-chip, .mode-chip { padding-inline: 8px; }
             /* Height is the scarce axis here, so the whole strip -- input,
