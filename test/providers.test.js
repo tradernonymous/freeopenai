@@ -365,9 +365,10 @@ test('the removed providers are gone and the new ones are present', async () => 
   assert.ok(!ids.includes('cerebras'), 'Cerebras was removed');
   assert.ok(!ids.includes('sambanova'), 'SambaNova was removed');
   assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
-  for (const id of ['mistral', 'nara', 'aigateway', 'ollama', 'nvidia']) {
+  for (const id of ['mistral', 'nara', 'ollama', 'nvidia']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
+  assert.ok(!ids.includes('aigateway'), 'AI Gateway was removed');
   for (const p of providers) {
     assert.ok(p.baseUrl === undefined, 'a base URL must never reach the client');
   }
@@ -1026,13 +1027,6 @@ test('a stream with no headers fails fast with a headers message', async () => {
     delete process.env.MISTRAL_BASE_URL;
     delete process.env.PROVIDER_TIMEOUT_HEADERS_MS;
   }
-});
-
-test('AI Gateway uses standard Bearer auth', async () => {
-  const seen = await withStubProvider('AI_GATEWAY_API_KEY', 'AI_GATEWAY_BASE_URL', 'Bearer', async (base) => {
-    await fetch(base + '/api/llm/models?provider=aigateway');
-  });
-  assert.equal(seen.authorization, 'Bearer KEY123');
 });
 
 test('Ollama stays hidden with neither key nor base URL', async () => {

@@ -611,19 +611,6 @@ function githubPutFile(req, res) {
 // Keys live here, never in the browser. The whole API surface already sits
 // behind the login gate, so a key can't be read by anyone who isn't signed in.
 const LLM_PROVIDERS = {
-  aigateway: {
-    label: 'AI Gateway',
-    baseUrl: 'https://ai-gateway.vercel.sh/v1',
-    envVar: 'AI_GATEWAY_API_KEY',
-    // Pinned to the allowed set, in picker order. Anything else the key can
-    // reach stays out of the list rather than appearing and failing on use.
-    models: [
-      'poolside/laguna-s-2.1',
-      'ling-3.0-flash-sante-free',
-      'ling-3.0-flash-fin-free',
-      'fish-audio/s2.1-pro-free',
-    ],
-  },
   nara: {
     label: 'Nara',
     baseUrl: 'https://router.bynara.id/v1',
