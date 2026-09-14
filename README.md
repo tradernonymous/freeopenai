@@ -241,7 +241,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
-| `NARA_IMAGE_MODEL` | *(unset)* | Image-capable alias for `/api/llm/images/generations` and `/api/llm/images/edits`. Required — both refuse clearly without it, rather than passing on Nara's "Image model is required". |
+| `NARA_IMAGE_MODEL` | *(e.g. `gpt-image-2.5`)* | Image-capable alias. The upstream (Nara) supports only a fixed set of dimensions; anything else returns 400 with the allowed list (`1024x1024`, `1640x856`, `1024x1280`, `2048x1024`) rather than being rewritten silently. |
 | `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
 | `OPENROUTER_API_KEY` | *(unset)* | Adds OpenRouter — **free tier only**. The picker pins all 19 `:free` models (verified 2026‑09‑12), led by Nemotron 3 Ultra 550B, Inkling / Inkling Small (1M ctx), Nemotron 3.5 Lightning (1M ctx), Gemma 4 31B, Laguna S/XS 2.1 and North Mini Code. `OPENROUTER_FREE_ONLY=0` lifts the free-only gate. |
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |

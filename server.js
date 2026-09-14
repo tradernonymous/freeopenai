@@ -604,6 +604,35 @@ function githubPutFile(req, res) {
   });
 }
 
+function isSecretFile(path) {
+  const secretNames = ['.env', '.env.local', '.env.*', '.claude-local', '.claude.json', '.freebuff', 'antigravity-accounts.json', 'token.json', 'config.yaml', 'opencode.json', '.github/workflows/', 'deploy/antigravity-proxy/data/'];
+  const p = String(path || '').toLowerCase();
+  return secretNames.some((n) => p.includes(n.toLowerCase()));
+}
+
+function enforceNoSecretWrites(req) {
+  // P2 enforcement hook: workspace_write_file to protected paths is
+  // refused. We check the message arguments directly because the body has
+  // no filePath field at this layer; if a path argument is present and
+  // names a secret, the turn is blocked with a clear reason.
+  const dangerousWrites = { workspace_write_file: true };
+  if (req.body && Array.isArray(req.body.tools)) {
+    const dangerous = req.body.tools.filter((t) => dangerousWrites[t.function?.name]);
+    const firstDangerous = dangerous[0];
+    if (firstDangerous && firstDangerous.function && firstDangerous.function.arguments) {
+      try {
+        const argsStr = String(firstDangerous.function.arguments || '');
+        const args = JSON.parse(argsStr);
+        const path = args.path || args.file || args.file_path || args.filePath || '';
+        if (path && isSecretFile(String(path))) {
+          return { blocked: true, reason: 'Write to a protected file (.env, secrets, proxy/auth data, .claude/.freebuff, .github/workflows) refused by enforcement hook. Read/version/rename instead, or ask explicitly.' };
+        }
+      } catch { /* arguments not JSON; no file path detectable; pass through */ }
+    }
+  }
+  return null; // not a blocked case
+}
+
 // Direct provider access, as an alternative to Puter. Each of these is
 // OpenAI-compatible, so one adapter covers all of them: only the base URL, the
 // key and a couple of headers differ.
@@ -1421,6 +1450,20 @@ async function llmImage(req, res, kind) {
         // sentence arrives here as a 400 that looks like our bug. Falling back
         // to the operator's configured alias keeps the client from having to
         // know Nara's model names.
+        // Dimensions are an upstream contract (this endpoint forwards to
+        // api-images.bynara.id): only validated, standard sizes pass; anything
+        // else is refused clearly rather than being rewritten silently.
+        const SUPPORTED_IMAGE_SIZES = [
+          { label: 'Square (1:1)', value: '1024x1024' },
+          { label: 'Facebook cover (wide, 1640×856)', value: '1640x856' },
+          { label: 'Portrait (4:5)', value: '1024x1280' },
+          { label: 'Landscape banner (2:1)', value: '2048x1024' },
+        ];
+        const sizeValue = body.size || process.env.NARA_IMAGE_SIZE || '';
+        const sizeValid = SUPPORTED_IMAGE_SIZES.some((s) => s.value === sizeValue);
+        if (body.size && !sizeValid) {
+          return sendJson(res, 400, { error: 'Image size ' + sizeValue + ' is not supported. Supported: ' + SUPPORTED_IMAGE_SIZES.map((s) => s.value).join(', ') + '.' });
+        }
         const model = body.model || process.env.NARA_IMAGE_MODEL;
         if (!model) {
           return sendJson(res, 400, { error: 'Image generation needs NARA_IMAGE_MODEL set to an image-capable alias.' });
@@ -1961,6 +2004,12 @@ function llmChat(req, res) {
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
   if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
+  // P2 enforcement hook: prevent writing to protected files through
+  // workspace_write_file from corrupting secrets or proxy state.
+  if (provider.id === 'antigravity') {
+    const guard = enforceNoSecretWrites(req);
+    if (guard && guard.blocked) return sendJson(res, 400, { error: guard.reason });
+  }
   readJsonBody(req, 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     if (!body || !body.model || !Array.isArray(body.messages)) {
