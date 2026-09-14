@@ -13,10 +13,10 @@ const {
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
-const NAMES = ['puterCanDraw', 'imageUrlFrom', 'generateImageSource'];
+const NAMES = ['puterCanDraw', 'imageUrlFrom', 'generateImageSource', 'editImageSource'];
 
 function harness({ signedIn = false, puterResult = null, route = null } = {}) {
-  const calls = { puter: [], fetch: [] };
+  const calls = { puter: [], puterOpts: [], fetch: [] };
   const deps = {
     // The real decisions, so the wiring is tested against the shipped rules.
     imageBackendOrder,
@@ -30,6 +30,7 @@ function harness({ signedIn = false, puterResult = null, route = null } = {}) {
       ai: {
         txt2img: async (prompt, opts) => {
           calls.puter.push(opts.model);
+          calls.puterOpts.push(opts || {});
           if (typeof puterResult === 'function') return puterResult(opts.model);
           if (puterResult instanceof Error) throw puterResult;
           return puterResult;
@@ -51,7 +52,12 @@ function harness({ signedIn = false, puterResult = null, route = null } = {}) {
     },
   };
   const loaded = loadFromIndex(NAMES, deps);
-  return { deps, calls, generate: (prompt, signal) => loaded.generateImageSource(prompt, signal) };
+  return {
+    deps,
+    calls,
+    generate: (prompt, signal) => loaded.generateImageSource(prompt, signal),
+    edit: (prompt, source, signal) => loaded.editImageSource(prompt, source, signal),
+  };
 }
 
 test('the extracted source is the shipped one, and the sandbox covers it', () => {
@@ -135,5 +141,64 @@ test('stopping a generation does not quietly start a second one', async () => {
   await assert.rejects(() => h.generate('a fox'), /aborted/);
   // Falling through on an abort would spend the route's quota on a request the
   // user just cancelled.
+  assert.equal(h.calls.fetch.length, 0);
+});
+
+// ---- edits ----
+// An edit used to go straight at the server route, so a signed-in Puter user
+// was told "Image editing needs NARA_IMAGE_MODEL" -- naming a backend they
+// were not using -- while the free draw they had was never asked.
+
+test('a signed-in Puter edits first, and the server route is not touched', async () => {
+  const h = harness({ signedIn: true, puterResult: { src: 'data:image/png;base64,EDITED' } });
+  const out = await h.edit('make it red', 'data:image/png;base64,CAR');
+  assert.equal(out, 'data:image/png;base64,EDITED');
+  assert.deepEqual(h.calls.puter, ['gpt-image-2']);
+  // The source image reaches Puter in the documented edit field.
+  assert.equal(h.calls.puterOpts[0].input_image, 'data:image/png;base64,CAR');
+  assert.equal(h.calls.fetch.length, 0, 'a working Puter is not second-guessed');
+});
+
+test('without Puter the server edit route runs, and Puter is never asked', async () => {
+  const h = harness({ signedIn: false, route: { data: { data: [{ url: 'u' }] } } });
+  const out = await h.edit('make it red', 'data:image/png;base64,CAR');
+  assert.equal(out, 'u');
+  assert.deepEqual(h.calls.puter, []);
+  assert.equal(h.calls.fetch.length, 1);
+  assert.equal(h.calls.fetch[0].url, '/api/llm/images/edits');
+  assert.deepEqual(h.calls.fetch[0].body, { prompt: 'make it red', image: 'data:image/png;base64,CAR' });
+});
+
+test('a Puter edit failure falls through to the server route', async () => {
+  const h = harness({ signedIn: true, puterResult: new Error('drawing is unavailable'), route: { data: { data: [{ url: 'u' }] } } });
+  assert.equal(await h.edit('make it red', 'src'), 'u');
+  assert.deepEqual(h.calls.puter, ['gpt-image-2', 'gpt-image-1.5']);
+  assert.equal(h.calls.fetch.length, 1);
+});
+
+test('an edit failure says what was edited with and names every backend', async () => {
+  const h = harness({ signedIn: false, route: { ok: false, data: { error: 'Image editing needs NARA_IMAGE_MODEL set to an image-capable alias.' } } });
+  await assert.rejects(
+    () => h.edit('make it red', 'src'),
+    (err) => {
+      assert.match(err.message, /Could not edit an image/);
+      assert.match(err.message, /server image route \(Image editing needs NARA_IMAGE_MODEL/);
+      return true;
+    },
+  );
+});
+
+test('a spent Puter account on an edit moves on to the route after one ask', async () => {
+  const h = harness({ signedIn: true, puterResult: new Error('out of credits'), route: { data: { data: [{ url: 'u' }] } } });
+  assert.equal(await h.edit('make it red', 'src'), 'u');
+  assert.deepEqual(h.calls.puter, ['gpt-image-2']);
+  assert.equal(h.calls.fetch.length, 1);
+});
+
+test('stopping an edit does not quietly start a second one', async () => {
+  const abort = new Error('aborted');
+  abort.name = 'AbortError';
+  const h = harness({ signedIn: true, puterResult: abort, route: { data: { data: [{ url: 'u' }] } } });
+  await assert.rejects(() => h.edit('make it red', 'src'), /aborted/);
   assert.equal(h.calls.fetch.length, 0);
 });

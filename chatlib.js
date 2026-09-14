@@ -1615,12 +1615,12 @@ function imageBackendOrder(options) {
 // When every backend fails, the useful thing to report is what was tried and
 // what stopped each one. Reporting only the last error meant a provider-only
 // setup was told "Puter is not signed in" -- true, and not the reason.
-function imageFailureMessage({ puterError = '', serverError = '' } = {}) {
+function imageFailureMessage({ puterError = '', serverError = '' } = {}, verb = 'generate') {
   const tried = [];
   if (puterError) tried.push('Puter (' + puterError + ')');
   if (serverError) tried.push('the server image route (' + serverError + ')');
-  if (!tried.length) return 'Could not generate an image: no backend was available.';
-  return 'Could not generate an image. Tried ' + tried.join(' and ') + '.';
+  if (!tried.length) return 'Could not ' + verb + ' an image: no backend was available.';
+  return 'Could not ' + verb + ' an image. Tried ' + tried.join(' and ') + '.';
 }
 
 // Whether a turn needs a Puter account before it can start.

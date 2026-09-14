@@ -5855,26 +5855,62 @@
         // An attached image plus an edit request goes here, not to txt2img and
         // not to a vision chat: those are the two paths that produced a poster
         // of the car instead of a recoloured one.
+        // Edits mirror the generation fallback (generateImageSource): Puter
+        // first when it can draw, then the server's Nara route. Without that
+        // second backend the edit reported "NARA_IMAGE_MODEL" to a signed-in
+        // Puter user -- naming a backend they were not using -- and without
+        // Puter first, an edit cost the operator's Nara key that a free
+        // signed-in draw would not have.
+        async function editImageSource(promptText, sourceDataUrl, signal) {
+            const errors = { puterError: '', serverError: '' };
+            for (const backend of imageBackendOrder({ puterSignedIn: puterCanDraw() })) {
+                if (backend === 'puter') {
+                    for (const model of IMAGE_MODELS) {
+                        try {
+                            const imgEl = await puter.ai.txt2img(promptText, { model, input_image: sourceDataUrl });
+                            if (imgEl && imgEl.src) return imgEl.src;
+                            errors.puterError = 'returned no image';
+                        } catch (error) {
+                            if (error && error.name === 'AbortError') throw error;
+                            errors.puterError = String((error && error.message) || error);
+                            // Same rule as generation: a spent or refused account
+                            // answers the same for every model, so stop spending
+                            // calls to hear it again and let the other backend try.
+                            if (isOutOfCreditsError(errors.puterError) || isAccountLevelFailure(errors.puterError, '')) break;
+                        }
+                    }
+                    continue;
+                }
+                try {
+                    const res = await fetch('/api/llm/images/edits', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: promptText, image: sourceDataUrl }),
+                        signal,
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) throw new Error(data.error || 'the edit route refused the request');
+                    const url = imageUrlFrom(data);
+                    if (!url) throw new Error('the edit route returned no image');
+                    return url;
+                } catch (error) {
+                    if (error && error.name === 'AbortError') throw error;
+                    errors.serverError = String((error && error.message) || error);
+                }
+            }
+            throw new Error(imageFailureMessage(errors, 'edit'));
+        }
+
         async function sendImageEdit(promptText, attachedFile, runId = generationId, controller = currentAbort) {
             let bubble = null;
             let filled = false;
-            const startedAt = Date.now();
             try {
                 usageCount++;
                 updateUsageDisplay();
                 const source = await imageEditSource(attachedFile, controller.signal);
                 if (!isActiveRun(runId, controller)) return;
                 bubble = createImageBubble();
-                const res = await fetch('/api/llm/images/edits', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: promptText, image: source }),
-                    signal: controller.signal,
-                });
-                const data = await safeJson(res);
-                if (!res.ok) throw new Error(data.error || 'the edit route refused the request');
-                const url = imageUrlFrom(data);
-                if (!url) throw new Error('the edit route returned no image');
+                const url = await editImageSource(promptText, source, controller.signal);
                 if (!isActiveRun(runId, controller)) {
                     discardTransientBubble(bubble);
                     return;
@@ -5893,9 +5929,8 @@
                 }
                 console.error('Image edit failed:', error);
                 const msg = String((error && (error.message || error)) || 'Unknown error');
-                const instant = Date.now() - startedAt < 2000 ? 'The request failed instantly (often a missing NARA_IMAGE_MODEL): ' : '';
                 showStatus('error', 'Failed: ' + msg);
-                addMessage('system', 'Error editing image: ' + instant + msg, { error: true });
+                addMessage('system', 'Error editing image: ' + msg, { error: true });
             } finally {
                 releaseRun(controller);
             }

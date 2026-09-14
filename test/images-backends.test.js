@@ -33,3 +33,12 @@ test('a failure names every backend that was tried, not just the last', () => {
   assert.match(imageFailureMessage({}), /no backend was available/);
   assert.match(imageFailureMessage(), /no backend was available/);
 });
+
+test('an edit failure says "edit", not "generate"', () => {
+  const msg = imageFailureMessage({ puterError: 'not signed in', serverError: 'no key' }, 'edit');
+  assert.match(msg, /Could not edit an image/);
+  assert.match(msg, /Puter \(not signed in\)/);
+  assert.match(msg, /the server image route \(no key\)/);
+  // The default stays 'generate' so the generation path is unchanged.
+  assert.match(imageFailureMessage({ serverError: 'x' }), /Could not generate an image/);
+});
