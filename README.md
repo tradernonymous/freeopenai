@@ -252,7 +252,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
 | `YOUCOM_API_KEY` | *(unset)* | Adds You.com. Search and research service. |
 | `ANTIGRAVITY_BASE_URL` | *(unset)* | Adds **Antigravity** through an OpenAI-compatible proxy — Claude Opus / Sonnet and Gemini 3, using a quota your Google account already has. Set it or `ANTIGRAVITY_API_KEY`. See [Antigravity](#antigravity). |
-| `ANTIGRAVITY_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. The proxy holds the Google credentials itself, so this is empty for a default local install — and empty means *no* auth header at all, never a bare `Bearer`. |
+| `ANTIGRAVITY_API_KEY` | *(unset)* | Key for the Antigravity proxy, sent as `Bearer`. Required by the current proxy — empty means *no* auth header at all, never a bare `Bearer`, and the proxy will 401. |
 | `ANTIGRAVITY_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list, for a proxy release whose model names differ. |
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
@@ -442,34 +442,32 @@ Two details that took a real browser to find. Off-screen bubbles are laid out la
 
 ### 🛰️ Antigravity (Claude Opus and Gemini through a proxy)
 
-Antigravity models are reached through an OpenAI-compatible proxy that you run yourself. Two projects make up that stack, and they do different jobs:
+Antigravity models are reached through an OpenAI-compatible proxy that you run yourself. The gateway is [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (see `deploy/cliproxyapi/` for the Railway service): it holds the Google accounts and serves `POST /v1/chat/completions` in OpenAI's shape, so this app can talk to it as an ordinary provider. (It replaced the archived `frieser` proxy, whose retired model names kept failing.)
 
-- [**antigravity-auth**](https://github.com/cortexkit/antigravity-auth) signs a Google account in and stores the resulting tokens on your machine.
-- [**antigravity-proxy**](https://github.com/frieser/antigravity-proxy) is the gateway: it holds those accounts and serves `POST /v1/chat/completions` in OpenAI's shape, so this app can talk to it as an ordinary provider.
-
-The app needs no Google credentials of its own — the proxy owns them. Set the base URL and the provider appears:
+The app needs no Google credentials of its own — the proxy owns them. Set the base URL and the key, and the provider appears. The key is required: unlike the old proxy, this one answers nothing without it.
 
 ```bash
-# terminal 1: the proxy (it opens on http://localhost:3000)
-bunx antigravity-proxy@0.7.0
+# terminal 1: the proxy (it opens on http://localhost:8317)
+# from a CLIProxyAPI checkout: go run ./cmd/server -config config.yaml
+# (or the Docker image this repo builds in deploy/cliproxyapi)
 
 # terminal 2: this app, pointed at it
-ANTIGRAVITY_BASE_URL=http://localhost:3000 npm start
+ANTIGRAVITY_BASE_URL=http://localhost:8317 ANTIGRAVITY_API_KEY=<the proxy's api key> npm start
 ```
 
-`Antigravity` then appears in the provider picker with Claude Opus 4.6 (thinking low / medium / high) and Gemini (3-flash, 3.1-pro-low, 2.5-flash) — every pinned id is probed against the live proxy before it ships, and retired upstream names (Sonnet 4.6/4.5, 3.1-pro-high, 3-pro-high, 2.5-pro) stay out so no picker row can only fail. Both `/v1` and a bare `http://host:port` work as the base URL — the version segment is added when it is missing. Docker works too (`docker run -d -p 3000:3000 frieserpaldi/antigravity-proxy:0.7.0`), and a non-default port goes in the URL.
+`Antigravity` then appears in the provider picker with Claude Opus 4.6 thinking, Sonnet 4.6, Gemini 3-flash, 3.1-pro-low and the pro-tier `gemini-pro-agent` — every pinned id is probed against the live service before it ships, and retired upstream names stay out so no picker row can only fail. Both `/v1` and a bare `http://host:port` work as the base URL — the version segment is added when it is missing, and a non-default port goes in the URL.
 
 | Setting | Value |
 | --- | --- |
-| `ANTIGRAVITY_BASE_URL` | `http://localhost:3000` (local) or the URL of wherever the proxy runs |
-| `ANTIGRAVITY_API_KEY` | *(leave unset for a default local proxy)* |
+| `ANTIGRAVITY_BASE_URL` | `http://localhost:8317` (local) or the URL of wherever the proxy runs |
+| `ANTIGRAVITY_API_KEY` | **Required** — the proxy's `api-keys` value, sent as `Bearer`. Empty means *no* auth header at all, never a bare `Bearer`, and the proxy will 401. |
 | `ANTIGRAVITY_MODELS` | Optional comma-separated override when your proxy's model names differ from the pinned list |
 
 Until that variable (or `ANTIGRAVITY_API_KEY`) is set, **Antigravity does not appear in the picker at all** — the provider stays out of it entirely rather than showing up and failing, so "I can't see the Opus models" on a deploy almost always means the variable is missing.
 
-**Running the proxy alongside a deployed app.** [`deploy/antigravity-proxy/`](deploy/antigravity-proxy/) builds the gateway with its accounts seeded from a variable and explains the Railway service: the variables, the private-network base URL, and how to read the logs when it does not come up. It exists because a hosted instance cannot create accounts — the proxy's OAuth redirect is hardcoded to `localhost:3000` — so they are signed in once locally and carried over.
+**Running the proxy alongside a deployed app.** [`deploy/cliproxyapi/`](deploy/cliproxyapi/) builds the gateway with its accounts seeded from a variable and explains the Railway service: the variables, the private-network base URL, and how to read the logs when it does not come up. It exists because a hosted instance cannot create accounts — the proxy's OAuth is a localhost loopback — so they are signed in once locally and carried over.
 
-**A local proxy is not reachable from a deployed app.** `http://localhost:3000` from the Railway container means the container itself, where no proxy is running. So either run this app locally against the proxy (the command above), or put the proxy somewhere the app can reach and point `ANTIGRAVITY_BASE_URL` at it. Don't publish the proxy to the open internet to do that: it holds your Google accounts, a default install asks for no key, and anyone who finds the URL is spending your quota. Put it behind your own authentication, or reach it over a private network. When the proxy runs as a service on the same Railway project, point `ANTIGRAVITY_BASE_URL` at the private-network name — `http://antigravity-proxy.railway.internal:3000` for a service named `antigravity-proxy`. You'll know the app is still set to an old tunnel/URL when a chat fails with `ENOTFOUND: the host name did not resolve`.
+**A local proxy is not reachable from a deployed app.** `http://localhost:8317` from the Railway container means the container itself, where no proxy is running. So either run this app locally against the proxy (the command above), or put the proxy somewhere the app can reach and point `ANTIGRAVITY_BASE_URL` at it. Don't publish the proxy to the open internet without its API key set: it holds your Google accounts, and anyone who finds an unkeyed URL is spending your quota. Put it behind your own authentication, or reach it over a private network. When the proxy runs as a service on the same Railway project, point `ANTIGRAVITY_BASE_URL` at the private-network name — `http://antigravity-proxy-v2.railway.internal:8317` for a service named `antigravity-proxy-v2` — and set `ANTIGRAVITY_API_KEY` to the same value as the service's key. You'll know the app is still set to an old tunnel/URL when a chat fails with `ENOTFOUND: the host name did not resolve`.
 
 **Read this before you use it.** Using Antigravity through a proxy runs against Google's Terms of Service, and the projects' own documentation reports account suspensions, bans and shadow-bans. Those accounts are yours. The risk is yours too — this app simply speaks to whatever gateway you point it at.
 

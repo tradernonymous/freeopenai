@@ -4,7 +4,7 @@ const http = require('node:http');
 const { LLM_PROVIDERS, createRequestHandler, normalizeProviderBaseUrl, clearModelCache } = require('../server.js');
 const { usableChatModels } = require('../chatlib.js');
 
-const OPUS = 'antigravity-claude-opus-4-6-thinking-high';
+const OPUS = 'claude-opus-4-6-thinking';
 
 function snapshotEnv() {
   return {
@@ -95,20 +95,26 @@ test('the pinned list is one the picker would actually show, Opus included', () 
 });
 
 test('the pinned list holds no ids Google has retired', () => {
-  // Probed against the live proxy on 2026-09-14: each of these fails on
+  // Probed live on 2026-09-14 against both proxies: each of these fails on
   // every account (404 model_not_found, 400 INVALID_ARGUMENT, a "no longer
-  // available" tombstone, or chronic 503/429), so none may be pinned again.
-  // gemini-2.5-flash is listed unprefixed on purpose: without the prefix the
-  // proxy alternates into its CLI pool, which answers 403 for these
-  // accounts — only the prefixed form stays Sandbox-bound.
+  // available" tombstone, chronic 503/429, or "unknown provider" on the v2
+  // service, whose catalogue only knows bare ids), so none may be pinned.
   const retired = [
+    'antigravity-claude-opus-4-6-thinking-high',
+    'antigravity-claude-opus-4-6-thinking-medium',
+    'antigravity-claude-opus-4-6-thinking-low',
+    'antigravity-claude-opus-4-6-thinking',
     'antigravity-claude-sonnet-4-6-thinking-high',
     'antigravity-claude-sonnet-4-6',
     'antigravity-claude-sonnet-4-5',
     'antigravity-gemini-3.1-pro-high',
+    'antigravity-gemini-3.1-pro-low',
     'antigravity-gemini-3-pro-high',
+    'antigravity-gemini-3-flash',
+    'antigravity-gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.5-flash',
+    'gemini-3.1-pro-high',
   ];
   for (const id of LLM_PROVIDERS.antigravity.models) {
     assert.ok(!retired.includes(id), `${id} is retired upstream and must not be pinned`);

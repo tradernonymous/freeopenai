@@ -924,35 +924,30 @@ const LLM_PROVIDERS = {
       'deepseek-r1:14b',
     ],
   },
-  // Google Antigravity through an OpenAI-compatible proxy (antigravity-proxy),
-  // which owns the Google accounts — antigravity-auth is how those accounts are
-  // obtained, and it stays on the operator's machine. The proxy speaks plain
-  // OpenAI, so this is an ordinary provider with two differences: it has no key
-  // of its own, and it usually runs beside the user rather than on the public
-  // internet, so it appears only once its base URL (or a key) is set.
+  // Google Antigravity through CLIProxyAPI (deploy/cliproxyapi), which owns the
+  // Google accounts -- they are signed in once locally and carried to the
+  // service as a variable, and it stays on the operator's side. The proxy
+  // speaks plain OpenAI, so this is an ordinary provider with two
+  // differences: the key is the service's API key rather than a provider key,
+  // and it appears only once its base URL (or a key) is set.
   //
-  // It publishes no model catalogue, so `catalogue: false` serves the pinned
-  // list below instead of asking an endpoint the proxy may not implement — a
-  // 404 there would turn a working setup into an empty picker plus a fetch
-  // error. These ids are the ones the proxy documented; they drift between its
-  // releases, so ANTIGRAVITY_MODELS replaces the list without a code change.
+  // It publishes a catalogue, but the catalogue is the proxy's whole world
+  // (every model any configured provider could serve) rather than this
+  // provider's allowlist, so `catalogue: false` serves the pinned list below
+  // instead: these ids are the ones probed live against the service, and
+  // ANTIGRAVITY_MODELS replaces the list without a code change.
   //
-  // Every id below was verified against the live proxy on 2026-09-14 (tiny
-  // "hi" over /v1/chat/completions, stream off). Anything not on this list
-  // was probed and failed on every account, so pinning it would only offer a
-  // picker row that cannot answer:
-  // - antigravity-claude-sonnet-4-6 + thinking-high, sonnet-4-5: Google
-  //   answers 404 model_not_found for the claude-sonnet targets they map to.
-  // - antigravity-gemini-3.1-pro-high: Google answers 400 INVALID_ARGUMENT
-  //   on all accounts, locally and from Railway alike — the target name is
-  //   retired, not a network problem.
-  // - antigravity-gemini-3-pro-high: answers 200 with "Gemini 3 Pro is no
-  //   longer available. Please switch to Gemini 3.1 Pro" — a tombstone, not
-  //   a model.
-  // - gemini-2.5-pro (unprefixed): 503/429 on every account. The unprefixed
-  //   form also lets the proxy alternate into its CLI pool, whose endpoint
-  //   answers 403 SUBSCRIPTION_REQUIRED for these accounts — so the
-  //   surviving 2.5-flash is pinned with its prefix, which pins Sandbox.
+  // Every id below was verified against the live v2 service on 2026-09-14
+  // (tiny "hi" over /v1/chat/completions, plus SSE streaming and a tool_calls
+  // round-trip). Anything not on this list failed on every account, so
+  // pinning it would only offer a picker row that cannot answer:
+  // - gemini-3.1-pro-high: Google answers 400 INVALID_ARGUMENT everywhere --
+  //   the target name is retired, not a network problem. gemini-pro-agent
+  //   serves the same tier under its current name.
+  // - gemini-2.5-flash: absent from the v2 catalogue, and on the old proxy
+  //   the only form that answered is retired with it.
+  // - gemini-3-pro-high, gemini-2.5-pro, sonnet-4-5 and the opus thinking
+  //   tiers: retired upstream or never served by this proxy.
   antigravity: {
     label: 'Antigravity',
     baseUrl: 'http://localhost:3000/v1',
@@ -960,15 +955,13 @@ const LLM_PROVIDERS = {
     needsKey: false,
     catalogue: false,
     models: [
-      // The reason this provider is worth wiring up at all: Opus through a
-      // quota the user already has, with the thinking variants alongside it.
-      'antigravity-claude-opus-4-6-thinking-high',
-      'antigravity-claude-opus-4-6-thinking-medium',
-      'antigravity-claude-opus-4-6-thinking-low',
-      'antigravity-claude-opus-4-6-thinking',
-      'antigravity-gemini-3.1-pro-low',
-      'antigravity-gemini-3-flash',
-      'antigravity-gemini-2.5-flash',
+      // The reason this provider is worth wiring up at all: Opus and Sonnet
+      // through a quota the user already has, plus Gemini alongside them.
+      'claude-opus-4-6-thinking',
+      'claude-sonnet-4-6',
+      'gemini-3-flash',
+      'gemini-3.1-pro-low',
+      'gemini-pro-agent',
     ],
   },
   // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
