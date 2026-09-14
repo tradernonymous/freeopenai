@@ -61,14 +61,23 @@ function modePrompt(mode) {
 
 // Parses the `--- ... ---` frontmatter block of a SKILL.md into an object.
 // Tolerates CRLF, blank values and missing blocks; never throws.
+//
+// Beyond name/description (the auto-router's matching signal) two optional
+// keys travel through, mirroring Claude Code's skill frontmatter:
+// - `allowed-tools`: space- or comma-separated function names in this app's
+//   own vocabulary (workspace_read_file, github_commit_file, ...). A skill
+//   that declares them offers only those tools while active.
+// - `disable-model-invocation: true`: the skill never auto-pins; only an
+//   explicit `/name` brings it in. For workflows with side effects, where
+//   the model must not decide timing on its own.
 function parseSkillFrontmatter(markdown) {
   const text = String(markdown || '');
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  if (!match) return { name: '', description: '' };
-  const out = { name: '', description: '' };
+  if (!match) return { name: '', description: '', allowedTools: null, userOnly: false };
+  const out = { name: '', description: '', allowedTools: null, userOnly: false };
   const lines = match[1].split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const m = /^(name|description):\s*(.*)$/.exec(lines[i].trim());
+    const m = /^(name|description|allowed-tools|disable-model-invocation):\s*(.*)$/.exec(lines[i].trim());
     if (!m) continue;
     let value = m[2].trim();
     // YAML block scalars ("description: >" / "|") put the real text on the
@@ -86,7 +95,16 @@ function parseSkillFrontmatter(markdown) {
       value = chunk.join(' ').replace(/\s+/g, ' ').trim();
       i = j - 1;
     }
-    out[m[1]] = value.replace(/^"|"$/g, '');
+    const key = m[1];
+    const clean = value.replace(/^"|"$/g, '');
+    if (key === 'allowed-tools') {
+      const list = clean.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+      out.allowedTools = list.length ? list : null;
+    } else if (key === 'disable-model-invocation') {
+      out.userOnly = /^(true|1|yes)$/i.test(clean);
+    } else {
+      out[key] = clean;
+    }
   }
   return out;
 }
@@ -328,6 +346,10 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   // what to make. In plan mode only these may trigger.
   const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif/i;
   const pool = skills.filter((s) => s && s.name && s.description)
+    // A user-only skill (disable-model-invocation) never auto-pins: only an
+    // explicit `/name` brings it in. This is the auto path; deliberate pins
+    // bypass pickSkills entirely, so they are unaffected.
+    .filter((s) => !s.userOnly)
     .filter((s) => !processOnly || PROCESS_HINT.test(s.description));
   const scored = pool
     .map((s) => ({
@@ -364,6 +386,26 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   // were handed over instead of none.
   if (mode === 'build' && scored.length) for (const name of BUILD_CORE_SKILLS) push(name);
   return picked;
+}
+
+// Narrows the offered tools to what the turn's skills allow. A skill that
+// declares `allowed-tools` names this app's function names
+// (workspace_read_file, github_commit_file, ...); the turn offers the union
+// of every declaring skill's list, and skills without the field abstain, so
+// a turn with no declarations is unchanged. Union, not intersection: two
+// scoped skills with disjoint sets would otherwise starve the turn to zero
+// tools, which reads as a broken model rather than a safe one.
+function filterToolsBySkills(tools, activeSkills) {
+  if (!Array.isArray(tools)) return tools;
+  const declaring = (Array.isArray(activeSkills) ? activeSkills : [])
+    .filter((s) => s && Array.isArray(s.allowedTools) && s.allowedTools.length);
+  if (!declaring.length) return tools;
+  const allow = new Set();
+  for (const s of declaring) for (const n of s.allowedTools) allow.add(String(n).toLowerCase());
+  return tools.filter((t) => {
+    const name = t && t.function && t.function.name;
+    return name ? allow.has(String(name).toLowerCase()) : true;
+  });
 }
 
 // Renders picked skills as extra system context. Bounded excerpts: the
@@ -575,11 +617,18 @@ const CHAT_COMMANDS = [
 // What a line typed into the composer means:
 //   { kind: 'command', name, args }   a known command
 //   { kind: 'skill', name }           /ponytail, when no command is named that
+//   { kind: 'chain', names }          /review /verify — pins several at once
 //   null                              plain text, sent to the model as usual
 //
 // Returning null for anything unrecognised is the important half: a message that
 // merely starts with a slash -- a path, a date, a shrug -- is a message, and an
 // app that swallowed it would be worse than a typo it never claimed to fix.
+//
+// A chain pins every named skill and consumes the line, exactly like one
+// /skill does: the text stays visible as the user's message but is not sent.
+// Asking in the same line would need send-path surgery (the composer can only
+// consume or reply, not inject), so that stays a follow-up, not this change.
+const MAX_SKILL_CHAIN = 3;
 function resolveChatCommand(text, skillNames) {
   const line = String(text == null ? '' : text).trim();
   const match = /^\/([a-z][a-z0-9-]*)\s*([\s\S]*)$/i.exec(line);
@@ -588,8 +637,18 @@ function resolveChatCommand(text, skillNames) {
   const args = match[2].trim();
   if (CHAT_COMMANDS.some((c) => c.name === name)) return { kind: 'command', name, args };
   const known = (Array.isArray(skillNames) ? skillNames : []).map((n) => String(n).toLowerCase());
-  if (known.includes(name)) return { kind: 'skill', name };
-  return null;
+  if (!known.includes(name)) return null;
+  // Leading run of /names: every token must carry its own slash, so args
+  // never glue onto the chain by accident.
+  const names = [name];
+  const rest = args.split(/\s+/).filter(Boolean);
+  for (const token of rest) {
+    const m = /^\/([a-z][a-z0-9-]*)$/i.exec(token);
+    if (!m || !known.includes(m[1].toLowerCase()) || names.length >= MAX_SKILL_CHAIN) break;
+    names.push(m[1].toLowerCase());
+  }
+  if (names.length < 2) return { kind: 'skill', name };
+  return { kind: 'chain', names };
 }
 
 function renderCommandsHelp() {
@@ -598,6 +657,7 @@ function renderCommandsHelp() {
     ...CHAT_COMMANDS.map((c) => '`' + c.usage + '` — ' + c.desc),
     '',
     'Or type `/` and a skill name — `/ponytail`, `/caveman`, `/humanizer` — to use it for the rest of this chat.',
+    'Name up to three at once — `/review /verify` — to pin a whole stack with one line.',
   ].join('\n');
 }
 
@@ -3373,6 +3433,7 @@ if (typeof module !== 'undefined' && module.exports) {
     suggestSkillFor,
     CHAT_COMMANDS,
     resolveChatCommand,
+    MAX_SKILL_CHAIN,
     renderCommandsHelp,
     renderSkillsCommandReply,
     MIN_SKILL_HITS,
@@ -3386,6 +3447,7 @@ if (typeof module !== 'undefined' && module.exports) {
     stemSkillToken,
     pickSkills,
     renderSkillsPrompt,
+    filterToolsBySkills,
     USE_SKILL_TOOL,
     isUseSkillTool,
     parseSkillFrontmatter,

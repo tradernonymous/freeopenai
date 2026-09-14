@@ -1902,7 +1902,7 @@ async function loadSkills(force = false) {
           // what the skill calls itself, and what the model will ask for.
           const name = meta.name || entry.name;
           if (body && meta.description) {
-            rows.push({ source: source.repo, name, description: meta.description, body });
+            rows.push({ source: source.repo, name, description: meta.description, body, allowedTools: meta.allowedTools || null, userOnly: !!meta.userOnly });
           }
         });
       }
@@ -1921,7 +1921,7 @@ async function loadSkills(force = false) {
 // GET /api/skills — the id catalogue for the picker.
 function llmSkills(req, res) {
   loadSkills().then((skills) => {
-    sendJson(res, 200, skills.map((s) => ({ source: s.source, name: s.name, description: s.description })));
+    sendJson(res, 200, skills.map((s) => ({ source: s.source, name: s.name, description: s.description, allowedTools: s.allowedTools || null, userOnly: !!s.userOnly })));
   }).catch((err) => sendJson(res, 502, { error: err.message }));
 }
 

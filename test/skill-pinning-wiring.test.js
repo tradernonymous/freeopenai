@@ -66,7 +66,7 @@ test('a pinned skill is consulted even in Chat mode, where nothing is auto-picke
   // use_skill rides along with whatever applied, and the application is
   // recorded: the card beside the chat says which skills answered, so a route
   // that applies a skill without logging it would leave that card lying.
-  assert.match(HTML, /if \(activeSkills\.length\) \{[\s\S]{0,120}tools\.push\(USE_SKILL_TOOL\);\s*\n\s*logSkillsUsed\(activeConversationId, activeSkills\);/);
+  assert.match(HTML, /if \(activeSkills\.length\) \{[\s\S]{0,220}tools\.push\(USE_SKILL_TOOL\);\s*\n\s*logSkillsUsed\(activeConversationId, activeSkills\);/);
   // A plain chat with nothing pinned does not drag the library in at all.
   const gate = HTML.slice(HTML.indexOf('if (activeSkillNames.length || learnedSkills'), HTML.indexOf('const stored = readPendingTurn()'));
   assert.match(gate, /const catalog = await ensureSkillsLoaded\(\)/);

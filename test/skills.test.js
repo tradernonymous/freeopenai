@@ -11,6 +11,8 @@ const {
   skillTriggerScore,
   pickSkills,
   renderSkillsPrompt,
+  filterToolsBySkills,
+  skillsForTurn,
   USE_SKILL_TOOL,
   isUseSkillTool,
   parseSkillFrontmatter,
@@ -152,7 +154,7 @@ test('frontmatter parsing survives real-world shapes', () => {
   const meta = parseSkillFrontmatter(real);
   assert.equal(meta.name, 'frontend-design');
   assert.equal(meta.description, 'Design guidance.');
-  assert.deepEqual(parseSkillFrontmatter('# No frontmatter\r\njust body'), { name: '', description: '' });
+  assert.deepEqual(parseSkillFrontmatter('# No frontmatter\r\njust body'), { name: '', description: '', allowedTools: null, userOnly: false });
   assert.equal(parseSkillFrontmatter('').name, '');
   const crlf = '---\r\nname: a\r\ndescription: b\r\n---\r\nbody';
   assert.equal(parseSkillFrontmatter(crlf).description, 'b');
@@ -169,4 +171,56 @@ test('frontmatter parsing survives real-world shapes', () => {
     pickSkills('anything', 'build', [{ source: 'x', name: 'no-desc', description: '', body: '---\nname: no-desc\n---\nbody' }]),
     []
   );
+});
+
+test('frontmatter carries tool scoping and the user-only flag', () => {
+  const scoped = parseSkillFrontmatter('---\nname: safe-review\ndescription: Use when reviewing.\nallowed-tools: workspace_read_file, web_search\n---\nbody');
+  assert.deepEqual(scoped.allowedTools, ['workspace_read_file', 'web_search']);
+  const spaced = parseSkillFrontmatter('---\nname: s\ndescription: d\nallowed-tools: github_read_file github_commit_file\n---\nbody');
+  assert.deepEqual(spaced.allowedTools, ['github_read_file', 'github_commit_file']);
+  const gated = parseSkillFrontmatter('---\nname: deploy\ndescription: Use when deploying.\ndisable-model-invocation: true\n---\nbody');
+  assert.equal(gated.userOnly, true);
+  assert.equal(gated.allowedTools, null);
+  const plain = parseSkillFrontmatter('---\nname: p\ndescription: d\n---\nbody');
+  assert.equal(plain.allowedTools, null);
+  assert.equal(plain.userOnly, false);
+  // Never throws, whatever the block holds.
+  assert.doesNotThrow(() => parseSkillFrontmatter('---\nallowed-tools:\ndisable-model-invocation: perhaps\n---\n'));
+});
+
+test('user-only skills never auto-pin, but explicit pins still apply', () => {
+  const catalog = [
+    { source: 'x', name: 'deploy', description: 'Use when deploying the app release', userOnly: true },
+    { source: 'x', name: 'release-notes', description: 'Use when writing the app release notes', userOnly: false },
+  ];
+  assert.deepEqual(
+    pickSkills('deploy the app release now', 'build', catalog).map((s) => s.name),
+    ['release-notes'],
+    'the user-only skill must not win its own trigger phrase'
+  );
+  assert.deepEqual(
+    skillsForTurn({ mode: 'build', skillsEnabled: true, requestText: 'hi', active: ['deploy'], catalog }).map((s) => s.name),
+    ['deploy'],
+    'a deliberate pin bypasses the auto-path gate'
+  );
+});
+
+test('filterToolsBySkills narrows only when a skill declares tools', () => {
+  const tools = [
+    { type: 'function', function: { name: 'workspace_read_file' } },
+    { type: 'function', function: { name: 'workspace_write_file' } },
+    { type: 'function', function: { name: 'web_search' } },
+  ];
+  // No declarations anywhere: the turn is unchanged.
+  assert.deepEqual(filterToolsBySkills(tools, [{ name: 'a' }]), tools);
+  assert.deepEqual(filterToolsBySkills(tools, []), tools);
+  // One declaring skill: union of its list, nothing else.
+  const scoped = filterToolsBySkills(tools, [{ name: 'r', allowedTools: ['workspace_read_file', 'WEB_search'] }]);
+  assert.deepEqual(scoped.map((t) => t.function.name), ['workspace_read_file', 'web_search']);
+  // Two declaring skills: union, so disjoint scopes cannot starve the turn.
+  const both = filterToolsBySkills(tools, [
+    { name: 'r', allowedTools: ['workspace_read_file'] },
+    { name: 'w', allowedTools: ['workspace_write_file'] },
+  ]);
+  assert.deepEqual(both.map((t) => t.function.name), ['workspace_read_file', 'workspace_write_file']);
 });

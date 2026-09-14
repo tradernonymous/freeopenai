@@ -2702,6 +2702,7 @@
             const parsed = resolveChatCommand(raw, catalog.map((s) => s.name));
             if (!parsed) return null;
             if (parsed.kind === 'skill') { pinSkillForChat(parsed.name); return ''; }
+            if (parsed.kind === 'chain') { parsed.names.forEach((n) => pinSkillForChat(n)); return ''; }
             if (parsed.name === 'help') return renderCommandsHelp();
             if (parsed.name === 'skills') return renderSkillsCommandReply(activeSkillNames, catalog);
             if (parsed.name === 'mode') return applyModeCommand(parsed.args);
@@ -5586,6 +5587,12 @@
                             catalog,
                         });
                         if (activeSkills.length) {
+                            // A skill that declares allowed-tools narrows the
+                            // turn to those function names (union across
+                            // declaring skills; the rest abstain). Filtered
+                            // before use_skill joins, so the loader itself is
+                            // never filtered out.
+                            tools = filterToolsBySkills(tools, activeSkills);
                             tools.push(USE_SKILL_TOOL);
                             logSkillsUsed(activeConversationId, activeSkills);
                         }
