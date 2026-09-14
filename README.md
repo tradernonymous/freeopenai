@@ -457,7 +457,7 @@ bunx antigravity-proxy@0.7.0
 ANTIGRAVITY_BASE_URL=http://localhost:3000 npm start
 ```
 
-`Antigravity` then appears in the provider picker with Claude Opus 4.6 (thinking low / medium / high), Sonnet and the Gemini 3 family. Both `/v1` and a bare `http://host:port` work as the base URL — the version segment is added when it is missing. Docker works too (`docker run -d -p 3000:3000 frieserpaldi/antigravity-proxy:0.7.0`), and a non-default port goes in the URL.
+`Antigravity` then appears in the provider picker with Claude Opus 4.6 (thinking low / medium / high) and Gemini (3-flash, 3.1-pro-low, 2.5-flash) — every pinned id is probed against the live proxy before it ships, and retired upstream names (Sonnet 4.6/4.5, 3.1-pro-high, 3-pro-high, 2.5-pro) stay out so no picker row can only fail. Both `/v1` and a bare `http://host:port` work as the base URL — the version segment is added when it is missing. Docker works too (`docker run -d -p 3000:3000 frieserpaldi/antigravity-proxy:0.7.0`), and a non-default port goes in the URL.
 
 | Setting | Value |
 | --- | --- |

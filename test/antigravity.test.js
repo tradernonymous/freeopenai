@@ -94,6 +94,27 @@ test('the pinned list is one the picker would actually show, Opus included', () 
   assert.ok(shown.has(OPUS));
 });
 
+test('the pinned list holds no ids Google has retired', () => {
+  // Probed against the live proxy on 2026-09-14: each of these fails on
+  // every account (404 model_not_found, 400 INVALID_ARGUMENT, a "no longer
+  // available" tombstone, or chronic 503/429), so none may be pinned again.
+  // gemini-2.5-flash is listed unprefixed on purpose: without the prefix the
+  // proxy alternates into its CLI pool, which answers 403 for these
+  // accounts — only the prefixed form stays Sandbox-bound.
+  const retired = [
+    'antigravity-claude-sonnet-4-6-thinking-high',
+    'antigravity-claude-sonnet-4-6',
+    'antigravity-claude-sonnet-4-5',
+    'antigravity-gemini-3.1-pro-high',
+    'antigravity-gemini-3-pro-high',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+  ];
+  for (const id of LLM_PROVIDERS.antigravity.models) {
+    assert.ok(!retired.includes(id), `${id} is retired upstream and must not be pinned`);
+  }
+});
+
 test('the provider is registered with the shape the server relies on', () => {
   const provider = LLM_PROVIDERS.antigravity;
   assert.equal(provider.label, 'Antigravity');

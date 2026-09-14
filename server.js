@@ -936,6 +936,23 @@ const LLM_PROVIDERS = {
   // 404 there would turn a working setup into an empty picker plus a fetch
   // error. These ids are the ones the proxy documented; they drift between its
   // releases, so ANTIGRAVITY_MODELS replaces the list without a code change.
+  //
+  // Every id below was verified against the live proxy on 2026-09-14 (tiny
+  // "hi" over /v1/chat/completions, stream off). Anything not on this list
+  // was probed and failed on every account, so pinning it would only offer a
+  // picker row that cannot answer:
+  // - antigravity-claude-sonnet-4-6 + thinking-high, sonnet-4-5: Google
+  //   answers 404 model_not_found for the claude-sonnet targets they map to.
+  // - antigravity-gemini-3.1-pro-high: Google answers 400 INVALID_ARGUMENT
+  //   on all accounts, locally and from Railway alike — the target name is
+  //   retired, not a network problem.
+  // - antigravity-gemini-3-pro-high: answers 200 with "Gemini 3 Pro is no
+  //   longer available. Please switch to Gemini 3.1 Pro" — a tombstone, not
+  //   a model.
+  // - gemini-2.5-pro (unprefixed): 503/429 on every account. The unprefixed
+  //   form also lets the proxy alternate into its CLI pool, whose endpoint
+  //   answers 403 SUBSCRIPTION_REQUIRED for these accounts — so the
+  //   surviving 2.5-flash is pinned with its prefix, which pins Sandbox.
   antigravity: {
     label: 'Antigravity',
     baseUrl: 'http://localhost:3000/v1',
@@ -949,15 +966,9 @@ const LLM_PROVIDERS = {
       'antigravity-claude-opus-4-6-thinking-medium',
       'antigravity-claude-opus-4-6-thinking-low',
       'antigravity-claude-opus-4-6-thinking',
-      'antigravity-claude-sonnet-4-6-thinking-high',
-      'antigravity-claude-sonnet-4-6',
-      'antigravity-claude-sonnet-4-5',
-      'antigravity-gemini-3.1-pro-high',
       'antigravity-gemini-3.1-pro-low',
-      'antigravity-gemini-3-pro-high',
       'antigravity-gemini-3-flash',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
+      'antigravity-gemini-2.5-flash',
     ],
   },
   // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
