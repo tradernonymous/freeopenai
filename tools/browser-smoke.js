@@ -1248,6 +1248,109 @@ async function main() {
     }
     if (!restoredPicture.tools) throw new Error('the restored picture has no Download beside it: ' + JSON.stringify(restoredPicture));
 
+    // A drawing is read back against the request that asked for it. The whole
+    // shipped turn runs -- bubble, caption, prompt, tools -- with only the two
+    // calls that leave the browser stubbed, so what is measured is the real
+    // wiring: which model reviews the picture, what the question carries, and
+    // what is left on screen when the answer is not a verdict at all.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: url + '-image-check' });
+    await waitFor(() => evaluate('typeof checkDrawingAgainstRequest === "function" && !!document.getElementById("chatInput")'), 'image check page');
+    await sleep(300);
+    const imageCheck = await evaluate(`(async () => {
+      chatMessages.innerHTML = '';
+      messages = [];
+      const canvas = document.createElement('canvas');
+      canvas.width = 320; canvas.height = 180;
+      canvas.getContext('2d').fillRect(0, 0, 320, 180);
+      const picture = canvas.toDataURL('image/png');
+
+      const providerOriginal = selectedProvider;
+      const modelsOriginal = providerModels;
+      const sourceOriginal = generateImageSource;
+      const callOriginal = callModel;
+      selectedProvider = 'smoke-direct';
+      providerModels = [
+        { id: 'smoke-flagship-vision', vision: true, pricing: { prompt: '0.01', completion: '0.03' } },
+        { id: 'smoke-mini-vision', vision: true, pricing: { prompt: '0.0001', completion: '0.0002' } },
+      ];
+      generateImageSource = async () => picture;
+      const seen = { models: [], questions: [] };
+      callModel = async (convo, extra, signal, model) => {
+        seen.models.push(model);
+        const part = (convo[1].content || []).find((c) => c.type === 'text') || {};
+        seen.questions.push(part.text || '');
+        return { message: { role: 'assistant', content: window.__imageCheckAnswer || 'MATCHES' } };
+      };
+
+      const run = async (answer, request) => {
+        window.__imageCheckAnswer = answer;
+        chatMessages.innerHTML = '';
+        messages = [];
+        seen.models.length = 0;
+        seen.questions.length = 0;
+        const controller = new AbortController();
+        currentAbort = controller;
+        const runId = ++generationId;
+        await sendImageGeneration('A poster reading "HELLO", flat vector style', runId, controller, { request: request });
+        // The check is detached on purpose, so the note arrives after the turn.
+        for (let i = 0; i < 60 && !document.querySelector('.image-check'); i++) await new Promise((r) => setTimeout(r, 50));
+        const note = document.querySelector('.image-check');
+        const order = Array.from(chatMessages.querySelector('.message-image-wrap').parentNode.children).map((el) => el.className.split(' ')[0]);
+        return {
+          note: note ? note.textContent : '',
+          missed: note ? note.classList.contains('missed') : false,
+          order: order,
+          models: seen.models.slice(),
+          question: seen.questions[0] || '',
+        };
+      };
+
+      // A model that introduces itself before the verdict is still answering,
+      // and the line break is built rather than escaped: an escape inside this
+      // template literal reaches the page as a real newline in a string literal.
+      const newline = String.fromCharCode(10);
+      const missed = await run('Looking at it:' + newline + 'MISSED: "the sign reads HLLO, not HELLO"', 'draw a poster that says HELLO');
+      const vague = await run('The picture shows a poster with some text on it.', 'draw a poster that says HELLO');
+      const matches = await run('MATCHES', 'draw a poster that says HELLO');
+      // Nothing can see, so nothing is asked and nothing is said.
+      providerModels = [];
+      const blind = await run('MISSED: should never be asked', 'draw a poster that says HELLO');
+
+      selectedProvider = providerOriginal;
+      providerModels = modelsOriginal;
+      generateImageSource = sourceOriginal;
+      callModel = callOriginal;
+      chatMessages.innerHTML = '';
+      messages = [];
+      return { missed: missed, vague: vague, matches: matches, blind: blind };
+    })()`);
+    console.log('image check: ' + JSON.stringify(imageCheck));
+    if (imageCheck.missed.models.length !== 1 || imageCheck.missed.models[0] !== 'smoke-mini-vision') {
+      throw new Error('the drawing was not reviewed by the cheapest model that can see: ' + JSON.stringify(imageCheck.missed));
+    }
+    if (imageCheck.missed.note !== 'Checked: the sign reads HLLO, not HELLO — use Edit below to fix it.') {
+      throw new Error('a missed drawing does not say what differs: ' + JSON.stringify(imageCheck.missed.note));
+    }
+    if (!imageCheck.missed.missed) throw new Error('a miss is not marked as one: ' + JSON.stringify(imageCheck.missed));
+    if (imageCheck.missed.question.indexOf('draw a poster that says HELLO') === -1) {
+      throw new Error('the check is not told what was asked for: ' + JSON.stringify(imageCheck.missed.question));
+    }
+    // Directly under the prompt it is about, and above the buttons.
+    const order = imageCheck.missed.order;
+    if (order.indexOf('image-check') !== order.indexOf('image-caption') + 1 || order.indexOf('image-check') > order.indexOf('message-actions')) {
+      throw new Error('the check is not read directly under the prompt it is about: ' + JSON.stringify(order));
+    }
+    if (imageCheck.matches.note !== 'Checked: this looks like what you asked for.' || imageCheck.matches.missed) {
+      throw new Error('a drawing that met the request is not said to have met it: ' + JSON.stringify(imageCheck.matches));
+    }
+    if (imageCheck.vague.note) {
+      throw new Error('an answer that is not a verdict left a note anyway: ' + JSON.stringify(imageCheck.vague.note));
+    }
+    if (imageCheck.blind.note || imageCheck.blind.models.length) {
+      throw new Error('a service with no model that can see ran a check anyway: ' + JSON.stringify(imageCheck.blind));
+    }
+
     // What a picked file becomes is decided by the file itself. A name list used to
     // decide it, and the same list filtered the file dialog -- so this hands the
     // shipped handler real File objects, exactly as a picker would, and reads the

@@ -1225,6 +1225,11 @@
         .attachment-chip[hidden] { display: none; }
         .attachment-thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
         .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        /* Whether the drawing met the request. One line, under the prompt that
+           drew it: a miss is worth noticing and acting on, and a match is the
+           receipt that the check ran at all. */
+        .image-check { margin: 6px 0 0; font-size: 12px; color: var(--text-muted); }
+        .image-check.missed { color: var(--danger); }
         /* What the attachment costs the next request. Shown before it is sent,
            because a pasted file is the one thing in the prompt that nothing
            trims -- the history behind it is budgeted, and this is not. */
@@ -6699,19 +6704,19 @@
                         return;
                     }
                     if (!isActiveRun(runId, controller)) return;
-                    await sendImageEdit(imagePrompt, source, runId, controller, { sizeFrom: raw });
+                    await sendImageEdit(imagePrompt, source, runId, controller, { sizeFrom: raw, request: raw });
                     return;
                 }
                 // No attachment, so the edit is of the picture this chat already
                 // shows. Named on screen, so the result is not a surprise.
                 if (previousImage) {
                     addMessage('system', 'Editing the last image in this chat.');
-                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image', sizeFrom: raw });
+                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image', sizeFrom: raw, request: raw });
                     return;
                 }
             }
             if (actionTaken === 'generate') {
-                await sendImageGeneration(imagePrompt, runId, controller, { sizeFrom: raw });
+                await sendImageGeneration(imagePrompt, runId, controller, { sizeFrom: raw, request: raw });
                 return;
             }
 
@@ -7414,6 +7419,9 @@
                 // mask being dropped is worth saying without pretending it did not
                 // happen, which is why the two are not the same sentence.
                 showImageOutcome('Edited image ready', outcome);
+                // Detached on purpose: the run is released below and the composer
+                // goes back to the reader while the picture is read back.
+                void checkDrawingAgainstRequest(bubble, url, options.request, promptText);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7486,6 +7494,7 @@
                 // service actually drew is worth saying without dressing it as a
                 // clean win, and worth leaving on screen to be read.
                 showImageOutcome('Image ready', outcome);
+                void checkDrawingAgainstRequest(bubble, imageSrc, options.request, promptText);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7583,6 +7592,67 @@
             el.appendChild(createHoloForge('Generating image…'));
             appendToTranscript(el, 'follow');
             return el;
+        }
+
+        // The model that reads a drawing back. The cheapest model this service
+        // lists that can actually see, and none at all when it lists none -- the
+        // note is then simply absent, which is honest, where a check run on a
+        // model that cannot see would be a guess dressed as a verdict.
+        //
+        // Puter's "catalogue" is the built-in list, which names its vision models
+        // rather than describing them, so capability is asked the two ways the
+        // rest of the page already asks it.
+        function imageCheckModel() {
+            const sees = (model) => (selectedProvider === PUTER_PROVIDER ? isVisionCapable(model.id) : acceptsImages(model));
+            return FreeOpenAIProviderRouting.cheapestVisionModel(routableModels(), {
+                acceptsImages: sees,
+                preferred: DEFAULT_VISION_MODEL,
+            });
+        }
+
+        function appendImageCheckNote(el, check) {
+            const note = document.createElement('div');
+            note.className = check.matches ? 'image-check' : 'image-check missed';
+            note.textContent = check.matches
+                ? 'Checked: this looks like what you asked for.'
+                : 'Checked: ' + check.missed + ' — use Edit below to fix it.';
+            // Directly under the prompt it is about, rather than under the whole
+            // bubble: the picture, the words that drew it, whether they met the
+            // request, and then the buttons -- in the order they get read.
+            const caption = el.querySelector('.image-caption');
+            if (caption && caption.parentNode === el) el.insertBefore(note, caption.nextSibling);
+            else el.appendChild(note);
+            scrollTranscript('follow');
+        }
+
+        // Whether the picture met the request, asked of a model that can see it.
+        //
+        // Best effort in every direction: no model that can see, a refusal, an
+        // answer that is not one of the two verdicts, or no answer at all leaves
+        // no note rather than a guess. Nothing here is awaited by the turn -- the
+        // picture is on screen and already paid for, and this is the app reading
+        // its own work back, which is the one thing the turn never did.
+        async function checkDrawingAgainstRequest(el, src, requestText, promptText) {
+            const model = imageCheckModel();
+            if (!model || !isSendableImageUrl(src)) return;
+            let answer = null;
+            try {
+                const response = await callModel([
+                    { role: 'system', content: IMAGE_CHECK_PROMPT },
+                    { role: 'user', content: [
+                        { type: 'text', text: imageCheckQuestion(requestText, promptText) },
+                        { type: 'image_url', image_url: { url: src } },
+                    ] },
+                ], {}, null, model);
+                answer = parseImageCheck(extractMessageText((response && response.message) || null));
+            } catch (error) {
+                // A check that could not be made is not a failed turn, and saying
+                // so would put an error beside a picture that arrived fine.
+                if (error && error.name === 'AbortError') return;
+                return;
+            }
+            if (!answer || !el || !el.parentNode) return;
+            appendImageCheckNote(el, answer);
         }
 
         function buildImageWrap(src, promptText) {
@@ -8092,6 +8162,9 @@
                 fillImageBubble(bubble, prompt + ' (edit)', url);
                 filled = true;
                 showImageOutcome('Edit ready', outcome);
+                // The brush's own words are the request to check against, which is
+                // what the region was painted for.
+                void checkDrawingAgainstRequest(bubble, url, typed, prompt);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);

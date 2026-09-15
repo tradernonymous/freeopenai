@@ -1036,6 +1036,56 @@ function parseImagePlan(text) {
   return { action, prompt };
 }
 
+// --- Reading a drawing back against the request -------------------------------
+//
+// The prompt an image model receives is a rewrite of what the user said, and the
+// picture that comes back is judged -- by the person who asked -- against what
+// they said, not against the rewrite. Nothing in this app ever compared the two:
+// a drawing that met its prompt but missed the request was indistinguishable from
+// a good one, and the only signal was the user noticing. One short question,
+// asked of a model that can see the picture, closes that loop.
+//
+// The verdict is deliberately two-valued and the miss is deliberately one line:
+// this is a note beside a picture that is already on screen, not a review. Any
+// answer that is not one of the two forms is no answer at all, because an
+// invented verdict is worse than a missing one.
+const IMAGE_CHECK_PROMPT = [
+  'You are shown a picture that was just drawn, the request that asked for it, and the prompt the image model was given.',
+  'Decide whether the picture shows what the request asked for. Judge the picture, not the prompt.',
+  'Be strict about words in the picture (wording and spelling), about counts, and about anything the request named that is missing or wrong.',
+  'Ignore style, quality and taste. Do not describe the picture.',
+  'Reply with one line and nothing else:',
+  'MATCHES',
+  'or',
+  'MISSED: <the single thing that differs, at most 12 words, in the terms the request used>',
+].join('\n');
+
+const MAX_IMAGE_CHECK_CHARS = 160;
+
+// What the checking call is shown, in that order: the words that asked, then the
+// words that drew. Both, because the two disagreeing is the whole point.
+function imageCheckQuestion(requestText, promptText) {
+  const prompt = String(promptText == null ? '' : promptText).trim();
+  // A turn with no separate request -- the brush editor's instruction arrives as
+  // the prompt, and so does a redraw -- asks about the prompt itself rather than
+  // sending a question with half of it missing.
+  const request = String(requestText == null ? '' : requestText).trim() || prompt;
+  return ['The request:', request, '', 'The prompt the image model was given:', prompt].join('\n');
+}
+
+// The verdict, or null when the reply was not one -- which leaves no note rather
+// than a guess. Prose before the verdict is tolerated, since models like to
+// introduce themselves; prose instead of one is not.
+function parseImageCheck(text) {
+  const lines = String(text == null ? '' : text).split('\n').map((line) => line.trim()).filter(Boolean);
+  const line = lines.find((candidate) => /^(match|miss|no\b)/i.test(candidate));
+  if (!line) return null;
+  if (/^match/i.test(line)) return { matches: true, missed: '' };
+  const rest = line.replace(/^(missed|miss(?:ing|es)?|no)\b/i, '').replace(/^[\s:.\u2013\u2014-]+/, '');
+  const missed = rest.replace(/^["\u201c'\s]+|["\u201d'\s.]+$/g, '').trim().slice(0, MAX_IMAGE_CHECK_CHARS);
+  return missed ? { matches: false, missed } : null;
+}
+
 // The floor plus the plan, as one rule. `fallback` is what imageAction() decided
 // from the text alone, and it wins whenever the plan cannot make the turn
 // *better*: an edit stays an edit, a draw request stays a draw request, and a
@@ -4437,6 +4487,10 @@ if (typeof module !== 'undefined' && module.exports) {
     imageFailureMessage,
     IMAGE_PLANNER_PROMPT,
     IMAGE_PLAN_ACTIONS,
+    IMAGE_CHECK_PROMPT,
+    MAX_IMAGE_CHECK_CHARS,
+    imageCheckQuestion,
+    parseImageCheck,
     MAX_IMAGE_PROMPT_CHARS,
     parseImagePlan,
     resolveImageAction,
