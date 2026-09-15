@@ -1919,11 +1919,63 @@ function imageModelFor(store, explicit) {
   return String(store.defaultModel || '').trim();
 }
 
+// A provider's image store: the one it declares, or one derived from a single
+// variable for every other provider that speaks OpenAI in and out of the same
+// URL.
+//
+// Only seven providers used to be able to draw at all, and the list was code.
+// That left the conversation's own service unable to produce a picture whenever
+// it was not one of them -- a Google key, an Antigravity proxy in front of one,
+// Mistral, Groq, any OpenAI-shaped gateway -- so a chat could generate images
+// only through Puter, in the browser, on the visitor's own account. The service
+// in front of the reader was the one thing the route would not ask.
+//
+// A derived store is not a guess at what a service can do: it exists only once
+// the operator has named a model with <PROVIDER>_IMAGE_MODEL, which is the same
+// thing they have to do for Nara, Ollama and OmniRoute. The shape is OpenAI's,
+// because that is what "OpenAI-compatible" means, and a service that answers
+// its chat on /v1/chat/completions answers /v1/images/generations one level the
+// same way -- which is why the chat path's own URL resolution is reused rather
+// than a second address declared here.
+function imageStoreFor(id) {
+  const declared = LLM_PROVIDERS[id];
+  if (!declared) return null;
+  if (declared.image) return declared.image;
+  // Speech and search services are not image services at any variable: their
+  // "models" are transcription and ranking engines, and a key for them is not a
+  // drawing key however it is named.
+  if (declared.kind && declared.kind !== 'chat') return null;
+  const modelEnv = providerEnvName(declared.envVar, '_IMAGE_MODEL');
+  if (!String(process.env[modelEnv] || '').trim()) return null;
+  return {
+    shape: 'openai-images',
+    derived: true,
+    modelEnv,
+    baseUrlEnv: providerEnvName(declared.envVar, '_IMAGES_BASE_URL'),
+    // A derived service is assumed to take a source picture as file parts, the
+    // way OpenAI's own edits endpoint does. A reference field would be
+    // OpenRouter's invention, and inventing it for someone else's URL is how a
+    // request becomes a 400 nobody can act on.
+    edit: 'multipart',
+  };
+}
+
 // One provider, ready to draw -- or the sentence that says why it cannot.
 function imageCandidateFor(id, options) {
   const declared = LLM_PROVIDERS[id];
-  const store = declared && declared.image ? declared.image : null;
-  if (!store) return { error: 'No image service is wired up as "' + id + '".' };
+  const store = imageStoreFor(id);
+  if (!store) {
+    // A chat provider is one variable away from being able to draw, and saying
+    // which one is the whole difference between "unsupported" and "not yet
+    // configured".
+    if (declared && (!declared.kind || declared.kind === 'chat')) {
+      return {
+        error: declared.label + ' can draw once its image model is named — set '
+          + providerEnvName(declared.envVar, '_IMAGE_MODEL') + '.',
+      };
+    }
+    return { error: 'No image service is wired up as "' + id + '".' };
+  }
   // providerConfig is what resolves a key and a base URL for the chat path, and
   // an image is billed to the same key: reading the environment a second way
   // here is how a provider that chats fine reports "not configured" for drawing.
@@ -1973,6 +2025,23 @@ function imageCandidateFor(id, options) {
   return { id, store, model, provider };
 }
 
+// Every provider that could be asked to draw, in the order they would be tried.
+//
+// The seven keep their order, which is the one the README documents. A preferred
+// provider leads when it can draw -- the conversation's own service is the one
+// the user chose, and asking it first is what makes "generate an image" follow
+// the model picker instead of a second decision. Behind them come the providers
+// whose operator named an image model themselves: one variable away from drawing,
+// and so part of "every key draws" rather than services this app has no opinion
+// about. Declaration order, so the order is the same on every request.
+function imageOrderIds(preferredId) {
+  const preferred = String(preferredId || '').trim();
+  const built = IMAGE_PROVIDER_ORDER.filter((id) => id !== preferred);
+  const extras = Object.keys(LLM_PROVIDERS)
+    .filter((id) => id !== preferred && !IMAGE_PROVIDER_ORDER.includes(id) && imageStoreFor(id));
+  return [...(preferred && imageStoreFor(preferred) ? [preferred] : []), ...built, ...extras];
+}
+
 // Every provider that could draw for this request, best first.
 //
 // A named provider is the whole list. Naming one is a decision, and quietly
@@ -1999,16 +2068,18 @@ function imageDrawOrder(requested, options) {
   const explicitModel = String(settings.explicitModel || '').trim();
   const named = String(requested || process.env.IMAGE_PROVIDER || '').trim();
   if (named) {
-    const provider = LLM_PROVIDERS[named];
-    if (!provider || !provider.image) {
-      return { error: 'Unknown image provider "' + named + '". Wired up: ' + IMAGE_PROVIDER_ORDER.join(', ') + '.' };
+    if (!LLM_PROVIDERS[named]) {
+      return { error: 'Unknown image provider "' + named + '". Wired up: ' + imageOrderIds('').join(', ') + '.' };
     }
-    return { candidates: [imageCandidateFor(named, { explicitModel })] };
+    // A named provider that cannot draw is answered with its own reason rather
+    // than "no image provider is ready": an operator who named one asked a
+    // question about that one.
+    const candidate = imageCandidateFor(named, { explicitModel });
+    if (candidate.error) return { error: candidate.error };
+    return { candidates: [candidate] };
   }
   const preferred = String(settings.preferredProvider || '').trim();
-  const order = preferred && IMAGE_PROVIDER_ORDER.includes(preferred)
-    ? [preferred, ...IMAGE_PROVIDER_ORDER.filter((id) => id !== preferred)]
-    : IMAGE_PROVIDER_ORDER;
+  const order = imageOrderIds(preferred);
   const candidates = [];
   for (const id of order) {
     // The conversation's model is offered to the provider the conversation is on,
@@ -2018,7 +2089,7 @@ function imageDrawOrder(requested, options) {
     const candidate = imageCandidateFor(id, { explicitModel: id === preferred ? explicitModel : '' });
     if (!candidate.error) candidates.push(candidate);
   }
-  if (!candidates.length) return { error: imageUnavailableMessage() };
+  if (!candidates.length) return { error: imageUnavailableMessage(preferred) };
   return { candidates };
 }
 
@@ -2032,10 +2103,10 @@ function imageDrawOrder(requested, options) {
 // variables it names are the ones that would actually fix the setup.
 function imageProvidersReport() {
   const rows = [];
-  for (const id of IMAGE_PROVIDER_ORDER) {
+  for (const id of imageOrderIds('')) {
     const provider = LLM_PROVIDERS[id];
-    const store = provider && provider.image ? provider.image : null;
-    if (!store) continue;
+    const store = imageStoreFor(id);
+    if (!provider || !store) continue;
     const candidate = imageCandidateFor(id, {});
     rows.push({
       id,
@@ -2049,17 +2120,49 @@ function imageProvidersReport() {
       edits: store.edit === 'multipart' ? 'mask' : store.edit === 'references' ? 'reference' : 'none',
     });
   }
+  // A chat provider the operator has configured that cannot draw *yet*. It is
+  // not in the order, so without this row it is not in this report either, and
+  // "my provider is not listed at all" is the exact question this report exists
+  // to answer -- with the one variable that fixes it.
+  for (const id of Object.keys(LLM_PROVIDERS)) {
+    const provider = LLM_PROVIDERS[id];
+    if (IMAGE_PROVIDER_ORDER.includes(id) || imageStoreFor(id)) continue;
+    if (provider.kind && provider.kind !== 'chat') continue;
+    if (!providerIsConfigured(provider)) continue;
+    rows.push({
+      id,
+      label: provider.label,
+      ready: false,
+      model: '',
+      reason: imageCandidateFor(id, {}).error || '',
+      sizes: [],
+      edits: 'none',
+    });
+  }
   return rows;
 }
 
 // What to say when nothing can draw, in the form an operator can act on: every
 // provider that could, and the one variable each is missing. Naming only the
 // first would send them round the loop one key at a time.
-function imageUnavailableMessage() {
+function imageUnavailableMessage(preferredId) {
   const rows = [];
-  for (const id of IMAGE_PROVIDER_ORDER) {
+  // The conversation's own service leads when it is the one this request was
+  // about. On a deployment whose provider is not one of the seven -- which is
+  // every deployment reaching an image through a proxy or a Google key -- a
+  // sentence listing seven services the operator does not have is advice they
+  // cannot take, and it never once mentioned the provider they were chatting on.
+  const preferred = String(preferredId || '').trim();
+  const order = [];
+  if (preferred && LLM_PROVIDERS[preferred] && !IMAGE_PROVIDER_ORDER.includes(preferred)) order.push(preferred);
+  order.push(...IMAGE_PROVIDER_ORDER);
+  for (const id of order) {
     const provider = LLM_PROVIDERS[id];
-    if (!provider || !provider.image) continue;
+    if (!provider) continue;
+    // Only the seven, plus the one this request named: listing every chat
+    // provider's missing variable would turn a sentence into a form.
+    if (!provider.image && id !== preferred) continue;
+    if (provider.kind && provider.kind !== 'chat' && !provider.image) continue;
     // The same answer imageCandidateFor gives, rather than a second guess at it.
     // Guessing produced "openrouter (set OPENROUTER_IMAGE_MODEL)" for a provider
     // that has a default model and was really being held back by its key being
@@ -2368,7 +2471,13 @@ async function drawImage(args) {
   }
 
   let response = null;
+  // Which model produced the answer, as opposed to the one asked for first: the
+  // ladder below may have moved on to the provider's own image model, and a
+  // response that names the chat model as the one that drew is wrong about the
+  // one fact it carries.
+  let usedModel = models[0];
   for (let index = 0; index < models.length; index++) {
+    usedModel = models[index];
     const attempts = attemptsFor(models[index]);
     const send = async (withExtra) => {
       for (const attempt of attempts) {
@@ -2408,6 +2517,7 @@ async function drawImage(args) {
     const bytes = Buffer.from(await response.arrayBuffer());
     return {
       status: response.status,
+      model: usedModel,
       notes,
       data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: bytes.toString('base64'), media_type: mediaType }] },
     };
@@ -2419,14 +2529,14 @@ async function drawImage(args) {
     // Workers AI: {result:{image:"<base64>"}, success:true}.
     const cf = payload.result && typeof payload.result.image === 'string' ? payload.result.image : '';
     if (cf) {
-      return { status: response.status, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
+      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
     }
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
-      return { status: response.status, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
+      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
     }
   }
-  return { status: response.status, notes, data: payload };
+  return { status: response.status, model: usedModel, notes, data: payload };
 }
 
 // The largest source picture an edit will carry, in bytes. The browser already
@@ -2636,7 +2746,8 @@ async function llmImage(req, res, kind) {
               ...drawn.data,
               provider: candidate.id,
               providerLabel: candidate.provider.label,
-              model: candidate.model,
+              // The model that drew, not the one the request opened with.
+              model: drawn.model || candidate.model,
               ...(allNotes.length ? { notes: allNotes } : {}),
             });
             return;

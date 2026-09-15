@@ -23,6 +23,10 @@ const PROVIDER_VARS = [
   'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL',
   'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_IMAGE_MODEL', 'CLOUDFLARE_IMAGES_BASE_URL',
   'OLLAMA_IMAGE_MODEL',
+  // The generic rule below is tested through one provider and has to stay
+  // general, so the variables it reads are cleared like every other provider's.
+  'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'MISTRAL_IMAGE_MODEL', 'MISTRAL_IMAGES_BASE_URL',
+  'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
 ];
@@ -883,5 +887,166 @@ test('Cloudflare leads the metered services, because its allowance refills', asy
     app.close();
     await new Promise((r) => up.server.close(r));
     await new Promise((r) => nv.server.close(r));
+  }
+});
+
+// ---- any provider, not only the seven --------------------------------------
+//
+// Only seven providers could draw, and the list was code. So a chat on anything
+// else -- a Google key, a proxy in front of one, an OpenAI-shaped gateway -- could
+// produce a picture only through Puter, in the browser, on the visitor's own
+// account: the one service the reader had not chosen. The conversation's provider
+// was not merely last, it was dropped, and naming one outright answered
+// "Unknown image provider".
+//
+// Mistral stands in for that shape here. Nothing below is Mistral's business
+// beyond the name: the host is a stand-in, and what these assert is the rule the
+// chat path already speaks -- one variable names the model, and the provider then
+// draws on the same URL and key it chats on.
+
+const OFF_ORDER = 'mistral';
+const OFF_ORDER_MODEL = 'some/image-model-one';
+
+// The off-order provider, served by a stand-in that answers the way any
+// OpenAI-shaped service does: a model that is not an image model is a 400, the
+// image model comes back as a picture.
+async function offOrderUpstream() {
+  const up = await upstreamOf((req, res, raw) => {
+    const body = JSON.parse(raw);
+    if (body.model !== OFF_ORDER_MODEL) {
+      return jsonAnswer(res, 400, { error: { message: body.model + ' is not an image model' } });
+    }
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/off-order.png' }] });
+  });
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.MISTRAL_IMAGE_MODEL = OFF_ORDER_MODEL;
+  return up;
+}
+
+test('a provider outside the built-in order draws with the image model its operator named', async () => {
+  const up = await offOrderUpstream();
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: OFF_ORDER,
+      model: 'a-chat-model',
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.data[0].url, 'https://img.test/off-order.png');
+    assert.equal(body.provider, OFF_ORDER);
+    // The chat's own model is asked first, because that is the model the
+    // conversation is on -- and the answer names the model that actually drew,
+    // which is the provider's own image model, not the one the request opened
+    // with.
+    assert.equal(body.model, OFF_ORDER_MODEL);
+    assert.equal(up.seen.length, 2, 'one free 400 on the chat model, then the model that can draw');
+    assert.equal(JSON.parse(up.seen[0].body).model, 'a-chat-model');
+    assert.equal(JSON.parse(up.seen[1].body).model, OFF_ORDER_MODEL);
+    assert.equal(up.seen[0].url, '/images/generations');
+    assert.equal(up.seen[0].headers.authorization, 'Bearer mistral-key');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('naming an off-order provider is honoured, not refused as unknown', async () => {
+  const up = await offOrderUpstream();
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: OFF_ORDER });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).provider, OFF_ORDER);
+    assert.equal(up.seen.length, 1, 'a service whose model is its own is asked once');
+    assert.equal(JSON.parse(up.seen[0].body).model, OFF_ORDER_MODEL);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('an off-order provider with no image model named answers with its own variable', async () => {
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: OFF_ORDER });
+    assert.equal(res.status, 400);
+    // Naming one provider asks a question about that provider, so the answer is
+    // about that provider rather than a list of seven services to set up.
+    assert.match((await res.json()).error, /MISTRAL_IMAGE_MODEL/);
+  } finally {
+    app.close();
+  }
+});
+
+test('the provider report lists a configured chat provider that cannot draw yet', async () => {
+  // "My provider is not in this list at all" is the question the report exists to
+  // answer, and a provider that draws with one more variable is the answer that
+  // needs the variable named.
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  const app = await startApp();
+  try {
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    const mistral = listed.providers.find((p) => p.id === OFF_ORDER);
+    assert.ok(mistral, 'a configured provider that could draw is listed');
+    assert.equal(mistral.ready, false);
+    assert.match(mistral.reason, /MISTRAL_IMAGE_MODEL/);
+  } finally {
+    app.close();
+  }
+});
+
+test('the report lists it as ready once the model is named', async () => {
+  const up = await offOrderUpstream();
+  const app = await startApp();
+  try {
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    const mistral = listed.providers.find((p) => p.id === OFF_ORDER);
+    assert.equal(mistral.ready, true);
+    assert.equal(mistral.model, OFF_ORDER_MODEL);
+    // Report and draw agree, which is the property the report is read for.
+    assert.deepEqual(listed.providers.filter((p) => p.ready).map((p) => p.id), [OFF_ORDER]);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('nothing can draw, and the sentence leads with the provider the chat is on', async () => {
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
+    assert.equal(res.status, 400);
+    const message = (await res.json()).error;
+    // A deployment whose chats run through a proxy has no Nara key and never
+    // will, and the old sentence never once mentioned the provider the user had
+    // just been chatting on.
+    assert.match(message, /^No image provider is ready\. mistral \(/);
+    assert.match(message, /MISTRAL_IMAGE_MODEL/);
+  } finally {
+    app.close();
+  }
+});
+
+test('a speech service is not made into a drawing key by naming one', async () => {
+  // Deepgram's models are transcription engines. A key for it is not a drawing
+  // key however the variable is spelled, and the exclusion is what keeps this
+  // rule from turning every configured service into a candidate that can only
+  // fail on every draw.
+  process.env.DEEPGRAM_API_KEY = 'dg-key';
+  process.env.DEEPGRAM_IMAGE_MODEL = 'a-model';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: 'deepgram' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /No image service is wired up as "deepgram"/);
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    assert.equal(listed.providers.some((p) => p.id === 'deepgram'), false, 'and it is not reported as a way to draw');
+  } finally {
+    app.close();
   }
 });
