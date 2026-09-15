@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const dns = require('dns');
@@ -3430,6 +3431,17 @@ const mime = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  // The types a command in the server workspace is likely to produce. A file
+  // served as octet-stream still downloads, but it downloads as a nameless blob
+  // -- and "generate a PDF and hand it to the user" is the thing this was built
+  // for, so the PDF has to arrive as a PDF.
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.zip': 'application/zip',
 };
 
 // --- Sending a static file ---
@@ -3550,6 +3562,248 @@ function isAssetPath(urlPath) {
   return path.extname(urlPath.split('?')[0]) !== '';
 }
 
+// --- The server workspace: where a command can actually run ---
+//
+// The scratch space the model keeps notes in is browser-local on purpose, so it
+// cannot be the place a script runs: a command needs a real filesystem. This is
+// that filesystem, a directory beside the app, and it is the one capability in
+// this app that can do something the user cannot take back -- so it is off
+// until the operator asks for it, twice.
+//
+// WORKSPACE_RUN=1 says the operator wants it at all, which keeps a push from
+// quietly turning a deployment into a shell. The second condition is the one
+// that matters: the app must already have a login. `isAuthenticated` treats an
+// app with no accounts configured as open to everyone, so on an open deployment
+// this route would hand a shell to anybody who has the URL, and the container
+// environment holds the operator's provider keys.
+const WORKSPACE_RUN_DIR = 'workspace';
+const WORKSPACE_RUN_DEFAULT_TIMEOUT_MS = 120000;
+const WORKSPACE_RUN_MAX_TIMEOUT_MS = 600000;
+const WORKSPACE_RUN_MAX_COMMAND_CHARS = 8000;
+const WORKSPACE_RUN_MAX_OUTPUT_CHARS = 32000;
+const WORKSPACE_RUN_MAX_FILES = 200;
+
+// What a command is allowed to see of the container's environment. Deliberately
+// a list of keys the process itself needs -- a shell, a cache directory, a
+// locale -- and never a pattern match, because the environment this is filtered
+// from holds the operator's provider keys, the GitHub token and the session
+// secret, and a model-authored script that prints `process.env` would post them
+// somewhere. NODE_OPTIONS and LD_PRELOAD are absent for the same reason: either
+// one is a way to run code *around* the command that was approved.
+const RUN_ENV_KEYS = [
+  'PATH', 'LANG', 'LC_ALL', 'TZ', 'TEMP', 'TMP',
+  'SystemRoot', 'ComSpec', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'PROCESSOR_ARCHITECTURE',
+];
+
+function workspaceRunRoot(root) {
+  return path.join(root, WORKSPACE_RUN_DIR);
+}
+
+// Why running is off, or an empty string when it is on. Two reasons rather than
+// one boolean, because they need different fixes and a refusal that does not say
+// which one is a refusal the operator cannot act on.
+function workspaceRunRefusal(env) {
+  if (String((env && env.WORKSPACE_RUN) || '').trim() !== '1') {
+    return 'Running commands is off on this server. Set WORKSPACE_RUN=1 to enable it.';
+  }
+  if (getConfiguredAccounts(env || {}).length === 0) {
+    return 'Running commands needs a login to be configured first: with no accounts set, every visitor would get a shell on this container.';
+  }
+  return '';
+}
+
+function workspaceRunTimeoutMs(env) {
+  const wanted = Math.round(Number((env && env.WORKSPACE_RUN_TIMEOUT_MS) || 0));
+  if (!Number.isFinite(wanted) || wanted <= 0) return WORKSPACE_RUN_DEFAULT_TIMEOUT_MS;
+  return Math.min(WORKSPACE_RUN_MAX_TIMEOUT_MS, Math.max(1000, wanted));
+}
+
+function runEnvironment(env, home) {
+  const out = {};
+  for (const key of RUN_ENV_KEYS) {
+    const value = env && env[key];
+    if (typeof value === 'string' && value) out[key] = value;
+  }
+  // A cache directory inside the workspace, not the operator's home: npm, pip
+  // and git all write here, and this directory is the one this app owns.
+  out.HOME = home;
+  out.USERPROFILE = home;
+  return out;
+}
+
+function capRunOutput(text, limit = WORKSPACE_RUN_MAX_OUTPUT_CHARS) {
+  const value = String(text == null ? '' : text);
+  if (value.length <= limit) return { text: value, truncated: false };
+  return { text: value.slice(0, limit), truncated: true };
+}
+
+// Where in the workspace a command may run. Anything that resolves outside it is
+// refused rather than clamped: `cwd: '../..'` from a model is a mistake or an
+// attempt, and neither one should be answered by quietly running somewhere else.
+function resolveWorkspaceCwd(root, rel) {
+  const wanted = String(rel == null ? '' : rel).trim();
+  if (!wanted || wanted === '.' || wanted === './') return root;
+  const resolved = path.resolve(root, wanted);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  return resolved;
+}
+
+// Everything under the workspace, so what a command produced is visible to the
+// model that ran it and downloadable by the user who approved it. Sorted, so a
+// second run reads as a change rather than a reshuffle.
+function listWorkspaceFiles(root, limit = WORKSPACE_RUN_MAX_FILES) {
+  const out = [];
+  const walk = (dir, prefix) => {
+    if (out.length >= limit) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      const rel = prefix ? prefix + '/' + entry.name : entry.name;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full, rel); continue; }
+      if (!entry.isFile()) continue;
+      try {
+        const stat = fs.statSync(full);
+        out.push({ path: rel, bytes: stat.size, mtimeMs: Math.round(stat.mtimeMs) });
+      } catch { /* vanished between the listing and the stat */ }
+    }
+  };
+  walk(root, '');
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+// A shell command is a tree: the timeout has to reach the child the shell
+// started, not just the shell, or a killed `npm test` leaves its runner behind
+// holding the port and the CPU it was told to release.
+function killProcessTree(child) {
+  if (!child || !child.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(-child.pid, 'SIGKILL');
+    }
+  } catch { /* already gone */ }
+  try { child.kill('SIGKILL'); } catch { /* already gone */ }
+}
+
+function runWorkspaceCommand({ command, cwd, env, timeoutMs }) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      env: runEnvironment(env, cwd),
+      windowsHide: true,
+      // Its own process group, so the kill below reaches the whole tree.
+      detached: process.platform !== 'win32',
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const finish = (extra) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, timedOut, durationMs: Date.now() - started, ...extra });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child);
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    // An unrunnable command is an answer, not an exception: the model reads the
+    // reason and corrects itself, which it cannot do from a 500.
+    child.on('error', (error) => finish({ exitCode: null, stderr: stderr + String((error && error.message) || error) }));
+    child.on('close', (code, signal) => finish({ exitCode: typeof code === 'number' ? code : null, signal: signal || '' }));
+  });
+}
+
+// One command at a time. A shell that hung -- an install waiting on the network
+// -- would otherwise let the model stack up four more of them behind it.
+let workspaceRunBusy = false;
+
+function handleWorkspaceRun(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  if (refusal) return sendJson(res, 403, { error: refusal, enabled: false });
+  readJsonBody(req, 128 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const command = String((body && body.command) || '').trim();
+    if (!command) return sendJson(res, 400, { error: 'command is required' });
+    if (command.length > WORKSPACE_RUN_MAX_COMMAND_CHARS) {
+      return sendJson(res, 400, { error: 'That command is too long (' + command.length + ' characters).' });
+    }
+    const runRoot = workspaceRunRoot(root);
+    try {
+      fs.mkdirSync(runRoot, { recursive: true });
+    } catch (error) {
+      return sendJson(res, 500, { error: 'The workspace could not be created: ' + error.message });
+    }
+    const cwd = resolveWorkspaceCwd(runRoot, body && body.cwd);
+    if (!cwd) return sendJson(res, 400, { error: 'cwd has to stay inside the workspace.' });
+    if (workspaceRunBusy) {
+      return sendJson(res, 429, { error: 'A command is already running. Wait for it to finish.' });
+    }
+    workspaceRunBusy = true;
+    try {
+      const result = await runWorkspaceCommand({
+        command,
+        cwd,
+        env: process.env,
+        timeoutMs: workspaceRunTimeoutMs(process.env),
+      });
+      const stdout = capRunOutput(result.stdout);
+      const stderr = capRunOutput(result.stderr);
+      sendJson(res, 200, {
+        enabled: true,
+        ok: result.exitCode === 0 && !result.timedOut,
+        exitCode: result.exitCode,
+        signal: result.signal || '',
+        timedOut: result.timedOut,
+        durationMs: result.durationMs,
+        cwd: path.relative(runRoot, cwd) || '.',
+        // Named because it decides the syntax: a heredoc works in bash and not in
+        // cmd, and a model that knows which one it is writing for gets it right
+        // the first time instead of reading a parse error and starting again.
+        shell: process.platform === 'win32' ? 'cmd' : 'bash',
+        stdout: stdout.text,
+        stdoutTruncated: stdout.truncated,
+        stderr: stderr.text,
+        stderrTruncated: stderr.truncated,
+        files: listWorkspaceFiles(runRoot),
+      });
+    } finally {
+      workspaceRunBusy = false;
+    }
+  });
+}
+
+// Answered whether or not running is enabled, because a surface that can list
+// what a command produced has to be able to say why it is not listing anything.
+function handleWorkspaceFiles(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  const runRoot = workspaceRunRoot(root);
+  const files = refusal ? [] : listWorkspaceFiles(runRoot);
+  sendJson(res, 200, { enabled: !refusal, reason: refusal, dir: WORKSPACE_RUN_DIR, files });
+}
+
+function handleWorkspaceFile(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  if (refusal) return sendJson(res, 403, { error: refusal });
+  const wanted = new URL(req.url, 'http://x').searchParams.get('path') || '';
+  const runRoot = workspaceRunRoot(root);
+  const file = resolveWorkspaceCwd(runRoot, wanted);
+  if (!file || file === runRoot) return sendJson(res, 400, { error: 'path has to name a file inside the workspace.' });
+  fs.promises.readFile(file).then((data) => {
+    res.writeHead(200, {
+      'Content-Type': mime[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'Content-Length': data.length,
+      'Content-Disposition': 'attachment; filename="' + path.basename(file).replace(/"/g, '') + '"',
+    });
+    res.end(data);
+  }).catch(() => sendJson(res, 404, { error: 'No such file in the workspace.' }));
+}
+
 function createRequestHandler(root) {
   return (req, res) => {
     const urlPath = req.url.split('?')[0];
@@ -3607,6 +3861,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/commits' && req.method === 'GET') return githubListCommits(req, res);
     if (urlPath === '/api/github/branches' && req.method === 'GET') return githubListBranches(req, res);
     if (urlPath === '/api/github/branch' && req.method === 'POST') return githubCreateBranch(req, res);
+    if (urlPath === '/api/workspace/run' && req.method === 'POST') return handleWorkspaceRun(req, res, root);
+    if (urlPath === '/api/workspace/files' && req.method === 'GET') return handleWorkspaceFiles(req, res, root);
+    if (urlPath === '/api/workspace/file' && req.method === 'GET') return handleWorkspaceFile(req, res, root);
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });
@@ -3657,6 +3914,14 @@ module.exports = {
   githubApiHeaders,
   resolveSafePath,
   isAssetPath,
+  workspaceRunRoot,
+  workspaceRunRefusal,
+  workspaceRunTimeoutMs,
+  runEnvironment,
+  capRunOutput,
+  resolveWorkspaceCwd,
+  listWorkspaceFiles,
+  runWorkspaceCommand,
   LLM_PROVIDERS,
   createRequestHandler,
   normalizeProviderModel,

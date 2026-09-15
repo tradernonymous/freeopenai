@@ -2312,6 +2312,13 @@
                     </div>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
+                            <strong>Server files</strong>
+                            <p class="settings-hint" id="serverWorkspaceStatus">Loading…</p>
+                        </div>
+                        <div class="workspace-list" id="serverWorkspaceFileList" aria-label="Files on the server"></div>
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
                             <strong>Tasks</strong>
                             <p class="settings-hint" id="taskStatus">Empty.</p>
                         </div>
@@ -2431,7 +2438,10 @@
                 <h3 id="githubConfirmTitle">Commit to GitHub?</h3>
             </div>
             <div class="modal-body">
-                <p id="githubConfirmText"></p>
+                <!-- pre-wrap because one of the things confirmed here is a shell
+                     command, and a command re-wrapped into one line is a command
+                     that cannot be read before it is approved. -->
+                <p id="githubConfirmText" style="white-space: pre-wrap; overflow-wrap: anywhere;"></p>
             </div>
             <div class="github-browser-row" style="padding: 0 20px 20px;">
                 <button class="icon-btn-text" onclick="githubConfirmResolve('once')">Allow once</button>
@@ -3657,7 +3667,10 @@
         function switchView(name) {
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
             document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
-            if (name === 'settings') refreshGithubStatus();
+            if (name === 'settings') {
+                refreshGithubStatus();
+                renderServerWorkspaceFiles();
+            }
             if (name === 'gallery') renderGallery();
         }
 
@@ -3893,7 +3906,9 @@
         // GitHub commit, a workspace write. "Always allow" is remembered per
         // kind, so allowing a file write this session never quietly becomes
         // permission to commit to a repository.
-        const alwaysAllow = { github: false, workspace: false };
+        // A command is its own kind, so allowing a file write this session never
+        // quietly becomes permission to run whatever the model likes.
+        const alwaysAllow = { github: false, workspace: false, run: false };
         let confirmResolver = null;
         let confirmKind = '';
 
@@ -3912,6 +3927,10 @@
 
         function askWorkspaceConfirm(text) {
             return askConfirm('workspace', 'Change a workspace file?', text);
+        }
+
+        function askRunConfirm(text) {
+            return askConfirm('run', 'Run this command on the server?', text);
         }
 
         function githubConfirmResolve(choice) {
@@ -4306,6 +4325,112 @@
 
         function formatChars(n) {
             return n < 1000 ? n + ' characters' : (n / 1000).toFixed(1) + 'k characters';
+        }
+
+        function formatBytes(n) {
+            const bytes = Number(n) || 0;
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // What a run hands back, in the shape a terminal would: the exit code,
+        // then the two streams, then what the command left behind.
+        //
+        // The file list is the part that matters for the thing this was built
+        // for. A script that generates a PDF is only useful if the PDF can be
+        // fetched, so every file the workspace now holds is named with its size
+        // and the route that serves it: the user can click it in the answer, and
+        // the model can see that its file is really there rather than assuming it.
+        function formatRunResult(data) {
+            const lines = [];
+            if (data.timedOut) {
+                lines.push('Timed out after ' + Math.round((data.durationMs || 0) / 1000) + 's and was stopped — it was probably waiting on input or the network.');
+            } else {
+                lines.push('Exit code ' + (data.exitCode === null || data.exitCode === undefined ? 'unknown' : data.exitCode) +
+                    ' after ' + Math.round((data.durationMs || 0) / 1000) + 's (' + (data.shell || 'sh') + ').');
+            }
+            if (data.stdout) lines.push('stdout:\n' + data.stdout + (data.stdoutTruncated ? '\n(stdout was cut off)' : ''));
+            if (data.stderr) lines.push('stderr:\n' + data.stderr + (data.stderrTruncated ? '\n(stderr was cut off)' : ''));
+            const files = Array.isArray(data.files) ? data.files : [];
+            if (files.length) {
+                lines.push('The server workspace now holds:\n' + files
+                    .map((file) => file.path + ' (' + formatBytes(file.bytes) + ') — /api/workspace/file?path=' + encodeURIComponent(file.path))
+                    .join('\n'));
+            }
+            return lines.length ? lines.join('\n\n') : 'The command ran and printed nothing.';
+        }
+
+        // The one tool that runs on the server rather than in this browser.
+        //
+        // Everything else the model reaches here is recoverable: this browser's
+        // own storage, or a repository the user connected. A command is not, which
+        // is why it goes through the same approval dialog every write does -- and
+        // why that dialog shows the command itself rather than describing it, and
+        // remembers "always allow" for commands separately from file writes.
+        async function runCommandTool(name, args) {
+            const command = String((args && args.command) || '').trim();
+            if (!command) return 'Error: command is required.';
+            const approved = await askRunConfirm(describeToolCall(name, args));
+            if (!approved) return 'The user declined to run this. Do not try it again unless they ask.';
+            try {
+                const res = await fetch('/api/workspace/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, cwd: args.cwd || '' }),
+                });
+                const data = await safeJson(res);
+                if (!res.ok) return 'Error: ' + (data.error || 'the command could not be run');
+                return formatRunResult(data);
+            } catch (e) {
+                return 'Error: the command could not be sent — ' + e.message;
+            }
+        }
+
+        // What commands have produced, on the server rather than in this browser.
+        //
+        // Listed here because a script that generates a PDF is only as useful as
+        // the PDF is reachable, and this panel is the only place in the app that
+        // knows the server workspace exists. The files are the container's, so the
+        // hint says the one thing about them a user would otherwise discover the
+        // hard way: a redeploy takes them with it.
+        async function renderServerWorkspaceFiles() {
+            const list = document.getElementById('serverWorkspaceFileList');
+            const status = document.getElementById('serverWorkspaceStatus');
+            if (!list || !status) return;
+            list.innerHTML = '';
+            let data = null;
+            try {
+                const res = await fetch('/api/workspace/files');
+                data = await safeJson(res);
+            } catch { /* the answer below covers it */ }
+            if (!data || !data.enabled) {
+                status.textContent = (data && data.reason) || 'The server workspace could not be read.';
+                return;
+            }
+            const files = Array.isArray(data.files) ? data.files : [];
+            if (!files.length) {
+                status.textContent = 'Empty. Files a command writes on the server appear here, and a redeploy takes them with it.';
+                return;
+            }
+            status.textContent = files.length + ' file(s) written by commands on the server. A redeploy takes them with it.';
+            for (const file of files) {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const name = document.createElement('span');
+                name.className = 'workspace-name';
+                name.textContent = file.path;
+                const size = document.createElement('span');
+                size.className = 'workspace-size';
+                size.textContent = formatBytes(file.bytes);
+                const download = document.createElement('a');
+                download.className = 'icon-btn-text';
+                download.textContent = 'Download';
+                download.href = '/api/workspace/file?path=' + encodeURIComponent(file.path);
+                download.setAttribute('download', '');
+                row.append(name, size, download);
+                list.append(row);
+            }
         }
 
         // The model's view of the workspace. Reads answer directly; a write is
@@ -5670,6 +5795,7 @@
             }
             if (isGithubTool(name)) return runGithubTool(name, args);
             if (isWebTool(name)) return runWebTool(name, args);
+            if (isRunTool(name)) return runCommandTool(name, args);
             if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
             if (isTaskTool(name)) return runTaskTool(name, args);
             if (isUseSkillTool(name)) return runUseSkillTool(args);
@@ -6538,6 +6664,7 @@
                     // that holds against a model with a tool in front of it.
                     const offered = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) offered.push(...GITHUB_TOOLS);
+                    offered.push(...RUN_TOOLS);
                     let tools = toolsForMode(selectedMode, offered);
                     // Skills ride along: whatever this chat pinned, plus what the
                     // router picks when auto-skills are on and the mode allows it.

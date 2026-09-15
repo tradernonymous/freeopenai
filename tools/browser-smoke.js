@@ -94,7 +94,11 @@ async function main() {
   try {
     app = spawn(process.execPath, ['server.js'], {
       cwd: APP_DIR,
-      env: { ...process.env, PORT: String(appPort) },
+      // The shell route is enabled for this run so the page's half of it can be
+      // driven. It still refuses to run anything: this app has no login
+      // configured (see `workspaceRunRefusal`), which is exactly the refusal the
+      // smoke below asserts it gets.
+      env: { ...process.env, PORT: String(appPort), WORKSPACE_RUN: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let serverOutput = '';
@@ -162,7 +166,10 @@ async function main() {
       }
       if (message.method === 'Network.responseReceived' && message.params.response.status >= 400) {
         const responseUrl = new URL(message.params.response.url);
-        if (responseUrl.pathname !== '/favicon.ico') {
+        // A refusal is an answer for the shell route, and the smoke asks for one
+        // on purpose: a 403 there is the app working, not a page in trouble.
+        const refusedShell = responseUrl.pathname === '/api/workspace/run' && message.params.response.status === 403;
+        if (responseUrl.pathname !== '/favicon.ico' && !refusedShell) {
           errors.push('HTTP ' + message.params.response.status + ' ' + message.params.response.url);
         }
       }
@@ -686,6 +693,70 @@ async function main() {
     }
     if (shapeCut.square.substituted) {
       throw new Error('a square request was re-encoded for nothing: ' + JSON.stringify(shapeCut.square));
+    }
+
+    // The shell tool, driven through the real page: the dialog names the command,
+    // and the answer comes back as a result.
+    //
+    // It cannot really run here. The route refuses to be a shell on an app with
+    // no login configured -- every visitor would get one -- so what this proves is
+    // the wiring: that the call is dispatched to the shell runner, that the
+    // command is put to the user verbatim before the request is sent at all, and
+    // that the refusal arrives as the model-visible result rather than as a
+    // broken turn. The execution itself is proved against a real server in
+    // test/workspace-run.test.js.
+    await send('Page.navigate', { url: url + '-run-tool' });
+    await waitFor(() => evaluate('typeof runCommandTool === "function" && !!document.getElementById("githubConfirmOverlay")'), 'run tool page');
+    await sleep(200);
+    const runTool = await evaluate(`(async () => {
+      const opened = new Promise((resolve) => {
+        const check = () => {
+          const overlay = document.getElementById('githubConfirmOverlay');
+          if (overlay && overlay.classList.contains('open')) resolve(document.getElementById('githubConfirmText').textContent);
+          else setTimeout(check, 20);
+        };
+        check();
+      });
+      const pending = runCommandTool('run_command', { command: 'node make-pdf.js' });
+      const asked = await opened;
+      githubConfirmResolve('once');
+      const result = await pending;
+      return {
+        asked,
+        title: document.getElementById('githubConfirmTitle').textContent,
+        result,
+        buildOffered: toolsForMode('build', RUN_TOOLS).length,
+        chatOffered: toolsForMode('chat', RUN_TOOLS).length,
+      };
+    })()`);
+    console.log('run tool: ' + JSON.stringify(runTool));
+    if (!/node make-pdf\.js/.test(runTool.asked)) {
+      throw new Error('the command was not put to the user before it was sent: ' + JSON.stringify(runTool));
+    }
+    if (!/server/.test(runTool.title)) throw new Error('the dialog does not say where it runs: ' + runTool.title);
+    // The reason that fires here is the login one, not the switch: this app has
+    // WORKSPACE_RUN set and no accounts, which is the combination that would hand
+    // a shell to any visitor.
+    if (!/needs a login/.test(runTool.result)) {
+      throw new Error('the refusal never reached the model: ' + JSON.stringify(runTool));
+    }
+    if (runTool.buildOffered !== 1 || runTool.chatOffered !== 0) {
+      throw new Error('the shell is offered in the wrong modes: ' + JSON.stringify(runTool));
+    }
+
+    // And the settings surface for what the server workspace holds says the same
+    // thing, in the same words, rather than loading forever.
+    const serverFiles = await evaluate(`(async () => {
+      switchView('settings');
+      await renderServerWorkspaceFiles();
+      return {
+        status: document.getElementById('serverWorkspaceStatus').textContent,
+        rows: document.getElementById('serverWorkspaceFileList').children.length,
+      };
+    })()`);
+    console.log('server files: ' + JSON.stringify(serverFiles));
+    if (!/login/.test(serverFiles.status)) {
+      throw new Error('the server files list does not say why it is empty: ' + JSON.stringify(serverFiles));
     }
 
     // The session panel floats, so opening it must not resize the conversation

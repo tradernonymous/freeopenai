@@ -29,7 +29,7 @@ const MODE_PROMPTS = {
   chat: [
     'MODE: CHAT. The user wants an answer, not a change to anything.',
     'Research it: search the web and read pages whenever the answer depends on anything past your training, prefer primary sources, and cite them as [title](url).',
-    'You can read this workspace and any connected repository, but you have no tools that write, commit or delete -- in this mode they are not offered at all. So never promise to "just fix it" here: say what would change, and that Build mode is where it happens.',
+    'You can read this workspace and any connected repository, but you have no tools that write, commit, delete or run a command -- in this mode they are not offered at all. So never promise to "just fix it" here: say what would change, and that Build mode is where it happens.',
     'Answer plainly and finish. No plan document, no todo list, no commit.',
   ].join('\n'),
   plan: [
@@ -44,14 +44,14 @@ const MODE_PROMPTS = {
     'MODE: BUILD. You are executing agreed work, and this is the only mode with the tools to change anything. Be disciplined about it:',
     '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
     '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
-    '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
+    '- Verify before claiming done: run what the repo offers (tests, build, lint) -- with run_command when it is offered, and never claim a result you did not read.',
     // The todo list is the plan of record. Kept in the mode prompt rather than
     // added to each request, because this text never changes between turns and a
     // request that grows on every turn cannot be cached (#89).
     '- Work from the todo list: record the plan as tasks before a multi-step job, update each status as it moves, and when the request changes revise the list -- add what is new, drop what is no longer wanted -- rather than starting a second plan beside it.',
     '- Finish every todo before you report. If one is genuinely still open, name it and say why; never report the work as complete while the list says otherwise.',
     '- Summarize what changed, what you verified, and what you deliberately did not do.',
-    '- Commits still require the user\'s explicit approval through the app\'s commit confirmation.',
+    '- Commits and shell commands still require the user\'s explicit approval through the app\'s own confirmation, so ask for the command you want rather than a way around it.',
   ].join('\n'),
 };
 
@@ -238,6 +238,7 @@ function skillsAllowedForMode(mode) {
 // still stopped by the approval dialog every write already goes through.
 const TOOL_GROUPS = {
   research: ['web_search', 'web_fetch'],
+  shell: ['run_command'],
   workspaceRead: ['workspace_list_files', 'workspace_read_file', 'workspace_search_files'],
   workspaceWrite: ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'],
   repoRead: ['github_list_repos', 'github_list_files', 'github_read_file', 'github_search_code', 'github_list_commits', 'github_list_branches'],
@@ -249,13 +250,13 @@ const TOOL_GROUPS = {
 const MODE_TOOL_GROUPS = {
   chat: ['research', 'workspaceRead', 'repoRead'],
   plan: ['research', 'workspaceRead', 'repoRead', 'plan', 'skills'],
-  build: ['research', 'workspaceRead', 'workspaceWrite', 'repoRead', 'repoWrite', 'plan', 'skills'],
+  build: ['research', 'workspaceRead', 'workspaceWrite', 'repoRead', 'repoWrite', 'plan', 'skills', 'shell'],
 };
 
 // The groups that change something outside this conversation: a file in the
 // workspace, a file in a repository. The task list is deliberately not one of
 // them -- a plan is a note to self, and Plan mode is exactly where it is written.
-const WRITE_TOOL_GROUPS = ['workspaceWrite', 'repoWrite'];
+const WRITE_TOOL_GROUPS = ['workspaceWrite', 'repoWrite', 'shell'];
 
 function toolGroupsForName(name) {
   const wanted = String(name || '');
@@ -1609,6 +1610,40 @@ const WORKSPACE_TOOLS = [
 
 const WORKSPACE_TOOL_NAMES = WORKSPACE_TOOLS.map((t) => t.function.name);
 
+// A command that runs on the server, which is the one tool here that can do
+// something the user cannot take back. The model's scratch space is
+// browser-local, so a script has nowhere to run -- writing and *executing* a file
+// needs a real machine, and this is it.
+//
+// Build mode only: the shell is a write in every sense that matters, and the
+// server refuses it outright unless the operator has enabled it (WORKSPACE_RUN in
+// server.js), so on a deployment where it was never turned on the model gets one
+// plain sentence back rather than a broken tool. Every command is also put to the
+// user verbatim before it runs, which is where the real decision is made.
+const RUN_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Run a shell command on the server and read its output: write and run a script, generate a file, run tests. It runs in a scratch directory on the server, not on the user\'s computer, and what comes back is stdout, stderr, the exit code, the shell it used and the files now in that directory. Write a script and run it in one command -- on bash a quoted heredoc so nothing is expanded on the way in (cat > make.js <<\'EOF\' ... EOF), then node make.js; the result names the shell, so write for the one you are given. The user is asked to approve every command before it runs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'The shell command to run, e.g. "node make.js".' },
+          cwd: { type: 'string', description: 'Folder inside the workspace to run in. Omit to run at the workspace root.' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+];
+
+const RUN_TOOL_NAMES = RUN_TOOLS.map((t) => t.function.name);
+
+function isRunTool(name) {
+  return RUN_TOOL_NAMES.includes(name);
+}
+
 // Which of them read and which of them change the store. The split is what the
 // mode surface and the parallel-safety rule both key off, so it is one list
 // rather than two spellings of the same idea.
@@ -2623,6 +2658,10 @@ function describeToolCall(name, args = {}) {
       return `Editing "${args.path || '?'}" in the workspace`;
     case 'workspace_delete_file':
       return `Deleting "${args.path || '?'}" from the workspace`;
+    case 'run_command':
+      // Verbatim and untruncated: this string is the approval dialog, and a
+      // command the user cannot read in full is not a command they approved.
+      return `Run on the server:\n${args.command || '?'}`;
     case 'task_list':
       return 'Reading the task list';
     case 'task_add':
@@ -3433,6 +3472,11 @@ const SYSTEM_PROMPT = [
   '- Never answer "say proceed and I will do it". If you can act, act now.',
   '- Committing is the only step that needs approval, and the app already asks the user itself.',
   '- Read a file before rewriting it, and send the complete new contents.',
+  '',
+  'When run_command is available:',
+  '- It runs on the server, in a scratch directory of its own. Create a file and run it in one command, with a quoted heredoc: cat > make.js <<\'EOF\' ... EOF. Then node make.js.',
+  '- The user approves every command before it runs, so send few, meaningful ones. Do not run a command just to look around.',
+  '- Read the output. A non-zero exit code with a stack trace is the useful part; fix the script and run it again rather than explaining the error back.',
   '',
   'When web tools are available:',
   '- If the question needs facts outside training or the repos -- current events, releases, prices, docs -- search first, never guess.',
@@ -4533,6 +4577,9 @@ if (typeof module !== 'undefined' && module.exports) {
     WORKSPACE_TOOL_NAMES,
     isWorkspaceTool,
     isWorkspaceWriteTool,
+    RUN_TOOLS,
+    RUN_TOOL_NAMES,
+    isRunTool,
     normalizeWorkspacePath,
     workspaceList,
     workspaceRead,

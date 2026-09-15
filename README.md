@@ -242,6 +242,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
 | `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
+| `WORKSPACE_RUN` | *(unset)* | Set to `1` to let the model run shell commands on the server (see [Running a command](#-running-a-command)). Requires a configured login — with no accounts set, every visitor would get a shell. |
+| `WORKSPACE_RUN_TIMEOUT_MS` | `120000` | How long one command may run before it and its process tree are killed. 1s–10min. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
@@ -452,6 +454,29 @@ It lives in your browser (localStorage) beside the conversations, not on the ser
 Paths are relative to the workspace root and a `..` is refused rather than resolved away, so nothing can reach outside it. Writes are capped (100 kB per file, 200 kB and 64 files in total) because the conversations share the same few megabytes of storage.
 
 Reads run in parallel with other reads; writes never do, since two writes to one path in the same moment is a race whose loser vanishes.
+
+### 🖥️ Running a command
+
+The one tool that reaches a real machine. It exists because a note-taking scratch space cannot *do* anything: writing a script and running it — generating a PDF, producing a file, running a test — needs a filesystem and a shell, and the browser-local workspace has neither by design.
+
+| Tool | What it does |
+| --- | --- |
+| `run_command` | Runs a shell command on the server and returns stdout, stderr, the exit code, the shell it used and the files the workspace now holds — **always asks you first** |
+
+**Off until an operator turns it on, and only where there is a login.** Two independent conditions, and neither is a default:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WORKSPACE_RUN` | *(unset)* | Set to `1` to enable `run_command` at all. A push therefore never turns a deployment into a shell by itself. |
+| `WORKSPACE_RUN_TIMEOUT_MS` | `120000` | How long one command may run before it and its whole process tree are killed. Clamped between 1s and 10min. |
+
+The second condition is the one that matters: the app must already have `AUTH_USER_1`/`AUTH_PASS_1` configured. `isAuthenticated` treats an app with *no* accounts as open to everyone, so on such a deployment a shell route would hand a shell to anybody holding the URL — and the container's environment holds your provider keys. `WORKSPACE_RUN=1` without a login is refused with that sentence, not with a 500.
+
+**What a command is not allowed to see.** It gets a scrubbed environment — `PATH`, a locale, a temp dir, and `HOME` pointed at the workspace — and never the app's own environment, so a script cannot read `NARA_API_KEY`, `GITHUB_TOKEN` or `SESSION_SECRET`. `NODE_OPTIONS` and `LD_PRELOAD` are scrubbed for the sharper reason: either one runs code *around* the command you approved. The working directory is confined to the workspace (`..` is refused, not resolved away), stdout and stderr are capped at 32 kB each, and one command runs at a time so a hung install cannot be stacked behind.
+
+**Where the files go, and where they don't.** Commands run in `workspace/` beside the app — a directory inside the container, so it is **gone on the next deploy**. That is the honest place for a scratch directory on a service that rebuilds its container, and it is why the panel says so. Produced files are listed with their size in the tool result (so the model can hand you a link) and in **Settings → Server files**, where each one downloads through `/api/workspace/file`. A downloaded `.pdf` arrives as a PDF, not as a blob, because "generate a PDF and give it to me" is the thing this was built for.
+
+**Build mode only.** The shell is a write in every sense that matters, so it is not in the request at all in Chat or Plan mode, and a call that arrives anyway is refused by the same gate every other write goes through. Its approval is remembered separately from file writes: allowing a note to be saved this session is not allowing a command to run.
 
 ### ✅ The task list
 

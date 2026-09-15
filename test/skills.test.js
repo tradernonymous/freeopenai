@@ -53,7 +53,7 @@ test('chat mode is research, and says it cannot change anything either', () => {
   const prompt = modePrompt('chat');
   assert.match(prompt, /MODE: CHAT/);
   assert.match(prompt, /search the web/);
-  assert.match(prompt, /no tools that write, commit or delete/);
+  assert.match(prompt, /no tools that write, commit, delete or run a command/);
   assert.match(prompt, /Build mode/);
 });
 

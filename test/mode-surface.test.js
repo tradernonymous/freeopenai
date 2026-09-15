@@ -42,14 +42,19 @@ test('every write tool is in a write group, and every write group is real', () =
   // than by the `_file` suffix it used to require: `github_create_branch`
   // changes a repository without touching a file, and a rule that only knows
   // about files would have argued it out of the group that keeps it out of
-  // Plan mode.
+  // Plan mode. The verb may also lead -- `run_command` is named that way because
+  // that is the name every coding agent knows it by -- and the check is that a
+  // verb is in the name at all, not where in the name it sits.
   for (const name of grouped) {
     assert.match(
       name,
-      /_(write|edit|delete|commit|create)_/,
+      /^(write|edit|delete|commit|create|run)_|_(write|edit|delete|commit|create|run)_/,
       `${name} looks like a read but is in a write group`,
     );
   }
+  // The shell is the one write whose verb leads, so it is named here as well as
+  // in the groups: a rewrite of that regex would otherwise let it out silently.
+  assert.ok(grouped.has('run_command'), 'run_command must stay in a write group');
 });
 
 test('chat mode is research: reads everywhere, and no way to change anything', () => {
