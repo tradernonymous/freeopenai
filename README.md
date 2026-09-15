@@ -35,6 +35,7 @@
 - 🚀 [Quick start](#quickstart)
 - ⚙️ [Configuration](#config)
 - ☁️ [Deploy to Railway](#deploy)
+- 🧩 [Rovo Dev (Claude Sonnet 4)](#rovo-dev)
 - 📱 [On a phone](#on-a-phone)
 - 🏗️ [Architecture](#architecture)
 - ⚠️ [Disclaimer](#disclaimer)
@@ -271,6 +272,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
 | `OMNIROUTE_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list — the `auto` variants and the direct flagships — when your gateway's catalogue routes different names. |
+| `ROVO_BASE_URL` | *(unset)* | Adds **Rovo** — Claude Sonnet 4 on an Atlassian account's own daily allowance (5M tokens free, 20M with a paid Jira plan), reached through `acli rovodev serve` and a shim. Set it or `ROVO_API_KEY`. See [Rovo Dev](#rovo-dev). |
+| `ROVO_API_KEY` | *(unset)* | The key **callers send to the gateway container**, not an Atlassian credential. The container refuses to start without one, because the shim behind it strips `Authorization` and a tunnelled URL would otherwise be an open door to the allowance. |
+| `ROVO_MODELS` | *(the live catalogue)* | Comma-separated ids that replace what the container reports, for when the shim's `/v1/models` is wrong. |
 
 > Each provider stays out of the picker until its key is set. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
 >
@@ -547,6 +551,27 @@ Until that variable (or `OMNIROUTE_API_KEY`) is set, **OmniRoute does not appear
 **A local gateway is not reachable from a deployed app.** `http://127.0.0.1:20128` from the Railway container means the container itself, where no gateway is running. Either run this app locally against the gateway (the command above), or run the gateway somewhere this app can reach — a second service on the same Railway project (private network), a VPS, or your own server — and point `OMNIROUTE_BASE_URL` at it. Don't publish an unhardened gateway to the open internet.
 
 **Quick-tunnel URL rotates on every restart.** When the gateway is reached from a deployed app through a local quick tunnel, the `trycloudflare.com` URL changes whenever the cloudflared container is recreated (a reboot, or `docker compose up --force-recreate`). After the machine restarts, read the new URL from `docker logs app-cloudflared-1` (look for `https://…trycloudflare.com`) and update `OMNIROUTE_BASE_URL` on Railway.
+
+<a name="rovo-dev"></a>
+
+### 🧩 Rovo Dev (Claude Sonnet 4 on Atlassian's allowance)
+
+An Atlassian account gets **5 million tokens a day** of Claude Sonnet 4 through Rovo Dev on the free tier — 20 million with a paid Jira plan — and no card either way. That is the one model here a free API key cannot otherwise buy. Qwen3-Coder-480B, the usual answer to "a free coding model", is free *nowhere* this app can reach: Cerebras ended its no-card tier in August 2026, and OpenRouter has never listed a `:free` variant of it.
+
+Rovo Dev is a terminal agent rather than an API, so the way in is `acli rovodev serve` — an officially documented server mode — with a shim translating OpenAI's shape to Rovo's `/v3`. Nothing is being bypassed here: it is Atlassian's own command, your own API token, your own allowance. `deploy/rovo-proxy` builds a container running both, plus the gate described below.
+
+```bash
+cp .env.example .env    # ROVO_EMAIL, ROVO_API_TOKEN, ROVO_API_KEY
+docker compose --profile rovo up -d --build
+docker compose logs cloudflared-rovo | grep trycloudflare
+# then on Railway: ROVO_BASE_URL=https://<that>.trycloudflare.com  and the same ROVO_API_KEY
+```
+
+**Two secrets, and they are not interchangeable.** `ROVO_API_TOKEN` authenticates the *container to Atlassian*; `ROVO_API_KEY` authenticates *callers to the container*. The shim strips `Authorization` on purpose, because Rovo is authenticated by the container's own `acli` session — fine on localhost, and a serious problem once tunnelled, since the URL then becomes the only secret and tunnel URLs end up in logs and screenshots. So the gate requires the key and **refuses to start without it**, and the entrypoint refuses to start if the two values match. `npm test` covers the gate as a running process: that it will not come up unguarded, that a wrong key is turned away before anything is forwarded, that the key is not passed downstream, and that replies still stream.
+
+**What it cannot do.** One request at a time — the shim serialises, so a tool turn that fires several calls in one wave queues them, and a queued request can reach the app's 55-second provider timeout. Text only: no vision, no image generation, because non-text parts are not forwarded. And it is one person's shim, nine commits, pinned by `ROVO_SHIM_REF` in the Dockerfile — expect to bump it when `acli` moves, and read the diff when you do.
+
+**The allowance is metered to your Atlassian account.** Powering a chat app is heavier use than terminal coding, and that account carries the consequence.
 
 ### 💸 What keeps a turn affordable
 
