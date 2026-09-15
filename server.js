@@ -509,6 +509,15 @@ async function githubRepos(req, res) {
   }
 }
 
+// A branch name reaches the contents API as ?ref= on a read and as a `branch`
+// field on a write. Both are optional: without one GitHub uses the repository's
+// default branch, which is the behaviour every call here had before branches
+// existed as a concept in this app.
+function refQuery(branch) {
+  const name = String(branch || '').trim();
+  return name ? '?ref=' + encodeURIComponent(name) : '';
+}
+
 async function githubListDir(req, res) {
   const query = new URL(req.url, 'http://x').searchParams;
   const repo = query.get('repo');
@@ -520,7 +529,7 @@ async function githubListDir(req, res) {
   try {
     const { ok, status, data } = await githubApiFetch(
       account.token,
-      `https://api.github.com/repos/${repo}/contents/${encoded}`
+      `https://api.github.com/repos/${repo}/contents/${encoded}` + refQuery(query.get('branch'))
     );
     if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not list path' });
     // A file path returns an object rather than an array; say so plainly so
@@ -542,7 +551,7 @@ async function githubGetFile(req, res) {
   try {
     const { ok, status, data } = await githubApiFetch(
       account.token,
-      `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
+      `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}` + refQuery(query.get('branch'))
     );
     if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not read file' });
     if (Array.isArray(data) || !data.content) return sendJson(res, 400, { error: 'Path is a directory, not a file' });
@@ -555,7 +564,7 @@ async function githubGetFile(req, res) {
 function githubPutFile(req, res) {
   readJsonBody(req, 512 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
-    const { repo, path: filePath, content, message, sha, account: requested } = body || {};
+    const { repo, path: filePath, content, message, sha, branch, account: requested } = body || {};
     if (!repo || !filePath || typeof content !== 'string' || !message) {
       return sendJson(res, 400, { error: 'repo, path, content, and message are required' });
     }
@@ -575,7 +584,10 @@ function githubPutFile(req, res) {
     if (!resolvedSha) {
       const existing = await githubApiFetch(
         account.token,
-        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
+        // On the same branch the write is going to: a sha read from another
+        // branch names a different blob, and GitHub rejects the commit with a
+        // conflict that reads like the file was changed underneath you.
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}` + refQuery(branch)
       );
       if (existing.ok && existing.data && existing.data.sha && !Array.isArray(existing.data)) {
         resolvedSha = existing.data.sha;
@@ -589,7 +601,12 @@ function githubPutFile(req, res) {
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, content: Buffer.from(content, 'utf8').toString('base64'), sha: resolvedSha || undefined }),
+          body: JSON.stringify({
+            message,
+            content: Buffer.from(content, 'utf8').toString('base64'),
+            sha: resolvedSha || undefined,
+            branch: String(branch || '').trim() || undefined,
+          }),
         }
       );
       if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not commit file' });
@@ -598,7 +615,108 @@ function githubPutFile(req, res) {
         htmlUrl: data.content.html_url,
         commitUrl: data.commit.html_url,
         account: account.login,
+        branch: String(branch || '').trim() || undefined,
       });
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
+// The branches a repository has, and which one is its default. A model that
+// cannot see this guesses "main", which is wrong often enough to matter: a repo
+// whose only branch is `claude/some-feature` answers 404 for every read, and
+// the reason is invisible from the outside.
+async function githubListBranches(req, res) {
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  if (!repo) return sendJson(res, 400, { error: 'repo is required' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
+  try {
+    const [branches, meta] = await Promise.all([
+      githubApiFetch(account.token, `https://api.github.com/repos/${repo}/branches?per_page=100`),
+      githubApiFetch(account.token, `https://api.github.com/repos/${repo}`),
+    ]);
+    if (!branches.ok) {
+      return sendJson(res, branches.status, { error: (branches.data && branches.data.message) || 'Could not list branches' });
+    }
+    const defaultBranch = meta.ok && meta.data ? meta.data.default_branch : undefined;
+    sendJson(res, 200, {
+      defaultBranch,
+      branches: (Array.isArray(branches.data) ? branches.data : []).map((b) => ({
+        name: b.name,
+        sha: b.commit && b.commit.sha,
+        isDefault: b.name === defaultBranch,
+      })),
+    });
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+// Create a branch. This existed nowhere, and its absence was reported by the
+// agent itself: asked to put work on `main` in a repo that had only a
+// `claude/...` branch, it answered that branch creation "requires the GitHub
+// web UI or the git CLI" and handed the user a list of clicks. A branch is one
+// POST to the refs API, so the tool surface was the only thing missing.
+function githubCreateBranch(req, res) {
+  readJsonBody(req, 64 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const { repo, branch, from, account: requested } = body || {};
+    const name = String(branch || '').trim();
+    if (!repo || !name) return sendJson(res, 400, { error: 'repo and branch are required' });
+    const picked = pickAccount(getGithubSession(req), repo, requested);
+    if (picked.error) {
+      return sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
+    }
+    const account = picked.account;
+    try {
+      // Where to branch from: the named source, else whatever the repository
+      // calls its default. Resolving it here means the caller never has to know
+      // a sha, which is the part of the refs API that makes it awkward.
+      let source = String(from || '').trim();
+      if (!source) {
+        const meta = await githubApiFetch(account.token, `https://api.github.com/repos/${repo}`);
+        if (!meta.ok) {
+          return sendJson(res, meta.status, { error: (meta.data && meta.data.message) || 'Could not read the repository' });
+        }
+        source = meta.data && meta.data.default_branch;
+        if (!source) {
+          return sendJson(res, 400, {
+            error: `${repo} has no commits yet, so there is nothing to branch from. Commit a first file to it instead.`,
+          });
+        }
+      }
+      const ref = await githubApiFetch(
+        account.token,
+        `https://api.github.com/repos/${repo}/git/ref/heads/${encodeURIComponent(source)}`
+      );
+      if (!ref.ok || !ref.data || !ref.data.object || !ref.data.object.sha) {
+        return sendJson(res, ref.status === 200 ? 400 : ref.status || 502, {
+          error: `No branch "${source}" in ${repo} to branch from`,
+        });
+      }
+      const { ok, status, data } = await githubApiFetch(
+        account.token,
+        `https://api.github.com/repos/${repo}/git/refs`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref: 'refs/heads/' + name, sha: ref.data.object.sha }),
+        }
+      );
+      if (!ok) {
+        // GitHub answers an existing branch with 422 "Reference already
+        // exists", which is not a failure worth retrying -- say what is true
+        // so the model carries on rather than trying again with a new name.
+        const message = (data && data.message) || 'Could not create the branch';
+        if (status === 422 && /already exists/i.test(message)) {
+          return sendJson(res, 200, { repo, branch: name, from: source, existed: true, account: account.login });
+        }
+        return sendJson(res, status, { error: message });
+      }
+      sendJson(res, 200, { repo, branch: name, from: source, sha: ref.data.object.sha, created: true, account: account.login });
     } catch (e) {
       sendJson(res, 502, { error: e.message });
     }
@@ -687,7 +805,7 @@ async function githubListCommits(req, res) {
 function githubDeleteFile(req, res) {
   readJsonBody(req, 64 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
-    const { repo, path: filePath, message, account: requested } = body || {};
+    const { repo, path: filePath, message, branch, account: requested } = body || {};
     if (!repo || !filePath) return sendJson(res, 400, { error: 'repo and path are required' });
     const picked = pickAccount(getGithubSession(req), repo, requested);
     if (picked.error) {
@@ -697,7 +815,7 @@ function githubDeleteFile(req, res) {
     try {
       const existing = await githubApiFetch(
         account.token,
-        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}`
+        `https://api.github.com/repos/${repo}/contents/${encodePath(filePath)}` + refQuery(branch)
       );
       if (!existing.ok || !existing.data || Array.isArray(existing.data) || !existing.data.sha) {
         // GitHub answers a missing file with "Not Found", which tells a caller
@@ -714,7 +832,11 @@ function githubDeleteFile(req, res) {
         {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message || `Delete ${filePath}`, sha: existing.data.sha }),
+          body: JSON.stringify({
+            message: message || `Delete ${filePath}`,
+            sha: existing.data.sha,
+            branch: String(branch || '').trim() || undefined,
+          }),
         }
       );
       if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not delete file' });
@@ -3359,6 +3481,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/file' && req.method === 'DELETE') return githubDeleteFile(req, res);
     if (urlPath === '/api/github/search' && req.method === 'GET') return githubSearchCode(req, res);
     if (urlPath === '/api/github/commits' && req.method === 'GET') return githubListCommits(req, res);
+    if (urlPath === '/api/github/branches' && req.method === 'GET') return githubListBranches(req, res);
+    if (urlPath === '/api/github/branch' && req.method === 'POST') return githubCreateBranch(req, res);
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });

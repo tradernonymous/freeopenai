@@ -4080,7 +4080,7 @@
                 if (name === 'github_list_files') {
                     if (!args.repo) return 'Error: repo is required.';
                     const url = '/api/github/tree?repo=' + encodeURIComponent(args.repo) +
-                        '&path=' + encodeURIComponent(args.path || '') + accountParam(args);
+                        '&path=' + encodeURIComponent(args.path || '') + branchParam(args) + accountParam(args);
                     const res = await fetch(url);
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
@@ -4090,7 +4090,7 @@
                 if (name === 'github_read_file') {
                     if (!args.repo || !args.path) return 'Error: repo and path are required.';
                     const url = '/api/github/file?repo=' + encodeURIComponent(args.repo) +
-                        '&path=' + encodeURIComponent(args.path) + accountParam(args);
+                        '&path=' + encodeURIComponent(args.path) + branchParam(args) + accountParam(args);
                     const res = await fetch(url);
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
@@ -4135,6 +4135,7 @@
                             repo: args.repo,
                             path: args.path,
                             message: args.message || ('Delete ' + args.path),
+                            branch: args.branch,
                             account: args.account,
                         }),
                     });
@@ -4157,13 +4158,48 @@
                             content: args.content,
                             message: args.message || ('Update ' + args.path),
                             sha: githubShaCache[shaKey(args)],
+                            branch: args.branch,
                             account: args.account,
                         }),
                     });
                     const data = await safeJson(res);
                     if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
                     githubShaCache[shaKey(args)] = data.sha;
-                    return 'Committed as ' + data.account + '. ' + data.commitUrl;
+                    return 'Committed as ' + data.account +
+                        (data.branch ? ' on ' + data.branch : '') + '. ' + data.commitUrl;
+                }
+
+                if (name === 'github_list_branches') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const res = await fetch('/api/github/branches?repo=' + encodeURIComponent(args.repo) + accountParam(args));
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list branches');
+                    if (!data.branches || !data.branches.length) {
+                        return args.repo + ' has no branches yet — it has no commits.';
+                    }
+                    return data.branches
+                        .map((b) => b.name + (b.isDefault ? ' (default)' : ''))
+                        .join('\n');
+                }
+
+                if (name === 'github_create_branch') {
+                    if (!args.repo || !args.branch) return 'Error: repo and branch are required.';
+                    const res = await fetch('/api/github/branch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            branch: args.branch,
+                            from: args.from,
+                            account: args.account,
+                        }),
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not create the branch');
+                    // An existing branch is the outcome the caller wanted, so
+                    // say so plainly rather than as a failure it might retry.
+                    if (data.existed) return 'Branch ' + data.branch + ' already exists in ' + data.repo + '.';
+                    return 'Created branch ' + data.branch + ' in ' + data.repo + ' from ' + data.from + '.';
                 }
 
                 return 'Error: unknown tool ' + name;
@@ -5015,8 +5051,16 @@
         // it. Keying by account meant reading as one and committing as another
         // silently lost the sha -- and the server now resolves it anyway, so
         // this is only a way to save a lookup.
+        function branchParam(args) {
+            return args && args.branch ? '&branch=' + encodeURIComponent(args.branch) : '';
+        }
+
         function shaKey(args) {
-            return `${args.repo}:${args.path}`;
+            // Per branch. The same path on two branches is two different blobs,
+            // and reusing one sha for the other is a commit GitHub rejects as a
+            // conflict -- which reads as "someone changed the file", not as a
+            // cache bug.
+            return `${args.repo}:${args.branch || ''}:${args.path}`;
         }
 
         // Runs the model until it stops asking for tools, then hands back its

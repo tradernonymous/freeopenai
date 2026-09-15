@@ -38,9 +38,17 @@ test('every write tool is in a write group, and every write group is real', () =
     assert.ok(grouped.has(name), `${name} is a write but is in no write group`);
     assert.equal(isGithubWriteTool(name) || name.startsWith('workspace_'), true);
   }
-  // And nothing in a write group is a read.
+  // And nothing in a write group is a read. The shape check is by verb rather
+  // than by the `_file` suffix it used to require: `github_create_branch`
+  // changes a repository without touching a file, and a rule that only knows
+  // about files would have argued it out of the group that keeps it out of
+  // Plan mode.
   for (const name of grouped) {
-    assert.match(name, /_(write|edit|delete|commit)_file$/, `${name} looks like a read but is in a write group`);
+    assert.match(
+      name,
+      /_(write|edit|delete|commit|create)_/,
+      `${name} looks like a read but is in a write group`,
+    );
   }
 });
 

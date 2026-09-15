@@ -240,8 +240,8 @@ const TOOL_GROUPS = {
   research: ['web_search', 'web_fetch'],
   workspaceRead: ['workspace_list_files', 'workspace_read_file', 'workspace_search_files'],
   workspaceWrite: ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'],
-  repoRead: ['github_list_repos', 'github_list_files', 'github_read_file', 'github_search_code', 'github_list_commits'],
-  repoWrite: ['github_commit_file', 'github_delete_file'],
+  repoRead: ['github_list_repos', 'github_list_files', 'github_read_file', 'github_search_code', 'github_list_commits', 'github_list_branches'],
+  repoWrite: ['github_commit_file', 'github_delete_file', 'github_create_branch'],
   plan: ['task_list', 'task_add', 'task_update'],
   skills: ['use_skill'],
 };
@@ -1364,6 +1364,7 @@ const GITHUB_TOOLS = [
         properties: {
           repo: { type: 'string', description: 'Repository as "owner/name".' },
           path: { type: 'string', description: 'Path to the file inside the repo.' },
+          branch: { type: 'string', description: 'Branch to commit to. Omit for the repository default. github_list_branches says which branches exist.' },
           content: { type: 'string', description: 'The complete new contents of the file.' },
           message: { type: 'string', description: 'Commit message.' },
           account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
@@ -1382,10 +1383,44 @@ const GITHUB_TOOLS = [
         properties: {
           repo: { type: 'string', description: 'Repository as "owner/name".' },
           path: { type: 'string', description: 'Path of the file to delete inside the repo.' },
+          branch: { type: 'string', description: 'Branch to delete from. Omit for the repository default.' },
           message: { type: 'string', description: 'Commit message.' },
           account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
         },
         required: ['repo', 'path', 'message'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_branches',
+      description: 'List the branches of a repository and say which one is the default. Read this before writing to a repository you have not written to in this conversation: a repo whose only branch is something like "claude/some-feature" answers 404 for every read that assumes "main".',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_create_branch',
+      description: 'Create a branch in a repository, from another branch or from the repository default. Use it rather than telling the user to make the branch themselves. Creating a branch that already exists is reported as such and is not an error. The user is asked to approve it, as with every repository write.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          branch: { type: 'string', description: 'Name of the branch to create, e.g. "main".' },
+          from: { type: 'string', description: 'Branch to start it from. Omit for the repository default.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo', 'branch'],
       },
     },
   },
@@ -1415,7 +1450,7 @@ const TOOL_ROUNDS_EXHAUSTED_PROMPT =
 
 const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
 
-const GITHUB_WRITE_TOOL_NAMES = ['github_commit_file', 'github_delete_file'];
+const GITHUB_WRITE_TOOL_NAMES = ['github_commit_file', 'github_delete_file', 'github_create_branch'];
 
 function isGithubTool(name) {
   return GITHUB_TOOL_NAMES.includes(name);
@@ -2495,16 +2530,24 @@ function describeToolCall(name, args = {}) {
       return `Searching ${repo}${as} for "${args.query || '?'}"`;
     case 'github_list_commits':
       return `Listing recent commits in ${repo}${args.path ? ` (${args.path})` : ''}${as}`;
+    case 'github_list_branches':
+      return `Listing the branches of ${repo}${as}`;
+    case 'github_create_branch':
+      return `Creating branch "${args.branch || '?'}" in ${repo}${args.from ? ` from ${args.from}` : ''}${as}`;
     case 'github_delete_file': {
       const owner = args.account || String(args.repo || '').split('/')[0];
-      return `Deleting "${args.path || '?'}" from ${repo}${owner ? ` as ${owner}` : ''}`;
+      const on = args.branch ? ` on ${args.branch}` : '';
+      return `Deleting "${args.path || '?'}" from ${repo}${on}${owner ? ` as ${owner}` : ''}`;
     }
     case 'github_commit_file': {
       // A commit dialog must always name the identity it will land under, so
       // fall back to the repo owner -- which is the account the server picks
       // when the model didn't name one.
       const owner = args.account || String(args.repo || '').split('/')[0];
-      return `Committing "${args.path || '?'}" to ${repo}${owner ? ` as ${owner}` : ''}`;
+      // The branch belongs in the approval dialog: "commit to main" and
+      // "commit to someone's feature branch" are different decisions.
+      const on = args.branch ? ` on ${args.branch}` : '';
+      return `Committing "${args.path || '?'}" to ${repo}${on}${owner ? ` as ${owner}` : ''}`;
     }
     case 'web_search':
       return `Searching the web for "${args.query || '?'}"`;

@@ -31,6 +31,7 @@ function harness({ approve = true, answer = {} } = {}) {
     },
     safeJson: async (res) => res.json(),
     accountParam: (args) => (args && args.account ? '&account=' + encodeURIComponent(args.account) : ''),
+    branchParam: (args) => (args && args.branch ? '&branch=' + encodeURIComponent(args.branch) : ''),
     shaKey: (args) => args.repo + '/' + args.path,
     githubShaCache: {},
     fetch: async (url, init) => {
@@ -147,4 +148,56 @@ test('a route failure comes back as an error string, not a thrown turn', async (
   const h = harness({ answer: { '/api/github/search': { status: 422, body: { error: 'you can only search the default branch' } } } });
   const reply = await h.run('github_search_code', { repo: 'o/r', query: 'x' });
   assert.match(reply, /^Error: you can only search the default branch/);
+});
+
+test('creating a branch goes through the same approval as any repository write', async () => {
+  // The branch tool was added after the central dialog existed, which is the
+  // case that matters: a write added later cannot forget to ask, because
+  // asking is not its own code.
+  const h = harness({
+    approve: true,
+    answer: { '/api/github/branch': { repo: 'octocat/demo', branch: 'main', from: 'claude/build', created: true } },
+  });
+  const reply = await h.run('github_create_branch', { repo: 'octocat/demo', branch: 'main', from: 'claude/build' });
+  assert.equal(h.asked.length, 1);
+  assert.match(h.asked[0], /Creating branch "main" in octocat\/demo from claude\/build\?/);
+  assert.equal(h.calls[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(h.calls[0].init.body), {
+    repo: 'octocat/demo', branch: 'main', from: 'claude/build',
+  });
+  assert.match(reply, /^Created branch main in octocat\/demo from claude\/build\./);
+});
+
+test('a branch that already exists reads as done, so the model does not retry it', async () => {
+  const h = harness({
+    approve: true,
+    answer: { '/api/github/branch': { repo: 'octocat/demo', branch: 'main', existed: true } },
+  });
+  const reply = await h.run('github_create_branch', { repo: 'octocat/demo', branch: 'main' });
+  assert.match(reply, /already exists/);
+  assert.doesNotMatch(reply, /Error/);
+});
+
+test('listing branches is a read: no dialog, and the default is marked', async () => {
+  const h = harness({
+    answer: {
+      '/api/github/branches': {
+        defaultBranch: 'dev',
+        branches: [{ name: 'dev', isDefault: true }, { name: 'claude/build', isDefault: false }],
+      },
+    },
+  });
+  const reply = await h.run('github_list_branches', { repo: 'octocat/demo' });
+  assert.deepEqual(h.asked, [], 'a read must never open the approval dialog');
+  assert.equal(reply, 'dev (default)\nclaude/build');
+});
+
+test('a commit names its branch in the dialog and sends it on', async () => {
+  // "Commit to main" and "commit to someone's feature branch" are different
+  // decisions, so the branch has to be in the sentence the user approves.
+  const h = harness({ approve: true, answer: { '/api/github/file': { sha: 'after', account: 'octocat', branch: 'dev', commitUrl: 'https://example/c' } } });
+  const reply = await h.run('github_commit_file', { repo: 'octocat/demo', path: 'README.md', content: 'x', message: 'y', branch: 'dev' });
+  assert.match(h.asked[0], /Committing "README\.md" to octocat\/demo on dev as octocat\?/);
+  assert.equal(JSON.parse(h.calls[0].init.body).branch, 'dev');
+  assert.match(reply, /on dev/);
 });

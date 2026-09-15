@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-214%20passing-22c55e?style=for-the-badge" alt="214 tests passing">
+  <img src="https://img.shields.io/badge/tests-874%20passing-22c55e?style=for-the-badge" alt="874 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -365,11 +365,11 @@ The composer has a mode chip that cycles **Chat → Plan → Build**, the same t
 
 | | Research | Workspace | Repos | Task list | Skills |
 | --- | --- | --- | --- | --- | --- |
-| **Chat** | `web_search`, `web_fetch` | read, search | read, search, commits | — | — |
+| **Chat** | `web_search`, `web_fetch` | read, search | read, search, commits, branches | — | — |
 | **Plan** | the same | the same | the same | `task_*` | `use_skill` |
-| **Build** | the same | **+ write, edit, delete** | **+ commit, delete** | `task_*` | `use_skill` |
+| **Build** | the same | **+ write, edit, delete** | **+ commit, delete, create branch** | `task_*` | `use_skill` |
 
-The split follows opencode, which is where the three modes come from: **Chat researches** (search, read pages, cite primary sources, answer — no plan document, no commits), **Plan investigates and proposes** but cannot change anything, and **Build executes** the agreed plan with the write tools in hand. The task list is deliberately a Plan-mode tool: writing down a plan is the point of the mode, so the task tools are not in the write group and are not refused. A tool in no group is offered in every mode — the table is a lock on writes, never on a read tool added later.
+The split follows opencode, which is where the three modes come from: **Chat researches** (search, read pages, cite primary sources, answer — no plan document, no commits), **Plan investigates and proposes** but cannot change anything, and **Build executes** the agreed plan with the write tools in hand. The task list is deliberately a Plan-mode tool: writing down a plan is the point of the mode, so the task tools are not in the write group and are not refused. A tool in no group is offered in every mode — the table is a lock on writes, never on a read tool added later. The rule is enforced by a test rather than by care: every name in a write group has to read as a write, and `github_create_branch` is why that check asks about the verb (`create`, `commit`, `delete`, `write`, `edit`) instead of requiring the suffix `_file` — a tool that changes a repository without touching a file would otherwise have been argued out of the group that keeps it out of Plan mode.
 
 Skills are pulled from open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down. **136 skills** across eleven libraries, loaded in about half a second cold and 3 ms warm:
 
@@ -416,8 +416,14 @@ Once connected, the model can work with your repos directly:
 | `github_read_file` | Reads one file |
 | `github_search_code` | Searches code across a repo, so it finds the right file instead of guessing paths |
 | `github_list_commits` | Lists recent commits, with messages and dates |
+| `github_list_branches` | Lists branches and says which is the default |
 | `github_commit_file` | Writes and commits — **always asks you first** |
 | `github_delete_file` | Deletes a file and commits the removal — **always asks you first** |
+| `github_create_branch` | Creates a branch from another or from the default — **always asks you first** |
+
+**Branches.** Every read and write takes an optional `branch`; without one, GitHub's default branch is used, which is what every call here did before. The commit tool looks up the file's sha *on the branch it is writing to* — a sha read from a different branch names a different blob, and GitHub rejects that commit as a conflict that reads like someone else changed the file.
+
+`github_create_branch` exists because its absence was reported by the agent itself. Asked to put work on `main` in a repository whose only branch was `claude/…`, it replied that branch creation "requires the GitHub web UI or the git CLI" and handed over a list of clicks. It was right about its tools and wrong about the API — a branch is one POST to `/git/refs` — so the tool surface was the only thing missing. Creating a branch that already exists is reported as an outcome rather than an error, because a `422` there reads as a failure and makes a model retry under a different name.
 
 Up to **three accounts** can be connected at once. Which one acts on a repo is resolved in a fixed order: an explicitly named account, then the repo's owner, and otherwise it refuses and asks — it never tries tokens in turn until one works, because guessing wrong on a write means committing under the wrong identity.
 
@@ -544,6 +550,8 @@ OMNIROUTE_BASE_URL=http://127.0.0.1:20128 npm start
 | `OMNIROUTE_MODELS` | Optional comma-separated override when your gateway's route names differ from the pinned list |
 
 **The model list here orders the picker, it does not gate it.** It used to be a plain allowlist, which made sense while the gateway was assumed to front a handful of flagships. It is the wrong shape for a gateway: you already chose what it fronts, in its own dashboard, so a second allowlist here can only overrule that — and did. Connecting Mistral published 48 `mistral/…` ids that could not be picked by name. Now the free-first routers (`auto/best-free`, `auto/coding:free`) and the free-tier flagships lead, and the rest of the live catalogue follows them. A named id that is retired upstream stops leading instead of vanishing from the list.
+
+**Not everything in a catalogue can hold a conversation.** Embedding, reranking, moderation, image and audio models sit in the same list as chat models and can only fail on a chat call, so one shared rule drops them before the picker and the router ever see them. Job words — `embed`, `rerank`, `whisper`, `tts` — catch most of it, but speech synthesis is named after the voice instead: `fish-audio/s2.1-pro-free` reads like an ordinary chat id, and a failover picked exactly that one and asked a text-to-speech endpoint to carry on with a coding task. So the voice families are named too (`fish-audio`, `orpheus`, `aura-N`, `elevenlabs`, `playai`, `kokoro`, `xtts`, `parler`, `speecht5`, `bark-`). Matching on "audio" would be the obvious rule and the wrong one — `gpt-4o-audio` and Voxtral answer chat completions perfectly well.
 
 The one exception is priced namespaces. The gateway publishes **no pricing at all** in `/v1/models`, so "is this free?" has no general answer here — but OpenRouter marks its free models in the id, and reaches the gateway as over a thousand ids on a key that is usually free-only. `freeOnlyPrefixes: ['openrouter/']` drops the paid ones, which would otherwise fill the picker with models that can only answer `402`. Everything else is offered: an unpriced model might be on an account allowance, and hiding it would be a guess. The page keeps the first 60 usable rows, so what leads the list is what can be picked by name.
 

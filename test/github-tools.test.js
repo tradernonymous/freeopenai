@@ -235,3 +235,130 @@ test('all three routes need the connector, like the rest of them', async () => {
     },
   );
 });
+
+// --- Branches -------------------------------------------------------------
+//
+// The gap this closes was reported by the agent itself. Asked to put work on
+// `main` in a repo whose only branch was `claude/...`, it answered that branch
+// creation "requires the GitHub web UI or the git CLI" and handed the user a
+// list of clicks. It was right about its tools and wrong about the API: a
+// branch is one POST to /git/refs.
+
+test('the branch list says which one is the default', async () => {
+  await withApp(
+    (req, url) => {
+      if (url.startsWith('/repos/octocat/demo/branches')) {
+        return { body: [{ name: 'claude/build', commit: { sha: 'aaa' } }, { name: 'dev', commit: { sha: 'bbb' } }] };
+      }
+      if (url === '/repos/octocat/demo') return { body: { default_branch: 'dev' } };
+      return null;
+    },
+    async ({ base, cookie }) => {
+      const res = await fetch(`${base}/api/github/branches?repo=octocat/demo`, { headers: { cookie } });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.defaultBranch, 'dev');
+      // Which one is default is the whole point: a model that guesses "main"
+      // gets a 404 on every read of a repo like this one, with no clue why.
+      assert.deepEqual(body.branches.map((b) => [b.name, b.isDefault]), [['claude/build', false], ['dev', true]]);
+    },
+  );
+});
+
+test('creating a branch resolves the source sha itself, from the default branch', async () => {
+  let created = null;
+  await withApp(
+    (req, url, body) => {
+      if (url === '/repos/octocat/demo') return { body: { default_branch: 'claude/build' } };
+      if (url === '/repos/octocat/demo/git/ref/heads/claude%2Fbuild') return { body: { object: { sha: 'src-sha' } } };
+      if (req.method === 'POST' && url === '/repos/octocat/demo/git/refs') {
+        created = body;
+        return { body: { ref: 'refs/heads/main' } };
+      }
+      return null;
+    },
+    async ({ base, cookie }) => {
+      const res = await fetch(`${base}/api/github/branch`, {
+        method: 'POST',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: 'octocat/demo', branch: 'main' }),
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.created, true);
+      assert.equal(body.from, 'claude/build', 'the default branch is the source when none is named');
+      // The caller never handles a sha: that is the part of the refs API that
+      // makes it awkward, and the reason this is a tool rather than advice.
+      assert.deepEqual(created, { ref: 'refs/heads/main', sha: 'src-sha' });
+    },
+  );
+});
+
+test('a branch that already exists is an outcome, not an error', async () => {
+  await withApp(
+    (req, url) => {
+      if (url === '/repos/octocat/demo') return { body: { default_branch: 'main' } };
+      if (url.startsWith('/repos/octocat/demo/git/ref/heads/')) return { body: { object: { sha: 'src-sha' } } };
+      if (req.method === 'POST' && url === '/repos/octocat/demo/git/refs') {
+        return { status: 422, body: { message: 'Reference already exists' } };
+      }
+      return null;
+    },
+    async ({ base, cookie }) => {
+      const res = await fetch(`${base}/api/github/branch`, {
+        method: 'POST',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: 'octocat/demo', branch: 'main' }),
+      });
+      // Reported as a 422 it reads as a failure, and a model retries it with a
+      // different name. The branch the caller asked for exists either way.
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { repo: 'octocat/demo', branch: 'main', from: 'main', existed: true, account: 'octocat' });
+    },
+  );
+});
+
+test('branching from a source that is not there names the source, not "Not Found"', async () => {
+  await withApp(
+    (req, url) => (url === '/repos/octocat/demo' ? { body: { default_branch: 'main' } } : null),
+    async ({ base, cookie }) => {
+      const res = await fetch(`${base}/api/github/branch`, {
+        method: 'POST',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: 'octocat/demo', branch: 'feature', from: 'gone' }),
+      });
+      assert.equal(res.status, 404);
+      assert.match((await res.json()).error, /No branch "gone" in octocat\/demo/);
+    },
+  );
+});
+
+test('a commit to a branch reads and writes on that branch, not the default', async () => {
+  let wrote = null;
+  await withApp(
+    (req, url, body) => {
+      if (req.method === 'GET' && url.startsWith('/repos/octocat/demo/contents/a.md')) {
+        // Only answers for the branch asked for; a read of the default would
+        // return the wrong blob sha and GitHub would reject the commit.
+        if (!url.includes('ref=dev')) return { status: 404, body: { message: 'Not Found' } };
+        return { body: { sha: 'dev-sha' } };
+      }
+      if (req.method === 'PUT' && url.startsWith('/repos/octocat/demo/contents/a.md')) {
+        wrote = body;
+        return { body: { content: { sha: 'new-sha', html_url: 'h' }, commit: { html_url: 'c' } } };
+      }
+      return null;
+    },
+    async ({ base, cookie }) => {
+      const res = await fetch(`${base}/api/github/file`, {
+        method: 'PUT',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: 'octocat/demo', path: 'a.md', content: 'hi', message: 'm', branch: 'dev' }),
+      });
+      assert.equal(res.status, 200);
+      assert.equal((await res.json()).branch, 'dev');
+      assert.equal(wrote.branch, 'dev');
+      assert.equal(wrote.sha, 'dev-sha', 'the sha has to come from the branch being written to');
+    },
+  );
+});
