@@ -54,9 +54,20 @@ From the repo root, where `docker-compose.yml` has a `rovo` profile:
 
 ```bash
 cp .env.example .env      # fill in ROVO_EMAIL, ROVO_API_TOKEN, ROVO_API_KEY
-docker compose --profile rovo up -d --build
+docker compose --profile rovo up -d --build rovo cloudflared-rovo
 docker compose logs -f rovo
 ```
+
+Name the two services. A profile is additive rather than exclusive, so a bare
+`--profile rovo up -d` also starts `omniroute` and `cloudflared` — which is fine
+on a clean machine and a port collision on one where they are already running.
+The compose file pins `name: app` so it adopts an existing stack instead of
+creating a second, empty copy of its volume.
+
+If `.env` already holds live OmniRoute values, add the `ROVO_*` lines to it
+rather than overwriting it with the template — `JWT_SECRET` and
+`API_KEY_SECRET` cannot be regenerated without invalidating every OmniRoute API
+key in use.
 
 Check it locally before exposing it:
 

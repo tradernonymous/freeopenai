@@ -554,6 +554,21 @@ Until that variable (or `OMNIROUTE_API_KEY`) is set, **OmniRoute does not appear
 
 **Quick-tunnel URL rotates on every restart.** When the gateway is reached from a deployed app through a local quick tunnel, the `trycloudflare.com` URL changes whenever the cloudflared container is recreated (a reboot, or `docker compose up --force-recreate`). After the machine restarts, read the new URL from `docker logs app-cloudflared-1` (look for `https://…trycloudflare.com`) and update `OMNIROUTE_BASE_URL` on Railway.
 
+**One home for the compose stack, and one `.env` that matters.** `docker-compose.yml` pins `name: app`, so the project name follows the file rather than the directory it is run from. That is deliberate: the stack was first started from a different folder, and without the pin a `docker compose up` from this repo would have named the project after this directory, created an empty second `freeopenai_omniroute-data` volume and collided on port 20128 — indistinguishable, from the dashboard, from OmniRoute having been wiped. With the pin, this repo *adopts* the running containers: `docker compose ps` here lists them, and `up` reuses the same volume. Name the services you want, too, because **profiles are additive** — `docker compose --profile rovo up -d` starts `omniroute` and `cloudflared` as well:
+
+```bash
+docker compose up -d omniroute cloudflared                          # the gateway
+docker compose --profile rovo up -d --build rovo cloudflared-rovo   # Rovo only
+```
+
+**Losing `.env` while the containers are up is recoverable; losing both is not.** `JWT_SECRET` and `API_KEY_SECRET` sign the dashboard logins and every API key held in `app_omniroute-data`, so generating fresh ones invalidates the key a deployed app is using — the gateway then answers `401` with its data apparently intact, which reads as a much stranger fault than it is. A running container still holds the values it was started with:
+
+```bash
+docker inspect app-omniroute-1 --format '{{range .Config.Env}}{{println .}}{{end}}'
+```
+
+Recover them into `.env` from there rather than inventing new ones. Once the container is removed, they are gone, and the only way back is a fresh admin password and a new API key on every client.
+
 <a name="rovo-dev"></a>
 
 ### 🧩 Rovo Dev (Claude Sonnet 4 on Atlassian's allowance)
@@ -564,7 +579,7 @@ Rovo Dev is a terminal agent rather than an API, so the way in is `acli rovodev 
 
 ```bash
 cp .env.example .env    # ROVO_EMAIL, ROVO_API_TOKEN, ROVO_API_KEY
-docker compose --profile rovo up -d --build
+docker compose --profile rovo up -d --build rovo cloudflared-rovo
 docker compose logs cloudflared-rovo | grep trycloudflare
 # then on Railway: ROVO_BASE_URL=https://<that>.trycloudflare.com  and the same ROVO_API_KEY
 ```
