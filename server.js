@@ -1122,6 +1122,28 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://api.mistral.ai/v1',
     envVar: 'MISTRAL_API_KEY',
   },
+  // Groq serves an OpenAI-compatible surface at /openai/v1, and its free
+  // developer tier needs no card -- rate limits are the only gate. No pinned
+  // list: what is free there is reshuffled often (Llama 3.3 70B and 3.1 8B
+  // left the free plan in August 2026), and a list pinned here would decide
+  // on this app's release schedule which models an account may see.
+  groq: {
+    label: 'Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    envVar: 'GROQ_API_KEY',
+  },
+  // Google's OpenAI compatibility shim, which is a different surface from the
+  // native Gemini API: same bearer key as every other provider here, so no
+  // second adapter. Its catalogue names models the way the REST API does --
+  // `models/gemini-2.5-flash` -- while the shim's own docs pass the bare id,
+  // so the prefix comes off on the way in rather than leaking a shape no
+  // other provider uses into the picker, the history and the status line.
+  gemini: {
+    label: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    envVar: 'GEMINI_API_KEY',
+    modelIdPrefix: 'models/',
+  },
   ollama: {
     label: 'Ollama',
     baseUrl: 'http://localhost:11434/v1',
@@ -2668,7 +2690,7 @@ async function llmModels(req, res) {
     else if (Array.isArray(data)) rows = data;
     const models = rows
       .filter((m) => m && m.id)
-      .map(normalizeProviderModel);
+      .map((m) => normalizeProviderModel(m, provider));
     // A curated allowlist pins the picker to exactly those ids, in that
     // order. Either form works: an array of ids, or a rule object
     // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
@@ -2878,11 +2900,19 @@ async function llmSkillContent(req, res) {
   sendJson(res, 200, skill);
 }
 
-function normalizeProviderModel(m) {
+function normalizeProviderModel(m, provider) {
   const architecture = m.architecture || {};
+  // A catalogue that namespaces its ids (Gemini's shim answers
+  // `models/gemini-2.5-flash`) is trimmed to the id that provider's own chat
+  // endpoint documents. One place knows about the prefix, rather than the
+  // picker, the router and the status line each learning to ignore it.
+  const prefix = provider && provider.modelIdPrefix;
+  const id = prefix && typeof m.id === 'string' && m.id.startsWith(prefix)
+    ? m.id.slice(prefix.length)
+    : m.id;
   const inputModalities = m.input_modalities || architecture.input_modalities;
   return {
-    id: m.id,
+    id,
     name: m.name || m.display_name,
     ownedBy: m.owned_by,
     pricing: normalizePricing(m),

@@ -114,7 +114,7 @@
     </td>
     <td valign="top">
       <h3>🔌 Many providers</h3>
-      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA, Mistral or HuggingFace and they appear in a picker — so one running dry never stops the work. A local Ollama joins with just a base URL and needs no key, and a self-hosted OmniRoute gateway fronts hundreds of providers — including the `auto` router — behind one endpoint. Keys stay on the server.
+      Puter needs no key at all. Add a key for Nara, OpenRouter, NVIDIA, Mistral, Groq, Gemini or HuggingFace and they appear in a picker — so one running dry never stops the work. A local Ollama joins with just a base URL and needs no key, and a self-hosted OmniRoute gateway fronts hundreds of providers — including the `auto` router — behind one endpoint. Keys stay on the server.
     </td>
     <td valign="top">
       <h3>📱 Built for a phone</h3>
@@ -261,6 +261,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `HF_TOKEN` | *(unset)* | Adds HuggingFace Inference Providers — one key across every serverless model on the Hub's OpenAI-compatible router. The free tier is monthly credits (~$0.10), so the picker pins the router's **full priced catalogue — 138 models, cheapest first** (verified 2026‑09‑12), led by the five **zero-priced** offerings (Qwen3.8‑27B, Ling‑3.0‑flash‑VL/Fin, Ternary‑Bonsai) that never touch credits, then gpt‑oss‑20b, Gemma 3, Llama 3.1 8B and up through GLM 5.3, DeepSeek V4 Pro, Kimi K3 and the 550B Nemotron. The `free` chip on huggingface.co/models is a community tag no provider honours — all 29 of those models were checked against the router and none is served. `HF_BASE_URL` overrides the router; `HF_MODELS` replaces the pinned list. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
+| `GROQ_API_KEY` | *(unset)* | Adds **Groq** — the fastest inference here, on a free developer tier that needs no card (rate limits are the only gate). The live catalogue is offered as-is; what is free there is reshuffled often. |
+| `GEMINI_API_KEY` | *(unset)* | Adds **Gemini** through Google's OpenAI compatibility shim at `/v1beta/openai`, not the native API. Free tier, no card. Its catalogue names models `models/gemini-2.5-flash`; the prefix is stripped so the picker and the history hold the id the shim's own docs pass. |
+| `GROQ_MODELS` / `GEMINI_MODELS` | *(the live catalogue)* | Comma-separated ids that replace what the provider reports. Write Gemini ids without the `models/` prefix — the same form the picker shows. |
 | `OLLAMA_API_KEY` | *(unset)* | Key for Ollama. A key alone means **Ollama Cloud** (`https://ollama.com/v1`) — the hosted catalogue appears. A key with no `OLLAMA_BASE_URL` never touches a local install; to reach one, set `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`) and the live local catalogue appears — GLM, DeepSeek, Kimi, Qwen, MiniMax, Devstral, Nemotron, Mistral, gpt-oss, Muse Glimmer and the rest, whatever the server actually serves. The app also accepts a Railway root URL and falls back from OpenAI-compatible `/v1/models` to native `/api/tags`. |
 | `DEEPGRAM_API_KEY` | *(unset)* | Adds Deepgram. Speech service; its chat endpoint answers 404. |
 | `ASSEMBLYAI_API_KEY` | *(unset)* | Adds AssemblyAI. Speech service; its chat endpoint answers 404. |
