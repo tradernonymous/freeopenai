@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { selectAllowedModels, newestInFamily, compareVersions } = require('../chatlib.js');
+const { selectAllowedModels, newestInFamily, compareVersions, usableChatModels } = require('../chatlib.js');
 const { LLM_PROVIDERS, createRequestHandler, clearModelCache } = require('../server.js');
 
 const CATALOGUE = [{ id: 'alpha-1' }, { id: 'alpha-2' }, { id: 'beta-1' }];
@@ -142,4 +142,32 @@ test('a paid id is still offered when it was named outright', () => {
     freeOnlyPrefixes: ['openrouter/'],
   }));
   assert.equal(chosen[0], 'openrouter/anthropic/claude-opus-4.5');
+});
+
+// A gateway catalogue carries more than chat models, and the ones named after
+// a voice rather than a job slip past a filter written in job words. This is
+// not hypothetical: a failover, refused by one model, picked
+// `fish-audio/s2.1-pro-free` and asked a text-to-speech endpoint to carry on
+// with a coding task.
+test('speech-synthesis models never reach the picker or the router', () => {
+  const speech = [
+    'fish-audio/s2.1-pro-free',
+    'groq/canopylabs/orpheus-v1-english',
+    'cf/@cf/deepgram/aura-2-es',
+    'elevenlabs/eleven-v3',
+    'cf/@cf/myshell-ai/melotts',
+    'playai-tts',
+    'bark-small',
+  ];
+  const shown = new Set(usableChatModels(speech.map((id) => ({ id }))).map((m) => m.id));
+  for (const id of speech) assert.equal(shown.has(id), false, id + ' would be offered as a chat model');
+});
+
+test('models that merely mention audio still count as chat models', () => {
+  // The obvious rule -- match "audio" -- is the wrong one: these answer chat
+  // completions, and dropping them would cost real models to fix a naming
+  // coincidence. "embark" is here because a bare `bark` would swallow it.
+  const chat = ['openai/gpt-4o-audio-preview', 'mistral/voxtral-small-latest', 'embark-chat'];
+  const shown = new Set(usableChatModels(chat.map((id) => ({ id }))).map((m) => m.id));
+  for (const id of chat) assert.ok(shown.has(id), id + ' should still be offered');
 });

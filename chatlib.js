@@ -3434,8 +3434,19 @@ function isCapableModelId(id) {
 const UNUSABLE_CHAT_MODEL_PATTERN =
   /(embed|rerank|whisper|tts|moderation|guard|safety|vision-only|image|dall-e|stable-diffusion|flux|lyria)/i;
 
+// Speech synthesis, which the words above do not catch because these families
+// are named after the voice rather than the job: `fish-audio/s2.1-pro-free`
+// reads like an ordinary chat id. A gateway catalogue is where this bites --
+// a failover picked exactly that model, having been refused by the one before
+// it, and asked a text-to-speech endpoint to continue a coding task. Matching
+// on "audio" would be the obvious rule and the wrong one: gpt-4o-audio and
+// Voxtral answer chat completions perfectly well.
+const SPEECH_MODEL_PATTERN =
+  /(fish-audio|orpheus|melotts|aura-\d|elevenlabs|eleven-v|playai|kokoro|xtts|parler|speecht5|\bbark-)/i;
+
 function isUsableChatModelId(id) {
-  return typeof id === 'string' && !!id && !UNUSABLE_CHAT_MODEL_PATTERN.test(id);
+  if (typeof id !== 'string' || !id) return false;
+  return !UNUSABLE_CHAT_MODEL_PATTERN.test(id) && !SPEECH_MODEL_PATTERN.test(id);
 }
 
 // Providers return their whole catalogue -- OpenRouter's runs to hundreds --
