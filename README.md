@@ -261,6 +261,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `HF_TOKEN` | *(unset)* | Adds HuggingFace Inference Providers — one key across every serverless model on the Hub's OpenAI-compatible router. The free tier is monthly credits (~$0.10), so the picker pins the router's **full priced catalogue — 138 models, cheapest first** (verified 2026‑09‑12), led by the five **zero-priced** offerings (Qwen3.8‑27B, Ling‑3.0‑flash‑VL/Fin, Ternary‑Bonsai) that never touch credits, then gpt‑oss‑20b, Gemma 3, Llama 3.1 8B and up through GLM 5.3, DeepSeek V4 Pro, Kimi K3 and the 550B Nemotron. The `free` chip on huggingface.co/models is a community tag no provider honours — all 29 of those models were checked against the router and none is served. `HF_BASE_URL` overrides the router; `HF_MODELS` replaces the pinned list. |
 | `MISTRAL_API_KEY` | *(unset)* | Adds Mistral. |
+| `CLOUDFLARE_API_TOKEN` | *(unset)* | Adds **Cloudflare Workers AI** — chat and, more importantly, **drawing**: its free tier includes text-to-image and is a *daily* allowance (10,000 neurons) that refills, where NVIDIA's is signup credit that runs out once and HuggingFace's is a monthly pot. Needs `CLOUDFLARE_ACCOUNT_ID` too. |
+| `CLOUDFLARE_ACCOUNT_ID` | *(unset)* | Required alongside the token: the API address contains it (`…/accounts/<id>/ai`). Find it on the right of any Cloudflare dashboard page, or in the Workers AI quickstart. |
+| `CLOUDFLARE_IMAGE_MODEL` | `@cf/black-forest-labs/flux-1-schnell` | Which Workers AI image model to draw with. |
 | `GROQ_API_KEY` | *(unset)* | Adds **Groq** — the fastest inference here, on a free developer tier that needs no card (rate limits are the only gate). The live catalogue is offered as-is; what is free there is reshuffled often. |
 | `GEMINI_API_KEY` | *(unset)* | Adds **Gemini** through Google's OpenAI compatibility shim at `/v1beta/openai`, not the native API. Free tier, no card. Its catalogue names models `models/gemini-2.5-flash`; the prefix is stripped so the picker and the history hold the id the shim's own docs pass. |
 | `GROQ_MODELS` / `GEMINI_MODELS` | *(the live catalogue)* | Comma-separated ids that replace what the provider reports. Write Gemini ids without the `models/` prefix — the same form the picker shows. |
@@ -615,7 +618,7 @@ Two checks now make this class of bug hard to reintroduce. `npm test` walks the 
 
 ### 🖼️ Image providers
 
-Every provider this app chats on can also draw, because they are all asked the same question through the same route: the server's `/api/llm/images/{generations,edits}`, behind which sits an order — **Nara → OpenRouter → NVIDIA → HuggingFace → OmniRoute → Ollama** — with the chat's own service moved to the front of it. There is no second picker to configure: a request for a picture is still a request to whoever is answering the chat.
+Every provider this app chats on can also draw, because they are all asked the same question through the same route: the server's `/api/llm/images/{generations,edits}`, behind which sits an order — **Nara → Cloudflare → OpenRouter → NVIDIA → HuggingFace → OmniRoute → Ollama** — with the chat's own service moved to the front of it. There is no second picker to configure: a request for a picture is still a request to whoever is answering the chat.
 
 **Puter is the one service that is not in that order unless you put it there.** It draws in the *browser* on the visitor's own account, which costs the operator nothing — but a Puter account gets a fixed monthly allowance of credits that does not roll over, and images are the dearest thing on it, where every other provider here runs on a free key. So a drawing nobody pointed at Puter goes to the route, and a route that fails says so rather than quietly billing the allowance: an automatic fallback is exactly how a month's credits disappear into pictures nobody chose to pay for.
 
@@ -630,6 +633,7 @@ What differs between the services is the shape of the request, and each provider
 | Shape | Request | Answer |
 | --- | --- | --- |
 | `openai-images` | `{model, prompt, size?, quality?, n?}` | `{data:[{b64_json\|url}]}` |
+| `cloudflare-ai` | `{prompt, width?, height?}` to `/run/<model>` | `{result:{image:"<base64>"}}` |
 | `hf-inference` | `{inputs, parameters:{width, height, num_images}}` | the picture's own bytes |
 | `nvidia-genai` | `{prompt, mode:"base", aspect_ratio?}` | `{artifacts:[{base64}]}` |
 

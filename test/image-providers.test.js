@@ -21,6 +21,7 @@ const PROVIDER_VARS = [
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
   'HF_TOKEN', 'HF_IMAGE_MODEL', 'HF_IMAGES_BASE_URL',
   'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL',
+  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_IMAGE_MODEL', 'CLOUDFLARE_IMAGES_BASE_URL',
   'OLLAMA_IMAGE_MODEL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
@@ -812,5 +813,75 @@ test('an image model of its own still takes the chat model as a preference', asy
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
+  }
+});
+
+// --- Cloudflare Workers AI -------------------------------------------------
+//
+// Added because it was the last free drawer standing: NVIDIA's signup credit
+// runs out once, HuggingFace's allowance is monthly, and Cloudflare's is a
+// daily one that refills. Its API is unlike the others in two ways worth
+// pinning: the account id is in the URL, and the picture comes back as base64
+// inside `result` rather than in an OpenAI-shaped document.
+
+test('Cloudflare runs the model by name and reads the picture out of result', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(req.url, '/run/@cf/black-forest-labs/flux-1-schnell', 'the model is named in the path');
+    assert.deepEqual(JSON.parse(raw), { prompt: 'a fox' });
+    jsonAnswer(res, 200, { result: { image: 'QUJD' }, success: true });
+  });
+  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+  process.env.CLOUDFLARE_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'cloudflare');
+    // Normalised where every other shape is, so the browser has one reader.
+    assert.equal(body.data[0].b64_json, 'QUJD');
+    assert.equal(up.seen[0].headers.authorization, 'Bearer cf-token');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('Cloudflare without an account id says which variable is missing', async () => {
+  // The address contains the account id, so a key alone cannot build a URL.
+  // Left to fail later it would read as a malformed-URL crash, which names
+  // nothing the operator can act on.
+  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+  const app = await startApp();
+  try {
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    const cf = listed.providers.find((p) => p.id === 'cloudflare');
+    assert.equal(cf.ready, false);
+    assert.match(cf.reason, /CLOUDFLARE_ACCOUNT_ID/);
+  } finally {
+    app.close();
+  }
+});
+
+test('Cloudflare leads the metered services, because its allowance refills', async () => {
+  const { LLM_PROVIDERS } = require('../server.js');
+  assert.ok(LLM_PROVIDERS.cloudflare.image, 'cloudflare has to declare an image store to be a candidate');
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { result: { image: 'QUJD' } }));
+  const nv = await upstreamOf((req, res) => jsonAnswer(res, 200, { artifacts: [{ base64: 'WFla' }] }));
+  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+  process.env.CLOUDFLARE_IMAGES_BASE_URL = up.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = nv.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal((await res.json()).provider, 'cloudflare');
+    assert.equal(nv.seen.length, 0, 'the daily allowance is asked before the one that runs out');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+    await new Promise((r) => nv.server.close(r));
   }
 });

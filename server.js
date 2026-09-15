@@ -1266,6 +1266,45 @@ const LLM_PROVIDERS = {
     envVar: 'GEMINI_API_KEY',
     modelIdPrefix: 'models/',
   },
+  // Cloudflare Workers AI. The reason it is here is images: its free tier
+  // includes text-to-image and resets daily, which after NVIDIA's credits run
+  // out and HuggingFace's monthly allowance is spent is the only free drawer
+  // left standing. Chat rides the same key through its OpenAI-compatible
+  // endpoint.
+  //
+  // Its address carries the account id, so baseUrl is built rather than
+  // written: https://api.cloudflare.com/client/v4/accounts/<id>/ai
+  cloudflare: {
+    label: 'Cloudflare',
+    baseUrl: () => {
+      const account = String(process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+      return account ? 'https://api.cloudflare.com/client/v4/accounts/' + account + '/ai/v1' : '';
+    },
+    envVar: 'CLOUDFLARE_API_TOKEN',
+    // Workers AI publishes no OpenAI-shaped /models route, so the list is
+    // declared rather than fetched -- and CLOUDFLARE_MODELS replaces it when
+    // the catalogue moves, as every other provider's override does.
+    catalogue: false,
+    models: [
+      '@cf/openai/gpt-oss-120b',
+      '@cf/openai/gpt-oss-20b',
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      '@cf/moonshotai/kimi-k2.7-code',
+      '@cf/deepseek-ai/deepseek-v4-flash-0731',
+      '@cf/zai-org/glm-5.3',
+    ],
+    image: {
+      shape: 'cloudflare-ai',
+      baseUrl: () => {
+        const account = String(process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+        return account ? 'https://api.cloudflare.com/client/v4/accounts/' + account + '/ai' : '';
+      },
+      baseUrlEnv: 'CLOUDFLARE_IMAGES_BASE_URL',
+      modelEnv: 'CLOUDFLARE_IMAGE_MODEL',
+      requiresEnv: 'CLOUDFLARE_ACCOUNT_ID',
+      defaultModel: '@cf/black-forest-labs/flux-1-schnell',
+    },
+  },
   ollama: {
     label: 'Ollama',
     baseUrl: 'http://localhost:11434/v1',
@@ -1551,7 +1590,8 @@ function providerConfig(id) {
   // that ships a cloudBaseUrl: there a real key means the hosted endpoint,
   // and the local default only applies when it is the operator's own install.
   const override = process.env[providerEnvName(provider.envVar, '_BASE_URL')];
-  const rawBaseUrl = override || (key && provider.cloudBaseUrl) || provider.baseUrl;
+  const declaredBase = typeof provider.baseUrl === 'function' ? provider.baseUrl() : provider.baseUrl;
+  const rawBaseUrl = override || (key && provider.cloudBaseUrl) || declaredBase;
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
@@ -1860,7 +1900,11 @@ async function llmFetch(req, res) {
 // exactly the behaviour they had, and one who does not gets their next key.
 // Ollama and OmniRoute are last because their image models are named by the
 // operator rather than published, so they can only be offered when asked for.
-const IMAGE_PROVIDER_ORDER = ['nara', 'openrouter', 'nvidia', 'huggingface', 'omniroute', 'ollama'];
+// Cloudflare sits ahead of the metered services on purpose: its free tier is a
+// daily allowance that resets, where NVIDIA's is signup credit that runs out
+// once and HuggingFace's is a monthly pot. Asking the one that refills first is
+// what keeps drawing working on free keys.
+const IMAGE_PROVIDER_ORDER = ['nara', 'cloudflare', 'openrouter', 'nvidia', 'huggingface', 'omniroute', 'ollama'];
 
 // Which model name to ask for: the request's own, then the operator's variable,
 // then the store's default. A store with no default (Ollama, OmniRoute) is
@@ -1915,6 +1959,9 @@ function imageCandidateFor(id, options) {
   // Read from the environment rather than from `declared.freeOnly`, which is
   // evaluated once when this module loads. Whether a provider may draw is a
   // per-request decision, the same as its key and base URL are.
+  if (store.requiresEnv && !String(process.env[store.requiresEnv] || '').trim()) {
+    return { error: declared.label + ' needs ' + store.requiresEnv + ' as well as its key — its API address contains the account id.' };
+  }
   const freeOnlyVar = providerEnvName(declared.envVar, '_FREE_ONLY');
   if ('freeOnly' in declared && process.env[freeOnlyVar] !== '0') {
     return {
@@ -2035,7 +2082,7 @@ function imageUnavailableMessage() {
 // and there it is normalised the same way the chat path normalises it.
 function imageBaseFor(id, provider, store) {
   const override = store.baseUrlEnv ? String(process.env[store.baseUrlEnv] || '').trim() : '';
-  const declared = override || store.baseUrl;
+  const declared = override || (typeof store.baseUrl === 'function' ? store.baseUrl() : store.baseUrl);
   if (declared) return declared.replace(/\/+$/, '');
   return normalizeProviderBaseUrl(id, provider.baseUrl);
 }
@@ -2278,6 +2325,17 @@ async function drawImage(args) {
         openaiAttempt('/images/generations'),
       ];
     }
+    if (store.shape === 'cloudflare-ai') {
+      // Workers AI runs a model by name in the path and answers
+      // {result:{image:"<base64>"}}. `steps` and `seed` are the only extras
+      // it documents for FLUX, so nothing else is offered to it.
+      return [(withExtra) => {
+        const body = { prompt };
+        const parts = sizeParts(requestedSize);
+        if (withExtra && parts) { body.width = parts.w; body.height = parts.h; }
+        return postJson(base + '/run/' + useModel, body, false);
+      }];
+    }
     if (store.shape === 'hf-inference') {
       // The task route, not the router: {inputs, parameters} in, image bytes out.
       return [(withExtra) => {
@@ -2357,6 +2415,11 @@ async function drawImage(args) {
   // The NVCF shape ({artifacts:[{base64}]}) is normalized here rather than at
   // the caller, so there is one place a picture could be misread.
   if (payload && !payload.data) {
+    // Workers AI: {result:{image:"<base64>"}, success:true}.
+    const cf = payload.result && typeof payload.result.image === 'string' ? payload.result.image : '';
+    if (cf) {
+      return { status: response.status, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
+    }
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
       return { status: response.status, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
