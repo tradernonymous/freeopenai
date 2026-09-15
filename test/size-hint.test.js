@@ -17,12 +17,13 @@ const {
   imageAction,
   imageSizeFromPrompt,
   imageSizeBody,
+  lastImageInMessages,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-const NAMES = ['imageAttachmentIsPending', 'imageWorkIsPossible', 'updateImageSizeHint'];
+const NAMES = ['imageAttachmentIsPending', 'imageSizeIsConditional', 'imageWorkIsPossible', 'updateImageSizeHint'];
 
 function stubHint() {
   return {
@@ -37,7 +38,7 @@ function stubHint() {
   };
 }
 
-function harness({ text = '', imageMode = false, attachment = null } = {}) {
+function harness({ text = '', imageMode = false, attachment = null, drawn = false } = {}) {
   const hint = stubHint();
   const deps = {
     // The real rules, so this exercises the shipped reading rather than a
@@ -45,6 +46,8 @@ function harness({ text = '', imageMode = false, attachment = null } = {}) {
     imageAction,
     imageSizeFromPrompt,
     imageSizeBody,
+    lastImageInMessages,
+    messages: drawn ? [{ role: 'assistant', images: [{ url: 'data:image/png;base64,PIC', prompt: 'a fox' }] }] : [],
     imageMode,
     pendingAttachment: attachment,
     chatInput: { value: text },
@@ -117,6 +120,45 @@ test('an attachment reads only a spelled-out size, because it makes the turn an 
   document.loaded.updateImageSizeHint();
   assert.equal(document.hint.hidden, false);
   assert.equal(document.hint.textContent, '2:3');
+});
+
+test('a shape word is marked conditional while a picture is on screen, a spelled size is not', () => {
+  // A chat showing a picture and holding no attachment is the one state the hint
+  // cannot resolve: the turn may edit that picture (shape word dropped, its own
+  // shape kept) or draw a new one (shape word read). It reads the word, and says
+  // outright that this reading is the conditional one -- a promise the request
+  // may not keep is exactly what this hint exists to prevent.
+  const ambiguous = harness({ text: 'draw a wide banner', imageMode: true, drawn: true });
+  ambiguous.loaded.updateImageSizeHint();
+  assert.equal(ambiguous.hint.hidden, false, 'the reading is still shown: it is the likelier one');
+  assert.equal(ambiguous.hint.textContent, '16:9', 'and it is the shape the word names');
+  assert.match(ambiguous.hint.title, /if this makes a new picture/);
+  assert.match(ambiguous.hint.title, /keeps its own shape/);
+  assert.match(ambiguous.hint.getAttribute('aria-label'), /if this makes a new picture/);
+
+  // Spelled out, both readings send it, so there is nothing conditional to say.
+  const spelled = harness({ text: 'draw a 1536x864 banner', imageMode: true, drawn: true });
+  spelled.loaded.updateImageSizeHint();
+  assert.equal(spelled.hint.hidden, false);
+  assert.equal(spelled.hint.textContent, '16:9');
+  assert.doesNotMatch(spelled.hint.title, /if this makes a new picture/);
+  assert.equal(spelled.hint.getAttribute('aria-label'), 'Image size 16:9, drawn at 1536x864');
+
+  // And with nothing on screen there is no other reading to hedge against.
+  const fresh = harness({ text: 'draw a wide banner', imageMode: true });
+  fresh.loaded.updateImageSizeHint();
+  assert.doesNotMatch(fresh.hint.title, /if this makes a new picture/);
+  assert.equal(fresh.hint.getAttribute('aria-label'), 'Image size 16:9, drawn at 1536x864');
+});
+
+test('the panel says the same conditional reading in words', () => {
+  const panel = stubHint();
+  const h = harness({ text: 'draw a wide banner', imageMode: true, drawn: true });
+  h.deps.document.getElementById = (id) => (id === 'sessionImageShape' ? panel : id === 'sizeHint' ? h.hint : null);
+  h.loaded.updateImageSizeHint();
+  assert.match(panel.textContent, /drawn at 16:9 — 1536x864/);
+  assert.match(panel.textContent, /may edit it instead/);
+  assert.match(panel.textContent, /keeps the shape it already has/);
 });
 
 test('the hint lives in the row that already exists, and is styled as a hint', () => {

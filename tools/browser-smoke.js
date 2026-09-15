@@ -526,6 +526,31 @@ async function main() {
         chat: type('a 16:9 banner for the shop front', false),
         cleared: type('', false),
       };
+      // The one state the hint cannot resolve: a picture already on screen and
+      // nothing attached, where the turn may edit that picture (shape word
+      // dropped, its own shape kept) or draw a new one (shape word read). It
+      // reads the word and says that reading is conditional -- here in a real
+      // browser, because "the promise is hedged" is not something a unit test
+      // proving the string exists can tell you is true on the page.
+      out.conditional = (() => {
+        const entry = { type: 'bot', content: '[Generated image: hint probe]', images: [{ url: 'data:image/png;base64,HINT', prompt: 'a fox' }] };
+        messages.push(entry);
+        if (imageMode !== true) toggleImageMode();
+        chatInput.value = 'draw a wide banner';
+        chatInput.dispatchEvent(new Event('input'));
+        const hint = document.getElementById('sizeHint');
+        const shape = document.getElementById('sessionImageShape');
+        const said = {
+          hidden: hint.hidden, text: hint.textContent, title: hint.title,
+          aria: hint.getAttribute('aria-label') || '',
+          panel: shape ? shape.textContent : '',
+        };
+        messages.pop();
+        chatInput.value = 'draw a fox';
+        chatInput.dispatchEvent(new Event('input'));
+        said.afterWithdraw = document.getElementById('sizeHint').title;
+        return said;
+      })();
       // Put the page back the way it was found.
       chatInput.value = '';
       chatInput.dispatchEvent(new Event('input'));
@@ -549,6 +574,18 @@ async function main() {
       if (!sizeHint[quiet].hidden) {
         throw new Error(quiet + ' promised a shape it will not send: ' + JSON.stringify(sizeHint[quiet]));
       }
+    }
+    if (sizeHint.conditional.hidden || sizeHint.conditional.text !== '16:9') {
+      throw new Error('a shape word with a picture on screen is still the reading to show: ' + JSON.stringify(sizeHint.conditional));
+    }
+    if (!/if this makes a new picture/.test(sizeHint.conditional.title) || !/if this makes a new picture/.test(sizeHint.conditional.aria)) {
+      throw new Error('the conditional shape word was promised outright: ' + JSON.stringify(sizeHint.conditional));
+    }
+    if (!/may edit it instead/.test(sizeHint.conditional.panel)) {
+      throw new Error('the panel did not carry the same caveat in words: ' + JSON.stringify(sizeHint.conditional));
+    }
+    if (/if this makes a new picture/.test(sizeHint.conditional.afterWithdraw)) {
+      throw new Error('the caveat outlived the picture that caused it: ' + JSON.stringify(sizeHint.conditional));
     }
 
     // The same hint on the screen with the least room for it: it sits in the

@@ -2942,12 +2942,6 @@
             if (name) showStatus('info', 'Not suggesting ' + name + ' in this chat');
         }
 
-        function forgetSkillHabits() {
-            skillUsage = {};
-            saveSkillUsage();
-            setSkillSuggestion(null);
-        }
-
         function renderSkillBar() {
             const bar = document.getElementById('skillBar');
             if (!bar) return;
@@ -5120,21 +5114,20 @@
         // There used to be a second picker for images -- which service, and then
         // which of its image models -- and it made the composer a row of six
         // controls answering a question the model picker had already answered.
-        // Drawing now follows the conversation: the service the chat is on draws
-        // first, with the model the chat is on. That is one fewer decision for the
-        // user and one fewer row of chips in the way of typing.
+        // Nothing picks an image service now: a picture goes to the server route,
+        // which asks the service the conversation is on first and walks its own
+        // order behind it. Puter is the one exception, and it is asked for by
+        // name -- see the Draw with Puter switch -- because it draws on the
+        // visitor's credits rather than the operator's key.
         //
-        // Puter is asked with the conversation's model first and its published
-        // image models behind that: most chat models on these services can draw,
-        // and one that cannot answers with a 400 that costs nothing. The server
-        // route is handed the same two facts as a preference, and decides for
-        // itself -- a catalogue of model ids belongs to the service it came from.
-        function puterModelsFor(kind) {
-            const known = imageModelsFor(kind);
-            const chat = selectedProvider === PUTER_PROVIDER ? String(selectedModel || '').trim() : '';
-            return chat && !known.includes(chat) ? [chat, ...known] : known;
-        }
-
+        // Puter is asked only for the image model its published list names for
+        // the job: Sunburst to edit, Flare to draw. The conversation's model
+        // cannot stand in for one. Puter's images endpoint takes an image model,
+        // and the model picker here offers chat models, so offering the chat's
+        // model first bought a refused round trip on every draw somebody had
+        // asked Puter for. The route is where the chat's model is a *preference*
+        // -- and it decides that for itself, because a catalogue of model ids
+        // belongs to the service it came from.
         function imageBackendsForTurn(options) {
             return imageBackendOrder({
                 puterSignedIn: puterCanDraw(),
@@ -6155,10 +6148,18 @@
         //
         // The one case it cannot know is a chat that already shows a picture and
         // has nothing attached: that turn may be an edit (a shape word dropped) or
-        // a generation (a shape word read). It reads words there, and the status
-        // line says what actually happened either way.
+        // a generation (a shape word read). It reads words there -- which is the
+        // reading a composer with nothing attached most often wants -- and says
+        // that this one is conditional, because a promise the request may not keep
+        // is the exact failure the hint exists to prevent. A *spelled* size is
+        // never conditional: both readings send that one, so the hint can promise
+        // it outright.
         function imageAttachmentIsPending() {
             return !!(pendingAttachment && pendingAttachment.kind === 'image');
+        }
+
+        function imageSizeIsConditional(size) {
+            return !!(size && size.words) && !pendingAttachment && !!lastImageInMessages(messages);
         }
 
         function imageWorkIsPossible(text) {
@@ -6178,9 +6179,11 @@
                 ? imageSizeFromPrompt(text, { words: !imageAttachmentIsPending() })
                 : null;
             const pixels = size ? imageSizeBody(size) : '';
+            const conditional = imageSizeIsConditional(size);
             if (shape) {
                 shape.textContent = size
                     ? 'These words are drawn at ' + size.label + ' — ' + pixels + '.'
+                        + (conditional ? ' A picture is already on screen, so this turn may edit it instead — and an edit keeps the shape it already has.' : '')
                     : 'No shape named — the service picks.';
             }
             if (!hint) return;
@@ -6191,8 +6194,11 @@
                 return;
             }
             hint.textContent = size.label;
-            hint.title = 'Drawn at ' + pixels + ' — name a shape ("16:9", "1024x1024") to change it';
-            hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels);
+            hint.title = conditional
+                ? 'Drawn at ' + pixels + ' if this makes a new picture — an edit of the one on screen keeps its own shape'
+                : 'Drawn at ' + pixels + ' — name a shape ("16:9", "1024x1024") to change it';
+            hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels
+                + (conditional ? ' if this makes a new picture' : ''));
             hint.hidden = false;
         }
 
@@ -6985,7 +6991,7 @@
                     if (options.mask && errors.serverError) {
                         outcome.notes.push('the brush mask was dropped — Puter cannot take one');
                     }
-                    for (const model of puterModelsFor(kind)) {
+                    for (const model of imageModelsFor(kind)) {
                         try {
                             const args = puterImageArgs(kind, { model, quality: IMAGE_QUALITY, ratio: imageRatioBody(size) }, sourceDataUrl);
                             const imgEl = await puter.ai.txt2img(promptText, args);
@@ -7512,10 +7518,6 @@
             } finally {
                 releaseRun(controller);
             }
-        }
-
-        function imageUrlFrom(data) {
-            return imageUrlsFrom(data)[0] || '';
         }
 
         // Every picture in a response, not just the first: an OpenAI-compatible
