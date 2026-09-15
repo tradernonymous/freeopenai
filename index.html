@@ -4387,7 +4387,7 @@
             if (data.timedOut) {
                 lines.push('Timed out after ' + Math.round((data.durationMs || 0) / 1000) + 's and was stopped — it was probably waiting on input or the network.');
             } else {
-                lines.push('Exit code ' + (data.exitCode === null || data.exitCode === undefined ? 'unknown' : data.exitCode) +
+                lines.push('Exit code ' + (data.exitCode === null ? 'unknown' : data.exitCode) +
                     ' after ' + Math.round((data.durationMs || 0) / 1000) + 's (' + (data.shell || 'sh') + ').');
             }
             if (data.stdout) lines.push('stdout:\n' + data.stdout + (data.stdoutTruncated ? '\n(stdout was cut off)' : ''));

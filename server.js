@@ -3715,7 +3715,7 @@ function runWorkspaceCommand({ command, cwd, env, timeoutMs }) {
     // An unrunnable command is an answer, not an exception: the model reads the
     // reason and corrects itself, which it cannot do from a 500.
     child.on('error', (error) => finish({ exitCode: null, stderr: stderr + String((error && error.message) || error) }));
-    child.on('close', (code, signal) => finish({ exitCode: typeof code === 'number' ? code : null, signal: signal || '' }));
+    child.on('close', (code) => finish({ exitCode: typeof code === 'number' ? code : null }));
   });
 }
 
@@ -3758,7 +3758,6 @@ function handleWorkspaceRun(req, res, root) {
         enabled: true,
         ok: result.exitCode === 0 && !result.timedOut,
         exitCode: result.exitCode,
-        signal: result.signal || '',
         timedOut: result.timedOut,
         durationMs: result.durationMs,
         cwd: path.relative(runRoot, cwd) || '.',
@@ -3921,7 +3920,6 @@ module.exports = {
   capRunOutput,
   resolveWorkspaceCwd,
   listWorkspaceFiles,
-  runWorkspaceCommand,
   LLM_PROVIDERS,
   createRequestHandler,
   normalizeProviderModel,

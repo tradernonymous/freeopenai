@@ -56,6 +56,10 @@ function harness({
   puterImages = false,
   model = 'gpt-5.4-nano',
   dims = { width: 0, height: 0 },
+  // A canvas that refuses, which is what a browser without one does. The cut is
+  // the last thing that happens to a picture, so it has to fail soft: a square
+  // picture beats no picture.
+  cutFails = false,
 } = {}) {
   const calls = { puter: [], puterOpts: [], puterPrompts: [], fetch: [], cut: null };
   const deps = {
@@ -88,6 +92,7 @@ function harness({
     reframePlan,
     canvasFromImage: async (src, needMatte, cut) => {
       calls.cut = cut || null;
+      if (cutFails) throw new Error('this browser cannot cut a picture');
       return {
         canvas: { toDataURL: () => 'data:image/png;base64,CUT-' + (cut ? cut.width + 'x' + cut.height : 'whole') },
         width: cut ? cut.width : dims.width,
@@ -232,6 +237,41 @@ test('a drawing that came back the wrong shape is cut to the one that was asked 
   assert.match(url, /CUT-1024x576/, 'the picture handed back is the cut one, not the one that arrived');
   assert.match(outcome.notes[0], /drawn 1:1 \(1024×1024\) — cut to 16:9 \(1024×576\)/,
     'the sentence names the shape the picture now has, not only the one it arrived as');
+});
+
+test('the route\'s size note is replaced by the cut, not doubled up with it', async () => {
+  // A service that cannot draw 16:9 swaps it for the nearest it offers and says
+  // so. When the picture is then cut back to the shape that was asked for, both
+  // sentences describe the same picture at different moments, and the status line
+  // would carry two sizes -- one of which is no longer what the user is holding.
+  const h = harness({
+    provider: 'nara',
+    dims: { width: 1024, height: 1024 },
+    route: {
+      data: {
+        data: [{ url: 'data:image/png;base64,SWAPPED' }],
+        providerLabel: 'Nara',
+        notes: ['asked for 1536x864 — Nara draws 1024x1024'],
+      },
+    },
+  });
+  const outcome = { notes: [] };
+  await h.generate('a 16:9 banner with no text', null, outcome);
+  assert.equal(outcome.notes.length, 1, 'one sentence about one answer: ' + JSON.stringify(outcome.notes));
+  assert.match(outcome.notes[0], /cut to 16:9 \(1024×576\)/);
+});
+
+test('a cut that cannot be made hands the picture over and says so', async () => {
+  const h = harness({
+    signedIn: true, puterImages: true,
+    puterResult: { src: 'data:image/png;base64,P' },
+    dims: { width: 1024, height: 1024 },
+    cutFails: true,
+  });
+  const outcome = { notes: [] };
+  const url = await h.generate('a 16:9 banner with no text', null, outcome);
+  assert.equal(url, 'data:image/png;base64,P', 'the picture that arrived is the one kept');
+  assert.match(outcome.notes[0], /asked for 16:9 \(1536x864\), drawn 1:1/);
 });
 
 test('a shape too small to cut is reported rather than cropped', async () => {

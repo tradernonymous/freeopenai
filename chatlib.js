@@ -2609,16 +2609,6 @@ function toolArgsUnusable(raw) {
 
 // One plain line describing what the model is about to do, used both in the
 // transcript and in the commit confirmation dialog.
-// One line, out of text that may not be. A shell command is written across
-// several; this string ends up as a line in the transcript *and* as the label
-// beside the typing dots, and neither has room for more than one. The full text
-// is the approval dialog's job, which is the place a command is read before it
-// runs -- and the only place it has to be.
-function singleLine(text, limit = 80) {
-  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
-  return flat.length > limit ? flat.slice(0, limit - 1) + '…' : flat;
-}
-
 function describeToolCall(name, args = {}) {
   const repo = args.repo || 'a repo';
   const as = args.account ? ` as ${args.account}` : '';
@@ -2668,11 +2658,15 @@ function describeToolCall(name, args = {}) {
       return `Editing "${args.path || '?'}" in the workspace`;
     case 'workspace_delete_file':
       return `Deleting "${args.path || '?'}" from the workspace`;
-    case 'run_command':
-      // Summarised rather than quoted: a transcript line is read long after the
-      // fact, and the arguments are what make two commands different. The dialog
-      // shows the command itself, in full, before anything is sent.
-      return 'Running on the server: ' + singleLine(args.command || '?');
+    case 'run_command': {
+      // Summarised on one line, and not quoted. This string becomes a transcript
+      // line and the label beside the typing dots, neither of which has room for
+      // a heredoc: the unfurled command pushed the arguments -- the only part
+      // that distinguishes two commands -- past the chip's ellipsis. The dialog
+      // quotes the command in full, which is the one place it has to be read.
+      const flat = String(args.command || '?').replace(/\s+/g, ' ').trim();
+      return 'Running on the server: ' + (flat.length > 80 ? flat.slice(0, 79) + '…' : flat);
+    }
     case 'task_list':
       return 'Reading the task list';
     case 'task_add':
@@ -4573,10 +4567,8 @@ if (typeof module !== 'undefined' && module.exports) {
     imageRatioBody,
     imageRatioLabel,
     describeDrawnSize,
-    imageShapeIsOff,
     reframePlan,
     MIN_REFRAME_EDGE,
-    SHAPE_TOLERANCE,
     isModerationRefusal,
     IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,
@@ -4635,7 +4627,6 @@ if (typeof module !== 'undefined' && module.exports) {
     matchListEntry,
     parseToolArgs,
     describeToolCall,
-    singleLine,
     extractMessageText,
     extractMessageReasoning,
     extractToolCalls,

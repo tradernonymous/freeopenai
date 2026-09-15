@@ -782,7 +782,6 @@ async function main() {
         // Only the lines this turn added: the transcript is empty on this page,
         // so anything here was said by one of the two runs above.
         wrote: systemLines().filter((line) => /Wrote|Settings/.test(line)),
-        everyone: systemLines(),
         title: document.getElementById('githubConfirmTitle').textContent,
         buildOffered: toolsForMode('build', RUN_TOOLS).map((t) => t.function.name),
         chatOffered: toolsForMode('chat', RUN_TOOLS).length,

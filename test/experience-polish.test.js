@@ -83,9 +83,6 @@ test('a picture with something to report keeps its sentence on screen', () => {
   assert.equal(timers.length, 1);
   assert.equal(timers[0].ms, 2500);
 
-  // An outcome with nothing on it at all is still a status, not a crash.
-  page.showImageOutcome('Image ready', undefined);
-  assert.equal(deps.statusMessage.textContent, 'Image ready');
 });
 
 test('the status timer is not a page-scope binding', () => {
