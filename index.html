@@ -2645,6 +2645,12 @@
         // Whether the chat should offer the GitHub tools to the model. Refreshed
         // on load and whenever the connector's state changes.
         let githubConnected = false;
+        // Whether this server runs shell commands at all, and the sentence to
+        // show why not when it does not. Asked once, like the GitHub connector,
+        // because it decides what the model is offered before the first turn.
+        let serverRunReady = false;
+        let serverRunReason = '';
+        let serverWorkspaceFiles = [];
 
         // The workspace is a flat map of path -> text, kept in this browser. It
         // is deliberately not the server's disk: the deployment is shared and
@@ -3522,6 +3528,11 @@
             // Learn up front whether the GitHub tools should be offered to the
             // model, rather than waiting for the user to open Settings.
             refreshGithubStatus();
+            // Same again for the shell, and it matters more here: the server can
+            // refuse to have it at all (see WORKSPACE_RUN), and a tool that always
+            // answers "this is switched off" costs a round trip and a dialog the
+            // user has to decline for a setting they either turned on or did not.
+            refreshServerRunStatus();
             loadProviders();
             showStatus('success', 'Connected');
         }
@@ -4394,21 +4405,43 @@
         // knows the server workspace exists. The files are the container's, so the
         // hint says the one thing about them a user would otherwise discover the
         // hard way: a redeploy takes them with it.
+        // Asking the server is what decides both of these: whether the shell is
+        // offered to the model, and what the panel lists. One request answers both
+        // so the two can never disagree about whether it is on.
+        async function refreshServerRunStatus() {
+            try {
+                const res = await fetch('/api/workspace/files');
+                const data = await safeJson(res);
+                serverRunReady = !!(data && data.enabled);
+                serverRunReason = (data && data.reason) || '';
+                serverWorkspaceFiles = Array.isArray(data && data.files) ? data.files : [];
+            } catch {
+                serverRunReady = false;
+                serverRunReason = 'The server workspace could not be read.';
+                serverWorkspaceFiles = [];
+            }
+            return serverRunReady;
+        }
+
+        // Opening the panel asks twice -- the view switch and the render both
+        // run -- and each pass clears the list before it awaits the server. Two
+        // passes in flight therefore each append their own rows, so the newest one
+        // takes the list and the older one drops out when it wakes up.
+        let serverFilesRender = 0;
+
         async function renderServerWorkspaceFiles() {
             const list = document.getElementById('serverWorkspaceFileList');
             const status = document.getElementById('serverWorkspaceStatus');
             if (!list || !status) return;
+            const token = ++serverFilesRender;
+            await refreshServerRunStatus();
+            if (token !== serverFilesRender) return;
             list.innerHTML = '';
-            let data = null;
-            try {
-                const res = await fetch('/api/workspace/files');
-                data = await safeJson(res);
-            } catch { /* the answer below covers it */ }
-            if (!data || !data.enabled) {
-                status.textContent = (data && data.reason) || 'The server workspace could not be read.';
+            if (!serverRunReady) {
+                status.textContent = serverRunReason || 'The server workspace is not available.';
                 return;
             }
-            const files = Array.isArray(data.files) ? data.files : [];
+            const files = serverWorkspaceFiles;
             if (!files.length) {
                 status.textContent = 'Empty. Files a command writes on the server appear here, and a redeploy takes them with it.';
                 return;
@@ -6664,7 +6697,9 @@
                     // that holds against a model with a tool in front of it.
                     const offered = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) offered.push(...GITHUB_TOOLS);
-                    offered.push(...RUN_TOOLS);
+                    // Only when this server actually runs them. The refusal below
+                    // is still there for a server that changes its mind mid-session.
+                    if (serverRunReady) offered.push(...RUN_TOOLS);
                     let tools = toolsForMode(selectedMode, offered);
                     // Skills ride along: whatever this chat pinned, plus what the
                     // router picks when auto-skills are on and the mode allows it.

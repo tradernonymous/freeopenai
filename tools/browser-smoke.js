@@ -18,6 +18,11 @@ const path = require('node:path');
 
 const APP_DIR = path.resolve(__dirname, '..');
 const WAIT_MS = 250;
+// The account the smoke's own server is started with, so it can sign in the way
+// a person does rather than by forging a cookie the server would accept but the
+// page has never seen.
+const SMOKE_USER = 'smoke';
+const SMOKE_PASS = 'smoke-pass';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function chromePath() {
@@ -94,11 +99,19 @@ async function main() {
   try {
     app = spawn(process.execPath, ['server.js'], {
       cwd: APP_DIR,
-      // The shell route is enabled for this run so the page's half of it can be
-      // driven. It still refuses to run anything: this app has no login
-      // configured (see `workspaceRunRefusal`), which is exactly the refusal the
-      // smoke below asserts it gets.
-      env: { ...process.env, PORT: String(appPort), WORKSPACE_RUN: '1' },
+      // A login and the shell switch, because the shell is refused outright
+      // without both (see `workspaceRunRefusal`) and a feature that only ever
+      // demonstrates its refusal is not demonstrated at all. The smoke signs in
+      // through the real login page before its first phase, so every phase from
+      // then on runs as a signed-in user -- which is what a deployment looks like.
+      env: {
+        ...process.env,
+        PORT: String(appPort),
+        WORKSPACE_RUN: '1',
+        AUTH_USER_1: SMOKE_USER,
+        AUTH_PASS_1: SMOKE_PASS,
+        WORKSPACE_RUN_TIMEOUT_MS: '30000',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let serverOutput = '';
@@ -166,14 +179,25 @@ async function main() {
       }
       if (message.method === 'Network.responseReceived' && message.params.response.status >= 400) {
         const responseUrl = new URL(message.params.response.url);
-        // A refusal is an answer for the shell route, and the smoke asks for one
-        // on purpose: a 403 there is the app working, not a page in trouble.
-        const refusedShell = responseUrl.pathname === '/api/workspace/run' && message.params.response.status === 403;
-        if (responseUrl.pathname !== '/favicon.ico' && !refusedShell) {
+        if (responseUrl.pathname !== '/favicon.ico') {
           errors.push('HTTP ' + message.params.response.status + ' ' + message.params.response.url);
         }
       }
     });
+
+    // Sign in once, through the login page, before anything else is driven. The
+    // cookie rides every later navigation of the same origin, so the phases below
+    // run as a signed-in user -- which is the only deployment where the shell is
+    // allowed to exist at all.
+    await send('Page.navigate', { url: 'http://127.0.0.1:' + appPort + '/login.html' });
+    await waitFor(() => evaluate('!!document.getElementById("loginForm")'), 'the login page');
+    await evaluate(`(async () => {
+      document.getElementById('username').value = ${JSON.stringify(SMOKE_USER)};
+      document.getElementById('password').value = ${JSON.stringify(SMOKE_PASS)};
+      document.getElementById('loginForm').requestSubmit();
+      return true;
+    })()`);
+    await waitFor(() => evaluate('location.pathname === "/"'), 'the signed-in app');
 
     const url = 'http://127.0.0.1:' + appPort + '/?smoke=' + Date.now();
     const visit = async (name, width, height, mobile) => {
@@ -695,69 +719,103 @@ async function main() {
       throw new Error('a square request was re-encoded for nothing: ' + JSON.stringify(shapeCut.square));
     }
 
-    // The shell tool, driven through the real page: the dialog names the command,
-    // and the answer comes back as a result.
+    // The two commands the smoke runs. Written here rather than inline in the
+    // page source so the quoting is plain Node string escaping instead of an
+    // escape inside an escape, which is how a smoke test starts lying about what
+    // it tested.
+    const PRINT_COMMAND = 'node -e "console.log(6 * 7)"';
+    const WRITE_COMMAND = 'node -e "require(\'fs\').writeFileSync(\'smoke-report.txt\',\'hello from the smoke\')"';
+    // Start from the file not being there, so "the write added it" is a fact about
+    // this run rather than about a run that failed halfway through last time.
+    try { fs.rmSync(path.join(APP_DIR, 'workspace', 'smoke-report.txt'), { force: true }); } catch { /* not there */ }
+
+    // The shell, driven through the real page and really running.
     //
-    // It cannot really run here. The route refuses to be a shell on an app with
-    // no login configured -- every visitor would get one -- so what this proves is
-    // the wiring: that the call is dispatched to the shell runner, that the
-    // command is put to the user verbatim before the request is sent at all, and
-    // that the refusal arrives as the model-visible result rather than as a
-    // broken turn. The execution itself is proved against a real server in
-    // test/workspace-run.test.js.
+    // This is the deployment the feature is for -- signed in, WORKSPACE_RUN set --
+    // so every step earns its place here: the tool is offered to Build and to no
+    // other mode, the command is put to the user verbatim before anything is sent,
+    // the command executes on the server, the answer comes back as a result the
+    // model can read, and the file it left behind downloads from Settings. Each one
+    // can be right in a unit test and wrong through the page.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: url + '-run-tool' });
-    await waitFor(() => evaluate('typeof runCommandTool === "function" && !!document.getElementById("githubConfirmOverlay")'), 'run tool page');
+    await waitFor(() => evaluate('typeof runCommandTool === "function" && typeof serverRunReady === "boolean"'), 'run tool page');
+    await waitFor(() => evaluate('serverRunReady === true'), 'the page to learn this server runs commands');
     await sleep(200);
     const runTool = await evaluate(`(async () => {
-      const opened = new Promise((resolve) => {
-        const check = () => {
-          const overlay = document.getElementById('githubConfirmOverlay');
-          if (overlay && overlay.classList.contains('open')) resolve(document.getElementById('githubConfirmText').textContent);
-          else setTimeout(check, 20);
-        };
-        check();
-      });
-      const pending = runCommandTool('run_command', { command: 'node make-pdf.js' });
-      const asked = await opened;
-      githubConfirmResolve('once');
-      const result = await pending;
+      const runThrough = async (command) => {
+        const opened = new Promise((resolve) => {
+          const check = () => {
+            const overlay = document.getElementById('githubConfirmOverlay');
+            if (overlay && overlay.classList.contains('open')) resolve(document.getElementById('githubConfirmText').textContent);
+            else setTimeout(check, 20);
+          };
+          check();
+        });
+        const pending = runCommandTool('run_command', { command });
+        const asked = await opened;
+        githubConfirmResolve('once');
+        return { asked, result: await pending };
+      };
+      // Real output, so the result is the command's rather than the page's.
+      const printed = await runThrough(${JSON.stringify(PRINT_COMMAND)});
+      // And a real file, through a real shell: this is "create and run the
+      // script" in its smallest honest form.
+      const produced = await runThrough(${JSON.stringify(WRITE_COMMAND)});
       return {
-        asked,
+        printed,
+        produced,
         title: document.getElementById('githubConfirmTitle').textContent,
-        result,
-        buildOffered: toolsForMode('build', RUN_TOOLS).length,
+        buildOffered: toolsForMode('build', RUN_TOOLS).map((t) => t.function.name),
         chatOffered: toolsForMode('chat', RUN_TOOLS).length,
+        planOffered: toolsForMode('plan', RUN_TOOLS).length,
       };
     })()`);
     console.log('run tool: ' + JSON.stringify(runTool));
-    if (!/node make-pdf\.js/.test(runTool.asked)) {
-      throw new Error('the command was not put to the user before it was sent: ' + JSON.stringify(runTool));
+    if (!/node -e/.test(runTool.printed.asked)) {
+      throw new Error('the command was not put to the user before it was sent: ' + JSON.stringify(runTool.printed));
     }
     if (!/server/.test(runTool.title)) throw new Error('the dialog does not say where it runs: ' + runTool.title);
-    // The reason that fires here is the login one, not the switch: this app has
-    // WORKSPACE_RUN set and no accounts, which is the combination that would hand
-    // a shell to any visitor.
-    if (!/needs a login/.test(runTool.result)) {
-      throw new Error('the refusal never reached the model: ' + JSON.stringify(runTool));
+    if (!/Exit code 0/.test(runTool.printed.result) || !/42/.test(runTool.printed.result)) {
+      throw new Error('the command did not run, or its output did not come back: ' + JSON.stringify(runTool.printed));
     }
-    if (runTool.buildOffered !== 1 || runTool.chatOffered !== 0) {
+    if (/smoke-report\.txt/.test(runTool.printed.result)) {
+      throw new Error('a command that wrote nothing listed a file anyway: ' + JSON.stringify(runTool.printed));
+    }
+    if (!/smoke-report\.txt/.test(runTool.produced.result)) {
+      throw new Error('a file the command wrote was not listed in the result: ' + JSON.stringify(runTool.produced));
+    }
+    if (runTool.buildOffered.join(',') !== 'run_command' || runTool.chatOffered || runTool.planOffered) {
       throw new Error('the shell is offered in the wrong modes: ' + JSON.stringify(runTool));
     }
 
-    // And the settings surface for what the server workspace holds says the same
-    // thing, in the same words, rather than loading forever.
+    // The file the command produced, downloaded through the panel that lists it.
     const serverFiles = await evaluate(`(async () => {
       switchView('settings');
       await renderServerWorkspaceFiles();
+      const row = [...document.querySelectorAll('#serverWorkspaceFileList .workspace-row')]
+        .find((node) => node.textContent.includes('smoke-report.txt'));
+      const link = row && row.querySelector('a');
+      if (!link) return { status: document.getElementById('serverWorkspaceStatus').textContent, rows: 0 };
+      const res = await fetch(link.getAttribute('href'));
       return {
         status: document.getElementById('serverWorkspaceStatus').textContent,
-        rows: document.getElementById('serverWorkspaceFileList').children.length,
+        rows: document.querySelectorAll('#serverWorkspaceFileList .workspace-row').length,
+        href: link.getAttribute('href'),
+        body: await res.text(),
       };
     })()`);
     console.log('server files: ' + JSON.stringify(serverFiles));
-    if (!/login/.test(serverFiles.status)) {
-      throw new Error('the server files list does not say why it is empty: ' + JSON.stringify(serverFiles));
+    // Exactly one row for one file: opening the panel renders the list twice (the
+    // view switch and the render), and a pass that appended after a newer one had
+    // already cleared the list would show the file twice.
+    if (serverFiles.rows !== 1 || !/1 file\(s\)/.test(serverFiles.status) || !/smoke-report\.txt/.test(serverFiles.href || '')) {
+      throw new Error('the produced file is not listed in Settings: ' + JSON.stringify(serverFiles));
     }
+    if (serverFiles.body !== 'hello from the smoke') {
+      throw new Error('the download is not the file the command wrote: ' + JSON.stringify(serverFiles));
+    }
+    try { fs.rmSync(path.join(APP_DIR, 'workspace', 'smoke-report.txt'), { force: true }); } catch { /* gone already */ }
 
     // The session panel floats, so opening it must not resize the conversation
     // and must not sit on the composer. One surface means the overlap rule the
