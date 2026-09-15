@@ -3935,7 +3935,15 @@ function newestInFamily(models, prefix) {
 // back to the full list matters: a provider that renames a model shouldn't
 // leave the picker empty.
 function selectAllowedModels(models, rules) {
-  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly)) return models || [];
+  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly && !rules.includeRest)) return models || [];
+  // Namespaces within one catalogue that publish a free marker in the id, and
+  // where the account can only spend the free ones. A gateway catalogue is
+  // mixed by nature: the models it fronts come from many accounts on many
+  // tiers, and it publishes no prices, so "is this free?" has no general
+  // answer here -- but it has an answer for the namespaces that say so.
+  const paid = (m) => (rules.freeOnlyPrefixes || []).some(
+    (prefix) => String(m.id).startsWith(prefix) && !isFreeModelId(m.id),
+  );
   const chosen = [];
   const seen = new Set();
   const take = (model) => {
@@ -3965,6 +3973,15 @@ function selectAllowedModels(models, rules) {
   // exact goes through matchListEntry so an id matches exactly the way it would
   // in a plain array allowlist -- by id, or by label-based token match.
   (rules.exact || []).forEach((wanted) => take((models || []).find((m) => m && matchListEntry(m, wanted))));
+
+  // includeRest turns the list from a gate into an ordering: what is named
+  // leads, everything else follows. A gateway is the case for it -- the
+  // operator already chose what it fronts, in its own dashboard, so a second
+  // allowlist here can only hide their choices, and does: connecting Mistral
+  // to OmniRoute added 48 models that a pinned list kept out of the picker
+  // entirely. Naming an id that has since been retired simply stops leading
+  // rather than removing a model from the list.
+  if (rules.includeRest) (models || []).filter((m) => m && !paid(m)).forEach(take);
   return chosen.length ? chosen : models || [];
 }
 

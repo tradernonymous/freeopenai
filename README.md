@@ -273,7 +273,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `ANTIGRAVITY_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list, for a proxy release whose model names differ. |
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
-| `OMNIROUTE_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list — the `auto` variants and the direct flagships — when your gateway's catalogue routes different names. |
+| `OMNIROUTE_MODELS` | *(the lead list)* | Comma-separated ids that replace the lead list — the `auto` variants and the free-tier flagships — when your gateway's catalogue routes different names. |
 | `OPENROUTER_FREE_ONLY` | `1` | Free models only. Also means **no drawing**: OpenRouter's Image API has no free tier, so a free-only key is not offered as an image candidate. Set `0` once the key has credits. |
 | `HF_IMAGE_MODEL` | `stabilityai/stable-diffusion-3-medium-diffusers` | The default is gated — accept its licence once on the model page, or the token gets a `403`. |
 
@@ -542,6 +542,10 @@ OMNIROUTE_BASE_URL=http://127.0.0.1:20128 npm start
 | `OMNIROUTE_BASE_URL` | `http://127.0.0.1:20128` (local) or wherever the gateway runs. Both with and without `/v1` work — the version segment is added when it is missing. |
 | `OMNIROUTE_API_KEY` | *(leave unset for a default install with `REQUIRE_API_KEY=false`)* |
 | `OMNIROUTE_MODELS` | Optional comma-separated override when your gateway's route names differ from the pinned list |
+
+**The model list here orders the picker, it does not gate it.** It used to be a plain allowlist, which made sense while the gateway was assumed to front a handful of flagships. It is the wrong shape for a gateway: you already chose what it fronts, in its own dashboard, so a second allowlist here can only overrule that — and did. Connecting Mistral published 48 `mistral/…` ids that could not be picked by name. Now the free-first routers (`auto/best-free`, `auto/coding:free`) and the free-tier flagships lead, and the rest of the live catalogue follows them. A named id that is retired upstream stops leading instead of vanishing from the list.
+
+The one exception is priced namespaces. The gateway publishes **no pricing at all** in `/v1/models`, so "is this free?" has no general answer here — but OpenRouter marks its free models in the id, and reaches the gateway as over a thousand ids on a key that is usually free-only. `freeOnlyPrefixes: ['openrouter/']` drops the paid ones, which would otherwise fill the picker with models that can only answer `402`. Everything else is offered: an unpriced model might be on an account allowance, and hiding it would be a guess. The page keeps the first 60 usable rows, so what leads the list is what can be picked by name.
 
 Until that variable (or `OMNIROUTE_API_KEY`) is set, **OmniRoute does not appear in the picker at all** — the provider stays out of it entirely rather than showing up and failing, so "I can't see the auto models" on a deploy almost always means the variable is missing.
 

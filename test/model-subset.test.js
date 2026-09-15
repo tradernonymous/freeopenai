@@ -95,3 +95,51 @@ test('a repeated id in the NVIDIA allowlist reaches the picker exactly once', as
     clearModelCache();
   }
 });
+
+// includeRest turns the rules from a gate into an ordering, for a catalogue
+// whose curation already happened somewhere else -- a gateway's own dashboard.
+// Without it, connecting a provider there published 48 ids that this app's
+// allowlist silently kept out of the picker.
+const MIXED = [
+  { id: 'auto/best-free' },
+  { id: 'mistral/codestral-latest' },
+  { id: 'openrouter/qwen3-coder:free' },
+  { id: 'openrouter/anthropic/claude-opus-4.5' },
+  { id: 'kr/claude-sonnet-5' },
+];
+
+test('includeRest leads with the named ids and keeps the rest behind them', () => {
+  const chosen = ids(selectAllowedModels(MIXED, { exact: ['kr/claude-sonnet-5', 'auto/best-free'], includeRest: true }));
+  assert.deepEqual(chosen.slice(0, 2), ['kr/claude-sonnet-5', 'auto/best-free'], 'named ids lead, in declared order');
+  assert.ok(chosen.includes('mistral/codestral-latest'), 'an unnamed model still reaches the picker');
+  assert.equal(new Set(chosen).size, chosen.length, 'a named id must not appear twice');
+});
+
+test('a named id that no longer exists stops leading rather than shrinking the list', () => {
+  // The failure this prevents: a pinned id retired upstream used to remove a
+  // model from the picker; now it costs nothing but its place in the order.
+  const chosen = ids(selectAllowedModels(MIXED, { exact: ['gone/model', 'kr/claude-sonnet-5'], includeRest: true }));
+  assert.equal(chosen[0], 'kr/claude-sonnet-5');
+  assert.equal(chosen.length, MIXED.length, 'every live model is still offered');
+});
+
+test('freeOnlyPrefixes drops the paid ids of a namespace that marks its free ones', () => {
+  const chosen = ids(selectAllowedModels(MIXED, { includeRest: true, freeOnlyPrefixes: ['openrouter/'] }));
+  assert.ok(chosen.includes('openrouter/qwen3-coder:free'));
+  assert.equal(chosen.includes('openrouter/anthropic/claude-opus-4.5'), false);
+  // Only that namespace is judged. Everything else has no price published
+  // here, and guessing "paid" would hide models the account can actually use.
+  assert.ok(chosen.includes('mistral/codestral-latest'));
+  assert.ok(chosen.includes('kr/claude-sonnet-5'));
+});
+
+test('a paid id is still offered when it was named outright', () => {
+  // freeOnlyPrefixes filters the tail, not the operator's own choices: naming
+  // an id is a decision, and silently dropping it would be the surprise.
+  const chosen = ids(selectAllowedModels(MIXED, {
+    exact: ['openrouter/anthropic/claude-opus-4.5'],
+    includeRest: true,
+    freeOnlyPrefixes: ['openrouter/'],
+  }));
+  assert.equal(chosen[0], 'openrouter/anthropic/claude-opus-4.5');
+});

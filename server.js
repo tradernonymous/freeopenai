@@ -1263,23 +1263,86 @@ const LLM_PROVIDERS = {
     // enough for a picker, and the allowlist below is written in those alias
     // ids, so ask for the deduplicated catalogue.
     modelsPath: '/models?prefix=alias',
-    models: [
-      // The router itself: let OmniRoute pick the best provider per request.
-      'auto',
-      'auto/coding',
-      'auto/fast',
-      'auto/cheap',
-      'auto/smart',
-      'auto/offline',
-      // Direct flagships, as documented in the OmniRoute README / affiliates.
-      'openai/gpt-5.4',
-      'glm/glm-5.2',
-      'cc/claude-opus-4-6',
-      'cc/claude-sonnet-4-6',
-      'agentrouter/claude-opus-4-8',
-      'agentrouter/claude-opus-5',
-      'agentrouter/gpt-5.6-sol',
-    ],
+    // Ordering, not gating. This used to be a plain allowlist, which made
+    // sense when the gateway was assumed to front a handful of flagships --
+    // but the operator already curates it in its own dashboard, so a second
+    // allowlist here could only overrule that, and did: connecting Mistral
+    // published 48 `mistral/...` ids that could not be picked by name. So the
+    // router and the flagships lead, and the rest of the live catalogue
+    // follows. A pinned id that is retired upstream just stops leading.
+    models: {
+      exact: [
+        // The router itself, free-first: `auto/best-free` and `auto/coding:free`
+        // route only to providers on a free tier, which is the whole point of
+        // running this gateway on free keys. The general routers follow. Bare
+        // `auto` is the documented headline id and stays named even though one
+        // install's catalogue did not list it -- a name with nothing behind it
+        // now simply does not lead, rather than shrinking the picker.
+        'auto',
+        'auto/best-free',
+        'auto/coding:free',
+        'auto/best-coding',
+        'auto/best-reasoning',
+        'auto/best-chat',
+        'auto/best-fast',
+        'auto/coding',
+        'auto/reasoning',
+        'auto/fast',
+        'auto/cheap',
+        'auto/smart',
+        'auto/offline',
+        // Then the best of what a free-tier account actually reaches here,
+        // read off the live catalogue rather than guessed: Kiro's frontier
+        // tier, Mistral, Groq, Gemini, DeepSeek, SambaNova, Ollama Cloud,
+        // LLM7 and Cloudflare. The page keeps the first 60 usable rows, so
+        // what leads this list is what can be picked by name.
+        'kr/claude-sonnet-5',
+        'kr/claude-sonnet-4.5',
+        'kr/claude-haiku-4.5',
+        'kr/gpt-5.6-sol',
+        'kr/glm-5',
+        'kr/qwen3-coder-next',
+        'kr/deepseek-3.2',
+        'kr/minimax-m2.5',
+        'mistral/codestral-latest',
+        'mistral/devstral-latest',
+        'mistral/mistral-large-latest',
+        'mistral/mistral-medium-3-5',
+        'mistral/mistral-small-latest',
+        'groq/llama-3.3-70b-versatile',
+        'groq/openai/gpt-oss-120b',
+        'groq/qwen/qwen3-32b',
+        'groq/meta-llama/llama-4-scout-17b-16e-instruct',
+        'gemini/gemini-3.1-pro-preview',
+        'gemini/gemini-3-flash-preview',
+        'gemini/gemini-2.5-pro',
+        'gemini/gemini-2.5-flash',
+        'ds/deepseek-v4-pro',
+        'ds/deepseek-v4-flash',
+        'ollamacloud/kimi-k3',
+        'ollamacloud/qwen3.5:397b',
+        'ollamacloud/glm-5.2',
+        'ollamacloud/gpt-oss:120b',
+        'samba/DeepSeek-V3.2',
+        'samba/Llama-4-Maverick-17B-128E-Instruct',
+        'samba/gpt-oss-120b',
+        'llm7/deepseek-r1-0528',
+        'llm7/qwen2.5-coder-32b-instruct',
+        'cf/@cf/openai/gpt-oss-120b',
+        'cf/@cf/moonshotai/kimi-k2.7-code',
+        // AgentRouter's flagships, the one paid-catalogue affiliate here that
+        // is reached on signup credit rather than a card.
+        'agentrouter/claude-opus-4-8',
+        'agentrouter/claude-opus-5',
+        'agentrouter/gpt-5.6-sol',
+      ],
+      includeRest: true,
+      // OpenRouter reaches this gateway as 1,091 of its 2,330 ids, almost all
+      // of them paid, on a key that is free-only -- so passing them through
+      // would fill the picker with models that can only answer 402. It is
+      // also the one namespace here that says which is which, in the id.
+      freeOnlyPrefixes: ['openrouter/'],
+    },
     // The gateway fronts plenty of upstreams that sell images, and it speaks
     // OpenAI, so whatever image model it has connected is reachable through it
     // -- named by the operator, because the gateway's catalogue is its own.
