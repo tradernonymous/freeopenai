@@ -2,9 +2,8 @@
 #
 # With core.autocrlf=true (the default on Windows), a checkout rewrites text
 # files to CRLF -- and a CRLF shell script fails at its shebang with
-# "/bin/sh^M: bad interpreter". That applies to deploy/antigravity-proxy/
-# entrypoint.sh, which is the container's ENTRYPOINT: a Windows-side checkout
-# would build an image that cannot start.
+# "/bin/sh^M: bad interpreter". Any entrypoint.sh a container runs would fail
+# to start from a Windows-side checkout.
 #
 # Docker builds from a Linux clone are unaffected, which is what makes this the
 # kind of problem that only appears for whoever tries it locally first.

@@ -51,30 +51,30 @@ test('Puter always needs a Puter account, whoever is asking', () => {
 test('a direct provider needs one only when nothing else is checking', () => {
   // With a login of its own, the deployment has established who the visitor is
   // and enforces it on every API route, so their own account is enough.
-  assert.equal(needsPuterAccount({ provider: 'antigravity', loginRequired: true }), false);
-  assert.equal(harness({ provider: 'antigravity', loginRequired: true }).needs(), false);
+  assert.equal(needsPuterAccount({ provider: 'nvidia', loginRequired: true }), false);
+  assert.equal(harness({ provider: 'nvidia', loginRequired: true }).needs(), false);
   // Wide open: nothing else stands between a visitor and the operator's keys.
-  assert.equal(needsPuterAccount({ provider: 'antigravity', loginRequired: false }), true);
-  assert.equal(harness({ provider: 'antigravity', loginRequired: false }).needs(), true);
+  assert.equal(needsPuterAccount({ provider: 'nvidia', loginRequired: false }), true);
+  assert.equal(harness({ provider: 'nvidia', loginRequired: false }).needs(), true);
   assert.equal(needsPuterAccount({ provider: 'openrouter', loginRequired: false }), true);
 });
 
 test('the page takes the login state from the deploy, and fails strict', async () => {
   // The plumbing: the server's answer is what decides whether a direct provider
   // needs a Puter account, so a typo here would silently keep the old gate.
-  const on = harness({ provider: 'antigravity', health: { loginRequired: true } });
+  const on = harness({ provider: 'nvidia', health: { loginRequired: true } });
   await on.loaded.refreshLoginRequirement();
   assert.equal(on.deps.loginRequired, true);
   assert.equal(on.needs(), false, 'a signed-in deploy frees the direct provider');
 
-  const off = harness({ provider: 'antigravity', health: { loginRequired: false } });
+  const off = harness({ provider: 'nvidia', health: { loginRequired: false } });
   await off.loaded.refreshLoginRequirement();
   assert.equal(off.deps.loginRequired, false);
   assert.equal(off.needs(), true, 'an open deployment keeps the Puter requirement');
 
   // Unreadable means unknown, and unknown stays strict rather than opening the
   // operator's provider keys to whoever is looking.
-  const broken = harness({ provider: 'antigravity', loginRequired: true, failHealth: true });
+  const broken = harness({ provider: 'nvidia', loginRequired: true, failHealth: true });
   await broken.loaded.refreshLoginRequirement();
   assert.equal(broken.deps.loginRequired, false);
   assert.equal(broken.needs(), true);
@@ -85,7 +85,7 @@ test('anything unreadable keeps the stricter answer', () => {
     assert.equal(needsPuterAccount(input), true, `${JSON.stringify(input)} must not open a provider key`);
   }
   // An unknown login state is passed as false by the page for the same reason.
-  assert.equal(harness({ provider: 'antigravity', loginRequired: false }).needs(), true);
+  assert.equal(harness({ provider: 'nvidia', loginRequired: false }).needs(), true);
 });
 
 test('no Puter check in the send gate stands on its own', () => {

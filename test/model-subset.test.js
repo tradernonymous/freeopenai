@@ -133,6 +133,28 @@ test('freeOnlyPrefixes drops the paid ids of a namespace that marks its free one
   assert.ok(chosen.includes('kr/claude-sonnet-5'));
 });
 
+test('restPrefixes lets only the named namespaces follow the list', () => {
+  // A gateway prices nothing, so the namespace is the only thing that says
+  // whether a model is on a free tier. The rest of the catalogue follows the
+  // named ids only from the namespaces the rules vouch for.
+  const withPaid = [...MIXED, { id: 'openai/gpt-5.4' }, { id: 'anthropic/claude-opus-5' }];
+  const chosen = ids(selectAllowedModels(withPaid, {
+    exact: ['auto/best-free'],
+    includeRest: true,
+    restPrefixes: ['auto/', 'kr/', 'mistral/', 'openrouter/'],
+    freeOnlyPrefixes: ['openrouter/'],
+  }));
+  assert.equal(chosen[0], 'auto/best-free');
+  assert.ok(chosen.includes('kr/claude-sonnet-5'));
+  assert.ok(chosen.includes('mistral/codestral-latest'));
+  assert.ok(chosen.includes('openrouter/qwen3-coder:free'), 'the two rules compose');
+  assert.equal(chosen.includes('openai/gpt-5.4'), false, 'a namespace with no free tier never follows on its own');
+  assert.equal(chosen.includes('anthropic/claude-opus-5'), false);
+  // Naming one is still a decision, the same as it is for a paid OpenRouter id.
+  const named = ids(selectAllowedModels(withPaid, { exact: ['openai/gpt-5.4'], includeRest: true, restPrefixes: ['kr/'] }));
+  assert.deepEqual(named, ['openai/gpt-5.4', 'kr/claude-sonnet-5']);
+});
+
 test('a paid id is still offered when it was named outright', () => {
   // freeOnlyPrefixes filters the tail, not the operator's own choices: naming
   // an id is a decision, and silently dropping it would be the surprise.

@@ -4151,7 +4151,12 @@ function selectAllowedModels(models, rules) {
   // to OmniRoute added 48 models that a pinned list kept out of the picker
   // entirely. Naming an id that has since been retired simply stops leading
   // rather than removing a model from the list.
-  if (rules.includeRest) (models || []).filter((m) => m && !paid(m)).forEach(take);
+  //
+  // restPrefixes narrows what follows to the namespaces it names -- the ones
+  // on a free tier, on a gateway that prices nothing. An id outside them is
+  // still reachable by naming it in `exact`; it just never follows on its own.
+  const followsOn = (m) => !rules.restPrefixes || rules.restPrefixes.some((prefix) => String(m.id).startsWith(prefix));
+  if (rules.includeRest) (models || []).filter((m) => m && !paid(m) && followsOn(m)).forEach(take);
   return chosen.length ? chosen : models || [];
 }
 

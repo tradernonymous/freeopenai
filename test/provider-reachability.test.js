@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { createRequestHandler, fetchFailureReason } = require('../server.js');
 
-// The reported symptom this covers: "Could not reach Antigravity: fetch failed".
+// The reported symptom this covers: "Could not reach OmniRoute: fetch failed".
 // Three unrelated problems produce that sentence -- a name that does not
 // resolve, a host with nothing listening, a connection that times out -- and
 // they have three different fixes. undici puts the distinguishing part in
@@ -63,7 +63,7 @@ async function chatWith(providerId, env) {
     const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=${providerId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'antigravity-claude-opus-4-6-thinking-high', messages: [{ role: 'user', content: 'hi' }] }),
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
     });
     return { status: res.status, body: await res.json() };
   } finally {
@@ -86,10 +86,10 @@ function closedPort() {
 
 test('a refused connection says so, and says it is your own endpoint', async () => {
   const port = await closedPort();
-  const { status, body } = await chatWith('antigravity', { ANTIGRAVITY_BASE_URL: `http://127.0.0.1:${port}` });
+  const { status, body } = await chatWith('omniroute', { OMNIROUTE_BASE_URL: `http://127.0.0.1:${port}` });
 
   assert.equal(status, 502);
-  assert.match(body.error, /Could not reach Antigravity/, 'still names the provider');
+  assert.match(body.error, /Could not reach OmniRoute/, 'still names the provider');
   assert.match(
     body.error,
     /the host resolved but nothing is listening on that port|the connection was closed as soon as it opened|the connection timed out/,

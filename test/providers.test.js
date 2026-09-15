@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS, providerConfig } = require('../server.js');
+const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS } = require('../server.js');
 const { isFreeModel, isFreeModelId, emitsText, usableChatModels } = require('../chatlib.js');
 
 // The OpenRouter allowlist is a free-tier commitment: paid ids only ever
@@ -339,7 +339,7 @@ test('non-LLM services are labelled by kind, with a reason', async () => {
   assert.equal(byId.youcom.kind, 'search');
   assert.equal(byId.nara.kind, 'chat');
   assert.equal(byId.openrouter.kind, 'chat');
-  assert.equal(byId.mistral.kind, 'chat');
+  assert.equal(byId.nvidia.kind, 'chat');
 
   assert.match(byId.deepgram.note, /transcription models/);
   assert.match(byId.youcom.note, /search and research/);
@@ -425,7 +425,6 @@ test('an HTML error body does not collapse into nothing', async () => {
 // marking the free ones in the id. Treating "no price" as free would rank
 // claude-fable-5 alongside the free tier the user actually has.
 
-
 test('an account-allowance provider still treats an unpriced model as free', () => {
   // Nara and NVIDIA meter the account, not the model, so nothing in their
   // catalogue is individually paid.
@@ -460,7 +459,7 @@ test('the removed providers are gone and the new ones are present', async () => 
   assert.ok(!ids.includes('cerebras'), 'Cerebras was removed');
   assert.ok(!ids.includes('sambanova'), 'SambaNova was removed');
   assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
-  for (const id of ['mistral', 'nara', 'ollama', 'nvidia']) {
+  for (const id of ['nara', 'openrouter', 'nvidia', 'omniroute']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
   assert.ok(!ids.includes('aigateway'), 'AI Gateway was removed');
@@ -469,16 +468,6 @@ test('the removed providers are gone and the new ones are present', async () => 
   }
 });
 
-
-
-
-
-
-
-
-
-
-
 test('a provider with no subset still returns its whole catalogue', async () => {
   clearModelCache();
   const upstream = http.createServer((req, res) => {
@@ -486,16 +475,16 @@ test('a provider with no subset still returns its whole catalogue', async () => 
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.MISTRAL_API_KEY = 'k';
-  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=mistral`)).json();
+  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`)).json();
 
   app.close(); upstream.close();
-  delete process.env.MISTRAL_API_KEY;
-  delete process.env.MISTRAL_BASE_URL;
+  delete process.env.NVIDIA_API_KEY;
+  delete process.env.NVIDIA_BASE_URL;
 
   assert.equal(body.length, 3);
 });
@@ -605,7 +594,7 @@ test('a 429 that says the quota is spent is reported, not retried', async () => 
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
   try {
     let calls = 0;
-    const result = await fetchProviderWithRetry('ollama', async () => {
+    const result = await fetchProviderWithRetry('nara', async () => {
       calls += 1;
       return { ok: false, status: 429, data: { error: 'you have reached your monthly usage limit, upgrade for higher limits' } };
     });
@@ -667,28 +656,28 @@ test('a corrupt provider key fails fast with a readable message, on chat and mod
   // The exact failure that shipped: a pasted placeholder carried an em dash,
   // and undici answered "Cannot convert argument to a ByteString ... value of
   // 8212" -- naming neither the variable nor the fix.
-  process.env.ANTIGRAVITY_API_KEY = 'Bearer <paste from clipboard \u2014 same value the gate checks>';
+  process.env.NVIDIA_API_KEY = 'Bearer <paste from clipboard \u2014 same value the gate checks>';
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
   try {
-    const chat = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=antigravity`, {
+    const chat = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=nvidia`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'antigravity-claude-opus-4-6-thinking-high', messages: [{ role: 'user', content: 'hi' }] }),
     });
     assert.equal(chat.status, 400);
     const body = await chat.json();
-    assert.match(body.error, /ANTIGRAVITY_API_KEY/);
+    assert.match(body.error, /NVIDIA_API_KEY/);
     assert.match(body.error, /U\+2014/);
     assert.match(body.error, /position 29/);
     assert.match(body.error, /plain ASCII/);
 
-    const models = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=antigravity`);
+    const models = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nvidia`);
     assert.equal(models.status, 400, 'the picker must not list models a corrupt key can never reach');
-    assert.match((await models.json()).error, /ANTIGRAVITY_API_KEY/);
+    assert.match((await models.json()).error, /NVIDIA_API_KEY/);
   } finally {
     app.close();
-    delete process.env.ANTIGRAVITY_API_KEY;
+    delete process.env.NVIDIA_API_KEY;
     clearModelCache();
   }
 });
@@ -911,13 +900,13 @@ test('llmChat streams SSE when body.stream is true', async () => {
     res.end();
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.MISTRAL_API_KEY = 'k';
-  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=nvidia`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral-small', messages: [{ role: 'user', content: 'hi' }], stream: true }),
@@ -929,8 +918,8 @@ test('llmChat streams SSE when body.stream is true', async () => {
   } finally {
     if (app) app.close();
     upstream.close();
-    delete process.env.MISTRAL_API_KEY;
-    delete process.env.MISTRAL_BASE_URL;
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
   }
 });
 
@@ -1075,13 +1064,13 @@ test('a stream that goes quiet aborts with a stall message, not silence', async 
     res.flushHeaders();
   });
   await new Promise((r) => hung.listen(0, r));
-  process.env.MISTRAL_API_KEY = 'k';
-  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${hung.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=nvidia`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }], stream: true }),
@@ -1095,8 +1084,8 @@ test('a stream that goes quiet aborts with a stall message, not silence', async 
   } finally {
     if (app) app.close();
     hung.close();
-    delete process.env.MISTRAL_API_KEY;
-    delete process.env.MISTRAL_BASE_URL;
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
     delete process.env.PROVIDER_STALL_MS;
   }
 });
@@ -1105,13 +1094,13 @@ test('a stream with no headers fails fast with a headers message', async () => {
   process.env.PROVIDER_TIMEOUT_HEADERS_MS = '120';
   const silent = http.createServer(() => { /* accept, never respond */ });
   await new Promise((r) => silent.listen(0, r));
-  process.env.MISTRAL_API_KEY = 'k';
-  process.env.MISTRAL_BASE_URL = `http://127.0.0.1:${silent.address().port}/v1`;
+  process.env.NVIDIA_API_KEY = 'k';
+  process.env.NVIDIA_BASE_URL = `http://127.0.0.1:${silent.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=mistral`, {
+    const res = await fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=nvidia`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }], stream: true }),
@@ -1122,134 +1111,17 @@ test('a stream with no headers fails fast with a headers message', async () => {
   } finally {
     if (app) app.close();
     silent.close();
-    delete process.env.MISTRAL_API_KEY;
-    delete process.env.MISTRAL_BASE_URL;
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_BASE_URL;
     delete process.env.PROVIDER_TIMEOUT_HEADERS_MS;
   }
 });
 
-test('Ollama stays hidden with neither key nor base URL', async () => {
-  delete process.env.OLLAMA_API_KEY;
-  delete process.env.OLLAMA_BASE_URL;
-  const app = http.createServer(createRequestHandler(__dirname + '/..'));
-  await new Promise((r) => app.listen(0, r));
-  const providers = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
-  app.close();
-  assert.equal(providers.find((p) => p.id === 'ollama').configured, false);
-});
-
-test('Ollama appears on a base URL alone and sends no auth header', async () => {
-  clearModelCache();
-  const seen = {};
-  const upstream = http.createServer((req, res) => {
-    seen.authorization = req.headers.authorization;
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: [{ id: 'qwen3:8b' }] }));
-  });
-  await new Promise((r) => upstream.listen(0, r));
-  delete process.env.OLLAMA_API_KEY;
-  process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
-  let app;
-  try {
-    app = http.createServer(createRequestHandler(__dirname + '/..'));
-    await new Promise((r) => app.listen(0, r));
-    const base = `http://127.0.0.1:${app.address().port}`;
-    const providers = await (await fetch(base + '/api/llm/providers')).json();
-    assert.equal(providers.find((p) => p.id === 'ollama').configured, true);
-    const body = await (await fetch(base + '/api/llm/models?provider=ollama')).json();
-    assert.equal(body.length, 1);
-    assert.equal(seen.authorization, undefined, 'no key means no auth header, not a bare Bearer');
-  } finally {
-    if (app) app.close();
-    upstream.close();
-    delete process.env.OLLAMA_BASE_URL;
-    clearModelCache();
-  }
-});
-
-test('Ollama accepts a Railway root URL and falls back to native /api/tags', async () => {
-  clearModelCache();
-  const seen = [];
-  const upstream = http.createServer((req, res) => {
-    seen.push(req.url);
-    if (req.url === '/v1/models') {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'not found' }));
-      return;
-    }
-    if (req.url === '/api/tags') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ models: [{ name: 'qwen3:8b' }, { model: 'deepseek-r1:8b' }] }));
-      return;
-    }
-    res.writeHead(404);
-    res.end();
-  });
-  await new Promise((r) => upstream.listen(0, r));
-  delete process.env.OLLAMA_API_KEY;
-  process.env.OLLAMA_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
-  let app;
-  try {
-    app = http.createServer(createRequestHandler(__dirname + '/..'));
-    await new Promise((r) => app.listen(0, r));
-    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=ollama`)).json();
-    assert.deepEqual(body.map((m) => m.id).sort(), ['qwen3:8b', 'deepseek-r1:8b'].sort());
-    assert.deepEqual(seen, ['/v1/models', '/api/tags']);
-  } finally {
-    if (app) app.close();
-    upstream.close();
-    delete process.env.OLLAMA_BASE_URL;
-    clearModelCache();
-  }
-});
-
-test('Ollama base URLs normalize to the OpenAI-compatible route only once', () => {
-  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com'), 'https://ollama.example.com/v1');
-  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com/'), 'https://ollama.example.com/v1');
-  assert.equal(normalizeProviderBaseUrl('ollama', 'https://ollama.example.com/v1'), 'https://ollama.example.com/v1');
+test('OmniRoute base URLs normalize to the OpenAI-compatible route only once', () => {
+  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com'), 'https://gateway.example.com/v1');
+  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com/'), 'https://gateway.example.com/v1');
+  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com/v1'), 'https://gateway.example.com/v1');
   assert.equal(normalizeProviderBaseUrl('nara', 'https://router.example.com'), 'https://router.example.com');
-});
-
-test('Ollama sends Bearer when a key is set', async () => {
-  const seen = await withStubProvider('OLLAMA_API_KEY', 'OLLAMA_BASE_URL', 'Bearer', async (base) => {
-    await fetch(base + '/api/llm/models?provider=ollama');
-  });
-  assert.equal(seen.authorization, 'Bearer KEY123');
-});
-
-test('Ollama key alone resolves to the cloud endpoint', () => {
-  clearModelCache();
-  delete process.env.OLLAMA_BASE_URL;
-  process.env.OLLAMA_API_KEY = 'real-key';
-  try {
-    const cfg = providerConfig('ollama');
-    assert.ok(cfg, 'ollama should be configured when a key is present');
-    assert.equal(cfg.baseUrl, 'https://ollama.com/v1', 'key + no base URL → Ollama Cloud');
-    assert.equal(cfg.key, 'real-key');
-  } finally {
-    delete process.env.OLLAMA_API_KEY;
-    clearModelCache();
-  }
-});
-
-test('Ollama key plus base URL honours the explicit base', () => {
-  clearModelCache();
-  process.env.OLLAMA_API_KEY = 'real-key';
-  process.env.OLLAMA_BASE_URL = 'http://localhost:11434/v1';
-  try {
-    const cfg = providerConfig('ollama');
-    assert.equal(cfg.baseUrl, 'http://localhost:11434/v1', 'explicit base URL wins over cloud');
-  } finally {
-    delete process.env.OLLAMA_API_KEY;
-    delete process.env.OLLAMA_BASE_URL;
-    clearModelCache();
-  }
-});
-
-test('Ollama with no key and no base URL is unconfigured', () => {
-  delete process.env.OLLAMA_API_KEY;
-  delete process.env.OLLAMA_BASE_URL;
-  assert.equal(providerConfig('ollama'), null);
 });
 
 test('NVIDIA returns its whole live catalogue', async () => {
