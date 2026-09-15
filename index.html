@@ -1228,8 +1228,11 @@
         /* Whether the drawing met the request. One line, under the prompt that
            drew it: a miss is worth noticing and acting on, and a match is the
            receipt that the check ran at all. */
-        .image-check { margin: 6px 0 0; font-size: 12px; color: var(--text-muted); }
+        .image-check { margin: 6px 0 0; font-size: 12px; color: var(--text-muted); display: flex; align-items: flex-start; gap: 8px; }
         .image-check.missed { color: var(--danger); }
+        /* The verdict keeps the width and wraps, so the one thing a miss has to
+           say is never the thing that gets ellipsised. */
+        .image-check span { flex: 1; min-width: 0; }
         /* What the attachment costs the next request. Shown before it is sent,
            because a pasted file is the one thing in the prompt that nothing
            trims -- the history behind it is budgeted, and this is not. */
@@ -2667,6 +2670,13 @@
         // block below already renders a UI that depends on it.
         let loginRequired = false;
         let providerModels = [];
+        // Every model the provider publishes that can see, which is not the same
+        // list as the picker's: that one is capped at sixty rows so a catalogue of
+        // hundreds stays usable, and the read-back is not a picker. Asked of the
+        // capped list, "the cheapest eye" became "the first eye that happens to sit
+        // in the first sixty rows" -- an alphabetically-first flagship, on a
+        // gateway, where the cheap vision models rank below the cap.
+        let providerVision = [];
         let providerInfo = {};
 
         // Whether the chat should offer the GitHub tools to the model. Refreshed
@@ -5312,6 +5322,7 @@
             rememberPreference('puterChatProvider', id);
             if (id === PUTER_PROVIDER) {
                 providerModels = [];
+                providerVision = [];
                 selectedModel = isValidModel(localStorage.getItem('puterChatModel') || '')
                     ? localStorage.getItem('puterChatModel')
                     : DEFAULT_MODEL;
@@ -5540,6 +5551,9 @@
                 if (!res.ok) throw new Error(data.error || 'Could not list models');
                 const listed = usableChatModels(data);
                 providerModels = listed.filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
+                // Uncapped, because the read-back is choosing one model rather than
+                // offering a list: the cap was hiding exactly the models it needs.
+                providerVision = usableChatModels(data, Infinity).filter((m) => m.vision === true);
                 // Every single model ruled out is not a catalogue problem, it is
                 // a session that met an outage. Offering them again is the only
                 // honest answer: the memory exists to stop repeating one
@@ -5558,6 +5572,7 @@
                 selectedModel = providerModels.some((m) => m.id === remembered) ? remembered : providerModels[0].id;
             } catch (err) {
                 providerModels = [];
+                providerVision = [];
                 const reason = providerInfo[selectedProvider] && providerInfo[selectedProvider].kind !== 'chat'
                     ? noChatModelsReason()
                     : 'Could not load models: ' + err.message;
@@ -6530,6 +6545,19 @@
             }
         }
 
+        // The run a tapped control starts: the four things the composer sets up
+        // before an image request, so a retry started from a note is a turn like
+        // any other -- the stop button stops it and the composer is busy while it
+        // runs. The runner itself releases it when it ends.
+        function startImageRun() {
+            const controller = new AbortController();
+            const runId = ++generationId;
+            currentAbort = controller;
+            setComposerBusy(true);
+            showTypingIndicator();
+            return { runId, controller };
+        }
+
         function stopGeneration() {
             if (!isTyping) return;
             generationId += 1;
@@ -7421,7 +7449,14 @@
                 showImageOutcome('Edited image ready', outcome);
                 // Detached on purpose: the run is released below and the composer
                 // goes back to the reader while the picture is read back.
-                void checkDrawingAgainstRequest(bubble, url, options.request, promptText);
+                // An edit's fix is an edit of the same source, with everything the
+                // request carried -- the size preference and, for the brush, the
+                // mask -- so a corrected picture is still the edit that was asked
+                // for rather than a drawing of the same words.
+                void checkDrawingAgainstRequest(bubble, url, options.request, promptText, (difference) => {
+                    const run = startImageRun();
+                    return sendImageEdit(imageCheckFixPrompt(promptText, difference), source, run.runId, run.controller, options);
+                });
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7494,7 +7529,13 @@
                 // service actually drew is worth saying without dressing it as a
                 // clean win, and worth leaving on screen to be read.
                 showImageOutcome('Image ready', outcome);
-                void checkDrawingAgainstRequest(bubble, imageSrc, options.request, promptText);
+                // The fix repeats this request with the reviewer's difference folded
+                // into the prompt, and the same size preference, so a corrected
+                // picture comes back in the shape that was asked for.
+                void checkDrawingAgainstRequest(bubble, imageSrc, options.request, promptText, (difference) => {
+                    const run = startImageRun();
+                    return sendImageGeneration(imageCheckFixPrompt(promptText, difference), run.runId, run.controller, options);
+                });
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7594,48 +7635,85 @@
             return el;
         }
 
-        // The model that reads a drawing back. The cheapest model this service
-        // lists that can actually see, and none at all when it lists none -- the
-        // note is then simply absent, which is honest, where a check run on a
-        // model that cannot see would be a guess dressed as a verdict.
-        //
-        // Puter's "catalogue" is the built-in list, which names its vision models
-        // rather than describing them, so capability is asked the two ways the
-        // rest of the page already asks it.
+        // The model that reads a drawing back: the cheapest this service lists that
+        // can actually see, or nothing when it lists none, which leaves the note
+        // absent rather than guessed. Puter's "catalogue" is the built-in list and
+        // names its vision models rather than describing them, so capability is
+        // asked the two ways the rest of the page asks it.
         function imageCheckModel() {
             const sees = (model) => (selectedProvider === PUTER_PROVIDER ? isVisionCapable(model.id) : acceptsImages(model));
-            return FreeOpenAIProviderRouting.cheapestVisionModel(routableModels(), {
-                acceptsImages: sees,
-                preferred: DEFAULT_VISION_MODEL,
-            });
+            // Puter's catalogue is the built-in list, so there is nothing beyond it
+            // to offer; a server provider's whole catalogue is what was just read.
+            const list = selectedProvider === PUTER_PROVIDER ? routableModels() : providerVision;
+            return FreeOpenAIProviderRouting.cheapestVisionModel(list, { acceptsImages: sees });
         }
 
-        function appendImageCheckNote(el, check) {
+        function appendImageCheckNote(el, check, fixWith) {
             const note = document.createElement('div');
             note.className = check.matches ? 'image-check' : 'image-check missed';
-            note.textContent = check.matches
+            // The verdict in its own span, so the button can sit beside it without
+            // becoming part of what the note says.
+            const said = document.createElement('span');
+            said.textContent = check.matches
                 ? 'Checked: this looks like what you asked for.'
-                : 'Checked: ' + check.missed + ' — use Edit below to fix it.';
-            // Directly under the prompt it is about, rather than under the whole
-            // bubble: the picture, the words that drew it, whether they met the
-            // request, and then the buttons -- in the order they get read.
+                : 'Checked: ' + check.missed;
+            note.appendChild(said);
+            // Only a difference has something to redraw, and only the path that
+            // drew this picture can draw it again: the folded prompt goes back
+            // through the runner that produced it, so fixing a masked edit is still
+            // that masked edit rather than a fresh drawing.
+            if (!check.matches && typeof fixWith === 'function') note.appendChild(imageCheckFixButton(check.missed, fixWith));
+            // Directly under the prompt it is about: the picture, the words that
+            // drew it, whether they met the request, then the buttons.
             const caption = el.querySelector('.image-caption');
             if (caption && caption.parentNode === el) el.insertBefore(note, caption.nextSibling);
             else el.appendChild(note);
             scrollTranscript('follow');
         }
 
+        // The one-tap fix: spend on the tap and nothing else.
+        //
+        // The note is written by a check nobody asked for, so the note must not be
+        // what spends anything. The tap is the consent, one tap is one render, and
+        // the button is dead while that render runs -- a second tap is a second
+        // picture billed to the same doubt. It comes back afterwards, because a
+        // fix that missed too is a fair reason to try again.
+        function imageCheckFixButton(missed, fixWith) {
+            const fix = document.createElement('button');
+            fix.type = 'button';
+            // The caption's own small control, so a button on a muted 12px line
+            // looks like the one already sitting on the line above it.
+            fix.className = 'caption-copy';
+            fix.textContent = 'Fix it';
+            fix.title = 'Redraw with this difference built into the prompt';
+            fix.setAttribute('aria-label', fix.title);
+            fix.addEventListener('click', async () => {
+                if (fix.disabled) return;
+                fix.disabled = true;
+                fix.textContent = 'Fixing…';
+                try {
+                    await fixWith(missed);
+                } catch (error) {
+                    // The runner reports its own failures in the transcript; all
+                    // this owes the tap is a button that can be tried again.
+                    console.error('Fix redraw failed:', error);
+                }
+                fix.disabled = false;
+                fix.textContent = 'Fix it';
+            });
+            return fix;
+        }
+
         // Whether the picture met the request, asked of a model that can see it.
         //
-        // Best effort in every direction: no model that can see, a refusal, an
-        // answer that is not one of the two verdicts, or no answer at all leaves
-        // no note rather than a guess. Nothing here is awaited by the turn -- the
-        // picture is on screen and already paid for, and this is the app reading
-        // its own work back, which is the one thing the turn never did.
-        async function checkDrawingAgainstRequest(el, src, requestText, promptText) {
+        // Detached from the turn: the picture is on screen and already paid for, so
+        // nothing awaits this. Best effort in every direction -- no model that can
+        // see, a refusal, an answer that is not one of the two verdicts -- leaves no
+        // note rather than a guess.
+        async function checkDrawingAgainstRequest(el, src, requestText, promptText, fixWith) {
             const model = imageCheckModel();
             if (!model || !isSendableImageUrl(src)) return;
-            let answer = null;
+            let answer;
             try {
                 const response = await callModel([
                     { role: 'system', content: IMAGE_CHECK_PROMPT },
@@ -7645,14 +7723,14 @@
                     ] },
                 ], {}, null, model);
                 answer = parseImageCheck(extractMessageText((response && response.message) || null));
-            } catch (error) {
-                // A check that could not be made is not a failed turn, and saying
-                // so would put an error beside a picture that arrived fine.
-                if (error && error.name === 'AbortError') return;
+            } catch {
+                // A check that could not be made is not a failed turn, and saying so
+                // would put an error beside a picture that arrived fine.
                 return;
             }
-            if (!answer || !el || !el.parentNode) return;
-            appendImageCheckNote(el, answer);
+            // A bubble discarded while the check was in flight is a verdict with
+            // nowhere to go, and the one way this can be called off.
+            if (answer && el.parentNode) appendImageCheckNote(el, answer, fixWith);
         }
 
         function buildImageWrap(src, promptText) {
@@ -7903,11 +7981,7 @@
         async function sendImageVariations(promptText) {
             const ok = await askImageConfirm('Generate 2 variations?', `"${promptText}" — two extra image generations will run.`);
             if (!ok) return;
-            const controller = new AbortController();
-            const runId = ++generationId;
-            currentAbort = controller;
-            setComposerBusy(true);
-            showTypingIndicator();
+            const { runId, controller } = startImageRun();
             let bubble = null;
             const made = [];
             const outcome = { notes: [] };
@@ -8125,11 +8199,17 @@
             if (!srcData) { showStatus('error', 'That image host blocks editing (canvas is locked).'); return; }
             const maskData = editMaskDataUrl();
             closeImageEdit();
-            const controller = new AbortController();
-            const runId = ++generationId;
-            currentAbort = controller;
-            setComposerBusy(true);
-            showTypingIndicator();
+            await runBrushEdit(typed, srcData, maskData);
+        }
+
+        // The brush edit itself, from the run it opens to the note it writes.
+        //
+        // A second attempt arrives as `fixedPrompt` -- the reviewer's difference
+        // folded into the prompt that drew the picture -- so a fix repeats the
+        // request instead of re-planning it, keeps the mask it was painted with,
+        // and is checked against the same words as the attempt it replaces.
+        async function runBrushEdit(typed, srcData, maskData, fixedPrompt = '') {
+            const { runId, controller } = startImageRun();
             let bubble = null;
             let filled = false;
             const outcome = { notes: [] };
@@ -8141,7 +8221,7 @@
                 // does. Two paraphrases of one request is two different pictures:
                 // "add horns" typed into the brush box and "add horns" typed into
                 // the composer used to reach the model in different words.
-                const prompt = await plannedImagePrompt(typed, {
+                const prompt = fixedPrompt || await plannedImagePrompt(typed, {
                     hasImage: true,
                     hasPreviousImage: false,
                     mask: !!maskData,
@@ -8162,9 +8242,27 @@
                 fillImageBubble(bubble, prompt + ' (edit)', url);
                 filled = true;
                 showImageOutcome('Edit ready', outcome);
-                // The brush's own words are the request to check against, which is
-                // what the region was painted for.
-                void checkDrawingAgainstRequest(bubble, url, typed, prompt);
+                // A brush edit is read back, deliberately. An edit is a request
+                // like any other, and the words typed here are the request -- so
+                // the question is the same one a drawing is asked.
+                //
+                // It matters most on this path, because this is where the app can
+                // quietly deliver something else: the mask is a file part or it is
+                // nothing, so a service that takes a reference edits the whole
+                // picture and says so only in the notes. A picture that came back
+                // without the region is exactly the case a second pair of eyes is
+                // for.
+                //
+                // What the reviewer is not shown is the mask, so its verdict is
+                // about the whole picture against those words -- and a "MISSED"
+                // here can describe a part of the picture nobody asked about. That
+                // is tolerable because the note only ever speaks: it recites an
+                // observation beside the Edit button and redraws nothing. Leaving
+                // it out would be worse, because no note is also what "the check
+                // could not be made" looks like, and this is the one path where
+                // that ambiguity is expensive.
+                void checkDrawingAgainstRequest(bubble, url, typed, prompt, (difference) =>
+                    runBrushEdit(typed, srcData, maskData, imageCheckFixPrompt(prompt, difference)));
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);

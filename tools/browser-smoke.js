@@ -1267,14 +1267,21 @@ async function main() {
 
       const providerOriginal = selectedProvider;
       const modelsOriginal = providerModels;
+      const visionOriginal = providerVision;
       const sourceOriginal = generateImageSource;
       const callOriginal = callModel;
-      selectedProvider = 'smoke-direct';
-      providerModels = [
+      const drawnPrompts = [];
+      const visionRows = [
         { id: 'smoke-flagship-vision', vision: true, pricing: { prompt: '0.01', completion: '0.03' } },
         { id: 'smoke-mini-vision', vision: true, pricing: { prompt: '0.0001', completion: '0.0002' } },
       ];
-      generateImageSource = async () => picture;
+      selectedProvider = 'smoke-direct';
+      providerModels = visionRows;
+      // The picker's rows and the catalogue the eye is chosen from are two lists
+      // in the page, because one is capped and the other is not. This provider
+      // publishes nothing below the cap, so here they are the same rows.
+      providerVision = visionRows;
+      generateImageSource = async (prompt) => { drawnPrompts.push(prompt); return picture; };
       const seen = { models: [], questions: [] };
       callModel = async (convo, extra, signal, model) => {
         seen.models.push(model);
@@ -1283,12 +1290,13 @@ async function main() {
         return { message: { role: 'assistant', content: window.__imageCheckAnswer || 'MATCHES' } };
       };
 
-      const run = async (answer, request) => {
+      const run = async (answer, request, tapFix) => {
         window.__imageCheckAnswer = answer;
         chatMessages.innerHTML = '';
         messages = [];
         seen.models.length = 0;
         seen.questions.length = 0;
+        drawnPrompts.length = 0;
         const controller = new AbortController();
         currentAbort = controller;
         const runId = ++generationId;
@@ -1297,40 +1305,106 @@ async function main() {
         for (let i = 0; i < 60 && !document.querySelector('.image-check'); i++) await new Promise((r) => setTimeout(r, 50));
         const note = document.querySelector('.image-check');
         const order = Array.from(chatMessages.querySelector('.message-image-wrap').parentNode.children).map((el) => el.className.split(' ')[0]);
-        return {
-          note: note ? note.textContent : '',
+        // The verdict is the note's own sentence: the one-tap fix, when it is
+        // there, is a button inside the same line.
+        const said = note && note.querySelector('span');
+        const fix = note && note.querySelector('button');
+        const out = {
+          note: said ? said.textContent : '',
+          fix: fix ? fix.textContent : '',
+          line: note ? note.textContent : '',
           missed: note ? note.classList.contains('missed') : false,
           order: order,
           models: seen.models.slice(),
           question: seen.questions[0] || '',
         };
+        // The tap is the whole point: it is the only thing that spends, and it
+        // must spend on this picture's own prompt with the difference in it.
+        if (tapFix && fix) {
+          fix.click();
+          for (let i = 0; i < 80 && drawnPrompts.length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+          out.redrawPrompt = drawnPrompts[1] || '';
+          out.prompts = drawnPrompts.slice();
+        }
+        return out;
       };
 
       // A model that introduces itself before the verdict is still answering,
       // and the line break is built rather than escaped: an escape inside this
       // template literal reaches the page as a real newline in a string literal.
       const newline = String.fromCharCode(10);
-      const missed = await run('Looking at it:' + newline + 'MISSED: "the sign reads HLLO, not HELLO"', 'draw a poster that says HELLO');
+      const missed = await run('Looking at it:' + newline + 'MISSED: "the sign reads HLLO, not HELLO"', 'draw a poster that says HELLO', true);
       const vague = await run('The picture shows a poster with some text on it.', 'draw a poster that says HELLO');
       const matches = await run('MATCHES', 'draw a poster that says HELLO');
       // Nothing can see, so nothing is asked and nothing is said.
       providerModels = [];
+      providerVision = [];
       const blind = await run('MISSED: should never be asked', 'draw a poster that says HELLO');
+
+      // An edit's fix is an edit, not a drawing of the same words: the runner
+      // captures a source this time, so a tap that went to the draw path would
+      // come back as a fresh picture and this is where that would show.
+      const editSourceOriginal = editImageSource;
+      const editedPrompts = [];
+      editImageSource = async (prompt) => { editedPrompts.push(prompt); return picture; };
+      providerModels = visionRows;
+      providerVision = visionRows;
+      chatMessages.innerHTML = '';
+      messages = [];
+      seen.models.length = 0;
+      seen.questions.length = 0;
+      window.__imageCheckAnswer = 'MISSED: the cube is still red';
+      const editController = new AbortController();
+      currentAbort = editController;
+      await sendImageEdit('A poster reading "HELLO", flat vector style', 'data:image/png;base64,AAA', ++generationId, editController, { request: 'draw a poster that says HELLO' });
+      for (let i = 0; i < 60 && !document.querySelector('.image-check'); i++) await new Promise((r) => setTimeout(r, 50));
+      const editNote = document.querySelector('.image-check');
+      const editFix = {
+        note: editNote && editNote.querySelector('span') ? editNote.querySelector('span').textContent : '',
+        fix: editNote && editNote.querySelector('button') ? editNote.querySelector('button').textContent : '',
+        prompts: editedPrompts.slice(),
+      };
+      if (editNote && editNote.querySelector('button')) {
+        editNote.querySelector('button').click();
+        for (let i = 0; i < 80 && editedPrompts.length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+        editFix.prompts = editedPrompts.slice();
+      }
+      editImageSource = editSourceOriginal;
 
       selectedProvider = providerOriginal;
       providerModels = modelsOriginal;
+      providerVision = visionOriginal;
       generateImageSource = sourceOriginal;
       callModel = callOriginal;
       chatMessages.innerHTML = '';
       messages = [];
-      return { missed: missed, vague: vague, matches: matches, blind: blind };
+      return { missed: missed, vague: vague, matches: matches, blind: blind, editFix: editFix };
     })()`);
     console.log('image check: ' + JSON.stringify(imageCheck));
     if (imageCheck.missed.models.length !== 1 || imageCheck.missed.models[0] !== 'smoke-mini-vision') {
       throw new Error('the drawing was not reviewed by the cheapest model that can see: ' + JSON.stringify(imageCheck.missed));
     }
-    if (imageCheck.missed.note !== 'Checked: the sign reads HLLO, not HELLO — use Edit below to fix it.') {
+    if (imageCheck.missed.note !== 'Checked: the sign reads HLLO, not HELLO') {
       throw new Error('a missed drawing does not say what differs: ' + JSON.stringify(imageCheck.missed.note));
+    }
+    // The one-tap fix is offered where it can help and nowhere else -- and the
+    // tap is what spends, so what it sends is the thing worth asserting.
+    if (imageCheck.missed.fix !== 'Fix it') {
+      throw new Error('a difference offers no one-tap fix: ' + JSON.stringify(imageCheck.missed));
+    }
+    if (imageCheck.missed.redrawPrompt !== 'A poster reading "HELLO", flat vector style' + '\n\nCorrect this in the next attempt: the sign reads HLLO, not HELLO') {
+      throw new Error('the fix did not redraw with the difference built into the prompt: ' + JSON.stringify(imageCheck.missed.prompts));
+    }
+    if (imageCheck.editFix.fix !== 'Fix it') {
+      throw new Error('an edit that missed offers no one-tap fix: ' + JSON.stringify(imageCheck.editFix));
+    }
+    if (imageCheck.editFix.prompts.length !== 2 || !/Correct this in the next attempt: the cube is still red$/.test(imageCheck.editFix.prompts[1] || '')) {
+      throw new Error('an edit\u2019s fix did not re-edit with the difference in the prompt: ' + JSON.stringify(imageCheck.editFix.prompts));
+    }
+    if (imageCheck.matches.fix || imageCheck.vague.fix || imageCheck.blind.fix) {
+      throw new Error('a fix was offered where there was no difference: ' + JSON.stringify({
+        matches: imageCheck.matches.fix, vague: imageCheck.vague.fix, blind: imageCheck.blind.fix,
+      }));
     }
     if (!imageCheck.missed.missed) throw new Error('a miss is not marked as one: ' + JSON.stringify(imageCheck.missed));
     if (imageCheck.missed.question.indexOf('draw a poster that says HELLO') === -1) {

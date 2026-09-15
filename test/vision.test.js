@@ -18,6 +18,7 @@ const {
   MAX_IMAGE_EDGE,
 } = require('../attachment-helpers.js');
 const { createRequestHandler, clearModelCache } = require('../server.js');
+const { usableChatModels } = require('../chatlib.js');
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 
@@ -30,6 +31,23 @@ test('only a model the catalogue marks as vision-capable counts as capable', () 
   assert.equal(acceptsImages(null), false);
   assert.equal(acceptsImages(undefined), false);
   assert.equal(acceptsImages({ id: 'a', vision: 'yes' }), false);
+});
+
+test("a catalogue's own vision flag survives into the list the page asks", () => {
+  // The list the picker shows is also the list the page consults for "which
+  // model can see this picture" -- the read-back check and an attached image
+  // both. Dropping the flag while mapping the catalogue left every direct
+  // provider looking like a provider with no eyes: the attached picture was
+  // refused, and the read-back check picked no model at all.
+  const rows = usableChatModels([
+    { id: 'text-only', vision: false },
+    { id: 'sees', vision: true },
+    { id: 'silent' },
+  ]);
+  const of = (id) => rows.find((m) => m.id === id);
+  assert.equal(acceptsImages(of('sees')), true);
+  assert.equal(acceptsImages(of('text-only')), false);
+  assert.equal(of('silent').vision, undefined);
 });
 
 test('an image turn keeps a model that can already see', () => {

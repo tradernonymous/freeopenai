@@ -20,7 +20,7 @@ const PROVIDER_VARS = [
   'OPENROUTER_API_KEY', 'OPENROUTER_IMAGE_MODEL', 'OPENROUTER_IMAGES_BASE_URL',
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
   'HF_TOKEN', 'HF_IMAGE_MODEL', 'HF_IMAGES_BASE_URL',
-  'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL',
+  'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL', 'OMNIROUTE_BASE_URL',
   'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_IMAGE_MODEL', 'CLOUDFLARE_IMAGES_BASE_URL',
   'OLLAMA_IMAGE_MODEL',
   // The generic rule below is tested through one provider and has to stay
@@ -380,6 +380,33 @@ test('an edit to a service that takes a reference rides the generations endpoint
   });
   process.env.OPENROUTER_API_KEY = 'or-key';
   process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).data[0].url, 'https://img.test/edited.png');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a gateway edit carries the source as a reference too', async () => {
+  // Verified against a live gateway (0.7.x): its images endpoint takes the same
+  // `input_references` body OpenRouter does, and the store did not say so -- so an
+  // "edit" through the gateway sent the prompt alone, the source picture was never
+  // handed over, and the fresh drawing that came back was presented as an edit.
+  const up = await upstreamOf((req, res, raw) => {
+    assert.match(req.url, /\/images\/generations$/);
+    const body = JSON.parse(raw);
+    assert.equal(body.model, 'gateway/default-image');
+    assert.equal(body.prompt, 'make it red');
+    assert.deepEqual(body.input_references, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } }]);
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/edited.png' }] });
+  });
+  process.env.OMNIROUTE_API_KEY = 'gw-key';
+  process.env.OMNIROUTE_BASE_URL = up.url;
+  process.env.OMNIROUTE_IMAGE_MODEL = 'gateway/default-image';
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });

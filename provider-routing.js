@@ -90,18 +90,15 @@
   // The cheapest model in a list that can see, or '' when none can. The ordering
   // is the one a tool-reading step goes through -- free, then price, then the
   // small model of a family -- for the same reason: a picture is reviewed by a
-  // cheap eye, not by the flagship the conversation happens to be on. Two
-  // differences, both deliberate: a model the caller has already named as its
-  // cheap eye wins outright, and a model whose price is unknown comes last rather
-  // than never, because a review by an unknown-cost model still beats no review.
+  // cheap eye, not by the flagship the conversation happens to be on. One
+  // difference: a model whose price is unknown comes last rather than never,
+  // because a review by an unknown-cost model still beats no review.
   function cheapestVisionModel(models, deps = {}) {
     const accepts = deps.acceptsImages || ((model) => !!(model && model.vision === true));
-    const preferred = String(deps.preferred || '');
     const ranked = (Array.isArray(models) ? models : [])
       .filter((model) => model && model.id && accepts(model))
       .map((model) => ({ id: model.id, rank: routeRank(model, deps) || { tier: 3, cost: 0 } }))
       .sort((a, b) => a.rank.tier - b.rank.tier || a.rank.cost - b.rank.cost || String(a.id).localeCompare(String(b.id)));
-    if (preferred && ranked.some((row) => row.id === preferred)) return preferred;
     return ranked.length ? ranked[0].id : '';
   }
 

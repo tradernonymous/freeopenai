@@ -10,16 +10,16 @@ const assert = require('node:assert/strict');
 const {
   IMAGE_CHECK_PROMPT,
   MAX_IMAGE_CHECK_CHARS,
-  DEFAULT_VISION_MODEL,
   PUTER_PROVIDER,
   imageCheckQuestion,
+  imageCheckFixPrompt,
   parseImageCheck,
   isVisionCapable,
   extractMessageText,
 } = require('../chatlib.js');
 const { acceptsImages, isSendableImageUrl } = require('../attachment-helpers.js');
 const routing = require('../provider-routing.js');
-const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
+const { loadFromIndex, sourceOf, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 // ---- the verdict ----------------------------------------------------------
 
@@ -35,7 +35,7 @@ test('a verdict is read from the one line that is one', () => {
   // a contract any model keeps.
   assert.equal(parseImageCheck('MISSED: no bicycle in the picture').missed, 'no bicycle in the picture');
   assert.equal(parseImageCheck('MISS: only four candles, not six').missed, 'only four candles, not six');
-  assert.equal(parseImageCheck('No: the car is blue').missed, 'the car is blue');
+  assert.equal(parseImageCheck('No, the car is blue').missed, 'the car is blue');
   assert.equal(parseImageCheck('MISSED — the text is misspelled').missed, 'the text is misspelled');
 });
 
@@ -67,11 +67,8 @@ test('the question shows both halves, because the two disagreeing is the point',
   const question = imageCheckQuestion('draw a poster that says HELLO', 'A poster reading "HELLO", flat vector style');
   assert.match(question, /The request:\ndraw a poster that says HELLO/);
   assert.match(question, /The prompt the image model was given:\nA poster reading "HELLO", flat vector style/);
-  // A turn with no separate request (a brush instruction, or the caption's own
-  // prompt) is still a question with both halves filled in.
-  assert.match(imageCheckQuestion('', 'a red fox'), /The request:\na red fox/);
-  // And the prompt the caller's judgement is about is what the system prompt
-  // says to judge the *picture* against the request, not the prompt.
+  // And the system prompt says to judge the *picture* against the request, not
+  // the picture against the prompt it was drawn from.
   assert.match(IMAGE_CHECK_PROMPT, /Judge the picture, not the prompt/);
 });
 
@@ -92,23 +89,22 @@ test('the cheapest model that can see is the one that looks', () => {
   assert.equal(routing.cheapestVisionModel([{ id: 'text-only' }]), '');
   assert.equal(routing.cheapestVisionModel([]), '');
   assert.equal(routing.cheapestVisionModel(null), '');
-  // The caller's own named cheap eye wins, which is how Puter's list is read.
-  assert.equal(routing.cheapestVisionModel(models, { preferred: 'flagship-vision' }), 'flagship-vision');
-  assert.equal(routing.cheapestVisionModel(models, { preferred: 'not-in-the-list' }), 'mini-vision');
+  // Capability is the caller's to define, because a service may name its vision
+  // models in its own list rather than describing them.
+  assert.equal(routing.cheapestVisionModel([{ id: 'named-by-the-caller' }], { acceptsImages: () => true }), 'named-by-the-caller');
 });
 
 // ---- the page's two choices ----------------------------------------------
 
 const NAMES = ['imageCheckModel', 'checkDrawingAgainstRequest'];
 
-function harness({ provider = 'openrouter', models = [], answer = 'MATCHES', fails = false } = {}) {
+function harness({ provider = 'openrouter', models = [], vision = null, answer = 'MATCHES', fails = false } = {}) {
   const calls = { model: [], notes: [] };
   const deps = {
     // The shipped rules, and the shipped routing module.
     FreeOpenAIProviderRouting: routing,
     isVisionCapable,
     acceptsImages,
-    DEFAULT_VISION_MODEL,
     PUTER_PROVIDER,
     IMAGE_CHECK_PROMPT,
     imageCheckQuestion,
@@ -117,6 +113,9 @@ function harness({ provider = 'openrouter', models = [], answer = 'MATCHES', fai
     extractMessageText,
     selectedProvider: provider,
     routableModels: () => models,
+    // The uncapped catalogue, which is the same list unless a test is asking
+    // about the picker's sixty-row window.
+    providerVision: vision || models,
     callModel: async (convo, extra, signal, model) => {
       calls.model.push(model);
       calls.convo = convo;
@@ -132,15 +131,9 @@ const ELEMENT = { parentNode: {} };
 
 test('the extracted source is the shipped one, and the sandbox covers it', () => {
   assertScannerCanRead(NAMES);
-  assertSandboxCoverCalls();
+  // Against the deps the harness builds, rather than a hand-written list.
+  assertSandboxCovers(NAMES, harness().deps);
 });
-
-// assertSandboxCovers needs the same deps shape the harness builds, so the check
-// runs against it rather than against a hand-written list.
-function assertSandboxCoverCalls() {
-  const { deps } = harness();
-  assertSandboxCovers(NAMES, deps);
-}
 
 test('a drawing is read back by a model that can see, and by a cheap one', async () => {
   const h = harness({
@@ -162,14 +155,83 @@ test('a drawing is read back by a model that can see, and by a cheap one', async
   assert.deepEqual(h.calls.notes, [{ matches: false, missed: 'the sign reads HLLO, not HELLO' }]);
 });
 
-test('Puter’s list names its vision models rather than describing them', async () => {
+test('the read-back is offered the whole catalogue, not the picker’s sixty rows', async () => {
+  // The picker lists the first sixty rows, which is what it should do. The eye
+  // that reads a drawing back is chosen from everything the provider publishes:
+  // on a gateway whose cheap vision models rank below the cap, the capped list
+  // offered none of them and "the cheapest eye" became an alphabetically-first
+  // flagship -- a quota-blocked one, in the run that found this.
   const h = harness({
-    provider: 'puter',
-    // No `vision` field at all, which is what Puter's built-in list looks like.
-    models: [{ id: 'gpt-6-astra' }, { id: DEFAULT_VISION_MODEL }, { id: 'gpt-4o-mini' }],
+    models: [{ id: 'picker-vision', vision: true, pricing: { prompt: '0.0001' } }],
+    vision: [
+      { id: 'flagship-vision', vision: true, pricing: { prompt: '0.01' } },
+      { id: 'mini-vision', vision: true, pricing: { prompt: '0.0001' } },
+    ],
   });
   await h.checkDrawingAgainstRequest(ELEMENT, 'data:image/png;base64,AAA', 'a fox', 'a fox');
-  assert.deepEqual(h.calls.model, [DEFAULT_VISION_MODEL]);
+  assert.deepEqual(h.calls.model, ['mini-vision']);
+});
+
+test('the page keeps that catalogue beside the picker list', () => {
+  const source = sourceOf('loadProviderModels');
+  assert.match(source, /providerVision = usableChatModels\(data, Infinity\)\.filter\(\(m\) => m\.vision === true\)/);
+  // And a provider the page could not read leaves no stale list behind, which is
+  // how the check would otherwise pick an eye from the provider before last.
+  assert.match(source, /providerVision = \[\]/);
+});
+
+// ---- the fix ---------------------------------------------------------------
+
+test('the prompt for a corrected drawing carries the difference, verbatim', () => {
+  const folded = imageCheckFixPrompt('A poster reading "HELLO"', 'the sign reads HLLO, not HELLO');
+  assert.equal(folded, 'A poster reading "HELLO"\n\nCorrect this in the next attempt: the sign reads HLLO, not HELLO');
+  // The original prompt survives intact: the retry is the same picture asked for
+  // again, not a new one described from the difference alone.
+  assert.ok(folded.startsWith('A poster reading "HELLO"'));
+});
+
+test('nothing to fix is no prompt at all', () => {
+  // Either half missing means the render would repeat the picture it replaces --
+  // and an empty prompt is not something an image service should be sent.
+  assert.equal(imageCheckFixPrompt('', 'the sign reads HLLO'), '');
+  assert.equal(imageCheckFixPrompt('   ', 'the sign reads HLLO'), '');
+  assert.equal(imageCheckFixPrompt('a fox', ''), '');
+  assert.equal(imageCheckFixPrompt(null, null), '');
+  assert.equal(imageCheckFixPrompt('a fox', undefined), '');
+});
+
+test('a difference longer than a verdict is cut, not carried whole', () => {
+  // The cap the verdict itself is held to, because this text goes into a prompt
+  // the user pays for.
+  const long = 'x'.repeat(MAX_IMAGE_CHECK_CHARS + 50);
+  const folded = imageCheckFixPrompt('a fox', long);
+  assert.equal(folded.length, 'a fox'.length + '\n\nCorrect this in the next attempt: '.length + MAX_IMAGE_CHECK_CHARS);
+});
+
+test('the brush editor reads its edit back, against the words that were typed', () => {
+  // Deliberately kept, so it is pinned here rather than left to the next
+  // reader's judgement: an edit is a request like any other, and the brush is
+  // the one path where the app can quietly deliver something else -- a service
+  // that takes a reference drops the mask and edits the whole picture. The
+  // reviewer never sees the mask, so its verdict covers the whole picture; the
+  // note only ever speaks and redraws nothing, which is what makes that
+  // tolerable on a region the user did not ask about.
+  const source = sourceOf('runBrushEdit');
+  assert.match(source, /checkDrawingAgainstRequest\(bubble, url, typed, prompt, \(difference\) =>/,
+    'an edit typed into the brush box is checked against what was typed, not the rewrite');
+  // And its fix repeats the same brush edit -- same source, same mask, difference
+  // folded in -- rather than drawing those words as a new picture.
+  assert.match(source, /runBrushEdit\(typed, srcData, maskData, imageCheckFixPrompt\(prompt, difference\)\)/);
+});
+
+test('Puter’s list names its vision models rather than describing them', async () => {
+  const models = [{ id: 'gpt-6-astra' }, { id: 'gpt-5.4-nano' }, { id: 'gpt-4o-mini' }];
+  const h = harness({ provider: 'puter', models });
+  await h.checkDrawingAgainstRequest(ELEMENT, 'data:image/png;base64,AAA', 'a fox', 'a fox');
+  // A row with no `vision` field is still a model that can see when its id says
+  // so, and one of them is the one asked to look.
+  assert.equal(h.calls.model.length, 1);
+  assert.equal(isVisionCapable(h.calls.model[0]), true);
   assert.equal(h.calls.notes.length, 1);
 });
 

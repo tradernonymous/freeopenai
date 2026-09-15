@@ -1039,16 +1039,11 @@ function parseImagePlan(text) {
 // --- Reading a drawing back against the request -------------------------------
 //
 // The prompt an image model receives is a rewrite of what the user said, and the
-// picture that comes back is judged -- by the person who asked -- against what
-// they said, not against the rewrite. Nothing in this app ever compared the two:
-// a drawing that met its prompt but missed the request was indistinguishable from
-// a good one, and the only signal was the user noticing. One short question,
-// asked of a model that can see the picture, closes that loop.
-//
-// The verdict is deliberately two-valued and the miss is deliberately one line:
-// this is a note beside a picture that is already on screen, not a review. Any
-// answer that is not one of the two forms is no answer at all, because an
-// invented verdict is worse than a missing one.
+// picture is judged -- by the person who asked -- against what they said, never
+// against the rewrite. Nothing compared the two: a drawing that met its prompt but
+// missed the request looked exactly like a good one, and the only signal was the
+// user noticing. One short question, asked of a model that can see the picture,
+// closes that loop.
 const IMAGE_CHECK_PROMPT = [
   'You are shown a picture that was just drawn, the request that asked for it, and the prompt the image model was given.',
   'Decide whether the picture shows what the request asked for. Judge the picture, not the prompt.',
@@ -1065,24 +1060,37 @@ const MAX_IMAGE_CHECK_CHARS = 160;
 // What the checking call is shown, in that order: the words that asked, then the
 // words that drew. Both, because the two disagreeing is the whole point.
 function imageCheckQuestion(requestText, promptText) {
-  const prompt = String(promptText == null ? '' : promptText).trim();
-  // A turn with no separate request -- the brush editor's instruction arrives as
-  // the prompt, and so does a redraw -- asks about the prompt itself rather than
-  // sending a question with half of it missing.
-  const request = String(requestText == null ? '' : requestText).trim() || prompt;
-  return ['The request:', request, '', 'The prompt the image model was given:', prompt].join('\n');
+  const text = (value) => String(value == null ? '' : value).trim();
+  return ['The request:', text(requestText), '', 'The prompt the image model was given:', text(promptText)].join('\n');
 }
 
-// The verdict, or null when the reply was not one -- which leaves no note rather
-// than a guess. Prose before the verdict is tolerated, since models like to
-// introduce themselves; prose instead of one is not.
+// 'MATCHES', or 'MISSED: the sign reads HLLO'. Anything else -- a description, a
+// hedge, a miss with nothing named -- is no verdict at all, which leaves no note
+// rather than a guess.
+// The prompt for a second attempt at a picture the reviewer found wanting.
+//
+// The difference is already the instruction -- the reviewer names one thing that
+// is wrong, in the words of the request -- so it is folded in verbatim rather
+// than paraphrased: a rewrite is a second chance to lose the one fact the retry
+// exists for. Either half missing is no prompt, because a fix with nothing to
+// fix would spend a render on the same picture, and an empty prompt is not what
+// an image service should be sent.
+function imageCheckFixPrompt(promptText, missed) {
+  const prompt = String(promptText == null ? '' : promptText).trim();
+  const difference = String(missed == null ? '' : missed).trim().slice(0, MAX_IMAGE_CHECK_CHARS);
+  if (!prompt || !difference) return '';
+  return prompt + '\n\nCorrect this in the next attempt: ' + difference;
+}
+
+const IMAGE_CHECK_ANSWER = /^\s*(match\w*|miss\w*|no)\b[\s:,.\u2026\u2013\u2014-]*(.*)$/i;
+
 function parseImageCheck(text) {
   const lines = String(text == null ? '' : text).split('\n').map((line) => line.trim()).filter(Boolean);
-  const line = lines.find((candidate) => /^(match|miss|no\b)/i.test(candidate));
-  if (!line) return null;
-  if (/^match/i.test(line)) return { matches: true, missed: '' };
-  const rest = line.replace(/^(missed|miss(?:ing|es)?|no)\b/i, '').replace(/^[\s:.\u2013\u2014-]+/, '');
-  const missed = rest.replace(/^["\u201c'\s]+|["\u201d'\s.]+$/g, '').trim().slice(0, MAX_IMAGE_CHECK_CHARS);
+  // The verdict line, not the first line: models like to introduce themselves.
+  const verdict = lines.map((line) => IMAGE_CHECK_ANSWER.exec(line)).find(Boolean);
+  if (!verdict) return null;
+  if (/^match/i.test(verdict[1])) return { matches: true, missed: '' };
+  const missed = verdict[2].replace(/^["\u201c'\s]+|["\u201d'\s.]+$/g, '').trim().slice(0, MAX_IMAGE_CHECK_CHARS);
   return missed ? { matches: false, missed } : null;
 }
 
@@ -3610,6 +3618,11 @@ function usableChatModels(models, limit = 60) {
       free: isFreeModel(m),
       capable: isCapableModelId(m.id),
       tools: supportsTools(m),
+      // Rides along because a capability is not a picker label: the picture
+      // read-back asks this list for a model that can see, and a catalogue's
+      // own answer is the only evidence there is. Dropped here once, and the
+      // check could only ever pick a model on Puter, whose list is built in.
+      vision: m.vision,
     }));
 
   const rank = (m) => (m.free ? 0 : 4) + (m.tools ? 0 : 2) + (m.capable ? 0 : 1);
@@ -4489,6 +4502,7 @@ if (typeof module !== 'undefined' && module.exports) {
     IMAGE_PLAN_ACTIONS,
     IMAGE_CHECK_PROMPT,
     MAX_IMAGE_CHECK_CHARS,
+    imageCheckFixPrompt,
     imageCheckQuestion,
     parseImageCheck,
     MAX_IMAGE_PROMPT_CHARS,

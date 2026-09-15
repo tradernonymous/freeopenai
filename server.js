@@ -1511,6 +1511,12 @@ const LLM_PROVIDERS = {
     image: {
       shape: 'openai-images',
       modelEnv: 'OMNIROUTE_IMAGE_MODEL',
+      // An edit rides the generations endpoint as a reference, and this was
+      // missing: an "edit" through the gateway sent the prompt alone, so the
+      // source picture was never handed over and the answer was a fresh drawing
+      // presented as one. Verified against a live gateway (0.7.x): the same
+      // `input_references` body OpenRouter takes comes back as an edited picture.
+      edit: 'references',
     },
   },
   // The three below are speech and search services. Probing them directly:
