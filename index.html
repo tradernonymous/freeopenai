@@ -1102,6 +1102,18 @@
            say "busy", which is the same for a two-second lookup and a stuck
            provider. The label names the step and its age. */
         .typing-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* A command is read, not skimmed: when the dialog is confirming one, its
+           body is the command itself in the one typeface where a flag cannot be
+           mistaken for a word -- and it scrolls rather than running off the
+           bottom of a phone, because a script can be long. */
+        #githubConfirmOverlay[data-kind="run"] #githubConfirmText {
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px; line-height: 1.5; text-align: left;
+            background: var(--surface-2); border: 1px solid var(--border);
+            border-radius: var(--r-sm); padding: 10px 12px; margin: 0;
+            max-height: 40vh; overflow: auto;
+        }
         .typing-dots { display: flex; gap: 3px; }
         .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: typing 1.2s infinite ease-in-out; }
         .typing-dots span:nth-child(2) { animation-delay: .15s; }
@@ -1477,6 +1489,9 @@
             border: 1px solid var(--ctl-edge); color: var(--text);
             font: inherit; font-size: 12px; font-weight: 500;
             cursor: pointer; transition: var(--transition); white-space: nowrap;
+            /* A download is an <a> and everything beside it is a <button>: same
+               class, same look, so it does not arrive underlined. */
+            text-decoration: none;
         }
         .icon-btn-text:hover { background: var(--ctl-bg-hover); border-color: var(--accent); color: var(--accent); }
         .icon-btn-text:focus-visible { outline: none; box-shadow: var(--glow); border-color: var(--accent); }
@@ -2444,8 +2459,8 @@
                 <p id="githubConfirmText" style="white-space: pre-wrap; overflow-wrap: anywhere;"></p>
             </div>
             <div class="github-browser-row" style="padding: 0 20px 20px;">
-                <button class="icon-btn-text" onclick="githubConfirmResolve('once')">Allow once</button>
-                <button class="icon-btn-text" onclick="githubConfirmResolve('always')">Always allow this session</button>
+                <button class="icon-btn-text" id="confirmAllowBtn" onclick="githubConfirmResolve('once')">Allow once</button>
+                <button class="icon-btn-text" id="confirmAlwaysBtn" onclick="githubConfirmResolve('always')">Always allow this session</button>
                 <button class="icon-btn-text danger" onclick="githubConfirmResolve('cancel')">Cancel</button>
             </div>
         </div>
@@ -3925,9 +3940,23 @@
 
         function askConfirm(kind, title, text) {
             if (alwaysAllow[kind]) return Promise.resolve(true);
+            const overlay = document.getElementById('githubConfirmOverlay');
+            // The kind decides how the body is set: a command is shown as a
+            // command and a sentence as a sentence. One dialog, styled per kind,
+            // rather than two dialogs that drift apart.
+            overlay.dataset.kind = kind;
             document.getElementById('githubConfirmTitle').textContent = title;
             document.getElementById('githubConfirmText').textContent = text;
-            document.getElementById('githubConfirmOverlay').classList.add('open');
+            // The buttons name the decision they are offering. A shell command is
+            // not a file write, and the same "always" wording would promise two
+            // very different things: one edits a note, the other runs whatever the
+            // model asks for until the tab closes.
+            const labels = kind === 'run'
+                ? ['Run it', 'Always run commands this session']
+                : ['Allow once', 'Always allow this session'];
+            document.getElementById('confirmAllowBtn').textContent = labels[0];
+            document.getElementById('confirmAlwaysBtn').textContent = labels[1];
+            overlay.classList.add('open');
             confirmKind = kind;
             return new Promise((resolve) => { confirmResolver = resolve; });
         }
@@ -4382,7 +4411,9 @@
         async function runCommandTool(name, args) {
             const command = String((args && args.command) || '').trim();
             if (!command) return 'Error: command is required.';
-            const approved = await askRunConfirm(describeToolCall(name, args));
+            // The command itself, not a description of it: the title asks the
+            // question, so the body is the thing being decided about.
+            const approved = await askRunConfirm(command);
             if (!approved) return 'The user declined to run this. Do not try it again unless they ask.';
             try {
                 const res = await fetch('/api/workspace/run', {
@@ -4392,6 +4423,20 @@
                 });
                 const data = await safeJson(res);
                 if (!res.ok) return 'Error: ' + (data.error || 'the command could not be run');
+                // The panel's picture of the workspace is refreshed from the run
+                // itself, and anything this command added or changed is said out
+                // loud in the transcript. The model is told either way; the user
+                // is told only when there is something to go and fetch, because a
+                // script that generates a file is exactly the case where they
+                // would otherwise have to take the reply's word for it.
+                const before = new Map(serverWorkspaceFiles.map((file) => [file.path, file.bytes]));
+                serverWorkspaceFiles = Array.isArray(data.files) ? data.files : [];
+                const wrote = serverWorkspaceFiles.filter((file) => before.get(file.path) !== file.bytes);
+                if (wrote.length) {
+                    addMessage('system', 'Wrote ' + wrote
+                        .map((file) => file.path + ' (' + formatBytes(file.bytes) + ')')
+                        .join(', ') + ' — Settings → Server files');
+                }
                 return formatRunResult(data);
             } catch (e) {
                 return 'Error: the command could not be sent — ' + e.message;
@@ -4443,7 +4488,7 @@
             }
             const files = serverWorkspaceFiles;
             if (!files.length) {
-                status.textContent = 'Empty. Files a command writes on the server appear here, and a redeploy takes them with it.';
+                status.textContent = 'Empty. Ask for something to be written in Build mode — a script, a generated PDF, a report — and it appears here. A redeploy takes it with it.';
                 return;
             }
             status.textContent = files.length + ' file(s) written by commands on the server. A redeploy takes them with it.';
@@ -7334,6 +7379,17 @@
             return parts.length ? base + ' — ' + parts.join('; ') : base;
         }
 
+        // A picture's status, in the one place that decides whether it stays.
+        //
+        // With a note it is an explanation -- a shape that came back different and
+        // was cut to the one that was asked for, a brush mask the service could not
+        // take -- so it holds until the next message. Without one it is a
+        // confirmation, and a confirmation should get out of the way.
+        function showImageOutcome(base, outcome) {
+            const noted = !!(outcome && Array.isArray(outcome.notes) && outcome.notes.length);
+            showStatus(noted ? 'info' : 'success', imageOutcomeStatus(base, outcome), noted ? 0 : undefined);
+        }
+
         // The source is prepared by the caller because there are two of them: the
         // picture that was attached, and the picture this chat already shows
         // ("now make it look realistic"). The backend chain does not care which.
@@ -7357,8 +7413,7 @@
                 // A caveat is not a success, and a success is not a caveat: the
                 // mask being dropped is worth saying without pretending it did not
                 // happen, which is why the two are not the same sentence.
-                if (outcome.notes.length) showStatus('info', imageOutcomeStatus('Edited image ready', outcome));
-                else showStatus('success', imageOutcomeStatus('Edited image ready', outcome));
+                showImageOutcome('Edited image ready', outcome);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7427,10 +7482,10 @@
                 fillImageBubble(bubble, promptText, imageSrc);
                 filled = true;
                 // A caveat is not a success and a success is not a caveat, which is
-                // the same split the edit path makes: the size a service actually
-                // drew is worth saying without dressing it as a clean win.
-                const status = outcome.notes.length ? 'info' : 'success';
-                showStatus(status, imageOutcomeStatus('Image ready', outcome));
+                // the split `showImageOutcome` makes for every path: the size a
+                // service actually drew is worth saying without dressing it as a
+                // clean win, and worth leaving on screen to be read.
+                showImageOutcome('Image ready', outcome);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -7812,7 +7867,7 @@
                 }
                 removeTypingIndicator();
                 finishImageContent(bubble, promptText + ' (variations)', made);
-                showStatus('success', imageOutcomeStatus('Variations ready', outcome));
+                showImageOutcome('Variations ready', outcome);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble) {
@@ -8036,8 +8091,7 @@
                 removeTypingIndicator();
                 fillImageBubble(bubble, prompt + ' (edit)', url);
                 filled = true;
-                if (outcome.notes.length) showStatus('info', imageOutcomeStatus('Edit ready', outcome));
-                else showStatus('success', imageOutcomeStatus('Edit ready', outcome));
+                showImageOutcome('Edit ready', outcome);
             } catch (error) {
                 removeTypingIndicator();
                 if (bubble && !filled) clearHoloForge(bubble);
@@ -9642,7 +9696,7 @@
         // dead zone then. That is not theoretical: it threw "Cannot access
         // 'statusResetTimer' before initialization" out of initializeApp and
         // stopped the rest of the boot with it.
-        function showStatus(type, msg) {
+        function showStatus(type, msg, holdMs = 2500) {
             const failed = type === 'error';
             statusDot.className = 'status-dot' + (failed ? ' error' : '');
             statusMessage.textContent = msg;
@@ -9650,6 +9704,12 @@
             if (showStatus.timer) clearTimeout(showStatus.timer);
             // Only the passing kinds expire: "Saved", "Copied", "Mode: BUILD".
             if (failed) return;
+            // And a message that explains a result does not expire either, for the
+            // same reason a failure does not: the sentence about a picture that
+            // came back a different shape is read *after* the picture appears, and
+            // 2.5 seconds of it, ellipsised in a one-line bar, is a sentence nobody
+            // finishes. It goes when the next thing happens.
+            if (!holdMs) return;
             showStatus.timer = setTimeout(() => {
                 if (statusMessage.textContent === msg) {
                     statusMessage.textContent = 'Ready';

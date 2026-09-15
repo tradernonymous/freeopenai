@@ -747,8 +747,21 @@ async function main() {
         const opened = new Promise((resolve) => {
           const check = () => {
             const overlay = document.getElementById('githubConfirmOverlay');
-            if (overlay && overlay.classList.contains('open')) resolve(document.getElementById('githubConfirmText').textContent);
-            else setTimeout(check, 20);
+            if (overlay && overlay.classList.contains('open')) {
+              const body = document.getElementById('githubConfirmText');
+              resolve({
+                text: body.textContent,
+                kind: overlay.getAttribute('data-kind'),
+                // The buttons name the decision. "Allow once" is right for saving a
+                // note and wrong for running a command, where "always" means the
+                // model runs whatever it likes until the tab closes.
+                allow: document.getElementById('confirmAllowBtn').textContent,
+                always: document.getElementById('confirmAlwaysBtn').textContent,
+                // A command in prose styling reads as a sentence. The dialog
+                // sets it as code, and this is what says so.
+                mono: /mono|consolas|menlo/i.test(getComputedStyle(body).fontFamily),
+              });
+            } else setTimeout(check, 20);
           };
           check();
         });
@@ -757,6 +770,7 @@ async function main() {
         githubConfirmResolve('once');
         return { asked, result: await pending };
       };
+      const systemLines = () => [...document.querySelectorAll('#chatMessages .message.system')].map((node) => node.textContent);
       // Real output, so the result is the command's rather than the page's.
       const printed = await runThrough(${JSON.stringify(PRINT_COMMAND)});
       // And a real file, through a real shell: this is "create and run the
@@ -765,6 +779,10 @@ async function main() {
       return {
         printed,
         produced,
+        // Only the lines this turn added: the transcript is empty on this page,
+        // so anything here was said by one of the two runs above.
+        wrote: systemLines().filter((line) => /Wrote|Settings/.test(line)),
+        everyone: systemLines(),
         title: document.getElementById('githubConfirmTitle').textContent,
         buildOffered: toolsForMode('build', RUN_TOOLS).map((t) => t.function.name),
         chatOffered: toolsForMode('chat', RUN_TOOLS).length,
@@ -772,8 +790,14 @@ async function main() {
       };
     })()`);
     console.log('run tool: ' + JSON.stringify(runTool));
-    if (!/node -e/.test(runTool.printed.asked)) {
-      throw new Error('the command was not put to the user before it was sent: ' + JSON.stringify(runTool.printed));
+    if (runTool.printed.asked.text !== PRINT_COMMAND) {
+      throw new Error('the dialog did not quote the command it was about to run: ' + JSON.stringify(runTool.printed.asked));
+    }
+    if (runTool.printed.asked.kind !== 'run' || !runTool.printed.asked.mono) {
+      throw new Error('the command was shown as prose rather than as a command: ' + JSON.stringify(runTool.printed.asked));
+    }
+    if (runTool.printed.asked.allow !== 'Run it' || !/Always run commands/.test(runTool.printed.asked.always)) {
+      throw new Error('the buttons do not name what they are allowing: ' + JSON.stringify(runTool.printed.asked));
     }
     if (!/server/.test(runTool.title)) throw new Error('the dialog does not say where it runs: ' + runTool.title);
     if (!/Exit code 0/.test(runTool.printed.result) || !/42/.test(runTool.printed.result)) {
@@ -784,6 +808,18 @@ async function main() {
     }
     if (!/smoke-report\.txt/.test(runTool.produced.result)) {
       throw new Error('a file the command wrote was not listed in the result: ' + JSON.stringify(runTool.produced));
+    }
+    // And the transcript says so, in the place the user is actually looking: the
+    // model is told about the file either way, and the user only when there is
+    // something for them to go and fetch.
+    // Exactly one acknowledgement, for the one command that produced a file: the
+    // first command printed to stdout and wrote nothing, so saying anything about
+    // it would be the app inventing activity.
+    if ((runTool.wrote || []).length !== 1) {
+      throw new Error('the transcript acknowledged the wrong number of files: ' + JSON.stringify(runTool.wrote));
+    }
+    if (!/^Wrote smoke-report\.txt \(20 B\) — Settings/.test(runTool.wrote[0])) {
+      throw new Error('the acknowledgement does not name the file and where to get it: ' + JSON.stringify(runTool.wrote));
     }
     if (runTool.buildOffered.join(',') !== 'run_command' || runTool.chatOffered || runTool.planOffered) {
       throw new Error('the shell is offered in the wrong modes: ' + JSON.stringify(runTool));
@@ -798,11 +834,18 @@ async function main() {
       const link = row && row.querySelector('a');
       if (!link) return { status: document.getElementById('serverWorkspaceStatus').textContent, rows: 0 };
       const res = await fetch(link.getAttribute('href'));
+      const style = getComputedStyle(link);
       return {
         status: document.getElementById('serverWorkspaceStatus').textContent,
         rows: document.querySelectorAll('#serverWorkspaceFileList .workspace-row').length,
         href: link.getAttribute('href'),
         body: await res.text(),
+        // It sits in a row of controls, so it has to look like one: the class it
+        // shares with the buttons beside it does not undo an anchor's underline
+        // by itself.
+        decoration: style.textDecorationLine,
+        border: style.borderStyle,
+        height: Math.round(link.getBoundingClientRect().height),
       };
     })()`);
     console.log('server files: ' + JSON.stringify(serverFiles));
@@ -814,6 +857,9 @@ async function main() {
     }
     if (serverFiles.body !== 'hello from the smoke') {
       throw new Error('the download is not the file the command wrote: ' + JSON.stringify(serverFiles));
+    }
+    if (serverFiles.decoration !== 'none' || serverFiles.border !== 'solid' || serverFiles.height < 20) {
+      throw new Error('the download does not look like the controls beside it: ' + JSON.stringify(serverFiles));
     }
     try { fs.rmSync(path.join(APP_DIR, 'workspace', 'smoke-report.txt'), { force: true }); } catch { /* gone already */ }
 

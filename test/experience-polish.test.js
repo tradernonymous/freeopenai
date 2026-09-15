@@ -55,6 +55,39 @@ test('a failure stays on screen; only the passing messages expire', () => {
   assert.equal(deps.statusDot.className, 'status-dot');
 });
 
+test('a picture with something to report keeps its sentence on screen', () => {
+  // "asked for 16:9 (1536x864), drawn 1:1 (1024×1024) — cut to 16:9 (1024×576)" is
+  // read *after* the picture appears, and the bar is one ellipsised line: 2.5
+  // seconds of it is a sentence nobody finishes. It is an explanation, so it goes
+  // when the next thing happens, exactly like a failure.
+  assertScannerCanRead(['showStatus', 'showImageOutcome', 'imageOutcomeStatus']);
+  const timers = [];
+  const deps = {
+    statusDot: { className: '' },
+    statusMessage: { textContent: '', classList: makeClassList() },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: () => {},
+  };
+  assertSandboxCovers(['showStatus', 'showImageOutcome', 'imageOutcomeStatus'], deps);
+  const page = loadFromIndex(['showStatus', 'showImageOutcome', 'imageOutcomeStatus'], deps);
+
+  page.showImageOutcome('Image ready', { drewWith: 'Puter', notes: ['asked for 16:9 (1536x864), drawn 1:1 (1024×1024) — cut to 16:9 (1024×576)'] });
+  assert.match(deps.statusMessage.textContent, /^Image ready — Puter; asked for 16:9/);
+  assert.match(deps.statusMessage.textContent, /cut to 16:9 \(1024×576\)$/);
+  assert.equal(timers.length, 0, 'the explanation must not be scheduled to vanish');
+  assert.equal(deps.statusMessage.classList.contains('error'), false, 'a caveat is not a failure');
+
+  // A clean draw is a confirmation, and confirmations still get out of the way.
+  page.showImageOutcome('Image ready', { drewWith: 'Puter', notes: [] });
+  assert.equal(deps.statusMessage.textContent, 'Image ready — Puter');
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].ms, 2500);
+
+  // An outcome with nothing on it at all is still a status, not a crash.
+  page.showImageOutcome('Image ready', undefined);
+  assert.equal(deps.statusMessage.textContent, 'Image ready');
+});
+
 test('the status timer is not a page-scope binding', () => {
   // The page calls showStatus while booting, before the bottom of the script has
   // run. A `let statusResetTimer` down there is in its temporal dead zone at that
