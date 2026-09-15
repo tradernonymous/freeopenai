@@ -1001,7 +1001,11 @@ test('fetchStreamWithRetry retries 429 and then succeeds', async () => {
 test('timeout knobs default sanely and read env at call time', () => {
   delete process.env.PROVIDER_TIMEOUT_CHAT_MS;
   delete process.env.PROVIDER_STALL_MS;
-  assert.deepEqual(providerTimeoutMs(), { models: 20000, chat: 55000, headers: 25000, stall: 60000 });
+  // image is its own knob because it is its own clock: the whole image request
+  // gets `chat`, and each service in the order gets `image` of it. One number
+  // for both is what let a single unreachable service spend the whole budget.
+  assert.deepEqual(providerTimeoutMs(), { models: 20000, chat: 55000, headers: 25000, stall: 60000, image: 22000 });
+  assert.ok(providerTimeoutMs().image < providerTimeoutMs().chat, 'a slice has to be smaller than the budget');
   process.env.PROVIDER_TIMEOUT_CHAT_MS = '10000';
   process.env.PROVIDER_STALL_MS = 'junk';
   try {

@@ -700,3 +700,62 @@ test('the HuggingFace default is a model that provider still serves', async () =
   );
   assert.doesNotMatch(LLM_PROVIDERS.huggingface.image.defaultModel, /FLUX\.1-schnell/);
 });
+
+test('a service that never answers costs its own slice, not everyone else’s', async () => {
+  // The failure this reproduces: one shared 55s clock for the whole order, so
+  // the first unreachable service — a gateway behind a dead tunnel — spent the
+  // entire budget. Every service after it went unasked, and the user was told
+  // "no image service answered within 55s", which named nobody and was untrue
+  // of the ones that were never tried.
+  const sockets = [];
+  const hang = await upstreamOf((req, res) => { sockets.push(res); /* never answers */ });
+  const draws = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/late.png' }] }));
+  // OpenRouter leads the order, so it is the one made to hang.
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = hang.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = draws.url;
+  process.env.PROVIDER_TIMEOUT_IMAGE_MS = '300';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 200, 'the second service must still get its turn');
+    const body = await res.json();
+    assert.equal(body.provider, 'nvidia');
+    assert.equal(body.data[0].url, 'https://img.test/late.png');
+    assert.equal(hang.seen.length, 1, 'the hanging service was asked, once');
+  } finally {
+    delete process.env.PROVIDER_TIMEOUT_IMAGE_MS;
+    app.close();
+    for (const res of sockets) { try { res.destroy(); } catch { /* already gone */ } }
+    await new Promise((r) => hang.server.close(r));
+    await new Promise((r) => draws.server.close(r));
+  }
+});
+
+test('when every service hangs, the message names them rather than nobody', async () => {
+  const sockets = [];
+  const hang = await upstreamOf((req, res) => { sockets.push(res); });
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = hang.url;
+  process.env.PROVIDER_TIMEOUT_IMAGE_MS = '250';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    // One service tried means its own status is the answer, and for a service
+    // that never replied that is 504 rather than the 502 that stands in for
+    // "something in a chain went wrong".
+    assert.equal(res.status, 504);
+    const body = await res.json();
+    // A timed-out service is a fact about that service, so it reads like every
+    // other failure in this list: who, and what they did.
+    assert.match(body.error, /OpenRouter/);
+    assert.match(body.error, /did not answer within/);
+    assert.deepEqual(body.tried, ['OpenRouter']);
+  } finally {
+    delete process.env.PROVIDER_TIMEOUT_IMAGE_MS;
+    app.close();
+    for (const res of sockets) { try { res.destroy(); } catch { /* already gone */ } }
+    await new Promise((r) => hang.server.close(r));
+  }
+});

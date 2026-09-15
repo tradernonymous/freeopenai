@@ -2441,9 +2441,19 @@ async function llmImage(req, res, kind) {
     // stalled image service keeps this request open until the hosting platform's
     // own ceiling answers it, and that arrives as an opaque failure rather than
     // the sentence below -- which is the same class of bug the chat path fixed.
+    // Two clocks, not one. The budget is how long the whole request may take;
+    // the slice is how long any one service gets before the walk moves on.
+    // Sharing a single deadline across the order meant one unreachable
+    // service -- a gateway behind a dead tunnel, a model that never answers --
+    // consumed the whole budget, so every service after it went unasked and
+    // the user was told "no image service answered", which named nobody and
+    // was not true of the ones that were never tried.
     const budget = providerTimeoutMs().chat;
+    const slice = Math.min(providerTimeoutMs().image, budget);
+    const deadline = Date.now() + budget;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
+    const failures = [];
     try {
       // The source picture is read once, before any provider is asked. A link
       // has to be fetched, and a mask has to match the picture it describes, so
@@ -2466,7 +2476,6 @@ async function llmImage(req, res, kind) {
         // fetch from a host it may not be able to reach.
         source = 'data:' + image.contentType + ';base64,' + image.bytes.toString('base64');
       }
-      const failures = [];
       const notes = [];
       for (const candidate of order.candidates) {
         // A painted mask is a file part or it is nothing. Handing one to a
@@ -2479,6 +2488,22 @@ async function llmImage(req, res, kind) {
           const dropped = 'the brush mask was dropped — ' + candidate.provider.label + ' edits the whole picture only';
           if (!notes.includes(dropped)) notes.push(dropped);
         }
+        // Don't start a service that cannot finish: a slice of a second or two
+        // buys an abort rather than an answer, and saying so is more use than
+        // one more timed-out row.
+        const left = deadline - Date.now();
+        if (left < 3000) {
+          failures.push({
+            label: candidate.provider.label,
+            reason: 'not tried - the request ran out of time before reaching it',
+            status: 504,
+          });
+          break;
+        }
+        const perCandidate = new AbortController();
+        const onAbort = () => perCandidate.abort();
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        const sliceTimer = setTimeout(() => perCandidate.abort(), Math.min(slice, left));
         let drawn;
         try {
           drawn = await drawImage({
@@ -2496,15 +2521,28 @@ async function llmImage(req, res, kind) {
             // earns the second attempt with this provider's own image model.
             explicitModel: candidate.model === String(body.model || '').trim() && !!candidate.model,
             headers: typeof candidate.provider.headers === 'function' ? candidate.provider.headers(req) : null,
-            signal: controller.signal,
+            signal: perCandidate.signal,
           });
         } catch (e) {
-          if (e && e.name === 'AbortError') throw e;
+          // The whole request is out of time: stop, and let the catch below
+          // report it with everything that was tried on the way.
+          if (e && e.name === 'AbortError' && controller.signal.aborted) throw e;
+          if (e && e.name === 'AbortError') {
+            failures.push({
+              label: candidate.provider.label,
+              reason: 'did not answer within ' + Math.round(Math.min(slice, left) / 1000) + 's',
+              status: 504,
+            });
+            continue;
+          }
           // A socket failure is a fact about this service -- a host that does
           // not resolve, a port with nothing behind it -- and the next provider
           // is a real chance of a picture, so this is recorded and stepped past.
           failures.push({ label: candidate.provider.label, reason: e.message + fetchFailureReason(e) });
           continue;
+        } finally {
+          clearTimeout(sliceTimer);
+          controller.signal.removeEventListener('abort', onAbort);
         }
         if (drawn.status >= 200 && drawn.status < 300) {
           if (imageUrlsIn(drawn.data).length) {
@@ -2551,11 +2589,15 @@ async function llmImage(req, res, kind) {
       });
     } catch (e) {
       if (e && e.name === 'AbortError') {
+        const tried = failures.length
+          ? ' Tried: ' + failures.map((f) => f.label + ' (' + f.reason + ')').join('; ') + '.'
+          : '';
         return sendJson(res, 504, {
           error:
-            what + ' timed out: no image service answered within ' +
-            Math.round(budget / 1000) +
-            's — the service is slow or unreachable, not your prompt. Try again.',
+            what + ' ran out of time after ' + Math.round(budget / 1000) +
+            's — a service was slow or unreachable, not your prompt.' + tried +
+            ' Try again.',
+          tried: failures.map((f) => f.label),
         });
       }
       sendJson(res, 502, { error: e.message });
@@ -2697,6 +2739,10 @@ function providerTimeoutMs() {
   return {
     models: num(process.env.PROVIDER_TIMEOUT_MODELS_MS, 20000),
     chat: num(process.env.PROVIDER_TIMEOUT_CHAT_MS, 55000),
+    // What one image service gets before the walk moves on. Separate from
+    // the whole request's budget on purpose: they used to be the same clock,
+    // so the first service to hang spent every other service's time too.
+    image: num(process.env.PROVIDER_TIMEOUT_IMAGE_MS, 22000),
     headers: num(process.env.PROVIDER_TIMEOUT_HEADERS_MS, 25000),
     stall: num(process.env.PROVIDER_STALL_MS, 60000),
   };
