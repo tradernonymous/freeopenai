@@ -736,26 +736,81 @@ test('a service that never answers costs its own slice, not everyone else’s', 
 test('when every service hangs, the message names them rather than nobody', async () => {
   const sockets = [];
   const hang = await upstreamOf((req, res) => { sockets.push(res); });
+  // Two of them, because a lone candidate is deliberately given the whole
+  // budget -- the slice exists to protect the other services' turns, and with
+  // no others there is nothing to protect it from.
   process.env.OPENROUTER_API_KEY = 'or-key';
   process.env.OPENROUTER_IMAGES_BASE_URL = hang.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = hang.url;
   process.env.PROVIDER_TIMEOUT_IMAGE_MS = '250';
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    // One service tried means its own status is the answer, and for a service
-    // that never replied that is 504 rather than the 502 that stands in for
-    // "something in a chain went wrong".
-    assert.equal(res.status, 504);
+    assert.equal(res.status, 502, 'more than one service failed, so no single status is the answer');
     const body = await res.json();
     // A timed-out service is a fact about that service, so it reads like every
     // other failure in this list: who, and what they did.
-    assert.match(body.error, /OpenRouter/);
-    assert.match(body.error, /did not answer within/);
-    assert.deepEqual(body.tried, ['OpenRouter']);
+    assert.match(body.error, /OpenRouter \(did not answer within/);
+    assert.match(body.error, /NVIDIA \(did not answer within/);
+    assert.deepEqual(body.tried, ['OpenRouter', 'NVIDIA']);
   } finally {
     delete process.env.PROVIDER_TIMEOUT_IMAGE_MS;
     app.close();
     for (const res of sockets) { try { res.destroy(); } catch { /* already gone */ } }
     await new Promise((r) => hang.server.close(r));
+  }
+});
+
+test('a chat model is a preference, not what makes a provider able to draw', async () => {
+  // Chatting on OmniRoute's `auto/minimax` router made OmniRoute an image
+  // candidate purely by borrowing that id, so every draw spent a round trip
+  // being told `400 Invalid image model: auto/minimax`. It also made
+  // /api/llm/images/providers a liar: that endpoint reported OmniRoute as not
+  // ready while the draw went on trying it anyway.
+  const gateway = await upstreamOf((req, res) => jsonAnswer(res, 400, { error: { message: 'Invalid image model: auto/minimax' } }));
+  const draws = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/nv.png' }] }));
+  process.env.OMNIROUTE_API_KEY = 'gw-key';
+  process.env.OMNIROUTE_BASE_URL = gateway.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = draws.url;
+  const app = await startApp();
+  try {
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    const gw = listed.providers.find((p) => p.id === 'omniroute');
+    assert.equal(gw.ready, false, 'the report says it cannot draw');
+
+    // preferProvider, not provider: this is the chat's own service being moved
+    // to the front of the order, which is how a draw reaches it in real use.
+    const res = await post(app, '/api/llm/images/generations', { preferProvider: 'omniroute', model: 'auto/minimax', prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).provider, 'nvidia', 'the draw goes to a service that can actually draw');
+    // And the report is telling the truth: the gateway was never asked.
+    assert.equal(gateway.seen.length, 0, 'a provider with no image model of its own must not be tried');
+  } finally {
+    app.close();
+    await new Promise((r) => gateway.server.close(r));
+    await new Promise((r) => draws.server.close(r));
+  }
+});
+
+test('an image model of its own still takes the chat model as a preference', async () => {
+  // The other half of the same rule: a provider that *can* draw still gets the
+  // chat's model offered to it, because that is the model the user picked.
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(JSON.parse(raw).model, 'stability/sdxl');
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/gw.png' }] });
+  });
+  process.env.OMNIROUTE_API_KEY = 'gw-key';
+  process.env.OMNIROUTE_BASE_URL = up.url;
+  process.env.OMNIROUTE_IMAGE_MODEL = 'gateway/default-image';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { provider: 'omniroute', model: 'stability/sdxl', prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).provider, 'omniroute');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
   }
 });

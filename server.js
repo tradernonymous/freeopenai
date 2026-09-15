@@ -1888,10 +1888,19 @@ function imageCandidateFor(id, options) {
   // The request's own model name is honoured only next to the provider it was
   // meant for. On its own it is whatever the browser last used somewhere else,
   // and an id from another catalogue is a 404 dressed up as a bad request.
-  const model = imageModelFor(store, options && options.explicitModel);
-  if (!model) {
+  // The chat's model is a *preference* for a service that can already draw,
+  // never the thing that makes one able to. A provider with no image model of
+  // its own used to become a candidate purely by borrowing the chat's id --
+  // so chatting on OmniRoute's `auto/minimax` router sent that id to an
+  // images endpoint and spent a round trip being told
+  //   400 "Invalid image model: auto/minimax. Use format: provider/model"
+  // every single draw. It also made /api/llm/images/providers a liar: it
+  // reported OmniRoute as not ready while the draw went on trying it.
+  const own = imageModelFor(store, null);
+  if (!own) {
     return { error: declared.label + ' has no image model named — set ' + (store.modelEnv || declared.envVar) + '.' };
   }
+  const model = imageModelFor(store, options && options.explicitModel);
   // A key restricted to free models cannot draw here, and asking anyway costs a
   // round trip to be told so. OpenRouter's Image API has no free tier at all --
   // the answer is
@@ -2449,7 +2458,13 @@ async function llmImage(req, res, kind) {
     // the user was told "no image service answered", which named nobody and
     // was not true of the ones that were never tried.
     const budget = providerTimeoutMs().chat;
-    const slice = Math.min(providerTimeoutMs().image, budget);
+    // The slice protects the *other* services' turns. When only one service
+    // can draw at all -- which is the ordinary case on free keys -- there is
+    // nothing to protect it from, and capping it at the slice would fail a
+    // request that had thirty unused seconds left in it.
+    const slice = order.candidates.length > 1
+      ? Math.min(providerTimeoutMs().image, budget)
+      : budget;
     const deadline = Date.now() + budget;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
