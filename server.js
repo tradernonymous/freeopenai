@@ -1290,12 +1290,11 @@ const LLM_PROVIDERS = {
         'auto/fast',
         'auto/cheap',
         'auto/smart',
-        'auto/offline',
         // Then the best of what a free-tier account actually reaches here,
-        // read off the live catalogue rather than guessed: Kiro's frontier
-        // tier, Mistral, Groq, Gemini, DeepSeek, SambaNova, Ollama Cloud,
-        // LLM7 and Cloudflare. The page keeps the first 60 usable rows, so
-        // what leads this list is what can be picked by name.
+        // read off a live catalogue rather than guessed: Kiro's frontier tier,
+        // GitHub Copilot, Mistral, Groq, Gemini, DeepSeek, SambaNova, Ollama
+        // Cloud, LLM7 and Cloudflare. The page keeps the first 60 usable rows,
+        // so what leads this list is what can be picked by name.
         'kr/claude-sonnet-5',
         'kr/claude-sonnet-4.5',
         'kr/claude-haiku-4.5',
@@ -1304,15 +1303,17 @@ const LLM_PROVIDERS = {
         'kr/qwen3-coder-next',
         'kr/deepseek-3.2',
         'kr/minimax-m2.5',
+        'gh/claude-opus-5',
+        'gh/claude-sonnet-5',
+        'gh/gpt-5.6-sol',
+        'gh/kimi-k2.7-code',
         'mistral/codestral-latest',
         'mistral/devstral-latest',
         'mistral/mistral-large-latest',
         'mistral/mistral-medium-3-5',
-        'mistral/mistral-small-latest',
         'groq/llama-3.3-70b-versatile',
         'groq/openai/gpt-oss-120b',
         'groq/qwen/qwen3-32b',
-        'groq/meta-llama/llama-4-scout-17b-16e-instruct',
         'gemini/gemini-3.1-pro-preview',
         'gemini/gemini-3-flash-preview',
         'gemini/gemini-2.5-pro',
@@ -1320,20 +1321,19 @@ const LLM_PROVIDERS = {
         'ds/deepseek-v4-pro',
         'ds/deepseek-v4-flash',
         'ollamacloud/kimi-k3',
-        'ollamacloud/qwen3.5:397b',
         'ollamacloud/glm-5.2',
         'ollamacloud/gpt-oss:120b',
         'samba/DeepSeek-V3.2',
         'samba/Llama-4-Maverick-17B-128E-Instruct',
-        'samba/gpt-oss-120b',
-        'llm7/deepseek-r1-0528',
-        'llm7/qwen2.5-coder-32b-instruct',
         'cf/@cf/openai/gpt-oss-120b',
         'cf/@cf/moonshotai/kimi-k2.7-code',
+        'llm7/deepseek-r1-0528',
+        'antigravity/gemini-3.7-flash-high',
         // AgentRouter's flagships, the one paid-catalogue affiliate here that
         // is reached on signup credit rather than a card.
-        'agentrouter/claude-opus-4-8',
+        'agentrouter/glm-5.3',
         'agentrouter/claude-opus-5',
+        'agentrouter/claude-opus-4-8',
         'agentrouter/gpt-5.6-sol',
       ],
       includeRest: true,
@@ -2778,6 +2778,19 @@ async function llmModels(req, res) {
       if (provider.freeOnly) {
         const free = models.filter((m) => isFreeModelId(m.id));
         if (free.length) listed = free;
+      }
+      // A declared list (PROVIDER_MODELS) that matches nothing is a typo or a
+      // list left behind by an older gateway, and it used to land straight on
+      // "serve the whole catalogue" -- which is how an OmniRoute picker came
+      // to show 2,330 ids in the gateway's own order, with the build's own
+      // ordering and its paid-model filter both silently skipped. The build's
+      // own list is a far better answer than the raw catalogue, so try it
+      // before giving up on ordering altogether.
+      const builtIn = LLM_PROVIDERS[id] && LLM_PROVIDERS[id].models;
+      if (!listed.length && builtIn && builtIn !== provider.models) {
+        listed = Array.isArray(builtIn)
+          ? builtIn.map((wanted) => models.find((m) => matchListEntry(m, wanted))).filter(Boolean)
+          : selectAllowedModels(models, builtIn);
       }
       if (!listed.length && models.length) listed = models;
       if (!listed.length && Array.isArray(provider.models)) {

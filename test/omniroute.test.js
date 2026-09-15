@@ -260,3 +260,23 @@ test('health lists the provider as one this build knows', async () => {
     assert.ok(health.providers.includes('omniroute'));
   });
 });
+test('a declared list that matches nothing falls back to the build list, not the raw catalogue', async () => {
+  // What this prevents, seen in production: OMNIROUTE_MODELS held ids from an
+  // older gateway, none of which existed any more. The empty intersection fell
+  // straight through to "serve the whole catalogue", so the picker showed
+  // every id the gateway knows, in the gateway's own order -- with this
+  // build's ordering and its paid-model filter both skipped in silence. The
+  // symptom reads as "my settings are being ignored", which is exactly right.
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    models: 'gone/one,gone/two',
+  }, async ({ base }) => {
+    const ids = (await (await fetch(modelsUrl(base))).json()).map((m) => m.id);
+    assert.ok(ids.includes('auto/coding'), 'the build list should answer when the declared one cannot');
+    assert.ok(
+      !ids.includes('openrouter/anthropic/claude-opus-4.5'),
+      'falling back must not skip the paid-model filter',
+    );
+    assert.ok(ids.indexOf('auto/coding') < ids.indexOf('mistral/codestral-latest'), 'and not skip the ordering');
+  });
+});
