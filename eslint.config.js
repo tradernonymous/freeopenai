@@ -16,6 +16,10 @@ module.exports = [
         Buffer: 'readonly',
         Blob: 'readonly',
         URL: 'readonly',
+        // Text in, bytes out (and back) -- both are globals in Node and in the
+        // browser, which is what lets the same decode rule run in either.
+        TextDecoder: 'readonly',
+        TextEncoder: 'readonly',
         URLSearchParams: 'readonly',
         fetch: 'readonly',
         AbortController: 'readonly',

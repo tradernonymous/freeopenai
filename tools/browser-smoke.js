@@ -1248,6 +1248,59 @@ async function main() {
     }
     if (!restoredPicture.tools) throw new Error('the restored picture has no Download beside it: ' + JSON.stringify(restoredPicture));
 
+    // What a picked file becomes is decided by the file itself. A name list used to
+    // decide it, and the same list filtered the file dialog -- so this hands the
+    // shipped handler real File objects, exactly as a picker would, and reads the
+    // chip it leaves behind.
+    await send('Page.navigate', { url: url + '-attachments' });
+    await waitFor(() => evaluate('typeof handleFileSelect === "function" && !!document.getElementById("fileInput")'), 'attach page');
+    await sleep(200);
+    const attach = await evaluate(`(async () => {
+      const chip = document.getElementById('attachmentChip');
+      const name = document.getElementById('attachmentName');
+      const status = document.getElementById('statusMessage');
+      const pick = async (file) => {
+        await handleFileSelect({ files: [file], value: '' });
+        const state = { name: name.textContent, chip: !chip.hidden, status: status.textContent };
+        clearAttachment();
+        return state;
+      };
+      const accepts = (kind) => { selectAttachKind(kind); return document.getElementById('fileInput').accept; };
+      return {
+        python: await pick(new File(['print("hi")\\n'], 'report.py', { type: '' })),
+        config: await pick(new File(['[build]'], 'settings.toml', { type: '' })),
+        noExtension: await pick(new File(['all: build'], 'Makefile', { type: '' })),
+        picture: await pick(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' })),
+        binary: await pick(new File([new Uint8Array([80, 75, 3, 4, 0, 0, 1, 2])], 'bundle.txt', { type: '' })),
+        empty: await pick(new File([], 'empty.txt', { type: '' })),
+        accepts: [accepts('file'), accepts('document'), accepts('image')],
+        oldGate: typeof isAttachableFile,
+      };
+    })()`);
+    console.log('attach: ' + JSON.stringify(attach));
+    for (const [label, state] of Object.entries(attach)) {
+      if (label === 'accepts' || label === 'oldGate') continue;
+      const wantsAttached = label !== 'binary';
+      if (state.chip !== wantsAttached) {
+        throw new Error(`${label} was ${state.chip ? 'attached' : 'refused'}: ${JSON.stringify(state)}`);
+      }
+    }
+    if (attach.binary.status.indexOf('not a text file') === -1) {
+      throw new Error('a binary file is refused without saying why: ' + JSON.stringify(attach.binary));
+    }
+    if (attach.python.name !== 'report.py' || attach.python.status !== 'Attached report.py') {
+      throw new Error('a .py file did not attach: ' + JSON.stringify(attach.python));
+    }
+    if (attach.noExtension.name !== 'Makefile') {
+      throw new Error('a file with no extension did not attach: ' + JSON.stringify(attach.noExtension));
+    }
+    if (attach.accepts.join('|') !== '|.pdf,.docx|image/*') {
+      throw new Error('the file dialog is still filtered by a list: ' + JSON.stringify(attach.accepts));
+    }
+    if (attach.oldGate !== 'undefined') {
+      throw new Error('the extension allowlist is still on the page: ' + attach.oldGate);
+    }
+
     if (errors.length) throw new Error('browser reported errors: ' + errors.join('; '));
     console.log('browser smoke: PASS (' + version.Browser + ')');
     if (serverOutput) process.stderr.write(serverOutput);

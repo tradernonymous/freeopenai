@@ -2150,7 +2150,7 @@
                                     </button>
                                     <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="file" onclick="selectAttachKind('file')">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-                                        <span>Files<br><span class="attach-item-hint">.txt, .md, .json, code, etc.</span></span>
+                                        <span>Files<br><span class="attach-item-hint">Any text file — code, config, logs</span></span>
                                     </button>
                                 </div>
                                 <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
@@ -3266,20 +3266,11 @@
         // the status bar match the app instead of framing it in black. These
         // follow the palettes below rather than the old pure-white-on-black.
         const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
-        let pendingAttachmentKind = 'file'; // 'image' | 'document' | 'file' — which attach menu item was picked
         const loadedScripts = {};
-        // The extracted attachment module owns the pure file/image decisions.
-        // Keep the fallback names from chatlib so a cached or blocked module
-        // cannot make the composer unusable.
-        const attachmentHelpers = typeof FreeOpenAIAttachment !== 'undefined'
-            ? FreeOpenAIAttachment
-            : {
-                isDocumentFile,
-                isAttachableFile,
-                modelForImage,
-                withImageTurn,
-                storedImagePlan,
-            };
+        // attachment-helpers.js owns what a picked file becomes: attachmentKindFor
+        // names the kind, decodeAttachmentText settles whether the bytes are text.
+        // Nothing here mirrors those decisions -- two gates for one question is how
+        // the extension allowlist stayed alive after the picker stopped using it.
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -8704,14 +8695,17 @@
             else if (e.key === 'Escape') { e.preventDefault(); closeAttachMenu(); attachTrigger.focus(); }
         }
 
+        // The menu item filters the file dialog; it never decides what the picked
+        // file becomes. Filtering "Files" by the extensions the app accepted is what
+        // made .py, .html, .css, .env, .toml, Makefile and Dockerfile unselectable --
+        // so Files opens unfiltered, and whatever arrives is classified by what it is.
         function selectAttachKind(kind) {
-            pendingAttachmentKind = kind;
             closeAttachMenu();
             fileInput.accept = kind === 'image'
                 ? 'image/*'
                 : kind === 'document'
                     ? '.pdf,.docx'
-                    : '.txt,.md,.csv,.json,.js,.ts,.log,.yml,.yaml';
+                    : '';
             fileInput.click();
         }
 
@@ -8772,16 +8766,19 @@
             return text.slice(0, MAX_DOCUMENT_TEXT_LENGTH) + '\n\n[...truncated, document was longer]';
         }
 
+        // A file attaches as whatever it *is*: a picture by its MIME type, a PDF or
+        // DOCX by its extension (the parser is what has to match), and otherwise
+        // text if the bytes decode as text. The old version asked the menu item
+        // instead, so a PDF opened from Files was refused for arriving through the
+        // wrong door and a .py opened from Documents likewise.
         async function handleFileSelect(input) {
             const file = input.files && input.files[0];
             input.value = '';
             if (!file) return;
 
-            if (pendingAttachmentKind === 'image') {
-                if (!file.type.startsWith('image/')) {
-                    showStatus('error', 'Please choose an image file');
-                    return;
-                }
+            const kind = attachmentKindFor(file.name, file.type);
+
+            if (kind === 'image') {
                 if (file.size > 8 * 1024 * 1024) {
                     showStatus('error', 'Image too large (8MB max)');
                     return;
@@ -8791,13 +8788,9 @@
                 return;
             }
 
-            if (pendingAttachmentKind === 'document') {
-                if (!isDocumentFile(file.name)) {
-                    showStatus('error', 'Only .pdf and .docx are supported here');
-                    return;
-                }
+            if (kind === 'document') {
                 if (file.size > 15 * 1024 * 1024) {
-                    showStatus('error', 'File too large (15MB max)');
+                    showStatus('error', 'Document too large (15MB max)');
                     return;
                 }
                 try {
@@ -8813,21 +8806,24 @@
                 return;
             }
 
-            if (!isAttachableFile(file.name)) {
-                showStatus('error', 'Only text-based files can be attached');
-                return;
-            }
+            // The whole file goes into the next prompt, which is why text stops at
+            // 200KB while a document can be 15MB -- its parser sends a summary.
             if (file.size > 200 * 1024) {
-                showStatus('error', 'File too large (200KB max)');
+                showStatus('error', 'File too large (200KB max) — attach a document to send more');
                 return;
             }
-            const reader = new FileReader();
-            reader.onload = () => {
-                setPendingAttachment({ kind: 'text', name: file.name, content: String(reader.result) });
-                showStatus('success', 'Attached ' + file.name);
-            };
-            reader.onerror = () => showStatus('error', 'Failed to read file');
-            reader.readAsText(file);
+            let text = null;
+            try {
+                text = decodeAttachmentText(await file.arrayBuffer());
+            } catch (error) {
+                console.error('Attachment read failed:', error);
+            }
+            if (text === null) {
+                showStatus('error', 'That is not a text file — attach it as an Image or a Document');
+                return;
+            }
+            setPendingAttachment({ kind: 'text', name: file.name, content: text });
+            showStatus('success', 'Attached ' + file.name);
         }
 
         function setPendingAttachment(attachment) {

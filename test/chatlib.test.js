@@ -5,7 +5,6 @@ const {
   DEFAULT_MODEL,
   isValidModel,
   escapeHtml,
-  isAttachableFile,
   renderMarkdownLite,
   detectsImageIntent,
   isVisionCapable,
@@ -51,13 +50,6 @@ test('escapeHtml neutralizes an XSS payload', () => {
 
 test('escapeHtml escapes all five reserved characters', () => {
   assert.equal(escapeHtml(`& < > " '`), '&amp; &lt; &gt; &quot; &#39;');
-});
-
-test('isAttachableFile allows text-like extensions and rejects binaries', () => {
-  assert.equal(isAttachableFile('notes.txt'), true);
-  assert.equal(isAttachableFile('data.CSV'), true);
-  assert.equal(isAttachableFile('photo.png'), false);
-  assert.equal(isAttachableFile('app.exe'), false);
 });
 
 test('renderMarkdownLite renders bold, italic, and inline code', () => {

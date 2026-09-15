@@ -969,9 +969,13 @@ function withImageTurn(messages, imageUrl, promptText) {
   ];
 }
 
-// Extensions handled by each attach menu option. "document" files are parsed
-// client-side (PDF via pdf.js, DOCX via mammoth.js) into plain text; "file"
-// covers the original plain-text attach behavior.
+// The extensions that need a parser: they are parsed client-side (PDF via
+// pdf.js, DOCX via mammoth.js) into plain text. Everything else attaches as
+// text, and that is decided by the file's bytes rather than by its name -- see
+// attachmentKindFor/decodeAttachmentText in attachment-helpers.js, which the page
+// calls. The list of nine extensions that used to live here refused .py, .html,
+// .css, .env, .toml, Makefile and Dockerfile, and it also filtered the file
+// dialog, so most files could not even be selected.
 const DOCUMENT_EXTENSIONS = ['.pdf', '.docx'];
 
 function isDocumentFile(filename) {
@@ -986,13 +990,6 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-const ATTACHABLE_EXTENSIONS = ['.txt', '.md', '.csv', '.json', '.js', '.ts', '.log', '.yml', '.yaml'];
-
-function isAttachableFile(filename) {
-  const lower = String(filename).toLowerCase();
-  return ATTACHABLE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 // Catches plain-language image requests ("generate an image of a fox",
@@ -4517,8 +4514,6 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_MODEL,
     isValidModel,
     escapeHtml,
-    ATTACHABLE_EXTENSIONS,
-    isAttachableFile,
     renderMarkdownLite,
     detectsImageIntent,
     detectsImageEditIntent,

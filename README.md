@@ -65,7 +65,7 @@
   <tr>
     <td valign="top">
       <h3>📎 Attachments</h3>
-      Attach an image, a PDF/DOCX document, or a small text file (<code>.txt .md .csv .json .js .ts .log .yml</code>) and it rides along with your next message.
+      Attach a picture, a PDF/DOCX document, or any text file — code, config, logs — and it rides along with your next message. What it is decides how it attaches, not what it is named.
     </td>
     <td valign="top">
       <h3>⚙️ Settings</h3>
@@ -178,7 +178,7 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | --- | --- |
 | Send a message | Type and press `Enter` (`Shift+Enter` for a newline) |
 | Switch model | Click the model pill in the composer, or open the **Models** tab |
-| Attach a file | Paperclip icon — an image, a PDF/DOCX, or a text file |
+| Attach a file | Paperclip icon — a picture, a PDF/DOCX, or any text file |
 | Generate an image | Just describe it — <i>"draw a cat on a skateboard"</i>. **Session → Image** forces a drawing when the wording could go both ways |
 | View / download an image | Click any generated image to zoom in, with a download link |
 | Copy a reply | Copy icon under any assistant message |
@@ -195,6 +195,8 @@ Each family has its own id convention on Puter.js: the GPT models take a bare id
 | Find a setting | The section chips across the top of **Settings** — Model, Chat, Workspace, Skills, Account, GitHub, Server |
 | Save the chat as a PDF | **Save chat as PDF** in the drawer — prints through your browser, so on a phone it lands in the share sheet |
 | Sign in / out | Account icon, top right, or the **Settings** tab |
+
+**A file attaches as what it is, not as what it is called.** The gate used to be a list of nine extensions, and the same list filtered the file dialog — so `.py`, `.html`, `.css`, `.env`, `.toml`, `Makefile` and `Dockerfile` could not be selected at all, and a `.txt` holding a zipped archive was accepted and arrived in the prompt as mojibake. A picture is now decided by its MIME type (which the send path needs anyway to build a `data:` URL), a PDF or DOCX by its extension (the parser is what has to match the format), and everything else is text if the bytes decode as text — a BOM is handled, and a NUL byte or a decoder that gave up is what refuses it. The menu item only filters the dialog now: it never decides, so a PDF opened from **Files** is read and a picture opened from **Files** is attached as a picture, instead of being refused for arriving through the wrong door. The refusal names the fix (`That is not a text file — attach it as an Image or a Document`), and the decisions live in one place, `attachment-helpers.js`, rather than in a copy beside the page.
 
 <br>
 
@@ -746,7 +748,10 @@ Every static response also carries an **ETag**. `Cache-Control: no-cache` is rig
 index.html      chat UI: markup, styles, and all client-side logic
 login.html      username/password screen, shown once AUTH_USER_1/AUTH_PASS_1 are set
 chatlib.js      shared, dependency-free logic (model list, HTML escaping,
-                attachment allowlist) — used by the page and by the tests
+                prompt budgeting) — used by the page and by the tests
+attachment-helpers.js
+                what a picked file becomes: image, document or text, and
+                whether the bytes are text at all
 auth.js         session-cookie signing and credential checking
 github.js       AES-256-GCM sealing for the stored GitHub token
 server.js       zero-dependency static server + the login and GitHub routes
