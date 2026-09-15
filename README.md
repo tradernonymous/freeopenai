@@ -292,6 +292,9 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
 | `OMNIROUTE_MODELS` | *(the lead list)* | Comma-separated ids that replace the lead list — the `auto` variants and the free-tier flagships — when your gateway's catalogue routes different names. |
+| `OPENAI_COMPAT_BASE_URL` | *(unset)* | Adds **OpenAI-compatible** — any endpoint of your own that speaks `GET /models` and `POST /chat/completions`: **LiteLLM**, **one-api**, vLLM, LM Studio, llama.cpp's server, or a gateway this app has never heard of. The `/v1` segment is added when it is missing. Set this or `OPENAI_COMPAT_API_KEY`; both with and without `/v1` work. See [Any OpenAI-compatible proxy](#openai-compatible). |
+| `OPENAI_COMPAT_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. Most local proxies need none, and an unset key means *no* auth header at all, never a bare `Bearer`. |
+| `OPENAI_COMPAT_MODELS` | *(the live catalogue)* | Comma-separated ids that narrow the proxy's catalogue and set their order, for a proxy that publishes more than you want to pick from. An id the catalogue does not publish stays out. |
 | `OPENROUTER_FREE_ONLY` | `1` | Free models only. Also means **no drawing**: OpenRouter's Image API has no free tier — its own docs say so, and none of its image models carries a `:free` id — so a free-only key is not offered as an image candidate. Set `0` once the key has credits. |
 | `HF_IMAGE_MODEL` | `stabilityai/stable-diffusion-3-medium-diffusers` | The default is gated — accept its licence once on the model page, or the token gets a `403`. |
 
@@ -621,6 +624,36 @@ docker inspect app-omniroute-1 --format '{{range .Config.Env}}{{println .}}{{end
 ```
 
 Recover them into `.env` from there rather than inventing new ones. Once the container is removed, they are gone, and the only way back is a fresh admin password and a new API key on every client.
+
+<a name="openai-compatible"></a>
+
+### 🔌 Any OpenAI-compatible proxy (LiteLLM, one-api, LM Studio, vLLM)
+
+Every gateway of this kind publishes the same two routes, and they are the two routes this app already speaks to each direct provider: `GET /models` and `POST /chat/completions`. So there is one provider for all of them, and its whole configuration is an address and an optional key — no model list to maintain, because what the proxy serves is your choice and its own catalogue is the only honest answer.
+
+```bash
+# LiteLLM, with its own config of free and paid providers behind one address
+docker run -d --name litellm -p 127.0.0.1:4000:4000 \
+  -v $(pwd)/litellm-config.yaml:/app/config.yaml \
+  ghcr.io/berriai/litellm:main-latest --config /app/config.yaml
+
+# one-api, same idea with a web dashboard: docker run -d -p 127.0.0.1:3000:3000 justsong/one-api
+
+# this app, pointed at it (no key needed for a local proxy without auth)
+OPENAI_COMPAT_BASE_URL=http://127.0.0.1:4000 npm start
+```
+
+`OpenAI-compatible` then appears in the provider picker with whatever that proxy serves — a LiteLLM config mixing a free Groq key, a local Ollama, and a paid model is one endpoint here, so one picker row per model it fronts. Point it at a **local** proxy and the whole stack runs on your own machine: no per-token bill, and the app's model picker, skills, tools and image route all work exactly as they do on a hosted key.
+
+| Setting | Value |
+| --- | --- |
+| `OPENAI_COMPAT_BASE_URL` | `http://127.0.0.1:4000` (LiteLLM's default), `http://127.0.0.1:3000` (one-api), `http://localhost:1234/v1` (LM Studio), `http://127.0.0.1:8000/v1` (vLLM). With or without `/v1` — the segment is added when it is missing, and a subpath you chose is kept (`…/openai` → `…/openai/v1`). |
+| `OPENAI_COMPAT_API_KEY` | Only if your proxy requires one. Sent as `Bearer`; unset sends no auth header at all. |
+| `OPENAI_COMPAT_MODELS` | Optional. Narrows the picker to the ids you name, in your order — an allowlist against the proxy's own catalogue, never a declaration of it. |
+
+**This is also the answer for a model no provider here lists.** A proxy in front of Ollama, vLLM or a fine-tune turns it into an OpenAI-compatible endpoint, and this app needs nothing else — which is the same reason `ANTIGRAVITY_BASE_URL` and `OMNIROUTE_BASE_URL` exist: the adapter is the OpenAI shape, so any service that speaks it is a base URL away.
+
+**A local proxy is not reachable from a deployed app.** `http://127.0.0.1:4000` from a Railway container means the container itself, where no proxy is running. Run this app locally against it, or put the proxy somewhere the app can reach and point the variable there — and if you expose it, add its own auth first (`LiteLLM`'s `master_key`, one-api's tokens), because an open proxy spends whatever is connected to it.
 
 <a name="image-providers"></a>
 

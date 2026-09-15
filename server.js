@@ -1555,6 +1555,23 @@ const LLM_PROVIDERS = {
       edit: 'references',
     },
   },
+  // Any OpenAI-compatible endpoint of the operator's own: LiteLLM and one-api
+  // (proxies that front many providers and free tiers behind one address),
+  // vLLM, LM Studio, llama.cpp's server, or a gateway this app has never heard
+  // of. The contract is the one every direct provider here already speaks --
+  // GET /models, POST /chat/completions -- so the whole entry is an address and
+  // an optional key. No pinned model list on purpose: what the proxy serves is
+  // the operator's choice, and its own catalogue is the only honest answer to
+  // "which models are there".
+  'openai-compat': {
+    label: 'OpenAI-compatible',
+    baseUrl: '',
+    envVar: 'OPENAI_COMPAT_API_KEY',
+    // A local proxy usually has no key of its own. Setting the base URL is what
+    // puts this provider in the picker; a key is sent when there is one, and no
+    // auth header at all when there is not (never a bare "Bearer ").
+    needsKey: false,
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -1665,7 +1682,7 @@ function providerIsConfigured(provider) {
 // and the Antigravity proxy both accept "http://host:port", and both serve
 // /v1/... underneath it, so the version segment is added when it is missing
 // rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute']);
+const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute', 'openai-compat']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
