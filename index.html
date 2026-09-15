@@ -3263,6 +3263,14 @@
         // temporal dead zone exactly then.
         let imageUrlById = new Map();
         let isTyping = false;
+        // A send is a turn the deployment pays for, and the button is not the
+        // only way in: Enter, a hero card and a double-click all reach
+        // sendMessage twice, and `isTyping` is set only after the first await --
+        // so two clicks in one tick each started a whole turn and the same
+        // message appeared twice. A timestamp rather than a flag, so there is
+        // no state to leave set.
+        const SEND_CLICK_WINDOW_MS = 400;
+        let lastSendAt = 0;
         let usageCount = 0;
         let pendingAttachment = null;
         let puterReady = false;
@@ -6607,12 +6615,21 @@
         async function sendMessage() {
             const raw = chatInput.value.trim();
             if (!raw || isTyping) return;
+            if (Date.now() - lastSendAt < SEND_CLICK_WINDOW_MS) return;
+            lastSendAt = Date.now();
             // Only a turn that actually needs Puter is held up by Puter: a
             // direct provider was previously unreachable without a Puter
             // account, which its own error named as a Puter problem.
             if (needsPuterLogin() && !puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
             if (needsPuterLogin() && puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
-                addMessage('system', 'Please sign in to chat (see the account icon above).', { error: true });
+                // Said once. Every Send while it stands used to add another copy
+                // of this line, so a user who tried twice got a transcript of the
+                // same refusal -- and the advice named an icon that is not on
+                // screen: the sign-in lives in the chat drawer's footer, and the
+                // provider menu is the way past Puter entirely.
+                const notice = 'Puter needs an account before it can answer. Sign in with the account button in the chat drawer, or pick another provider in the model menu.';
+                const last = messages[messages.length - 1];
+                if (!last || last.type !== 'system' || last.content !== notice) addMessage('system', notice, { error: true });
                 return;
             }
 
@@ -6678,8 +6695,13 @@
             // plain-language draw request, or the image toggle -- so an ordinary
             // chat message never pays for the extra call. Its answer is best
             // effort: no plan means the keyword decision stands.
+            //
+            // The picture already in the chat is the whole reason "now make the
+            // sky pink" can become an edit: no keyword reads that as one, so
+            // leaving this gate on the keywords alone sent a follow-up about the
+            // picture on screen to a vision chat that could only describe it.
             let plan = null;
-            if (fallbackAction !== 'chat' || attachedImageFile) {
+            if (fallbackAction !== 'chat' || attachedImageFile || previousImage) {
                 setActivity('Reading the request…');
                 try {
                     plan = await planImageTurn(raw, {
@@ -7388,9 +7410,10 @@
         // of the car instead of a recoloured one. options.mask is the painted
         // brush region, and options.notes collects what the caller has to say
         // about the backend that answered.
-        async function editImageSource(promptText, sourceDataUrl, signal, options) {
+        async function editImageSource(promptText, source, signal, options) {
             const opts = options || {};
             const notes = Array.isArray(opts.notes) ? opts.notes : [];
+            const sourceDataUrl = await imageSourceForRequest(source);
             const urls = await imageSourceFrom('edit', promptText, sourceDataUrl, signal, {
                 mask: opts.mask || '',
                 notes,
@@ -7398,6 +7421,38 @@
                 outcome: opts.outcome,
             });
             return urls[0];
+        }
+
+        // The picture an edit is sent with, in the one form the route can read.
+        //
+        // It takes a data URL or a link and nothing else, and a picture this
+        // chat already shows is neither: it is a blob: URL, an object URL over
+        // the bytes in the picture index that only this page can read. So "make
+        // the sky pink" on the picture from the last turn answered "Invalid
+        // source image — expected a data URL or an http(s) link" -- the one
+        // thing the server could not do anything else about. Reading the bytes
+        // back here also carries the type the picture was stored with, so a
+        // JPEG does not go out labelled PNG. An attachment is already a data
+        // URL and a link is passed through untouched.
+        async function imageSourceForRequest(src) {
+            const url = String(src || '');
+            // Only the store's own object URLs need it, so only those are read
+            // back: a data URL and a link are already in the form the route
+            // takes, and anything else is passed along as it always was.
+            if (!/^blob:/i.test(url)) return url;
+            let blob;
+            try {
+                blob = await (await fetch(url)).blob();
+            } catch {
+                throw new Error('that picture can no longer be read here — attach it again to edit it');
+            }
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            if (!bytes.length) throw new Error('that picture has no bytes stored — attach it again to edit it');
+            // Chunked because an argument list has a length limit: one call with
+            // a megabyte of bytes throws "too many arguments".
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+            return 'data:' + imageMediaType({ mime_type: blob.type }) + ';base64,' + btoa(binary);
         }
 
         // What the status line says about a picture that arrived: which service
@@ -8044,7 +8099,7 @@
                 .map((item) => {
                     if (!item) return '';
                     if (item.url) return item.url;
-                    if (item.b64_json) return 'data:image/png;base64,' + item.b64_json;
+                    if (item.b64_json) return 'data:' + imageMediaType(item) + ';base64,' + item.b64_json;
                     return '';
                 })
                 .filter(Boolean);

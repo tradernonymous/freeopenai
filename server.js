@@ -1340,9 +1340,6 @@ const LLM_PROVIDERS = {
       // model through the image endpoint, which answers 200 and no picture --
       // a failure this route reports as "the service did not do the job".
       ownModel: true,
-      // Workers AI takes the pixel pair itself, so a size is never a preference
-      // it could refuse.
-      exactSize: true,
     },
   },
   ollama: {
@@ -1624,18 +1621,19 @@ const LLM_PROVIDERS = {
       shape: 'pollinations',
       baseUrlEnv: 'POLLINATIONS_IMAGES_BASE_URL',
       modelEnv: 'POLLINATIONS_IMAGE_MODEL',
+      // What it is asked for. The free tier serves a model of its own choosing
+      // and answers under this name either way, so this is a preference rather
+      // than a claim about what made the picture.
       defaultModel: 'flux',
-      // Its own idea of a request is a query string, so the size it is handed
-      // is the size it draws.
-      exactSize: true,
-      edit: 'none',
+      // No `edit`: it generates and nothing else, which is what makes the route
+      // step past it for an edit rather than draw a new picture in place of one.
       // The anonymous tier stamps its pictures, and `nologo` is documented as
       // needing an account -- so a token is what removes it, and until then
-      // every picture drawn here says why it carries a mark. Every other drawer
-      // in the order is unwatermarked, which is what makes this the floor rather
-      // than the plan.
+      // every picture drawn here says why it carries a mark. No other drawer in
+      // the order stamps a visible one, which is what makes this the floor
+      // rather than the plan.
       caveat: (provider) => (provider.key ? ''
-        : 'drawn on Pollinations’ anonymous tier, which watermark its pictures — a free account token for it, or any other provider in the order, draws without one'),
+        : 'drawn on Pollinations’ anonymous tier, which watermark its pictures — a free account token for it, or any other provider in the order, draws without a visible one'),
     },
   },
 };
@@ -2469,10 +2467,18 @@ function imageLooksRefused(status, text) {
 // "every provider failed" is the same sentence for six different problems.
 function imageDrawFailureMessage(what, failures) {
   if (!failures.length) return what + ' failed: no image provider was ready to try.';
-  if (failures.length === 1) return what + ' failed on ' + failures[0].label + ': ' + failures[0].reason;
+  // Every candidate stepped past for the one reason that is about the request
+  // rather than about a service: this deployment has nothing that takes a source
+  // picture. "cannot edit, only generate" says what happened and not what to do
+  // about it -- and on a deployment whose only drawer is the keyless one, that
+  // refusal is the end of the road for an edit.
+  const editHint = failures.every((f) => f.reason === 'cannot edit, only generate')
+    ? ' An edit needs a service that takes the picture being edited: add a key for one (Gemini and OpenRouter both do), or turn on “Draw with Puter” to edit it in your browser.'
+    : '';
+  if (failures.length === 1) return what + ' failed on ' + failures[0].label + ': ' + failures[0].reason + '.' + editHint;
   return (
     what + ' failed on every provider that could draw: ' +
-    failures.map((f) => f.label + ' (' + f.reason + ')').join('; ') + '.'
+    failures.map((f) => f.label + ' (' + f.reason + ')').join('; ') + '.' + editHint
   );
 }
 
@@ -2537,12 +2543,6 @@ function nearestDeclaredSize(declared, parts) {
 function resolveImageSize(store, requested, label) {
   const want = String(requested || '').trim();
   if (!want) return { declaredSize: '', preferenceSize: '' };
-  // A store that spells the size in its own body or query -- Workers AI's
-  // width/height pair, Pollinations' query string -- draws whatever it is
-  // handed, so the size is not a preference there: sending it twice, or
-  // offering to drop it after a 400, would be answering a question the
-  // service was never asked.
-  if (store.exactSize) return { declaredSize: want, preferenceSize: '' };
   const declared = Array.isArray(store.sizes) && store.sizes.length ? store.sizes : null;
   if (!declared) return { declaredSize: '', preferenceSize: want };
   const exact = declared.find((entry) => entry.value === want);
@@ -2705,13 +2705,18 @@ async function drawImage(args) {
       }];
     }
     if (store.shape === 'pollinations') {
-      // The whole request is its URL. 404 for an edit is the honest answer: this
-      // endpoint generates and does nothing else, so `edit: 'none'` above is
-      // what stops a source picture being dropped silently.
+      // The whole request is its URL: the prompt in the path, the shape in the
+      // query. No account, no key -- which is the entire point of it.
+      //
+      // The pair is not optional here. Asked without width and height this
+      // service answers `200` with an empty body, which this route reads as
+      // "answered without a picture" and blames on the provider -- so a caller
+      // who named no size got a failure for a request the service never refused.
       return [(withExtra) => {
         const query = new URLSearchParams();
-        const parts = sizeParts(declaredSize || requestedSize);
-        if (parts) { query.set('width', String(parts.w)); query.set('height', String(parts.h)); }
+        const parts = sizeParts(requestedSize) || { w: 1024, h: 1024 };
+        query.set('width', String(parts.w));
+        query.set('height', String(parts.h));
         if (withExtra && useModel) query.set('model', useModel);
         if (withExtra && provider.key) query.set('nologo', 'true');
         const tail = query.toString();
@@ -2832,13 +2837,11 @@ async function drawImage(args) {
     if (cf) {
       return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
     }
-    // Gemini: an interaction whose picture is a base64 block somewhere inside
-    // it. Which field holds it depends on how many images the answer has --
-    // `output_image` names the last one, an interleaved answer spreads them
-    // through its steps -- so the block is found rather than assumed.
-    const gemini = lastImageBlock(payload);
-    if (gemini) {
-      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: gemini.data, media_type: gemini.mime || 'image/png' }] } };
+    // Gemini: an interaction carries its picture as `output_image`, which its
+    // own docs name as the last generated image block.
+    const gemini = payload.output_image;
+    if (gemini && typeof gemini.data === 'string') {
+      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: gemini.data, media_type: gemini.mime_type || 'image/png' }] } };
     }
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
@@ -2846,35 +2849,6 @@ async function drawImage(args) {
     }
   }
   return { status: response.status, model: usedModel, notes, data: payload };
-}
-
-// The last picture block in a document, wherever the answer put it. Gemini's
-// own field for it is not the same in every response shape, and an answer that
-// interleaved text and images carries several, so this looks for the shape of a
-// picture rather than a name. MIME can be camel or snake case; a block with no
-// MIME at all is only accepted under a key that says image, so a stray base64
-// string somewhere else in the payload is not mistaken for the drawing.
-function lastImageBlock(value, found) {
-  let last = found;
-  if (!value || typeof value !== 'object') return last;
-  for (const [key, child] of Object.entries(value)) {
-    if (!child || typeof child !== 'object') continue;
-    const data = typeof child.data === 'string' ? child.data : '';
-    const mime = String(child.mime_type || child.mimeType || '');
-    if (data && (/^image\//i.test(mime) || (!mime && /image/i.test(key)))) last = { data, mime };
-    last = lastImageBlock(child, last);
-  }
-  return last;
-}
-
-// Whether a service can be handed the picture that is being edited. The three
-// modes are the three ways one takes it: file parts, a reference URL, or an
-// input alongside the words. A service with none of them is not a weaker choice
-// for an edit, it is a different operation -- it would draw a new picture from
-// the words alone and hand it back as though the one on screen had been
-// changed, which is the one substitution worth refusing outright.
-function storeCanEdit(store) {
-  return !!store && (store.edit === 'multipart' || store.edit === 'references' || store.edit === 'parts');
 }
 
 // The largest source picture an edit will carry, in bytes. The browser already
@@ -3018,11 +2992,12 @@ async function llmImage(req, res, kind) {
       }
       const notes = [];
       for (const candidate of order.candidates) {
-        // An edit needs a service that can take the picture being edited. One
-        // that generates and nothing else is stepped past with the reason said,
-        // rather than asked to draw something new and have it presented as the
-        // change that was requested.
-        if (kind === 'edits' && !storeCanEdit(candidate.store)) {
+        // An edit needs a service that can be handed the picture being edited --
+        // as file parts, a reference URL, or an input beside the words. One that
+        // generates and nothing else would draw a new picture from the words
+        // alone and have it presented as the change that was requested, so it is
+        // stepped past with the reason said instead.
+        if (kind === 'edits' && !['multipart', 'references', 'parts'].includes(candidate.store.edit)) {
           failures.push({ label: candidate.provider.label, reason: 'cannot edit, only generate', status: 400 });
           continue;
         }

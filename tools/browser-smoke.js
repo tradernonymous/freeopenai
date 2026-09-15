@@ -1015,6 +1015,7 @@ async function main() {
       const providerOriginal = selectedProvider;
       const runOriginal = runChatWithTools;
       const loginOriginal = loginRequired;
+      const callModelOriginal = callModel;
       selectedProvider = 'smoke-direct';
       loginRequired = true;
       runChatWithTools = async () => ({
@@ -1022,6 +1023,10 @@ async function main() {
         exhausted: false,
         finishReason: 'stop',
       });
+      // There is a picture in this chat, so the turn asks the planner whether it
+      // is image work before it chats -- and an unstubbed call would leave the
+      // page for a provider that does not exist on this server.
+      callModel = async () => ({ message: { role: 'assistant', content: '{"action":"chat"}' } });
       const input = document.getElementById('chatInput');
       input.value = 'smoke send probe';
       let sendError = '';
@@ -1030,6 +1035,7 @@ async function main() {
         selectedProvider = providerOriginal;
         runChatWithTools = runOriginal;
         loginRequired = loginOriginal;
+        callModel = callModelOriginal;
       } catch { /* restore best-effort */ }
       const sent = messages.map((m) => m.type + ':' + (m.content || '')).join('|');
       const send = {

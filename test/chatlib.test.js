@@ -16,6 +16,7 @@ const {
   parseSseChunk,
   describeAttachmentCost,
   HISTORY_TOKEN_BUDGET,
+  imageMediaType,
 } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
@@ -273,6 +274,21 @@ test('an attachment says what it costs before it is sent', () => {
   assert.equal(describeAttachmentCost({ kind: 'text', content: '' }), null);
   assert.equal(describeAttachmentCost({ kind: 'image', name: 'shot.png' }), null);
   assert.equal(describeAttachmentCost(null), null);
+});
+
+test('a picture is labelled with the type its service named', () => {
+  // The label is not decoration: an edit sends the picture back as a data URL
+  // and the server reads the type out of it. Labelling a JPEG as PNG made every
+  // edit of a drawn picture carry a type its bytes contradict.
+  assert.equal(imageMediaType({ media_type: 'image/jpeg' }), 'image/jpeg');
+  assert.equal(imageMediaType({ mime_type: 'image/webp' }), 'image/webp');
+  assert.equal(imageMediaType({ media_type: 'IMAGE/JPEG' }), 'image/jpeg');
+  // A response that names none is what an OpenAI-shaped endpoint returns.
+  assert.equal(imageMediaType({ b64_json: 'x' }), 'image/png');
+  // Anything that is not an image type is not allowed to become the label.
+  assert.equal(imageMediaType({ media_type: 'text/html' }), 'image/png');
+  assert.equal(imageMediaType({ media_type: 'image/png; charset=x' }), 'image/png');
+  assert.equal(imageMediaType(null), 'image/png');
 });
 
 test('isToolsRejection flags shape failures only', () => {

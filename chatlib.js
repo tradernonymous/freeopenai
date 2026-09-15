@@ -4237,6 +4237,20 @@ function nextStreamCadence(lastRenderMs, current = STREAM_RENDER_MIN_MS) {
   return now;
 }
 
+// What a picture in a response actually is.
+//
+// The base64 form used to be labelled image/png whatever the bytes were, and
+// the services do not agree: the free drawer, Workers AI and Gemini all answer
+// JPEG here. The label is not decoration -- an edit sends the picture on as a
+// data URL and the server reads the type straight out of it, so a JPEG wearing
+// image/png is a source file whose declared type is a lie. Only an image type
+// is accepted, and a response that names none stays PNG, which is what an
+// OpenAI-shaped images endpoint returns.
+function imageMediaType(item) {
+  const declared = String((item && (item.media_type || item.mime_type)) || '').trim().toLowerCase();
+  return /^image\/[a-z0-9.+-]+$/.test(declared) ? declared : 'image/png';
+}
+
 // --- Saving a generated picture ---
 //
 // The picture the model drew is saved at the size it was drawn, which is the
@@ -4678,6 +4692,7 @@ if (typeof module !== 'undefined' && module.exports) {
     serializePendingTurn,
     parsePendingTurn,
     retryTargetFor,
+    imageMediaType,
     MAX_PROVIDER_FAILOVERS,
     failoverProviderOrder,
     nextFailoverProvider,

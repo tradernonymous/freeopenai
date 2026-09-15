@@ -299,3 +299,21 @@ test('the request that actually goes out carries the image and the model that ca
     { type: 'image_url', image_url: { url: PNG } },
   ]);
 });
+
+// ---- the two things the send path has to get right -------------------------
+
+test('a drawn picture is labelled with the type its service gave it', () => {
+  // The base64 was labelled image/png whatever it was, and the services this
+  // page draws on answer JPEG. The label travels: an edit sends the picture
+  // back as a data URL and the server takes the type straight out of it, so a
+  // JPEG wearing image/png is a source file whose declared type is a lie.
+  assert.match(sourceOf('imageUrlsFrom'), /imageMediaType\(item\)/);
+});
+
+test('a picture already in the chat is enough to ask what the turn is', () => {
+  // "now make the sky pink" matches no image keyword, so the planner is the
+  // only thing that can read it as an edit -- and the gate that decides whether
+  // to ask listed everything except the picture already on screen, which is
+  // exactly what a follow-up like that is about.
+  assert.match(sourceOf('sendMessage'), /if \(fallbackAction !== 'chat' \|\| attachedImageFile \|\| previousImage\)/);
+});

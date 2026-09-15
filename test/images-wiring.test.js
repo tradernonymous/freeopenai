@@ -26,6 +26,7 @@ const {
   describeDrawnSize,
   imageRatioLabel,
   reframePlan,
+  imageMediaType,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -35,6 +36,7 @@ const NAMES = [
   'generateImageSource',
   'generateImageSources',
   'editImageSource',
+  'imageSourceForRequest',
   'imageSourceFrom',
   'puterImageArgs',
   'imageBackendsForTurn',
@@ -78,6 +80,7 @@ function harness({
     imageSizeBody,
     imageRatioBody,
     describeDrawnSize,
+    imageMediaType,
     selectedProvider: provider,
     drawWithPuter: puterImages,
     selectedModel: model,
