@@ -33,6 +33,10 @@ test('a file is attached as what it is, not as what it is named', () => {
   assert.equal(attachmentKindFor('report.pdf', 'application/pdf'), 'document');
   assert.equal(attachmentKindFor('RESUME.DOCX', ''), 'document');
   assert.equal(isDocumentFile('report.PDF'), true);
+  assert.equal(isDocumentFile('resume.DOCX'), true);
+  // A name that needs no parser is not a document, whichever way it is spelled.
+  assert.equal(isDocumentFile('notes.txt'), false);
+  assert.equal(isDocumentFile('photo.png'), false);
   // The archive that used to slip through as a .txt is still called text; the
   // bytes are what refuse it, below.
   assert.equal(attachmentKindFor('archive.txt', ''), 'text');

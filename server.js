@@ -1908,15 +1908,138 @@ async function llmFetch(req, res) {
 const IMAGE_PROVIDER_ORDER = ['nara', 'cloudflare', 'openrouter', 'nvidia', 'huggingface', 'omniroute', 'ollama'];
 
 // Which model name to ask for: the request's own, then the operator's variable,
-// then the store's default. A store with no default (Ollama, OmniRoute) is
-// therefore only usable once the operator names one -- which is the point, since
-// nothing here can know what a local server or a gateway has loaded.
+// then the store's default, then one read from the provider's own catalogue (see
+// discoverImageModel). A store with no default (Nara, Ollama, OmniRoute) is
+// therefore usable once the operator names a model -- which is the point, since
+// nothing here can know what a local server or a gateway has loaded -- or once
+// the service publishes one that can be read.
 function imageModelFor(store, explicit) {
   const named = String(explicit || '').trim();
   if (named) return named;
   const fromEnv = store.modelEnv ? String(process.env[store.modelEnv] || '').trim() : '';
   if (fromEnv) return fromEnv;
-  return String(store.defaultModel || '').trim();
+  return String(store.defaultModel || store.discoveredModel || '').trim();
+}
+
+// --- Finding an image model a service already publishes ----------------------
+//
+// Naming <PROVIDER>_IMAGE_MODEL is how every service gained the ability to
+// draw, and it asks an operator to know something the service publishes itself:
+// the id of its own image model. On a Google key or an Antigravity proxy the
+// answer is a model already sitting in that provider's catalogue
+// (`gemini-2.5-flash-image`), so the variable is one line of configuration
+// between a deployment and a working draw -- and the line nobody knows to write.
+//
+// So the catalogue is read instead, for the service the conversation is already
+// on, and only when that service has no model of its own: a provider whose
+// operator named one is never asked, and a provider that answers "none" is not
+// asked again for the cache's lifetime.
+
+// What an image model looks like in an id, best first. The order is the ranking:
+// `gpt-image-1` beats a model that merely contains "image", and within one rank
+// the catalogue's own order wins, which is newest-first nearly everywhere.
+const IMAGE_MODEL_MARKERS = [
+  'gpt-image', 'dall-e', 'imagen', 'flux', 'stable-diffusion', 'sdxl', 'sd3',
+  'seedream', 'ideogram', 'recraft', 'photon', 'nano-banana', 'kolors',
+  'qwen-image', 'image',
+];
+
+// Words that mean a model reads or indexes pictures rather than making one. A
+// vision model is the trap: its id says "image" and its answer is prose.
+const IMAGE_MODEL_NOT = [
+  'vision', 'vl', 'embed', 'rerank', 'moderation', 'guard', 'caption',
+  'whisper', 'tts', 'audio', 'ocr', 'transcri',
+];
+
+// The one id in a catalogue that can draw, or ''. Takes ids or model rows.
+function imageModelFromCatalogue(models) {
+  const ids = (Array.isArray(models) ? models : [])
+    .map((m) => (typeof m === 'string' ? m : (m && m.id) || ''))
+    .filter(Boolean);
+  let best = '';
+  let bestRank = Infinity;
+  for (const id of ids) {
+    const lower = String(id).toLowerCase();
+    if (IMAGE_MODEL_NOT.some((word) => lower.includes(word))) continue;
+    const rank = IMAGE_MODEL_MARKERS.findIndex((marker) => lower.includes(marker));
+    if (rank < 0 || rank >= bestRank) continue;
+    best = id;
+    bestRank = rank;
+  }
+  return best;
+}
+
+// What a provider's catalogue answered when it was last asked, whether or not it
+// had anything: "none" is an answer, and re-reading it on every draw would put a
+// round trip in front of every picture. Kept apart from modelCache on purpose --
+// that one holds what the *picker* may show, which for a gateway is the
+// operator's own allowlist rather than the catalogue, and writing raw catalogue
+// ids into it is how a picker ends up showing 2,330 rows.
+const imageDiscoveryCache = new Map();
+
+function clearImageDiscoveryCache() {
+  imageDiscoveryCache.clear();
+}
+
+// '' means "asked, and there was nothing to draw with"; null means "not asked".
+// The two are different answers -- one is a reason to stop reading and the other
+// is a reason to go and read -- and collapsing them made every draw re-read a
+// catalogue that had already answered.
+function discoveryFor(id) {
+  if (!id) return null;
+  const hit = imageDiscoveryCache.get(id);
+  if (!hit || Date.now() - hit.fetchedAt >= modelsCacheTtlMs()) return null;
+  return hit.model;
+}
+
+function discoveredImageModel(id) {
+  return discoveryFor(id) || '';
+}
+
+// A discovery read is a lookup in front of a picture the user is waiting for, so
+// it gets a shorter leash than the picker's own catalogue read: five seconds is
+// already a long time for a GET, and the draw behind it is the point of the wait.
+const IMAGE_DISCOVERY_TIMEOUT_MS = 5000;
+
+// Read a provider's catalogue for an image model, or ''. Never throws: a service
+// that will not answer is a service with no discovered model, which is where
+// this route stood before it was asked at all.
+async function discoverImageModel(req, id) {
+  const provider = LLM_PROVIDERS[id];
+  if (!provider) return '';
+  const already = discoveryFor(id);
+  if (already !== null) return already;
+  const store = imageStoreFor(id);
+  // A service that already has a model -- its own default or one the operator
+  // named -- is not asked: the answer could not change the request, and every
+  // draw would pay a round trip for it.
+  if (!store || imageModelFor(store, '')) return '';
+  // The picker's list is free when it is warm, which on a service the user has
+  // been chatting on it usually is.
+  const warm = modelCache.get(id);
+  if (warm && Date.now() - warm.fetchedAt < modelsCacheTtlMs()) {
+    const found = imageModelFromCatalogue(warm.models);
+    if (found) {
+      imageDiscoveryCache.set(id, { fetchedAt: Date.now(), model: found });
+      return found;
+    }
+  }
+  const config = providerConfig(id);
+  if (!config || config.keyError) return '';
+  let model = '';
+  try {
+    // Through the *configured* provider, not the declared one: an operator's
+    // base URL override is how a proxy or a gateway is reached at all, and the
+    // key that reaches its catalogue is the same key that draws.
+    const result = id === 'ollama'
+      ? await fetchOllamaModels(req, config, IMAGE_DISCOVERY_TIMEOUT_MS)
+      : await providerFetch(req, config, config.modelsPath || '/models', {}, IMAGE_DISCOVERY_TIMEOUT_MS);
+    if (result && result.ok) model = imageModelFromCatalogue(catalogueRows(result.data, provider));
+  } catch {
+    model = '';
+  }
+  imageDiscoveryCache.set(id, { fetchedAt: Date.now(), model });
+  return model;
 }
 
 // A provider's image store: the one it declares, or one derived from a single
@@ -1940,16 +2063,23 @@ function imageModelFor(store, explicit) {
 function imageStoreFor(id) {
   const declared = LLM_PROVIDERS[id];
   if (!declared) return null;
-  if (declared.image) return declared.image;
+  // A model read from the provider's own catalogue rides on the store, so every
+  // reader of "which model would this service draw with" -- the order, the
+  // report, the draw -- answers with the same one.
+  const discovered = discoveredImageModel(id);
+  if (declared.image) return discovered ? { ...declared.image, discoveredModel: discovered } : declared.image;
   // Speech and search services are not image services at any variable: their
   // "models" are transcription and ranking engines, and a key for them is not a
   // drawing key however it is named.
   if (declared.kind && declared.kind !== 'chat') return null;
   const modelEnv = providerEnvName(declared.envVar, '_IMAGE_MODEL');
-  if (!String(process.env[modelEnv] || '').trim()) return null;
-  return {
+  const named = String(process.env[modelEnv] || '').trim();
+  // A derived store exists once the operator names a model -- or, now that a
+  // catalogue can be read, once the service is configured at all: the variable
+  // stays the way to pin or override a model, not the only way to have one.
+  if (!named && !discovered && !providerIsConfigured(declared)) return null;
+  const store = {
     shape: 'openai-images',
-    derived: true,
     modelEnv,
     baseUrlEnv: providerEnvName(declared.envVar, '_IMAGES_BASE_URL'),
     // A derived service is assumed to take a source picture as file parts, the
@@ -1958,6 +2088,7 @@ function imageStoreFor(id) {
     // request becomes a 400 nobody can act on.
     edit: 'multipart',
   };
+  return discovered ? { ...store, discoveredModel: discovered } : store;
 }
 
 // One provider, ready to draw -- or the sentence that says why it cannot.
@@ -1965,14 +2096,11 @@ function imageCandidateFor(id, options) {
   const declared = LLM_PROVIDERS[id];
   const store = imageStoreFor(id);
   if (!store) {
-    // A chat provider is one variable away from being able to draw, and saying
-    // which one is the whole difference between "unsupported" and "not yet
-    // configured".
+    // A chat provider reaches here only when it has no key: one that is
+    // configured has a store now, whether or not it yet has a model, so the
+    // missing thing is what it would be drawn with at all.
     if (declared && (!declared.kind || declared.kind === 'chat')) {
-      return {
-        error: declared.label + ' can draw once its image model is named — set '
-          + providerEnvName(declared.envVar, '_IMAGE_MODEL') + '.',
-      };
+      return { error: declared.label + ' is not configured — set ' + declared.envVar + '.' };
     }
     return { error: 'No image service is wired up as "' + id + '".' };
   }
@@ -2101,45 +2229,38 @@ function imageDrawOrder(requested, options) {
 // follows the conversation, so this is the operator's view of the order rather
 // than the browser's. It is also what a failure message is written from, so the
 // variables it names are the ones that would actually fix the setup.
-function imageProvidersReport() {
-  const rows = [];
+function imageProviderRow(id, provider, candidate, store) {
+  return {
+    id,
+    label: provider.label,
+    ready: !candidate.error,
+    model: candidate.model || '',
+    reason: candidate.error || '',
+    // Only the store that states its dimensions has any: everywhere else a size
+    // is a preference the upstream may or may not know.
+    sizes: store ? (store.sizes || []).map((s) => s.value) : [],
+    edits: !store ? 'none' : store.edit === 'multipart' ? 'mask' : store.edit === 'references' ? 'reference' : 'none',
+  };
+}
+
+async function imageProvidersReport(req) {
+  // Every provider that would be tried, in order, plus each one's reason when it
+  // cannot draw. A configured chat service with no image model of its own is in
+  // this list rather than in a section of its own: it is a candidate, and the
+  // one variable that makes it ready is named where the reader is already
+  // looking for it.
+  const ids = [];
   for (const id of imageOrderIds('')) {
-    const provider = LLM_PROVIDERS[id];
-    const store = imageStoreFor(id);
-    if (!provider || !store) continue;
-    const candidate = imageCandidateFor(id, {});
-    rows.push({
-      id,
-      label: provider.label,
-      ready: !candidate.error,
-      model: candidate.model || '',
-      reason: candidate.error || '',
-      // Only the store that states its dimensions has any: everywhere else a
-      // size is a preference the upstream may or may not know.
-      sizes: (store.sizes || []).map((s) => s.value),
-      edits: store.edit === 'multipart' ? 'mask' : store.edit === 'references' ? 'reference' : 'none',
-    });
+    if (LLM_PROVIDERS[id] && imageStoreFor(id)) ids.push(id);
   }
-  // A chat provider the operator has configured that cannot draw *yet*. It is
-  // not in the order, so without this row it is not in this report either, and
-  // "my provider is not listed at all" is the exact question this report exists
-  // to answer -- with the one variable that fixes it.
-  for (const id of Object.keys(LLM_PROVIDERS)) {
-    const provider = LLM_PROVIDERS[id];
-    if (IMAGE_PROVIDER_ORDER.includes(id) || imageStoreFor(id)) continue;
-    if (provider.kind && provider.kind !== 'chat') continue;
-    if (!providerIsConfigured(provider)) continue;
-    rows.push({
-      id,
-      label: provider.label,
-      ready: false,
-      model: '',
-      reason: imageCandidateFor(id, {}).error || '',
-      sizes: [],
-      edits: 'none',
-    });
-  }
-  return rows;
+  // Asked before answered, because "not ready" has to mean "its catalogue has
+  // nothing to draw with" rather than "nobody has looked yet" -- the first is
+  // advice an operator can act on, and the second sends them hunting for a model
+  // id they never needed. Concurrent and cached for the catalogue's own
+  // lifetime, so this is one round trip per service per TTL, and none of it is
+  // on the draw path: the page does not call this route.
+  await Promise.all(ids.map((id) => discoverImageModel(req, id)));
+  return ids.map((id) => imageProviderRow(id, LLM_PROVIDERS[id], imageCandidateFor(id, {}), imageStoreFor(id)));
 }
 
 // What to say when nothing can draw, in the form an operator can act on: every
@@ -2153,16 +2274,15 @@ function imageUnavailableMessage(preferredId) {
   // sentence listing seven services the operator does not have is advice they
   // cannot take, and it never once mentioned the provider they were chatting on.
   const preferred = String(preferredId || '').trim();
-  const order = [];
-  if (preferred && LLM_PROVIDERS[preferred] && !IMAGE_PROVIDER_ORDER.includes(preferred)) order.push(preferred);
-  order.push(...IMAGE_PROVIDER_ORDER);
-  for (const id of order) {
+  for (const id of new Set([preferred, ...imageOrderIds('')])) {
     const provider = LLM_PROVIDERS[id];
     if (!provider) continue;
+    const declares = !!provider.image;
     // Only the seven, plus the one this request named: listing every chat
     // provider's missing variable would turn a sentence into a form.
-    if (!provider.image && id !== preferred) continue;
-    if (provider.kind && provider.kind !== 'chat' && !provider.image) continue;
+    if (!declares && id !== preferred) continue;
+    // A speech or search service is not a drawing service however it is keyed.
+    if (!declares && provider.kind && provider.kind !== 'chat') continue;
     // The same answer imageCandidateFor gives, rather than a second guess at it.
     // Guessing produced "openrouter (set OPENROUTER_IMAGE_MODEL)" for a provider
     // that has a default model and was really being held back by its key being
@@ -2607,9 +2727,22 @@ async function llmImage(req, res, kind) {
     // order stays behind it. Which one the page names is the user's own choice
     // from the model picker, so it is worth honouring -- and worth not being
     // trapped by when the model turns out not to draw.
+    const preferred = String(body.preferProvider || '').trim();
+    // Before the order is built, because a service that publishes an image model
+    // in its own catalogue can draw without the operator naming one -- the
+    // difference between a Google key or a proxy making a picture and being told
+    // to set a variable for a model it already publishes. Cached either way, and
+    // skipped for a service that has a model of its own.
+    //
+    // Whichever provider this request singles out: the one it named, the one the
+    // conversation is on, or the one the deployment pinned. Discovering for the
+    // preferred service only would make naming one a worse way to ask than
+    // preferring it.
+    const lead = String(body.provider || preferred || process.env.IMAGE_PROVIDER || '').trim();
+    if (lead) await discoverImageModel(req, lead);
     const order = imageDrawOrder(body.provider, {
       explicitModel: body.model,
-      preferredProvider: body.preferProvider,
+      preferredProvider: preferred,
     });
     if (order.error) return sendJson(res, 400, { error: order.error });
     const options = {
@@ -2801,13 +2934,14 @@ async function llmImage(req, res, kind) {
 // would be tried, each with what it is missing when it cannot. The page reads
 // this instead of guessing: a picker that offers a service the server has no key
 // for turns a working setup into a failure the user then has to debug.
-function llmImageProviders(req, res) {
+async function llmImageProviders(req, res) {
+  const providers = await imageProvidersReport(req);
   sendJson(res, 200, {
     // Puter is not a server provider -- it draws in the browser on the visitor's
     // own account -- so it is reported here only so the picker can offer it in
     // the same list, and marked as what it is.
     browser: { id: 'puter', label: 'Puter', ready: false, note: 'Draws in your browser, billed to your Puter account when signed in.' },
-    providers: imageProvidersReport(),
+    providers,
   }, { 'Cache-Control': 'no-store' });
 }
 
@@ -2950,8 +3084,10 @@ function providerAuthHeaders(provider, req) {
   return { ...auth, 'Content-Type': 'application/json', ...extra };
 }
 
-async function providerFetch(req, provider, path, init = {}) {
-  const budget = path.includes('chat') ? providerTimeoutMs().chat : providerTimeoutMs().models;
+async function providerFetch(req, provider, path, init = {}, budgetMs = 0) {
+  // A caller that knows this answer is worth less than the wait -- discovery in
+  // front of a draw -- passes its own budget. Everyone else gets the picker's.
+  const budget = budgetMs > 0 ? budgetMs : path.includes('chat') ? providerTimeoutMs().chat : providerTimeoutMs().models;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budget);
   try {
@@ -3007,8 +3143,8 @@ async function providerFetch(req, provider, path, init = {}) {
   }
 }
 
-async function fetchOllamaModels(req, provider) {
-  const openai = await providerFetch(req, provider, '/models');
+async function fetchOllamaModels(req, provider, budgetMs = 0) {
+  const openai = await providerFetch(req, provider, '/models', {}, budgetMs);
   if (openai.ok && openai.data && Array.isArray(openai.data.data) && openai.data.data.length) {
     return openai;
   }
@@ -3020,7 +3156,7 @@ async function fetchOllamaModels(req, provider) {
     ...provider,
     baseUrl: provider.baseUrl.replace(/\/v1\/?$/i, ''),
   };
-  const native = await providerFetch(req, nativeProvider, '/api/tags');
+  const native = await providerFetch(req, nativeProvider, '/api/tags', {}, budgetMs);
   if (native.ok && native.data && Array.isArray(native.data.models)) {
     return {
       ...native,
@@ -3100,18 +3236,7 @@ async function llmModels(req, res) {
       }
       return sendJson(res, status, { error: describeProviderError(status, data, provider) });
     }
-    // OpenAI-compatible providers wrap the catalogue in { data: [...] }, but
-    // the wire occasionally disagrees -- a bare array, or Ollama-style
-    // { models: [...] }. Reading any of those beats reading the answer as
-    // nothing, which used to flow on as an empty 200 and the client's
-    // "this provider returned no chat models".
-    let rows = [];
-    if (data && Array.isArray(data.data)) rows = data.data;
-    else if (data && Array.isArray(data.models)) rows = data.models;
-    else if (Array.isArray(data)) rows = data;
-    const models = rows
-      .filter((m) => m && m.id)
-      .map((m) => normalizeProviderModel(m, provider));
+    const models = catalogueRows(data, provider);
     // A curated allowlist pins the picker to exactly those ids, in that
     // order. Either form works: an array of ids, or a rule object
     // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
@@ -3332,6 +3457,24 @@ async function llmSkillContent(req, res) {
   const skill = skills.find((s) => s.name === name);
   if (!skill) return sendJson(res, 404, { error: `No installed skill named "${name}"` });
   sendJson(res, 200, skill);
+}
+
+// The rows in whatever shape a catalogue arrived in.
+//
+// OpenAI-compatible providers wrap the catalogue in { data: [...] }, but the
+// wire occasionally disagrees -- a bare array, or Ollama-style
+// { models: [...] }. Reading any of those beats reading the answer as nothing,
+// which used to flow on as an empty 200 and the client's "this provider returned
+// no chat models". One reader, because the picker and the image route's
+// discovery both have to understand the same provider.
+function catalogueRows(data, provider) {
+  let rows = [];
+  if (data && Array.isArray(data.data)) rows = data.data;
+  else if (data && Array.isArray(data.models)) rows = data.models;
+  else if (Array.isArray(data)) rows = data;
+  return rows
+    .filter((m) => m && m.id)
+    .map((m) => normalizeProviderModel(m, provider));
 }
 
 function normalizeProviderModel(m, provider) {
@@ -4045,6 +4188,8 @@ module.exports = {
   fetchProviderWithRetry,
   fetchStreamWithRetry,
   clearModelCache,
+  clearImageDiscoveryCache,
+  imageModelFromCatalogue,
   clearSkillsCache,
   loadSkills,
   modelsCacheTtlMs,

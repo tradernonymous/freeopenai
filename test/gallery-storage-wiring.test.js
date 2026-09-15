@@ -15,7 +15,9 @@
 // browser with no index to put anything in.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { storedImagePlan, STORED_IMAGE_MAX_EDGE, STORED_IMAGE_MAX_CHARS } = require('../chatlib.js');
+// The attachment module owns where a picture may go and at what size, and the
+// page loads it as its own script, so this is the shipped copy.
+const { storedImagePlan, STORED_IMAGE_MAX_EDGE, STORED_IMAGE_MAX_CHARS } = require('../attachment-helpers.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const NAMES = ['storeGeneratedImages', 'keepFullSizeImage', 'compactImageForStorage'];

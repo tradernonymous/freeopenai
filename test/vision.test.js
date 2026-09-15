@@ -6,6 +6,9 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+// The attachment module owns what a picture may be sent as, and the page loads
+// it as its own script -- so these tests run the code that actually runs, rather
+// than a second copy of the same decision kept beside it.
 const {
   acceptsImages,
   modelForImage,
@@ -13,7 +16,7 @@ const {
   withImageTurn,
   MAX_IMAGE_DATA_URL_CHARS,
   MAX_IMAGE_EDGE,
-} = require('../chatlib.js');
+} = require('../attachment-helpers.js');
 const { createRequestHandler, clearModelCache } = require('../server.js');
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';

@@ -1258,10 +1258,14 @@ async function main() {
     const attach = await evaluate(`(async () => {
       const chip = document.getElementById('attachmentChip');
       const name = document.getElementById('attachmentName');
+      const cost = document.getElementById('attachmentCost');
       const status = document.getElementById('statusMessage');
       const pick = async (file) => {
         await handleFileSelect({ files: [file], value: '' });
-        const state = { name: name.textContent, chip: !chip.hidden, status: status.textContent };
+        const state = {
+          name: name.textContent, chip: !chip.hidden, status: status.textContent,
+          cost: cost.hidden ? '' : cost.textContent, heavy: cost.classList.contains('heavy'), title: cost.title,
+        };
         clearAttachment();
         return state;
       };
@@ -1273,13 +1277,26 @@ async function main() {
         picture: await pick(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' })),
         binary: await pick(new File([new Uint8Array([80, 75, 3, 4, 0, 0, 1, 2])], 'bundle.txt', { type: '' })),
         empty: await pick(new File([], 'empty.txt', { type: '' })),
+        // A pasted file is the one thing in the prompt that nothing trims: the
+        // history behind it is budgeted and this is not, so the chip says what it
+        // costs before it is sent.
+        pasted: await pick(new File(['x'.repeat(100000)], 'dump.log', { type: '' })),
+        costRule: typeof describeAttachmentCost,
         accepts: [accepts('file'), accepts('document'), accepts('image')],
         oldGate: typeof isAttachableFile,
+        // attachment-helpers.js is where every attachment decision lives and the
+        // page calls them as plain names, so the module's script tag is what puts
+        // them there. A name missing from this list breaks a feature that no unit
+        // test can see, because the tests import the module directly.
+        helpers: ['attachmentKindFor', 'decodeAttachmentText', 'isDocumentFile', 'modelForImage',
+          'isSendableImageUrl', 'withImageTurn', 'storedImagePlan', 'capConversationImages',
+          'stripStoredImages', 'MAX_IMAGE_EDGE', 'MAX_IMAGE_DATA_URL_CHARS', 'STORED_IMAGE_MAX_EDGE']
+          .filter((name) => typeof window[name] === 'undefined'),
       };
     })()`);
     console.log('attach: ' + JSON.stringify(attach));
     for (const [label, state] of Object.entries(attach)) {
-      if (label === 'accepts' || label === 'oldGate') continue;
+      if (label === 'accepts' || label === 'oldGate' || label === 'helpers' || label === 'costRule') continue;
       const wantsAttached = label !== 'binary';
       if (state.chip !== wantsAttached) {
         throw new Error(`${label} was ${state.chip ? 'attached' : 'refused'}: ${JSON.stringify(state)}`);
@@ -1299,6 +1316,24 @@ async function main() {
     }
     if (attach.oldGate !== 'undefined') {
       throw new Error('the extension allowlist is still on the page: ' + attach.oldGate);
+    }
+    // A cost readout on the real chip, for a real File: a text attachment says
+    // what it weighs, a picture says nothing (no character estimate speaks for
+    // pixels), and one bigger than the whole history budget says so in full.
+    if (attach.costRule !== 'function') {
+      throw new Error('the page cannot see describeAttachmentCost, so nothing shows the cost');
+    }
+    if (!/^~[\d.]+k? tokens$/.test(attach.python.cost)) {
+      throw new Error('a text attachment does not say what it costs: ' + JSON.stringify(attach.python));
+    }
+    if (!/^~25(\.0)?k tokens$/.test(attach.pasted.cost) || !attach.pasted.heavy || attach.pasted.title.indexOf('24k') === -1) {
+      throw new Error('a pasted file larger than the history budget is not flagged: ' + JSON.stringify(attach.pasted));
+    }
+    if (attach.picture.cost || attach.picture.heavy) {
+      throw new Error('a picture is given a character-estimated cost: ' + JSON.stringify(attach.picture));
+    }
+    if (attach.helpers.length) {
+      throw new Error('the page cannot see these attachment helpers: ' + attach.helpers.join(', '));
     }
 
     if (errors.length) throw new Error('browser reported errors: ' + errors.join('; '));

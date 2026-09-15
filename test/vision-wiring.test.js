@@ -11,17 +11,21 @@ const {
   isAccountLevelFailure,
   isModelScopedRefusal,
   isQuotaExhausted,
-  modelForImage,
   nextUsableModel,
   refusedModelIds,
-  isSendableImageUrl,
-  withImageTurn,
   isRetryableStatus,
-  MAX_IMAGE_DATA_URL_CHARS,
-  MAX_IMAGE_EDGE,
   MAX_MODEL_REFUSAL_RETRIES,
   cachedTokensFromUsage,
 } = require('../chatlib.js');
+// The attachment module, which is what the page loads for these -- the same code
+// the browser runs rather than a copy of it.
+const {
+  modelForImage,
+  isSendableImageUrl,
+  withImageTurn,
+  MAX_IMAGE_DATA_URL_CHARS,
+  MAX_IMAGE_EDGE,
+} = require('../attachment-helpers.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';

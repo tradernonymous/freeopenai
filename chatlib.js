@@ -912,77 +912,6 @@ function batchIndices(indices, size = MAX_CONCURRENT_TOOLS) {
   return batches;
 }
 
-// The browser re-encodes an attached image before it is sent, because the chat
-// endpoint refuses bodies over 1MB while the attach menu allows images up to
-// 8MB. The cap sits below the server's with room for the prompt and history
-// still to fit, and the edge is what vision models are usually fed anyway.
-const MAX_IMAGE_DATA_URL_CHARS = 700000;
-const MAX_IMAGE_EDGE = 1600;
-
-// Whether a model is *known* to read images. Absent is not the same as capable:
-// the request would only fail, and the failure would read as the model being
-// broken rather than the picture being unsupported.
-function acceptsImages(model) {
-  return !!(model && model.vision === true);
-}
-
-// The model that should answer a turn carrying an image, or null when this
-// provider has none. A model that can already see is never swapped away from.
-function modelForImage(models, preferredId) {
-  const list = Array.isArray(models) ? models.filter((m) => m && m.id) : [];
-  if (acceptsImages(list.find((m) => m.id === preferredId))) return preferredId;
-  const capable = list.find(acceptsImages);
-  return capable ? capable.id : null;
-}
-
-// Only an inline image or a plain http(s) link may ride in a request. A
-// data:text/html or javascript: URL must never reach a provider.
-function isSendableImageUrl(url) {
-  return /^data:image\//i.test(String(url || '')) || /^https?:\/\//i.test(String(url || ''));
-}
-
-// Put an image on the turn as content parts, the shape every OpenAI-compatible
-// provider understands. Pure -- neither the array nor its messages are
-// touched, because the same conversation is re-sent when a model refuses.
-//
-// Throws on a URL that could not be sent rather than quietly returning a
-// text-only turn: silently dropping the image is the bug this exists to fix.
-function withImageTurn(messages, imageUrl, promptText) {
-  const list = Array.isArray(messages) ? messages : [];
-  const last = list[list.length - 1];
-  if (!last || last.role !== 'user') return list;
-  if (!isSendableImageUrl(imageUrl)) {
-    throw new Error('Refusing to send an image URL that is not a data:image or http(s) link');
-  }
-  // Already multimodal: leave the caller's own content parts alone.
-  if (Array.isArray(last.content)) return list;
-  const text = String(promptText || last.content || '').trim();
-  return [
-    ...list.slice(0, -1),
-    {
-      ...last,
-      content: [
-        { type: 'text', text: text || 'What is in this image?' },
-        { type: 'image_url', image_url: { url: imageUrl } },
-      ],
-    },
-  ];
-}
-
-// The extensions that need a parser: they are parsed client-side (PDF via
-// pdf.js, DOCX via mammoth.js) into plain text. Everything else attaches as
-// text, and that is decided by the file's bytes rather than by its name -- see
-// attachmentKindFor/decodeAttachmentText in attachment-helpers.js, which the page
-// calls. The list of nine extensions that used to live here refused .py, .html,
-// .css, .env, .toml, Makefile and Dockerfile, and it also filtered the file
-// dialog, so most files could not even be selected.
-const DOCUMENT_EXTENSIONS = ['.pdf', '.docx'];
-
-function isDocumentFile(filename) {
-  const lower = String(filename).toLowerCase();
-  return DOCUMENT_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -3034,6 +2963,26 @@ function estimateTokens(value) {
   return text ? Math.ceil(text.length / 4) : 0;
 }
 
+// What the attachment in the composer costs the next request, in the same
+// estimate the history budget is spent in -- which is the point of showing it,
+// because the two numbers are read together and an attachment rides in the
+// prompt *whole* where the history behind it gets trimmed. The 200KB ceiling is
+// about fifty thousand tokens, and no model reads that for free. A picture is
+// bytes that no character estimate can speak for, so it has no cost here rather
+// than a made-up one. Returns null when there is nothing to show.
+function describeAttachmentCost(attachment) {
+  const tokens = attachment && attachment.kind === 'text' ? estimateTokens(attachment.content) : 0;
+  if (!tokens) return null;
+  const shown = tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : String(tokens);
+  return {
+    label: '~' + shown + ' tokens',
+    tokens,
+    // Worth noticing rather than wrong: it alone outweighs the entire history
+    // this app trims a chat to, and unlike that history it is not trimmed at all.
+    heavy: tokens > HISTORY_TOKEN_BUDGET,
+  };
+}
+
 // How much history is worth sending. The message cap above bounds the *number*
 // of turns; this bounds their weight, which is what actually overflows a model's
 // window: twelve turns of chat are cheap, twelve turns carrying a pasted file
@@ -4377,51 +4326,6 @@ function buildImagePdf(jpegBytes, imageWidth, imageHeight) {
   return out;
 }
 
-const STORED_IMAGE_MAX_EDGE = 1024;
-const STORED_IMAGE_MAX_CHARS = 300000;
-
-// 'remote' -- an http(s) link: store it as it stands
-// 'encode' -- data:/blob: bytes already in hand: re-encode before storing
-// 'skip'   -- nothing usable
-function storedImagePlan(url) {
-  const value = String(url || '');
-  if (/^https?:\/\//i.test(value)) return 'remote';
-  if (/^data:image\//i.test(value) || /^blob:/i.test(value)) return 'encode';
-  return 'skip';
-}
-
-// Images are the only part of history that grows without bound, and
-// localStorage is what pays for it. Keep the newest few per conversation, and
-// when the browser refuses the write anyway, the pictures go before the text:
-// a chat with no image is still a chat, a chat with no history is a loss.
-const MAX_STORED_IMAGES_PER_CONVERSATION = 8;
-
-function capConversationImages(messages, max = MAX_STORED_IMAGES_PER_CONVERSATION) {
-  const limit = Math.max(0, Number(max) || 0);
-  const list = Array.isArray(messages) ? messages : [];
-  const holders = [];
-  list.forEach((m, i) => { if (m && Array.isArray(m.images) && m.images.length) holders.push(i); });
-  const overflow = holders.length - limit;
-  if (overflow <= 0) return list.slice();
-  const drop = new Set(holders.slice(0, overflow));
-  return list.map((m, i) => (drop.has(i) ? { ...m, images: [] } : m));
-}
-
-// Every conversation's images except the protected one -- the active chat is the
-// last thing to give up its pictures, since that is where the reader is looking.
-function stripStoredImages(conversations, protectId = '') {
-  return (Array.isArray(conversations) ? conversations : []).map((c) => {
-    if (!c) return c;
-    if (protectId && c.id === protectId) return c;
-    if (!Array.isArray(c.messages)) return c;
-    if (!c.messages.some((m) => m && Array.isArray(m.images) && m.images.length)) return c;
-    return {
-      ...c,
-      messages: c.messages.map((m) => (m && Array.isArray(m.images) && m.images.length ? { ...m, images: [] } : m)),
-    };
-  });
-}
-
 // Renders a conversation as markdown for the clipboard. Tool-activity lines
 // and error notices are the app talking to itself, so they stay out -- what
 // gets pasted into an issue or a doc should be the exchange, nothing else.
@@ -4455,12 +4359,6 @@ if (typeof module !== 'undefined' && module.exports) {
     pdfPageFor,
     pdfBytes,
     buildImagePdf,
-    STORED_IMAGE_MAX_EDGE,
-    STORED_IMAGE_MAX_CHARS,
-    storedImagePlan,
-    MAX_STORED_IMAGES_PER_CONVERSATION,
-    capConversationImages,
-    stripStoredImages,
     MODES,
     DEFAULT_MODE,
     isValidMode,
@@ -4521,14 +4419,6 @@ if (typeof module !== 'undefined' && module.exports) {
     VISION_MODEL_IDS,
     DEFAULT_VISION_MODEL,
     isVisionCapable,
-    MAX_IMAGE_DATA_URL_CHARS,
-    MAX_IMAGE_EDGE,
-    acceptsImages,
-    modelForImage,
-    isSendableImageUrl,
-    withImageTurn,
-    DOCUMENT_EXTENSIONS,
-    isDocumentFile,
     GITHUB_TOOLS,
     GITHUB_WRITE_TOOL_NAMES,
     isGithubWriteTool,
@@ -4696,6 +4586,7 @@ if (typeof module !== 'undefined' && module.exports) {
     compareVersions,
     estimateTokens,
     HISTORY_TOKEN_BUDGET,
+    describeAttachmentCost,
     budgetChatHistory,
     MAX_TOOL_RESULT_CHARS,
     clipToolResult,

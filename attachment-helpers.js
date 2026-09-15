@@ -4,9 +4,13 @@
   const api = factory();
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else {
-    // Keep a namespace for the page's explicit adapter, and expose the same
-    // names for old inline callers while the extraction settles in.
-    root.FreeOpenAIAttachment = api;
+    // The page calls these by plain name -- `attachmentKindFor(file.name,
+    // file.type)` -- so the module puts them on the global scope, and this is the
+    // only copy of them: chatlib.js used to carry a second one, and a fix applied
+    // to the wrong copy did nothing in the browser, which is how a file that was
+    // not .txt came to be unselectable. `npm run smoke` checks that every name the
+    // page uses is still here, because a unit test that imports this module cannot
+    // see the script tag that puts them there.
     Object.assign(root, api);
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function attachmentFactory() {

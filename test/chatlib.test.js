@@ -9,12 +9,13 @@ const {
   detectsImageIntent,
   isVisionCapable,
   DEFAULT_VISION_MODEL,
-  isDocumentFile,
   isRateLimitError,
   isRetryableStatus,
   safeJson,
   isToolsRejection,
   parseSseChunk,
+  describeAttachmentCost,
+  HISTORY_TOKEN_BUDGET,
 } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
@@ -186,13 +187,6 @@ test('DEFAULT_VISION_MODEL is itself vision-capable and a known model', () => {
   assert.equal(isValidModel(DEFAULT_VISION_MODEL), true);
 });
 
-test('isDocumentFile recognizes pdf and docx only', () => {
-  assert.equal(isDocumentFile('report.pdf'), true);
-  assert.equal(isDocumentFile('resume.DOCX'), true);
-  assert.equal(isDocumentFile('notes.txt'), false);
-  assert.equal(isDocumentFile('photo.png'), false);
-});
-
 test('isRateLimitError recognizes the shapes a 429 actually arrives in', () => {
   assert.equal(isRateLimitError('429: {"status":429,"title":"Too Many Requests"} — rate limited, wait a moment'), true);
   assert.equal(isRateLimitError('too many requests'), true);
@@ -261,6 +255,24 @@ test('safeJson degrades an unreadable body into a retryable error, not a crash',
   assert.equal(out.parseFailed, true);
   assert.match(out.error, /retry/i);
   assert.match(out.error, /unreadable/);
+});
+
+test('an attachment says what it costs before it is sent', () => {
+  // A pasted file is the one thing in a prompt that nothing trims: the history
+  // behind it is budgeted, and the attachment arrives whole. So the number is
+  // shown, in the same estimate the history budget is spent in, and one that
+  // outweighs the entire trim is flagged rather than silently sent.
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(400) }).label, '~100 tokens');
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(4000) }).label, '~1.0k tokens');
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(HISTORY_TOKEN_BUDGET * 4) }).heavy, false);
+  const heavy = describeAttachmentCost({ kind: 'text', content: 'x'.repeat(HISTORY_TOKEN_BUDGET * 4 + 4) });
+  assert.equal(heavy.heavy, true);
+  assert.equal(heavy.tokens, HISTORY_TOKEN_BUDGET + 1);
+  // Nothing to show, rather than a made-up number: an empty file costs nothing,
+  // and a picture is bytes no character estimate can speak for.
+  assert.equal(describeAttachmentCost({ kind: 'text', content: '' }), null);
+  assert.equal(describeAttachmentCost({ kind: 'image', name: 'shot.png' }), null);
+  assert.equal(describeAttachmentCost(null), null);
 });
 
 test('isToolsRejection flags shape failures only', () => {

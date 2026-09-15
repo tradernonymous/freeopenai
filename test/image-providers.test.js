@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { createRequestHandler } = require('../server.js');
+const { createRequestHandler, clearModelCache, clearImageDiscoveryCache, imageModelFromCatalogue } = require('../server.js');
 
 // Every variable that decides which providers are configured. Cleared before
 // each test so one test's key cannot be what makes the next one pass.
@@ -25,7 +25,7 @@ const PROVIDER_VARS = [
   'OLLAMA_IMAGE_MODEL',
   // The generic rule below is tested through one provider and has to stay
   // general, so the variables it reads are cleared like every other provider's.
-  'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'MISTRAL_IMAGE_MODEL', 'MISTRAL_IMAGES_BASE_URL',
+  'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'MISTRAL_MODELS', 'MISTRAL_IMAGE_MODEL', 'MISTRAL_IMAGES_BASE_URL',
   'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
@@ -33,6 +33,11 @@ const PROVIDER_VARS = [
 
 function clearProviders() {
   for (const name of PROVIDER_VARS) delete process.env[name];
+  // Both callbacks hold module-global answers -- which models a provider
+  // published, and which of them is an image model -- and a test that leaves one
+  // warm is a test that passes for the previous test's reason.
+  clearModelCache();
+  clearImageDiscoveryCache();
   // OpenRouter's Image API has no free tier, so a free-only key is not an image
   // candidate at all. Most tests here are about the drawing paths rather than
   // that gate, so the baseline is a key with credits on it; the gate has a test
@@ -790,8 +795,10 @@ test('a chat model is a preference, not what makes a provider able to draw', asy
     const res = await post(app, '/api/llm/images/generations', { preferProvider: 'omniroute', model: 'auto/minimax', prompt: 'a fox' });
     assert.equal(res.status, 200);
     assert.equal((await res.json()).provider, 'nvidia', 'the draw goes to a service that can actually draw');
-    // And the report is telling the truth: the gateway was never asked.
-    assert.equal(gateway.seen.length, 0, 'a provider with no image model of its own must not be tried');
+    // And the report is telling the truth: the gateway's catalogue is read for an
+    // image model, and it is never asked to draw one.
+    assert.deepEqual(gateway.seen.map((s) => s.url), ['/v1/models?prefix=alias'],
+      'a provider with no image model of its own is read, never tried');
   } finally {
     app.close();
     await new Promise((r) => gateway.server.close(r));
@@ -968,8 +975,15 @@ test('naming an off-order provider is honoured, not refused as unknown', async (
   }
 });
 
-test('an off-order provider with no image model named answers with its own variable', async () => {
+test('an off-order provider whose catalogue publishes no image model answers with its own variable', async () => {
+  // Read first, named second: the catalogue is asked for an image model, and
+  // only when it has none does the operator have to supply one.
+  const up = await upstreamOf((req, res) => {
+    assert.equal(req.url, '/models');
+    jsonAnswer(res, 200, { data: [{ id: 'mistral-large-latest' }, { id: 'mistral-embed' }] });
+  });
   process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: OFF_ORDER });
@@ -977,8 +991,10 @@ test('an off-order provider with no image model named answers with its own varia
     // Naming one provider asks a question about that provider, so the answer is
     // about that provider rather than a list of seven services to set up.
     assert.match((await res.json()).error, /MISTRAL_IMAGE_MODEL/);
+    assert.equal(up.seen.length, 1, 'and its catalogue was read before the variable was named');
   } finally {
     app.close();
+    await new Promise((r) => up.server.close(r));
   }
 });
 
@@ -1016,7 +1032,10 @@ test('the report lists it as ready once the model is named', async () => {
 });
 
 test('nothing can draw, and the sentence leads with the provider the chat is on', async () => {
+  const up = await upstreamOf((req, res) =>
+    jsonAnswer(res, 200, { data: [{ id: 'mistral-large-latest' }, { id: 'mistral-small' }] }));
   process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
@@ -1029,6 +1048,148 @@ test('nothing can draw, and the sentence leads with the provider the chat is on'
     assert.match(message, /MISTRAL_IMAGE_MODEL/);
   } finally {
     app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+// --- The model a service already publishes ----------------------------------
+
+// A catalogue with everything on it: a chat model, an indexer, a vision model
+// whose id says image, and the one model that can actually draw.
+const MISTRAL_CATALOGUE = {
+  data: [
+    { id: 'mistral-large-latest' },
+    { id: 'mistral-embed' },
+    { id: 'pixtral-vision-large' },
+    { id: 'mistral-image-latest' },
+  ],
+};
+
+test('an image model is picked out of a catalogue by its id', () => {
+  assert.equal(imageModelFromCatalogue(['gpt-4o', 'text-embedding-3-large', 'gpt-image-1']), 'gpt-image-1');
+  assert.equal(imageModelFromCatalogue([{ id: 'google/gemini-2.5-flash-image' }]), 'google/gemini-2.5-flash-image');
+  assert.equal(imageModelFromCatalogue(['black-forest-labs/flux-1-schnell']), 'black-forest-labs/flux-1-schnell');
+  assert.equal(imageModelFromCatalogue(['stabilityai/stable-diffusion-3-medium']), 'stabilityai/stable-diffusion-3-medium');
+  // Specific beats generic wherever each sits in the list, and within one rank
+  // the catalogue's own order wins -- which is newest-first nearly everywhere.
+  assert.equal(imageModelFromCatalogue(['company/image-model', 'gpt-image-1-mini']), 'gpt-image-1-mini');
+  assert.equal(imageModelFromCatalogue(['company/image-small', 'company/image-large']), 'company/image-small');
+  // A model that reads or indexes pictures is not a model that makes one. The
+  // vision case is the trap: its id says "image" and its answer is prose.
+  assert.equal(imageModelFromCatalogue(['openai/gpt-4o-vision', 'qwen/qwen3-vl-72b']), '');
+  assert.equal(imageModelFromCatalogue(['some/image-captioner']), '');
+  assert.equal(imageModelFromCatalogue(['openai/whisper-large']), '');
+  assert.equal(imageModelFromCatalogue([]), '');
+  assert.equal(imageModelFromCatalogue(null), '');
+});
+
+test('a provider that publishes an image model draws with no variable named', async () => {
+  // The line an operator should not have to write. A Google key and an
+  // Antigravity proxy in front of one both reach a model called
+  // `gemini-2.5-flash-image` through this same catalogue, and neither reaches
+  // it through a default this app could ship.
+  const up = await upstreamOf((req, res, raw) => {
+    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
+    const body = JSON.parse(raw);
+    if (body.model !== 'mistral-image-latest') {
+      return jsonAnswer(res, 400, { error: { message: body.model + ' makes no pictures' } });
+    }
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/discovered.png' }] });
+  });
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: OFF_ORDER,
+      model: 'mistral-large-latest',
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, OFF_ORDER);
+    // The answer names the model that actually drew: the catalogue's, not the
+    // chat model the request opened with.
+    assert.equal(body.model, 'mistral-image-latest');
+    assert.equal(body.data[0].url, 'https://img.test/discovered.png');
+    assert.deepEqual(up.seen.map((s) => s.url), ['/models', '/images/generations', '/images/generations'],
+      'its catalogue is read, the chat model is tried, then the model that can draw');
+
+    // Read from the same cache, so the report and the draw agree about which
+    // model this deployment would draw with.
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    const row = listed.providers.find((p) => p.id === OFF_ORDER);
+    assert.equal(row.ready, true);
+    assert.equal(row.model, 'mistral-image-latest');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a catalogue is read once, not once per draw', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
+    assert.equal(JSON.parse(raw).model, 'mistral-image-latest');
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/twice.png' }] });
+  });
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    for (let i = 0; i < 2; i++) {
+      const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox ' + i, preferProvider: OFF_ORDER });
+      assert.equal(res.status, 200);
+      assert.equal((await res.json()).model, 'mistral-image-latest');
+    }
+    assert.equal(up.seen.filter((s) => s.url === '/models').length, 1);
+    assert.deepEqual(up.seen.map((s) => s.url), ['/models', '/images/generations', '/images/generations']);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a catalogue that cannot be read is not a failed request', async () => {
+  // A service whose catalogue is down is a service with no discovered model,
+  // which is where this route stood before anything was read: the draw answers a
+  // 400 naming the variable, rather than an error about the catalogue.
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 500, { error: { message: 'catalogue is down' } }));
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /MISTRAL_IMAGE_MODEL/);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a discovered model never leaks into the picker’s list', async () => {
+  // modelCache holds what the picker may show, which for a gateway is the
+  // operator's allowlist rather than the catalogue. The discovery read is kept
+  // apart from it on purpose: writing raw catalogue ids there is how a picker
+  // comes to show hundreds of models nobody can pick from.
+  const up = await upstreamOf((req, res) => {
+    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
+    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/one.png' }] });
+  });
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.MISTRAL_MODELS = 'mistral-large-latest';
+  const app = await startApp();
+  try {
+    const drawn = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
+    assert.equal(drawn.status, 200);
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=mistral`)).json();
+    assert.deepEqual(listed.map((m) => m.id), ['mistral-large-latest'],
+      'the picker still shows exactly what the operator declared');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
   }
 });
 

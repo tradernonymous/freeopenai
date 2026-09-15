@@ -1225,6 +1225,12 @@
         .attachment-chip[hidden] { display: none; }
         .attachment-thumb { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; border: 1px solid var(--border); }
         .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        /* What the attachment costs the next request. Shown before it is sent,
+           because a pasted file is the one thing in the prompt that nothing
+           trims -- the history behind it is budgeted, and this is not. */
+        .attachment-cost { flex-shrink: 0; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+        .attachment-cost.heavy { color: var(--danger); }
+        .attachment-cost[hidden] { display: none; }
 
         /* Fixed to the viewport rather than absolute, for the same reason the
            model menu is: the controls row scrolls horizontally on a phone, and
@@ -2101,6 +2107,7 @@
                         <div class="attachment-chip" id="attachmentChip" hidden>
                             <img class="attachment-thumb" id="attachmentThumb" alt="" hidden>
                             <span class="attachment-name" id="attachmentName"></span>
+                            <span class="attachment-cost" id="attachmentCost" hidden></span>
                             <button type="button" onclick="clearAttachment()" aria-label="Remove attachment">×</button>
                         </div>
                         <div class="skill-bar" id="skillBar" hidden aria-label="Skills pinned to this chat"></div>
@@ -3267,10 +3274,11 @@
         // follow the palettes below rather than the old pure-white-on-black.
         const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
         const loadedScripts = {};
-        // attachment-helpers.js owns what a picked file becomes: attachmentKindFor
-        // names the kind, decodeAttachmentText settles whether the bytes are text.
-        // Nothing here mirrors those decisions -- two gates for one question is how
-        // the extension allowlist stayed alive after the picker stopped using it.
+        // Every attachment decision is in attachment-helpers.js, the script tag
+        // above: what a picked file becomes, whether its bytes are text, and what a
+        // picture may be sent as. Nothing here mirrors one of them -- a decision
+        // kept in two places is how the extension allowlist stayed alive after the
+        // picker stopped using it, and a fix in the wrong copy does nothing here.
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -3463,6 +3471,7 @@
         const attachmentChip = document.getElementById('attachmentChip');
         const attachmentName = document.getElementById('attachmentName');
         const attachmentThumb = document.getElementById('attachmentThumb');
+        const attachmentCost = document.getElementById('attachmentCost');
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
@@ -8831,6 +8840,14 @@
             pendingAttachment = attachment;
             attachmentName.textContent = attachment.name;
             attachmentChip.hidden = false;
+            const cost = describeAttachmentCost(attachment);
+            attachmentCost.hidden = !cost;
+            attachmentCost.textContent = cost ? cost.label : '';
+            attachmentCost.className = cost && cost.heavy ? 'attachment-cost heavy' : 'attachment-cost';
+            attachmentCost.title = cost && cost.heavy
+                ? 'About ' + cost.tokens + ' tokens — more than the ' + (HISTORY_TOKEN_BUDGET / 1000)
+                  + 'k-token history this chat is trimmed to. An attachment is sent in full.'
+                : '';
             if (attachment.kind === 'image') {
                 attachmentThumb.src = attachment.previewUrl;
                 attachmentThumb.hidden = false;
@@ -8845,6 +8862,10 @@
             pendingAttachment = null;
             attachmentChip.hidden = true;
             attachmentName.textContent = '';
+            attachmentCost.hidden = true;
+            attachmentCost.textContent = '';
+            attachmentCost.className = 'attachment-cost';
+            attachmentCost.title = '';
             attachmentThumb.hidden = true;
             attachmentThumb.src = '';
             // An attachment is what makes the next turn an edit rather than a
