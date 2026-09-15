@@ -17,3 +17,36 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm test
+
+  # The smoke drives the real page in headless Chrome, from the login form to the
+  # composer, so it is the only check that can see the wiring between a rule and
+  # the DOM it is meant to change -- the class of bug the unit tests, which never
+  # render, passed for months. That is worth a run on every push rather than when
+  # someone remembers to type it.
+  #
+  # Its own job, and its own Node: the client speaks CDP over the built-in
+  # WebSocket, so it needs Node 22+, where the unit tests need neither a browser
+  # nor a modern runtime. It starts its own server on a free port, so it shares
+  # nothing with the job above.
+  smoke:
+    runs-on: ubuntu-latest
+    # Generous, and still a bound: the phases wait on the page, and a wedged
+    # browser should fail in minutes rather than hold the runner for an hour.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      # The runner image ships Chrome on the paths the smoke already looks in; if
+      # a future image moves it, this fails naming SMOKE_CHROME rather than
+      # silently not checking anything.
+      - run: npm run smoke
+        # The smoke's own server reads the skill catalogue from GitHub's API, and
+        # an unauthenticated runner gets 60 requests an hour shared with every
+        # other build on that address -- so the phase that pins a skill would
+        # skip on every run. The workflow's token lifts that. It reaches nothing
+        # else: GITHUB_TOKEN appears in one place in the app, that catalogue.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

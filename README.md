@@ -224,7 +224,7 @@ npm start
 ```bash
 npm test      # node --test — server logic + shared chat helpers
 npm run lint  # eslint
-npm run smoke # optional clean-profile Chrome smoke check (Node 22+ and Chrome required)
+npm run smoke # the clean-profile Chrome smoke check CI runs (Node 22+ and a browser)
 ```
 
 <br>
@@ -775,7 +775,9 @@ server.js       zero-dependency static server + the login and GitHub routes
 test/           node --test suite for server.js, chatlib.js, auth.js, github.js,
                 the GitHub tools, the conversation store, and a boot check that
                 runs index.html's script against a stub DOM
-.github/        CI: lint + tests on every push and pull request
+.github/        CI: lint + tests on every push and a PR, and the browser smoke,
+                which renders the page in headless Chrome and is the only check
+                that can see the wiring between a rule and the DOM it changes
 ```
 
 </details>

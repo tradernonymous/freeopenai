@@ -4,8 +4,8 @@
  *
  * It starts an isolated local server and a clean headless Chrome profile, then
  * checks the actual rendered page at desktop, portrait and landscape sizes.
- * This is intentionally not part of `npm test`: it needs Chrome and exercises
- * layout timing, not pure rules. Run with `npm run smoke`.
+ * Not part of `npm test`: it needs Chrome and exercises layout timing, not pure
+ * rules. It runs as its own job in CI, and locally with `npm run smoke`.
  */
 'use strict';
 
@@ -26,6 +26,15 @@ const SMOKE_PASS = 'smoke-pass';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function chromePath() {
+  // An explicit path first, because that is what the error this feeds promises:
+  // a runner whose browser lives somewhere else has no other way in. Named here
+  // rather than trusted, so a typo says so instead of surfacing as a spawn
+  // failure three steps later.
+  const override = process.env.SMOKE_CHROME;
+  if (override) {
+    if (!fs.existsSync(override)) throw new Error('SMOKE_CHROME points at nothing: ' + override);
+    return override;
+  }
   const candidates = process.platform === 'win32'
     ? [
         process.env['PROGRAMFILES'] && path.join(process.env['PROGRAMFILES'], 'Google/Chrome/Application/chrome.exe'),
@@ -125,6 +134,9 @@ async function main() {
     browser = spawn(chrome, [
       '--headless=new',
       '--no-sandbox',
+      // A runner's /dev/shm is small enough to crash a renderer mid-phase, which
+      // would read as a broken page rather than a broken container.
+      '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-first-run',
       '--no-default-browser-check',
