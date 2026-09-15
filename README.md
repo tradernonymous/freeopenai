@@ -35,7 +35,6 @@
 - 🚀 [Quick start](#quickstart)
 - ⚙️ [Configuration](#config)
 - ☁️ [Deploy to Railway](#deploy)
-- 🧩 [Rovo Dev (Claude Sonnet 4)](#rovo-dev)
 - 📱 [On a phone](#on-a-phone)
 - 🏗️ [Architecture](#architecture)
 - ⚠️ [Disclaimer](#disclaimer)
@@ -272,9 +271,6 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](#omniroute). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
 | `OMNIROUTE_MODELS` | *(the pinned list)* | Comma-separated ids that replace the pinned list — the `auto` variants and the direct flagships — when your gateway's catalogue routes different names. |
-| `ROVO_BASE_URL` | *(unset)* | Adds **Rovo** — Claude Sonnet 4 on an Atlassian account's own daily allowance (5M tokens free, 20M with a paid Jira plan), reached through `acli rovodev serve` and a shim. Set it or `ROVO_API_KEY`. See [Rovo Dev](#rovo-dev). |
-| `ROVO_API_KEY` | *(unset)* | The key **callers send to the gateway container**, not an Atlassian credential. The container refuses to start without one, because the shim behind it strips `Authorization` and a tunnelled URL would otherwise be an open door to the allowance. |
-| `ROVO_MODELS` | *(the live catalogue)* | Comma-separated ids that replace what the container reports, for when the shim's `/v1/models` is wrong. |
 | `OPENROUTER_FREE_ONLY` | `1` | Free models only. Also means **no drawing**: OpenRouter's Image API has no free tier, so a free-only key is not offered as an image candidate. Set `0` once the key has credits. |
 | `HF_IMAGE_MODEL` | `stabilityai/stable-diffusion-3-medium-diffusers` | The default is gated — accept its licence once on the model page, or the token gets a `403`. |
 
@@ -554,11 +550,10 @@ Until that variable (or `OMNIROUTE_API_KEY`) is set, **OmniRoute does not appear
 
 **Quick-tunnel URL rotates on every restart.** When the gateway is reached from a deployed app through a local quick tunnel, the `trycloudflare.com` URL changes whenever the cloudflared container is recreated (a reboot, or `docker compose up --force-recreate`). After the machine restarts, read the new URL from `docker logs app-cloudflared-1` (look for `https://…trycloudflare.com`) and update `OMNIROUTE_BASE_URL` on Railway.
 
-**One home for the compose stack, and one `.env` that matters.** `docker-compose.yml` pins `name: app`, so the project name follows the file rather than the directory it is run from. That is deliberate: the stack was first started from a different folder, and without the pin a `docker compose up` from this repo would have named the project after this directory, created an empty second `freeopenai_omniroute-data` volume and collided on port 20128 — indistinguishable, from the dashboard, from OmniRoute having been wiped. With the pin, this repo *adopts* the running containers: `docker compose ps` here lists them, and `up` reuses the same volume. Name the services you want, too, because **profiles are additive** — `docker compose --profile rovo up -d` starts `omniroute` and `cloudflared` as well:
+**One home for the compose stack, and one `.env` that matters.** `docker-compose.yml` pins `name: app`, so the project name follows the file rather than the directory it is run from. That is deliberate: the stack was first started from a different folder, and without the pin a `docker compose up` from this repo would have named the project after this directory, created an empty second `freeopenai_omniroute-data` volume and collided on port 20128 — indistinguishable, from the dashboard, from OmniRoute having been wiped. With the pin, this repo *adopts* the running containers: `docker compose ps` here lists them, and `up` reuses the same volume:
 
 ```bash
-docker compose up -d omniroute cloudflared                          # the gateway
-docker compose --profile rovo up -d --build rovo cloudflared-rovo   # Rovo only
+docker compose up -d omniroute cloudflared
 ```
 
 **Losing `.env` while the containers are up is recoverable; losing both is not.** `JWT_SECRET` and `API_KEY_SECRET` sign the dashboard logins and every API key held in `app_omniroute-data`, so generating fresh ones invalidates the key a deployed app is using — the gateway then answers `401` with its data apparently intact, which reads as a much stranger fault than it is. A running container still holds the values it was started with:
@@ -568,56 +563,6 @@ docker inspect app-omniroute-1 --format '{{range .Config.Env}}{{println .}}{{end
 ```
 
 Recover them into `.env` from there rather than inventing new ones. Once the container is removed, they are gone, and the only way back is a fresh admin password and a new API key on every client.
-
-<a name="rovo-dev"></a>
-
-### 🧩 Rovo Dev (Claude Sonnet 4 on Atlassian's allowance)
-
-An Atlassian account gets **5 million tokens a day** of Claude Sonnet 4 through Rovo Dev on the free tier — 20 million with a paid Jira plan — and no card either way. That is the one model here a free API key cannot otherwise buy. Qwen3-Coder-480B, the usual answer to "a free coding model", is free *nowhere* this app can reach: Cerebras ended its no-card tier in August 2026, and OpenRouter has never listed a `:free` variant of it.
-
-Rovo Dev is a terminal agent rather than an API, so the way in is `acli rovodev serve` — an officially documented server mode — with a shim translating OpenAI's shape to Rovo's `/v3`. Nothing is being bypassed here: it is Atlassian's own command, your own API token, your own allowance. `deploy/rovo-proxy` builds a container running both, plus the gate described below.
-
-```bash
-cp .env.example .env    # ROVO_EMAIL, ROVO_API_TOKEN, ROVO_API_KEY
-docker compose --profile rovo up -d --build rovo cloudflared-rovo
-docker compose logs cloudflared-rovo | grep trycloudflare
-# then on Railway: ROVO_BASE_URL=https://<that>.trycloudflare.com  and the same ROVO_API_KEY
-```
-
-**Two secrets, and they are not interchangeable.** `ROVO_API_TOKEN` authenticates the *container to Atlassian*; `ROVO_API_KEY` authenticates *callers to the container*. The shim strips `Authorization` on purpose, because Rovo is authenticated by the container's own `acli` session — fine on localhost, and a serious problem once tunnelled, since the URL then becomes the only secret and tunnel URLs end up in logs and screenshots. So the gate requires the key and **refuses to start without it**, and the entrypoint refuses to start if the two values match. `npm test` covers the gate as a running process: that it will not come up unguarded, that a wrong key is turned away before anything is forwarded, that the key is not passed downstream, and that replies still stream.
-
-**What it cannot do.** One request at a time — the shim serialises, so a tool turn that fires several calls in one wave queues them, and a queued request can reach the app's 55-second provider timeout. Text only: no vision, no image generation, because non-text parts are not forwarded. And it is one person's shim, nine commits, pinned by `ROVO_SHIM_REF` in the Dockerfile — expect to bump it when `acli` moves, and read the diff when you do.
-
-**The allowance is metered to your Atlassian account.** Powering a chat app is heavier use than terminal coding, and that account carries the consequence.
-
-### 💸 What keeps a turn affordable
-
-Every call is billed again with the whole conversation in front of it, so what a turn costs is mostly what it sends twice. Five rules keep that down, and each one is visible in the app rather than buried:
-
-| Rule | What it does |
-| --- | --- |
-| **The stable part comes first** | The system message holds only what does not change: the base prompt and the mode. The task list and any active skills ride at the *end* of the request instead, on the live user turn. A prefix that changes every turn can never be reused, so the provider re-reads the entire conversation at full price every time; now everything up to the newest message can be. Where the provider caches automatically — OpenAI, Gemini 2.5, DeepSeek, Grok, Moonshot, Groq — those hits now actually happen. |
-| **A tool call runs once** | Results are remembered for the duration of a question, keyed by the tool name and its arguments (argument *order* does not matter). A model that reads the same file twice, or asks for it twice in one round, gets the answer it already paid for, and the transcript says `Reused N earlier tool result(s) instead of repeating the call`. A commit asked for twice therefore commits once. |
-| **A repeat is called out** | When the same call comes back a second time, the app says so *in the conversation* — a status toast is something the model never reads — so it uses what it already has instead of asking a third time. |
-| **Oversized results are clipped** | A tool result longer than 20,000 characters is cut once, with the missing size stated, because every later round of the turn re-sends it. The limit is deliberately high enough that reading an ordinary source file still delivers the whole file; what it bounds is the file nobody meant to open. |
-| **A read is remembered past the question that paid for it** | The follow-up to an answer about a file used to open by reading that file again — and once history trimming had dropped the earlier answer for weight, the model had no choice but to. Reads are now remembered for the conversation, so the next question answers out of the last one's work; the transcript says so, and the result itself carries its age (`[remembered from 4 minutes ago]`), because the model is the one that has to decide whether to trust it. Three rules keep that honest: a **write forgets what it touched** — the file it wrote, and any listing of a folder containing it — so a model that writes a file and reads it back is never handed the text from before its own write; a remembered read **expires after fifteen minutes**; and a fresh read is never labelled. It lives in the tab, not in storage: a reload is a fine time to stop trusting a file read twenty minutes ago. |
-| **History has a weight cap, not just a count** | The last twelve turns travel, but only up to roughly 24,000 estimated tokens of them. Twelve turns of chat are cheap, twelve turns carrying a pasted file are not, and a request that overflows the model's window fails outright rather than costing less. The newest turn always travels, however large: without it, it is a different question. |
-| **A classifier does not pay flagship rates** | Asking for a picture in passing — with something attached, or in plain words — runs one small call first that decides whether the turn is a drawing, an edit or a chat, and writes the prompt the image model receives. That is a classification, not the conversation, and it now runs on the cheapest model the service lists rather than on your flagship. An ordinary chat message never makes the call at all. A planner that fails is simply no plan, and the keyword decision stands, so the cheap model risks nothing. |
-| **A work step goes to a cheaper model** | A tool turn is not one call but up to twelve, and each one re-sends the whole conversation — so the rounds that only read what a tool returned are the expensive ones. Those steps are sent to the cheapest model the provider lists, while the model you picked plans the turn and is the one the app falls back to the moment a step goes wrong. Below, and switchable in **Settings → Cheaper models for tool steps**. |
-
-### 🪜 Which model answers which step
-
-A tool turn has three kinds of call, and they are worth different amounts of money. The **plan** is the first call, with nothing read yet, so it decides what the turn is even going to do. A **work** step is any later call that has tool output in hand: it reads the result and chooses the next move. The **answer** is a call made with tools withheld — the reply you are waiting for.
-
-Only the work step moves. It is also the one that costs the most, because by then the whole conversation is in front of the model and a tool call is all that comes back. The choice is by published price — free first, then the cheapest input-weighted cost, since a round of this size is mostly input — and only among models that can actually take tools. Where a provider publishes *no* prices at all, which is the case for the allowance-backed ones (Nara, NVIDIA, the Antigravity proxy), the small model of the family is used instead, by name. That is a heuristic and it is last: any published price beats it. An unpriced model is never treated as free — the router refuses to guess rather than hand every step to whichever premium model happens to publish nothing. The same catalogue as the picker is filtered, so an embedding or image model is never a candidate.
-
-The trade is real and it is measured by the people who designed this shape: NVIDIA's [Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) reaches 72.7% on Terminal-Bench 2.1 at $68.19 against a 76.0% / $98.06 baseline — **30.5% cheaper for 3.3 points of accuracy**. So it is a switch, and the app is on the record about it: the first routed step of a turn says so in the conversation and names *both* models, and the status bar reports the model that actually produced the reply rather than the one the picker shows. Since a work step can be the step that answers, that is often the cheaper model — which is the honest consequence of the trade, not a bug.
-
-Four things send a step back to your model, and all four are observed rather than guessed: the cheap model **refused** that step (a refusal is never allowed to move your selection — it only takes that model out of circulation), it came back with **nothing**, it sent **arguments the tools cannot use** (which `parseToolArgs` has to swallow to keep the turn alive, and which was invisible until now), or it **asked again for something it already had**. The first is re-asked immediately on your model; the others hand the *next* step back, because that is the one that has to make sense of the result. A whole turn carrying an image is never routed at all: the model was already switched to one that can read the picture.
-
-Two things outside that loop also move. The **image planner** is a classifier rather than a step of the conversation, so it is not held to the work stage — it is ranked the same way, among models that need not take tools at all. And **Puter now honours routing**, which it did not: the browser branch read the model you had picked and ignored the routed one entirely, so every saving the switch describes was silently skipped on the one provider where a step is paid for in credits out of a fixed monthly allowance. Puter publishes no prices, so several of its models tie as "the small one in the family"; the app's own default (`gpt-5.4-nano`) breaks that tie rather than whichever id happens to sort first.
-
-When a question fails part-way through a tool loop, the answers it already collected are kept — so retrying replays those lookups instead of buying them a second time, while a genuinely new question starts from nothing. The status bar reports what the provider cached, so the saving is visible: `gpt-5.4-nano · 3s · 812 chars · 120 tok · 12.4k cached`. A provider that caches nothing reports nothing.
 
 <a name="image-providers"></a>
 

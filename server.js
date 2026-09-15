@@ -1197,35 +1197,6 @@ const LLM_PROVIDERS = {
   //   the only form that answered is retired with it.
   // - gemini-3-pro-high, gemini-2.5-pro, sonnet-4-5 and the opus thinking
   //   tiers: retired upstream or never served by this proxy.
-   // Rovo Dev, which is Claude Sonnet 4 on an Atlassian account's own allowance:
-  // 5 million tokens a day on the free tier, 20 million with a paid Jira plan,
-  // and no card either way. That is the one thing here that a free key cannot
-  // otherwise buy -- Qwen3-Coder-480B is free nowhere reachable since Cerebras
-  // ended its no-card tier, and OpenRouter has never listed a :free variant.
-  //
-  // It is not an API. Rovo Dev is a terminal agent, and the way in is
-  // `acli rovodev serve <port>`, an officially documented server mode, with a
-  // small shim in front translating OpenAI's shape to Rovo's /v3. Both run in
-  // the container built by deploy/rovo-proxy, so what this provider talks to is
-  // an ordinary OpenAI-compatible endpoint like any other here.
-  //
-  // needsKey is false because the key does not authenticate to Rovo -- the
-  // container's own acli session does that. The key authenticates to the
-  // container, which matters a great deal: the shim strips Authorization, so a
-  // tunnelled URL with nothing in front of it lets anyone on the internet spend
-  // the account's allowance. The gate in that container is what the key is for.
-  //
-  // No `models` list. The shim reports what the account can actually reach, and
-  // a list pinned here would go stale against a service whose catalogue is not
-  // ours; ROVO_MODELS overrides when the live answer is wrong. No `image` block
-  // either, because the shim is text-only and says so.
-  rovo: {
-    label: 'Rovo',
-    baseUrl: 'http://localhost:4000/v1',
-    envVar: 'ROVO_API_KEY',
-    needsKey: false,
-  },
-
  antigravity: {
     label: 'Antigravity',
     baseUrl: 'http://localhost:3000/v1',
@@ -1354,7 +1325,7 @@ function providerIsConfigured(provider) {
 // and the Antigravity proxy both accept "http://host:port", and both serve
 // /v1/... underneath it, so the version segment is added when it is missing
 // rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute', 'rovo']);
+const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');

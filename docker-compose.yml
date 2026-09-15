@@ -22,31 +22,5 @@ services:
     depends_on: [omniroute]
     restart: unless-stopped
 
-  # Rovo Dev -- Claude Sonnet 4 on the Atlassian account's own daily allowance.
-  #
-  # Behind a profile, so the two above keep starting on a bare `docker compose
-  # up -d` and this one only runs when it is asked for:
-  #
-  #   docker compose --profile rovo up -d --build
-  #
-  # A quick tunnel serves exactly one origin, which is why this has a cloudflared
-  # of its own rather than sharing the one above.
-  rovo:
-    profiles: ["rovo"]
-    build: ./deploy/rovo-proxy
-    ports: ["4000:4000"]
-    env_file: .env
-    restart: unless-stopped
-
-  cloudflared-rovo:
-    profiles: ["rovo"]
-    image: cloudflare/cloudflared:latest
-    # Read the public URL from: docker logs freeopenai-cloudflared-rovo-1
-    # (look for https://xxx.trycloudflare.com) and set it as ROVO_BASE_URL on
-    # Railway. It changes whenever this container is recreated.
-    command: tunnel --no-autoupdate --url http://rovo:4000
-    depends_on: [rovo]
-    restart: unless-stopped
-
 volumes:
   omniroute-data:
