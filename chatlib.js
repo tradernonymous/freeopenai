@@ -2291,20 +2291,72 @@ function imageRatioBody(size) {
   return { w: size.ratio.w, h: size.ratio.h };
 }
 
+// How far off a shape may be and still count as the shape that was asked for.
+// Two percent: providers round a ratio to the grid their model draws on, and
+// 1536x1024 against 1530x1020 is the same picture to anyone looking at it.
+const SHAPE_TOLERANCE = 0.02;
+
+// Whether the drawing is a different shape from the one that was asked for.
+// The one test behind both answers to that question -- saying so, and cutting it
+// to the shape -- so the two can never disagree about a picture.
+function imageShapeIsOff(size, drawnWidth, drawnHeight) {
+  const w = Math.round(Number(drawnWidth) || 0);
+  const h = Math.round(Number(drawnHeight) || 0);
+  if (!size || !size.width || !size.height || !w || !h) return false;
+  const asked = size.width / size.height;
+  return Math.abs(asked - w / h) / asked > SHAPE_TOLERANCE;
+}
+
 // The sentence for a picture that came back a different shape from the one that
 // was asked for. Silence would be the same silence that produced the complaint:
 // the user is looking at a square and believes they asked for a square.
-function describeDrawnSize(size, drawnWidth, drawnHeight) {
+//
+// `reframed` is the cut that was made, when one was: the sentence then names the
+// shape the picture has rather than only the one it arrived as, because the
+// second is the answer and the first is the reason.
+function describeDrawnSize(size, drawnWidth, drawnHeight, reframed) {
   const w = Math.round(Number(drawnWidth) || 0);
   const h = Math.round(Number(drawnHeight) || 0);
-  if (!size || !w || !h) return '';
-  const asked = size.width / size.height;
-  const drawn = w / h;
-  // Two percent: providers round a ratio to the grid their model draws on, and
-  // 1536x1024 against 1530x1020 is the same picture to anyone looking at it.
-  if (Math.abs(asked - drawn) / asked <= 0.02) return '';
-  return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), drawn ' +
-    imageRatioLabel(w, h) + ' (' + w + '×' + h + ')';
+  if (!imageShapeIsOff(size, w, h)) return '';
+  const drawn = 'drawn ' + imageRatioLabel(w, h) + ' (' + w + '×' + h + ')';
+  const cut = reframed && reframed.width && reframed.height ? reframed : null;
+  if (cut) {
+    return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), ' + drawn +
+      ' — cut to ' + imageRatioLabel(cut.width, cut.height) + ' (' + cut.width + '×' + cut.height + ')';
+  }
+  return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), ' + drawn;
+}
+
+// The largest rectangle of the shape that was asked for, taken from the middle
+// of the picture that came back. Null when there is nothing worth cutting.
+//
+// This is where "ask for a size and get it" stops being a measurement and
+// becomes an answer. Every service is asked for the shape and not every service
+// honours it; the app used to measure the result, say "drawn 1:1" on the status
+// line, and hand the square over anyway. A 1024x1024 drawing for a 16:9 request
+// already contains a 1024x576 picture, and that picture is the one the request
+// described -- so it is cut out rather than reported on.
+//
+// Nothing is upscaled and nothing is padded, so a service that draws small
+// still draws small; it just draws the shape that was asked for. A cut that
+// would leave a sliver is refused, because 2000x120 is not a banner.
+const MIN_REFRAME_EDGE = 64;
+
+function reframePlan(size, drawnWidth, drawnHeight) {
+  const width = Math.round(Number(drawnWidth) || 0);
+  const height = Math.round(Number(drawnHeight) || 0);
+  if (!imageShapeIsOff(size, width, height)) return null;
+  const aspect = size.width / size.height;
+  const cut = width >= height * aspect
+    ? { width: Math.round(height * aspect), height }
+    : { width, height: Math.round(width / aspect) };
+  if (cut.width < MIN_REFRAME_EDGE || cut.height < MIN_REFRAME_EDGE) return null;
+  return {
+    x: Math.round((width - cut.width) / 2),
+    y: Math.round((height - cut.height) / 2),
+    width: cut.width,
+    height: cut.height,
+  };
 }
 
 // A refusal is the *prompt's* fault -- not the account's, and not that model's.
@@ -4466,6 +4518,10 @@ if (typeof module !== 'undefined' && module.exports) {
     imageRatioBody,
     imageRatioLabel,
     describeDrawnSize,
+    imageShapeIsOff,
+    reframePlan,
+    MIN_REFRAME_EDGE,
+    SHAPE_TOLERANCE,
     isModerationRefusal,
     IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,

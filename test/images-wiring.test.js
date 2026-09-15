@@ -25,6 +25,7 @@ const {
   imageRatioBody,
   describeDrawnSize,
   imageRatioLabel,
+  reframePlan,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
@@ -38,6 +39,7 @@ const NAMES = [
   'puterImageArgs',
   'imageBackendsForTurn',
   'noteDrawnSize',
+  'reframeToRequestedShape',
 ];
 
 // The conversation the request is riding on: the service answering the chat and
@@ -55,7 +57,7 @@ function harness({
   model = 'gpt-5.4-nano',
   dims = { width: 0, height: 0 },
 } = {}) {
-  const calls = { puter: [], puterOpts: [], puterPrompts: [], fetch: [] };
+  const calls = { puter: [], puterOpts: [], puterPrompts: [], fetch: [], cut: null };
   const deps = {
     // The real decisions, so the wiring is tested against the shipped rules.
     imageBackendOrder,
@@ -79,6 +81,20 @@ function harness({
     // dimensions it would have read are the input instead.
     imageDimensionsOf: async () => dims,
     imageRatioLabel,
+    // Whether it is the right shape, and the sentence about it, are the real
+    // rules. The cut itself needs a canvas, which this test has no DOM for, so
+    // the rectangle is recorded instead -- `reframePlan` is where the maths is
+    // and it is tested on its own.
+    reframePlan,
+    canvasFromImage: async (src, needMatte, cut) => {
+      calls.cut = cut || null;
+      return {
+        canvas: { toDataURL: () => 'data:image/png;base64,CUT-' + (cut ? cut.width + 'x' + cut.height : 'whole') },
+        width: cut ? cut.width : dims.width,
+        height: cut ? cut.height : dims.height,
+        type: 'image/png',
+      };
+    },
     // The browser's Image constructor is used to measure a source picture's
     // dimensions before an edit request: the stub simulates it with the dims
     // the test already provides.
@@ -197,6 +213,41 @@ test('a picture drawn the wrong shape says so, and one drawn right stays quiet',
   const clean = { notes: [] };
   await right.generate('a 16:9 banner with no text', null, clean);
   assert.deepEqual(clean.notes, [], 'a provider rounding onto its grid is not a complaint');
+});
+
+test('a drawing that came back the wrong shape is cut to the one that was asked for', async () => {
+  // The shape is the one part of an image request no later step can give back:
+  // a square is not a banner, and a download menu cannot make it one. A
+  // 1024x1024 drawing for a 16:9 request already contains a 1024x576 picture,
+  // and that picture is the one the request described -- so it is cut out
+  // rather than handed over as a square with a sentence about it.
+  const h = harness({
+    signedIn: true, puterImages: true,
+    puterResult: { src: 'data:image/png;base64,P' },
+    dims: { width: 1024, height: 1024 },
+  });
+  const outcome = { notes: [] };
+  const url = await h.generate('a 16:9 banner with no text', null, outcome);
+  assert.deepEqual(h.calls.cut, { x: 0, y: 224, width: 1024, height: 576 }, 'the widest 16:9 rectangle, from the middle');
+  assert.match(url, /CUT-1024x576/, 'the picture handed back is the cut one, not the one that arrived');
+  assert.match(outcome.notes[0], /drawn 1:1 \(1024×1024\) — cut to 16:9 \(1024×576\)/,
+    'the sentence names the shape the picture now has, not only the one it arrived as');
+});
+
+test('a shape too small to cut is reported rather than cropped', async () => {
+  // A 640x640 sliver of 16:9 is 23 pixels tall, which is not a banner. Cutting
+  // anyway would be worse than saying what happened, and saying what happened is
+  // what the app did before -- so nothing is lost by refusing.
+  const h = harness({
+    signedIn: true, puterImages: true,
+    puterResult: { src: 'data:image/png;base64,P' },
+    dims: { width: 40, height: 40 },
+  });
+  const outcome = { notes: [] };
+  const url = await h.generate('a 16:9 banner with no text', null, outcome);
+  assert.equal(h.calls.cut, null, 'nothing is cut');
+  assert.equal(url, 'data:image/png;base64,P', 'the picture that arrived is the one kept');
+  assert.match(outcome.notes[0], /asked for 16:9/);
 });
 
 test('a chat on Puter still draws on the route while the switch is off', async () => {

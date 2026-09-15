@@ -6203,9 +6203,14 @@
                 return;
             }
             hint.textContent = size.label;
-            hint.title = conditional
-                ? 'Drawn at ' + pixels + ' if this makes a new picture — an edit of the one on screen keeps its own shape'
-                : 'Drawn at ' + pixels + ' — name a shape ("16:9", "1024x1024") to change it';
+            // The shape first, then the size it is asked for at: the shape is the
+            // part the app now delivers even when a service draws something else
+            // and it is cut to fit (see reframeToRequestedShape), so it is the
+            // part the hint can promise. The panel says the same sentence, in the
+            // same order, beside the switch that decides whether it is drawn.
+            hint.title = 'Drawn at ' + size.label + ' — ' + pixels + (conditional
+                ? ', if this makes a new picture: an edit of the one on screen keeps its own shape'
+                : '. Name a shape ("16:9", "1024x1024") to change it');
             hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels
                 + (conditional ? ' if this makes a new picture' : ''));
             hint.hidden = false;
@@ -6923,6 +6928,61 @@
             if (said && !outcome.notes.includes(said)) outcome.notes.push(said);
         }
 
+        // The picture the request described, cut out of the picture that came
+        // back.
+        //
+        // The shape is the one part of an image request a layout cannot work
+        // around: a square is not a banner, and no later step can give it back.
+        // Every service is asked for the shape and some ignore it, which used to
+        // be the end of the promise -- the app measured the result, said "drawn
+        // 1:1" on the status line and handed over the square. A 1024x1024 drawing
+        // for a 16:9 request already contains a 1024x576 picture, so that picture
+        // is cut out here and the sentence says which shape the picture now has
+        // rather than only the shape it arrived as.
+        //
+        // Nothing is upscaled and nothing is padded, so a service that draws
+        // small still draws small -- it just draws the shape that was asked for.
+        // The cut is made once, in the format the picture arrived in, and only
+        // when there is a cut to make: everything downstream (the transcript, the
+        // gallery, all three downloads, the PDF page) then measures the same
+        // picture, which is why this belongs here and not in each of them. When
+        // the cut cannot be made the original is kept untouched, because a square
+        // picture beats no picture.
+        async function reframeToRequestedShape(url, size, outcome) {
+            if (!url || !size || !outcome) return url;
+            const drawn = await imageDimensionsOf(url);
+            const cut = reframePlan(size, drawn.width, drawn.height);
+            if (!cut) {
+                // The right shape already, or too small a sliver to cut: say what
+                // it is, which is all that could be done before.
+                await noteDrawnSize(outcome, size, url, drawn);
+                return url;
+            }
+            try {
+                // No matte: the cut is written back in the format it arrived in,
+                // so a transparent PNG stays one instead of being flattened onto
+                // white to satisfy a JPEG it is not going to become.
+                const framed = await canvasFromImage(url, false, cut);
+                const jpeg = /^image\/jpeg$/.test(framed.type);
+                const shaped = framed.canvas.toDataURL(jpeg ? 'image/jpeg' : 'image/png', 0.95);
+                if (!shaped) throw new Error('the cut produced nothing');
+                // The sentence replaces whatever the route said about size: the
+                // shape it named is not the shape this picture has now, and both
+                // at once would be two sentences about one answer. Replaced in
+                // place, because this array may be the caller's -- assigning a
+                // filtered copy over it would report a size swap nobody reads.
+                const kept = outcome.notes.filter((note) => !/^asked for .+ draws /.test(note));
+                outcome.notes.splice(0, outcome.notes.length, ...kept);
+                outcome.notes.push(describeDrawnSize(size, drawn.width, drawn.height, cut));
+                return shaped;
+            } catch {
+                // A cut that could not be made is a size that could not be
+                // delivered, and that is still worth saying out loud.
+                await noteDrawnSize(outcome, size, url, drawn);
+                return url;
+            }
+        }
+
         // One place that produces an image, so the composer, the variations
         // button and the brush editor cannot drift apart.
         //
@@ -7006,8 +7066,10 @@
                             const imgEl = await puter.ai.txt2img(promptText, args);
                             if (imgEl && imgEl.src) {
                                 outcome.drewWith = 'Puter';
-                                await noteDrawnSize(outcome, size, imgEl.src, { width: imgEl.naturalWidth, height: imgEl.naturalHeight });
-                                return [imgEl.src];
+                                // The element is what Puter drew; sizes it cannot
+                                // honour are fixed on the way out, exactly as they
+                                // are for the route.
+                                return [await reframeToRequestedShape(imgEl.src, size, outcome)];
                             }
                             errors.puterError = 'returned no image';
                         } catch (error) {
@@ -7061,10 +7123,11 @@
                     if (Array.isArray(data.notes)) data.notes.forEach((note) => {
                         if (!outcome.notes.includes(note)) outcome.notes.push(note);
                     });
-                    // Only when the route did not already say so: a service that
-                    // reported the size it drew is the better authority on it.
-                    if (!outcome.notes.length) await noteDrawnSize(outcome, size, urls[0]);
-                    return urls;
+                    // Every picture the route returns, not just the first: a
+                    // variation set drawn the wrong shape is wrong in all of it.
+                    const shaped = [];
+                    for (const url of urls) shaped.push(await reframeToRequestedShape(url, size, outcome));
+                    return shaped;
                 } catch (error) {
                     if (error && error.name === 'AbortError') throw error;
                     errors.serverError = String((error && error.message) || error);
@@ -7886,7 +7949,14 @@
         // The picture drawn onto a canvas that is exactly as big as it is. The
         // matte is for the formats with no alpha channel: without it, a
         // transparent PNG would come back as black boxes.
-        async function canvasAtImageSize(src, needMatte) {
+        //
+        // A cut, when one is given, takes that rectangle instead of the whole
+        // picture and makes the canvas the rectangle's size -- so the output is
+        // the region at its own scale, never the region inside the original
+        // frame. Only the drawing path ever passes one; a download wants the
+        // picture it was handed. The blob's type rides back with it so the caller
+        // can write the result out in the format it arrived in.
+        async function canvasFromImage(src, needMatte, cut) {
             const response = await fetch(src);
             if (!response.ok) throw new Error(`the picture could not be re-read (${response.status})`);
             const blob = await response.blob();
@@ -7901,17 +7971,20 @@
                 const width = img.naturalWidth || 0;
                 const height = img.naturalHeight || 0;
                 if (!width || !height) throw new Error('that picture reported no size');
+                const outWidth = cut ? cut.width : width;
+                const outHeight = cut ? cut.height : height;
                 const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
+                canvas.width = outWidth;
+                canvas.height = outHeight;
                 const ctx = canvas.getContext('2d');
                 if (!ctx) throw new Error('this browser cannot re-encode a picture');
                 if (needMatte) {
                     ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 0, width, height);
+                    ctx.fillRect(0, 0, outWidth, outHeight);
                 }
-                ctx.drawImage(img, 0, 0);
-                return { canvas, width, height };
+                if (cut) ctx.drawImage(img, cut.x, cut.y, cut.width, cut.height, 0, 0, outWidth, outHeight);
+                else ctx.drawImage(img, 0, 0);
+                return { canvas, width: outWidth, height: outHeight, type: blob.type || '' };
             } finally {
                 URL.revokeObjectURL(objectUrl);
             }
@@ -7927,7 +8000,7 @@
 
         async function imageBlobForDownload(src, formatId) {
             const format = imageDownloadFormat(formatId);
-            const { canvas, width, height } = await canvasAtImageSize(src, format.id !== 'png');
+            const { canvas, width, height } = await canvasFromImage(src, format.id !== 'png');
             if (format.id === 'png') {
                 const blob = await canvasToBlob(canvas, 'image/png');
                 if (!blob) throw new Error('this browser could not encode a PNG');

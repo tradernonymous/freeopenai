@@ -21,6 +21,8 @@ const {
   imageRatioBody,
   imageRatioLabel,
   describeDrawnSize,
+  reframePlan,
+  MIN_REFRAME_EDGE,
   buildImagePdf,
 } = require('../chatlib.js');
 
@@ -231,4 +233,33 @@ test('a picture that came back the wrong shape is said out loud', () => {
   assert.equal(describeDrawnSize(wide, 1530, 860), '');
   assert.equal(describeDrawnSize(null, 1024, 1024), '', 'nothing was asked for');
   assert.equal(describeDrawnSize(wide, 0, 0), '', 'nothing was measured');
+
+  // When the shape was fixed rather than merely reported, the sentence says
+  // which shape the picture has now -- the reason is only half the answer.
+  const cut = describeDrawnSize(wide, 1024, 1024, reframePlan(wide, 1024, 1024));
+  assert.match(cut, /— cut to 16:9 \(1024×576\)$/);
+});
+
+test('the shape that was asked for is cut out of the picture that came back', () => {
+  const wide = imageSizePreset('wide');
+  // The comparison is against the shape, never the pixel size: 1024x576 is a
+  // 16:9 picture even though it is not 1536x864, and nothing here upscales a
+  // service that drew smaller than it was asked to.
+  assert.deepEqual(reframePlan(wide, 1024, 1024), { x: 0, y: 224, width: 1024, height: 576 });
+  assert.deepEqual(reframePlan(wide, 1536, 864), null, 'the right shape needs no cut');
+  assert.deepEqual(reframePlan(wide, 1530, 860), null, 'a rounding is not a wrong shape');
+  assert.deepEqual(reframePlan(null, 1024, 1024), null, 'nothing was asked for');
+  assert.deepEqual(reframePlan(wide, 0, 0), null, 'nothing was measured');
+
+  // A tall picture asked for wide is cut horizontally, not just vertically: the
+  // rectangle is the largest one of the wanted shape that fits, so the cut is
+  // always the biggest picture available and never a crop of a crop.
+  assert.deepEqual(reframePlan(wide, 1024, 2048), { x: 0, y: 736, width: 1024, height: 576 });
+  const tall = imageSizePreset('tall');
+  assert.deepEqual(reframePlan(tall, 2048, 1024), { x: 736, y: 0, width: 576, height: 1024 });
+
+  // Refused when the result would be a sliver. A warning is recoverable; a
+  // 23-pixel-tall banner is a file the user has to notice and draw again.
+  assert.deepEqual(reframePlan(wide, 40, 40), null);
+  assert.equal(MIN_REFRAME_EDGE > 40, true, 'the refusal is the edge floor, not a rounding accident');
 });

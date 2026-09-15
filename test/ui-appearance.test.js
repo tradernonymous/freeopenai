@@ -114,11 +114,18 @@ test('the save menu offers the three formats and names the real size', () => {
   assert.match(menu, /Save at \$\{size\.width\} × \$\{size\.height\}/, 'the true pixel size is what makes a wrong engine size visible');
   assert.match(sourceOf('imageDownloadMenuHtml'), /IMAGE_DOWNLOAD_FORMATS/, 'the formats are not the shared list');
 
-  // The render is a pass-through: a fixed size here is how a 1536x1024 picture
-  // ends up in the downloads folder as a square.
-  const canvas = sourceOf('canvasAtImageSize');
-  assert.match(canvas, /canvas\.width = width;/);
-  assert.match(canvas, /canvas\.height = height;/);
+  // The download renders the whole picture: the one cut in the app belongs to
+  // the drawing path, which trims a wrong-shaped result to the shape that was
+  // asked for. A download that cropped would be the same defect as one that
+  // squares -- a file saved at a size nobody chose.
+  assert.match(sourceOf('imageBlobForDownload'), /\(src, format\.id !== 'png'\)/, 'the download asks for no cut');
+
+  // The render takes its size from the picture (or from the cut it was handed),
+  // never from a constant: a fixed size here is how a 1536x1024 picture ends up
+  // in the downloads folder as a square.
+  const canvas = sourceOf('canvasFromImage');
+  assert.match(canvas, /canvas\.width = outWidth;/);
+  assert.match(canvas, /canvas\.height = outHeight;/);
   assert.doesNotMatch(canvas, /1024|aspect-ratio|Math\.min\(1,/, 'the render is sizing the picture instead of passing it through');
 
   const pdf = sourceOf('downloadImage') + sourceOf('imageBlobForDownload');

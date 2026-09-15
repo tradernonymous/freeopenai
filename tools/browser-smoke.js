@@ -622,6 +622,72 @@ async function main() {
       throw new Error('the size hint leaves no room to type: ' + JSON.stringify(phoneHint));
     }
 
+    // The shape that was asked for is cut out of the picture that came back.
+    //
+    // The unit tests decide the rectangle against a stubbed canvas; this is the
+    // only place the bytes are really re-encoded, so it is the only place that
+    // can catch a cut that plans the right rectangle and draws the wrong one.
+    // The source is a square whose kept region is painted and whose dropped
+    // edges are another colour, so a cut that took the wrong part of the picture
+    // is visible rather than merely plausible.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: url + '-image-shape' });
+    await waitFor(() => evaluate('typeof reframeToRequestedShape === "function" && typeof imageSizeFromPrompt === "function"'), 'shape page');
+    await sleep(250);
+    const shapeCut = await evaluate(`(async () => {
+      const source = document.createElement('canvas');
+      source.width = 1024; source.height = 1024;
+      const paint = source.getContext('2d');
+      paint.fillStyle = '#00ff00';
+      paint.fillRect(0, 0, 1024, 1024);
+      paint.fillStyle = '#ff0000';
+      paint.fillRect(0, 224, 1024, 576);
+      paint.fillStyle = '#0000ff';
+      paint.fillRect(224, 0, 576, 1024);
+      const original = source.toDataURL('image/png');
+      const read = async (dataUrl) => {
+        const img = await new Promise((resolve) => {
+          const probe = new Image();
+          probe.onload = () => resolve(probe);
+          probe.src = dataUrl;
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const at = (x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data).slice(0, 3).join(',');
+        return {
+          w: img.naturalWidth,
+          h: img.naturalHeight,
+          topLeft: at(2, 2),
+          topRight: at(img.naturalWidth - 3, 2),
+          bottom: at(2, img.naturalHeight - 3),
+        };
+      };
+      const cutTo = async (words) => {
+        const outcome = { notes: [] };
+        const cut = await reframeToRequestedShape(original, imageSizeFromPrompt(words, { words: true }), outcome);
+        return { ...(await read(cut)), substituted: cut !== original, note: outcome.notes[0] || '' };
+      };
+      return { wide: await cutTo('a 16:9 banner'), tall: await cutTo('a 9:16 poster'), square: await cutTo('1:1') };
+    })()`);
+    console.log('shape cut: ' + JSON.stringify(shapeCut));
+    // Red where the 16:9 cut keeps, green where it drops: a cut from the top of
+    // the square would come back green, and one that kept the square would not
+    // be 1024x576 at all.
+    if (shapeCut.wide.w !== 1024 || shapeCut.wide.h !== 576 || shapeCut.wide.topLeft !== '255,0,0' || shapeCut.wide.topRight !== '255,0,0' || shapeCut.wide.bottom !== '255,0,0') {
+      throw new Error('a 16:9 request was not cut to the middle of the picture: ' + JSON.stringify(shapeCut.wide));
+    }
+    if (!/cut to 16:9 \(1024×576\)/.test(shapeCut.wide.note)) {
+      throw new Error('the cut was not reported on the outcome: ' + JSON.stringify(shapeCut.wide));
+    }
+    if (shapeCut.tall.w !== 576 || shapeCut.tall.h !== 1024 || shapeCut.tall.topLeft !== '0,0,255' || shapeCut.tall.bottom !== '0,0,255') {
+      throw new Error('a 9:16 request was not cut to the middle columns: ' + JSON.stringify(shapeCut.tall));
+    }
+    if (shapeCut.square.substituted) {
+      throw new Error('a square request was re-encoded for nothing: ' + JSON.stringify(shapeCut.square));
+    }
+
     // The session panel floats, so opening it must not resize the conversation
     // and must not sit on the composer. One surface means the overlap rule the
     // two cards needed has nothing left to arbitrate.
