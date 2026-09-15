@@ -23,10 +23,16 @@ const PROVIDER_VARS = [
   'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL',
   'OLLAMA_IMAGE_MODEL',
   'IMAGE_PROVIDER',
+  'OPENROUTER_FREE_ONLY',
 ];
 
 function clearProviders() {
   for (const name of PROVIDER_VARS) delete process.env[name];
+  // OpenRouter's Image API has no free tier, so a free-only key is not an image
+  // candidate at all. Most tests here are about the drawing paths rather than
+  // that gate, so the baseline is a key with credits on it; the gate has a test
+  // of its own below.
+  process.env.OPENROUTER_FREE_ONLY = '0';
 }
 
 // A stand-in upstream that records every request and answers with whatever the
@@ -226,7 +232,7 @@ test('the HuggingFace task route is read as bytes, not as a document', async () 
   // route, {inputs, parameters} in and the picture itself out.
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const up = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/models/black-forest-labs/FLUX.1-schnell');
+    assert.equal(req.url, '/models/stabilityai/stable-diffusion-3-medium-diffusers');
     assert.deepEqual(JSON.parse(raw), { inputs: 'a fox', parameters: { width: 1024, height: 1024 } });
     res.writeHead(200, { 'Content-Type': 'image/png' });
     res.end(png);
@@ -474,7 +480,7 @@ test('the chat’s own provider is asked first, with the chat’s own model', as
   process.env.OPENROUTER_API_KEY = 'or-key';
   process.env.OPENROUTER_IMAGES_BASE_URL = openrouter.url;
   process.env.HF_TOKEN = 'hf';
-  process.env.HF_IMAGE_MODEL = 'black-forest-labs/FLUX.1-schnell';
+  process.env.HF_IMAGE_MODEL = 'stabilityai/stable-diffusion-xl-base-1.0';
   process.env.HF_IMAGES_BASE_URL = hugging.url;
   const app = await startApp();
   try {
@@ -530,7 +536,10 @@ test('a chat model that cannot draw is not the end of the provider', async () =>
 
 test('a preference is not a pin: a provider that cannot draw is stepped past', async () => {
   const hugging = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/models/black-forest-labs/FLUX.1-schnell');
+    // Deliberately not the store's default: this test is about the order
+    // carrying on past a preference, and an explicit model that happened to
+    // equal the default would not show the override was honoured.
+    assert.equal(req.url, '/models/stabilityai/stable-diffusion-xl-base-1.0');
     assert.equal(JSON.parse(raw).inputs, 'a fox');
     res.writeHead(200, { 'Content-Type': 'image/png' });
     res.end(Buffer.from([0xff, 0xd8, 0xff]));
@@ -540,7 +549,7 @@ test('a preference is not a pin: a provider that cannot draw is stepped past', a
   process.env.NARA_IMAGE_MODEL = 'nara-image';
   process.env.NARA_IMAGES_BASE_URL = nara.url;
   process.env.HF_TOKEN = 'hf';
-  process.env.HF_IMAGE_MODEL = 'black-forest-labs/FLUX.1-schnell';
+  process.env.HF_IMAGE_MODEL = 'stabilityai/stable-diffusion-xl-base-1.0';
   process.env.HF_IMAGES_BASE_URL = hugging.url;
   const app = await startApp();
   try {
@@ -602,4 +611,92 @@ test('a size the service does offer is passed through untouched, with nothing to
     app.close();
     await new Promise((r) => up.server.close(r));
   }
+});
+
+// --- The three reasons drawing failed on every provider at once ---
+
+test('a free-only OpenRouter key is not asked to draw, because it cannot', async () => {
+  // OpenRouter's Image API has no free tier. Asking anyway spends a round trip
+  // to be told "402 Insufficient credits. This account never purchased
+  // credits." -- a fact about the account, so every later attempt gets the same.
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/or.png' }] }));
+  delete process.env.OPENROUTER_FREE_ONLY;
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.ok(res.status >= 400, 'a key that cannot draw should not report success');
+    // The message has to say how to get back in, not merely that it failed.
+    assert.match(JSON.stringify(await res.json()), /OPENROUTER_FREE_ONLY=0/);
+    assert.equal(up.seen.length, 0, 'a provider that cannot draw must not be contacted');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a key with credits still draws on OpenRouter', async () => {
+  // The gate above is the free-only case and nothing wider: a paid key is
+  // unaffected, which is what makes OPENROUTER_FREE_ONLY=0 a real way back in.
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/or.png' }] }));
+  process.env.OPENROUTER_FREE_ONLY = '0';
+  process.env.OPENROUTER_API_KEY = 'or-key';
+  process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).provider, 'openrouter');
+    assert.equal(up.seen.length, 1);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a shape the service rejects is dropped and retried, on 422 as well as 400', async () => {
+  // NVIDIA answers a field it does not accept with
+  //   422 {"type":"extra_forbidden","loc":["body","aspect_ratio"]}
+  // Two things were wrong: the retry only looked for 400, and aspect_ratio sat
+  // outside the drop-preferences mechanism entirely -- so the retry re-sent the
+  // very field that caused the refusal, for every model, every time.
+  const bodies = [];
+  const up = await upstreamOf((req, res, raw) => {
+    const body = JSON.parse(raw.toString() || '{}');
+    bodies.push(body);
+    if (body.aspect_ratio) {
+      return jsonAnswer(res, 422, [{ type: 'extra_forbidden', loc: ['body', 'aspect_ratio'] }]);
+    }
+    jsonAnswer(res, 200, { artifacts: [{ base64: 'UElD' }] });
+  });
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    // 1640x856 is what the table calls 16:9, and "16:9" is the value NVIDIA
+    // named in the refusal. A size with no aspect in the table sends no
+    // aspect_ratio at all and would test nothing.
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', size: '1640x856' });
+    assert.equal(res.status, 200, 'the retry without the shape should have drawn');
+    assert.ok(JSON.stringify(await res.json()).includes('UElD'));
+    assert.ok(bodies.length >= 2, 'expected a second attempt without the rejected field');
+    assert.ok(bodies[0].aspect_ratio, 'the first attempt carries the shape that was asked for');
+    assert.equal(bodies[bodies.length - 1].aspect_ratio, undefined, 'the retry still carried aspect_ratio');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('the HuggingFace default is a model that provider still serves', async () => {
+  // FLUX.1-schnell was retired from hf-inference and answers 410 "deprecated
+  // and no longer supported", which made HuggingFace a guaranteed failure in
+  // the chain rather than a fallback.
+  const { LLM_PROVIDERS } = require('../server.js');
+  assert.equal(
+    LLM_PROVIDERS.huggingface.image.defaultModel,
+    'stabilityai/stable-diffusion-3-medium-diffusers',
+  );
+  assert.doesNotMatch(LLM_PROVIDERS.huggingface.image.defaultModel, /FLUX\.1-schnell/);
 });

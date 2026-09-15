@@ -1105,7 +1105,16 @@ const LLM_PROVIDERS = {
       baseUrl: 'https://router.huggingface.co/hf-inference',
       baseUrlEnv: 'HF_IMAGES_BASE_URL',
       modelEnv: 'HF_IMAGE_MODEL',
-      defaultModel: 'black-forest-labs/FLUX.1-schnell',
+      // FLUX.1-schnell was retired from hf-inference and answers
+      //   410 "The requested model is deprecated and no longer supported"
+      // Checked against the Hub's own provider mapping on 2026-09-15: SD3
+      // Medium is the text-to-image model hf-inference still serves live.
+      //
+      // It is gated (`gated: auto`), so a token that has not accepted the
+      // licence on the model page gets a 403 rather than a picture. That is a
+      // one-off click, and the alternative -- shipping a default that is
+      // deprecated -- is a provider that cannot draw at all.
+      defaultModel: 'stabilityai/stable-diffusion-3-medium-diffusers',
     },
   },
   mistral: {
@@ -1705,6 +1714,27 @@ function imageCandidateFor(id, options) {
   if (!model) {
     return { error: declared.label + ' has no image model named — set ' + (store.modelEnv || declared.envVar) + '.' };
   }
+  // A key restricted to free models cannot draw here, and asking anyway costs a
+  // round trip to be told so. OpenRouter's Image API has no free tier at all --
+  // the answer is
+  //   402 "Insufficient credits. This account never purchased credits."
+  // -- and that is a fact about the account, not this request, so every
+  // subsequent attempt gets the same. The free-only switch already means "this
+  // key buys nothing"; it now means that for pictures too.
+  //
+  // OPENROUTER_FREE_ONLY=0 is the way back in for a key with credits on it: the
+  // same variable that opens the paid chat catalogue opens drawing.
+  //
+  // Read from the environment rather than from `declared.freeOnly`, which is
+  // evaluated once when this module loads. Whether a provider may draw is a
+  // per-request decision, the same as its key and base URL are.
+  const freeOnlyVar = providerEnvName(declared.envVar, '_FREE_ONLY');
+  if ('freeOnly' in declared && process.env[freeOnlyVar] !== '0') {
+    return {
+      error: declared.label + ' draws only with purchased credits, and this key is '
+        + 'limited to free models. Add credits and set ' + freeOnlyVar + '=0 to draw with it.',
+    };
+  }
   return { id, store, model, provider };
 }
 
@@ -1795,8 +1825,14 @@ function imageUnavailableMessage() {
   for (const id of IMAGE_PROVIDER_ORDER) {
     const provider = LLM_PROVIDERS[id];
     if (!provider || !provider.image) continue;
+    // The same answer imageCandidateFor gives, rather than a second guess at it.
+    // Guessing produced "openrouter (set OPENROUTER_IMAGE_MODEL)" for a provider
+    // that has a default model and was really being held back by its key being
+    // limited to free models -- advice that could not have worked.
+    const candidate = imageCandidateFor(id, {});
+    if (!candidate.error) continue;
     if (!providerIsConfigured(provider)) rows.push(id + ' (add ' + provider.envVar + ')');
-    else rows.push(id + ' (set ' + provider.image.modelEnv + ')');
+    else rows.push(id + ' (' + candidate.error + ')');
   }
   return (
     'No image provider is ready. ' +
@@ -1994,6 +2030,18 @@ async function drawImage(args) {
   if (options.quality) extra.quality = options.quality;
   if (options.n > 1) extra.n = options.n;
   if (sizeForService.preferenceSize) extra.size = sizeForService.preferenceSize;
+  // The NVCF shape asks for a shape as `aspect_ratio` rather than a `size`, so
+  // it never travelled in `extra` -- and that put it outside the one mechanism
+  // that can take a preference back off a request. NVIDIA answered
+  //   422 {"type":"extra_forbidden","loc":["body","aspect_ratio"]}
+  // and the retry re-sent the field that caused it, every time, for every
+  // model. It is a preference like the others and is now treated as one.
+  const aspect = aspectForSize(requestedSize);
+  // Whether this request carries anything droppable at all, in whichever shape
+  // it ends up being sent. `extra` alone was the wrong test: the NVCF attempt
+  // passes withExtra=false, so for that shape the aspect is the only preference
+  // there has ever been.
+  const sentPreference = Object.keys(extra).length > 0 || !!aspect;
 
   const postJson = (url, body, withExtra) => fetch(url, {
     method: 'POST',
@@ -2034,8 +2082,7 @@ async function drawImage(args) {
         (withExtra) => {
           // The hosted FLUX models: {prompt} in, {artifacts:[{base64}]} out.
           const body = { prompt, mode: 'base' };
-          const aspect = aspectForSize(requestedSize);
-          if (aspect) body.aspect_ratio = aspect;
+          if (withExtra && aspect) body.aspect_ratio = aspect;
           if (withExtra && extra.n > 1) body.n = extra.n;
           return postJson(base + '/genai/' + useModel, body, false);
         },
@@ -2084,12 +2131,17 @@ async function drawImage(args) {
       }
     };
     await send(true);
-    if (Object.keys(extra).length && response && response.status === 400) {
+    // 422 alongside 400: a FastAPI-shaped service -- which NVIDIA's is, hence
+    // the pydantic `extra_forbidden` in its body -- reports an unknown field as
+    // Unprocessable Entity rather than Bad Request. Only 400 was checked, so the
+    // one service that most needed this retry never got it.
+    if (sentPreference && response && (response.status === 400 || response.status === 422)) {
       // A 400 is never billed, which is what makes this second attempt free. The
       // first answer is the one kept when the second fails too: dropping a
       // preference answers "was it the preference?", and when the answer is no, the
       // sentence worth reporting is the refusal the service actually wrote.
-      console.warn('image ' + kind + ': ' + provider.label + ' refused a request carrying ' + Object.keys(extra).join(', ') + ' — retrying without them');
+      const carried = [...Object.keys(extra), ...(aspect ? ['aspect_ratio'] : [])].join(', ');
+      console.warn('image ' + kind + ': ' + provider.label + ' refused a request carrying ' + carried + ' — retrying without them');
       const refusedWithPreferences = response;
       await send(false);
       if (!response || response.status >= 400) {
