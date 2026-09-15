@@ -23,7 +23,7 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
-const NAMES = ['imageAttachmentIsPending', 'imageSizeIsConditional', 'imageWorkIsPossible', 'updateImageSizeHint'];
+const NAMES = ['imageAttachmentIsPending', 'imageSizeIsConditional', 'storedImageUrl', 'imageWorkIsPossible', 'updateImageSizeHint'];
 
 function stubHint() {
   return {
@@ -47,6 +47,10 @@ function harness({ text = '', imageMode = false, attachment = null, drawn = fals
     imageSizeFromPrompt,
     imageSizeBody,
     lastImageInMessages,
+    // A picture kept in the index is named by an id, and storedImageUrl is the
+    // one place that turns either shape into something showable. The stub entry
+    // below carries a url, so the map stays empty here.
+    imageUrlById: new Map(),
     messages: drawn ? [{ role: 'assistant', images: [{ url: 'data:image/png;base64,PIC', prompt: 'a fox' }] }] : [],
     imageMode,
     pendingAttachment: attachment,

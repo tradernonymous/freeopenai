@@ -743,7 +743,15 @@ async function main() {
       await storeGeneratedImages(entry, [png], 'smoke');
       switchView('gallery');
       const image = document.querySelector('#galleryGrid img');
-      const gallery = { stored: !!(entry.images && entry.images.length), jpeg: !!(entry.images && entry.images[0] && entry.images[0].url.startsWith('data:image/jpeg')), rendered: !!image };
+      const gallery = {
+        stored: !!(entry.images && entry.images.length),
+        // The bytes went to the picture index and the entry is a name for them
+        // rather than a copy of them, which is what keeps the picture the size
+        // it was drawn.
+        kept: !!(entry.images && entry.images[0] && entry.images[0].id),
+        inline: !!(entry.images && entry.images[0] && entry.images[0].url),
+        rendered: !!image,
+      };
 
       // A real sendMessage() on a stubbed model call: the whole body runs, so
       // a use-before-declaration or a broken handler kills the probe instead
@@ -791,7 +799,9 @@ async function main() {
       throw new Error('the composer did not complete a send: ' + JSON.stringify(behavior.send));
     }
     if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
-    if (!behavior.gallery.stored || !behavior.gallery.jpeg || !behavior.gallery.rendered) throw new Error('generated image did not survive into the Gallery');
+    if (!behavior.gallery.stored || !behavior.gallery.kept || behavior.gallery.inline || !behavior.gallery.rendered) {
+      throw new Error('generated image did not survive into the Gallery as stored bytes: ' + JSON.stringify(behavior.gallery));
+    }
 
     // The keyboard has to be able to see where it is. A real Tab, dispatched
     // through the browser rather than a scripted .focus(), because :focus-visible
@@ -948,6 +958,55 @@ async function main() {
     if (modes.offered !== (writable ? writeNames.length : 0) || modes.blocked !== (writable ? 0 : writeNames.length)) {
       throw new Error('the mode surface and the refusal disagree: ' + JSON.stringify(modes));
     }
+
+    // A picture survives a reload at the size it was drawn.
+    //
+    // This is the join the whole thing turns on: a conversation names its
+    // pictures by id rather than carrying their bytes, so nothing but the index
+    // can put one back -- and a 1536x864 drawing returning as a 1024px re-encode
+    // is the bug that started this. Measured from the decoded <img> after a real
+    // reload, because that is the only place the second half of it can be seen.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: url + '-image-store' });
+    await waitFor(() => evaluate('typeof storeGeneratedImages === "function" && !!document.getElementById("chatInput")'), 'picture index page');
+    await sleep(300);
+    const storedPicture = await evaluate(`(async () => {
+      chatMessages.innerHTML = '';
+      messages = [];
+      const canvas = document.createElement('canvas');
+      canvas.width = 1536; canvas.height = 864;
+      canvas.getContext('2d').fillRect(0, 0, 1536, 864);
+      const entry = { type: 'bot', content: '[Generated image: a 1536x864 picture]' };
+      messages.push(entry);
+      await storeGeneratedImages(entry, [canvas.toDataURL('image/png')], 'a 1536x864 picture');
+      persistMessages();
+      const saved = (entry.images && entry.images[0]) ? entry.images[0] : {};
+      const raw = localStorage.getItem('puterChatConversations') || '';
+      return { kept: !!saved.id, bytes: saved.bytes || 0, carriedBytes: raw.indexOf('data:image') !== -1 };
+    })()`);
+    console.log('picture index: ' + JSON.stringify(storedPicture));
+    if (!storedPicture.kept) throw new Error('the picture was not kept in the index: ' + JSON.stringify(storedPicture));
+    if (storedPicture.carriedBytes) throw new Error('the picture is still being carried inside localStorage: ' + JSON.stringify(storedPicture));
+    if (storedPicture.bytes < 1) throw new Error('nothing was kept for the picture to come back as: ' + JSON.stringify(storedPicture));
+
+    await send('Page.navigate', { url: url + '-image-store' });
+    await waitFor(() => evaluate('!!document.querySelector("#chatMessages .message-image")'), 'restored picture');
+    await sleep(200);
+    const restoredPicture = await evaluate(`(async () => {
+      const img = document.querySelector('#chatMessages .message-image');
+      if (!img) return { found: false };
+      if (!img.complete) await new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+        setTimeout(resolve, 2000);
+      });
+      return { found: true, w: img.naturalWidth, h: img.naturalHeight, tools: !!document.querySelector('#chatMessages .message-actions') };
+    })()`);
+    console.log('picture restored: ' + JSON.stringify(restoredPicture));
+    if (!restoredPicture.found || restoredPicture.w !== 1536 || restoredPicture.h !== 864) {
+      throw new Error('the picture came back at the wrong size: ' + JSON.stringify(restoredPicture));
+    }
+    if (!restoredPicture.tools) throw new Error('the restored picture has no Download beside it: ' + JSON.stringify(restoredPicture));
 
     if (errors.length) throw new Error('browser reported errors: ' + errors.join('; '));
     console.log('browser smoke: PASS (' + version.Browser + ')');

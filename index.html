@@ -9,6 +9,7 @@
     <title>FreeAi4U | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
     <script src="chatlib.js"></script>
+    <script src="image-store.js"></script>
     <script src="provider-routing.js"></script>
     <script src="transcript-controller.js"></script>
     <script src="attachment-helpers.js"></script>
@@ -3200,6 +3201,14 @@
         // Set when GitHub handed back an account that was already connected.
         let githubSameAccountNotice = '';
         let messages = [];
+        // Stored picture id -> a URL this page can show, for the life of the
+        // page. A conversation entry keeps only the id (see image-store.js), so
+        // something has to hold the readable form between the index being read
+        // and the picture being drawn -- and this is it. Declared here rather
+        // than beside its users on purpose: startup reads history before the
+        // bottom of this script has run, and a `let` down there would be in its
+        // temporal dead zone exactly then.
+        let imageUrlById = new Map();
         let isTyping = false;
         let usageCount = 0;
         let pendingAttachment = null;
@@ -6159,7 +6168,7 @@
         }
 
         function imageSizeIsConditional(size) {
-            return !!(size && size.words) && !pendingAttachment && !!lastImageInMessages(messages);
+            return !!(size && size.words) && !pendingAttachment && !!lastImageInMessages(messages, storedImageUrl);
         }
 
         function imageWorkIsPossible(text) {
@@ -6402,7 +6411,7 @@
             // editing is impossible: no image service hands a model a picture the
             // client cannot name, and re-attaching your own output by hand is not
             // something anyone does.
-            const previousImage = lastImageInMessages(messages);
+            const previousImage = lastImageInMessages(messages, storedImageUrl);
             if (imageMode) toggleImageMode();
 
             addMessage('user', raw);
@@ -7318,11 +7327,17 @@
         // picture (it was still in memory) while the gallery, which reads saved
         // history, had nothing but the "[Generated image: ...]" text.
         //
-        // Storing is deliberately off the critical path: re-encoding a 1024px
-        // JPEG is hundreds of milliseconds of canvas work, and the reader is
-        // already looking at the picture. The message entry exists first, so a
-        // failed encode costs the picture in history -- which the gallery
-        // already knows how to explain -- and never the message itself.
+        // The bytes now go to the picture index (see image-store.js) at the size
+        // they were drawn, and the conversation carries an id. That is what makes
+        // a reopened chat show the picture that was asked for rather than a
+        // 1024px re-encode of it -- which is what the Download menu was being
+        // handed, and why it reported "Save at 1024 x 576" back to somebody who
+        // had asked for 1536x864.
+        //
+        // Storing is deliberately off the critical path: the reader is already
+        // looking at the picture. The message entry exists first, so a failure to
+        // store costs the picture in history -- which the gallery already knows
+        // how to explain -- and never the message itself.
         async function storeGeneratedImages(entry, urls, promptText) {
             const wanted = urls.filter((u) => storedImagePlan(u) !== 'skip');
             if (!wanted.length) return;
@@ -7333,13 +7348,89 @@
                     stored.push({ url, prompt: promptText });
                     continue;
                 }
+                const kept = await keepFullSizeImage(url, promptText);
+                if (kept) { stored.push(kept); continue; }
+                // No index, or it refused the write: the compact inline copy is
+                // still better than losing the picture, and the size it was
+                // saved at is stated on screen before anything is downloaded.
                 const compact = await compactImageForStorage(url);
-                if (compact) stored.push({ url: compact, prompt: promptText });
+                if (compact) stored.push({ url: compact, prompt: promptText, compact: true });
             }
             if (!stored.length) return;
             entry.images = stored;
             persistMessages();
             renderGallery();
+        }
+
+        // The picture's own bytes, at the size it was drawn, as an entry that
+        // names them. Null when there is no index to put them in or the write
+        // failed, which is what sends the caller to the compact path.
+        //
+        // The URL is deliberately *not* kept on the entry: an entry with an id
+        // has to stay a few dozen bytes, or the thing this replaced comes back on
+        // the next persist. It goes in imageUrlById instead, so a chat switched
+        // away from and back within this session draws from memory.
+        async function keepFullSizeImage(url, promptText) {
+            if (!imageStoreAvailable()) return null;
+            try {
+                const res = await fetch(url);
+                if (!res.ok) return null;
+                const blob = await res.blob();
+                if (!blob || !blob.size) return null;
+                const id = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+                if (!(await putImageBytes(id, blob))) return null;
+                imageUrlById.set(id, url);
+                return { id, prompt: promptText, bytes: blob.size, type: blob.type || 'image/png' };
+            } catch {
+                return null;
+            }
+        }
+
+        // What a stored entry can be shown with: its own URL when it has one (a
+        // link from somewhere else, or an inline copy this page made), and the
+        // index otherwise.
+        function storedImageUrl(im) {
+            if (!im) return '';
+            if (typeof im.url === 'string' && im.url) return im.url;
+            return im.id ? imageUrlById.get(String(im.id)) || '' : '';
+        }
+
+        // Turn every stored id into something the DOM can show, before anything
+        // draws one. Every conversation, not just the open one, because the
+        // Gallery shows them all and each is one indexed read either way.
+        //
+        // A picture whose bytes are gone keeps no URL, which is the same state
+        // the transcript already has a card for, so nothing new has to explain
+        // it.
+        async function hydrateStoredImages() {
+            const pending = new Map();
+            const keep = new Set();
+            conversations.forEach((c) => (c.messages || []).forEach((m) => (m.images || []).forEach((im) => {
+                if (!im || !im.id) return;
+                const key = String(im.id);
+                keep.add(key);
+                // Keyed by id, not listed: the same picture can be on screen in
+                // two chats, and it is one read and one URL either way.
+                if (!im.url && !pending.has(key)) pending.set(key, im);
+            })));
+            if (!pending.size && !keep.size) return;
+            await Promise.all([...pending.entries()].map(async ([key, im]) => {
+                if (imageUrlById.has(key)) return;
+                const blob = await readImageBytes(key);
+                if (!blob) return;
+                // An object URL over a data: URL on purpose: this walks every
+                // picture in every chat, and a data: URL is the whole image as a
+                // string in the heap. The browser keeps these alive for the life
+                // of the page and frees them with it.
+                try {
+                    imageUrlById.set(key, URL.createObjectURL(blob));
+                } catch { /* no URL for it: it reads as unavailable, which is true of it here */ }
+                if (im.bytes === undefined && blob.size) im.bytes = blob.size;
+            }));
+            // Bytes nothing names any more, trimmed out of history by the picture
+            // cap or by a full-quota strip. pruneImageBytes refuses an empty keep
+            // set, so a history that failed to read cannot empty the index.
+            await pruneImageBytes(keep);
         }
 
         // Downscale to a size worth storing, then walk the quality down until the
@@ -8919,7 +9010,12 @@
                 // reappeared nowhere, and there was no chip left to turn off.
                 syncActiveSkillsFromConversation();
                 syncDismissedSuggestionsFromConversation();
-                renderSavedMessages();
+                // Pictures are bytes in the index now, and reading them is
+                // asynchronous. The transcript is drawn once they are in hand,
+                // because the alternative is a chat that opens saying "image
+                // unavailable" about a picture that is right there. The empty
+                // transcript lasts one indexed read.
+                hydrateStoredImages().then(() => renderSavedMessages());
             } else {
                 activeConversationId = newConversationId();
                 syncActiveSkillsFromConversation();
@@ -9211,11 +9307,23 @@
             const el = document.createElement('div');
             el.className = 'message bot';
             el.dataset.rawContent = msg.content || `[Generated image: ${promptText}]`;
+            let drawn = 0;
             msg.images.forEach((im) => {
-                if (im && im.url) el.appendChild(buildImageWrap(im.url, im.prompt || promptText));
+                const url = storedImageUrl(im);
+                if (!url) return;
+                drawn += 1;
+                el.appendChild(buildImageWrap(url, im.prompt || promptText));
             });
+            // A picture whose bytes are gone reads the same as one that was never
+            // kept: the text is still here, the file is not.
+            if (!drawn) {
+                const card = document.createElement('div');
+                card.className = 'gallery-expired';
+                card.textContent = 'Image unavailable — only "' + promptText + '" was kept, not the file. Generate it again to see it here.';
+                el.appendChild(card);
+            }
             el.appendChild(buildMessageActions(promptText, true));
-            appendImageTools(el, (msg.images[0] && msg.images[0].url) || '', promptText);
+            appendImageTools(el, storedImageUrl(msg.images[0]), promptText);
             chatMessages.appendChild(el);
             messages.push({ type: 'bot', content: el.dataset.rawContent, images: msg.images, timestamp: msg.timestamp || Date.now() });
         }
@@ -9239,9 +9347,10 @@
             all.forEach((c) => {
                 (c.messages || []).forEach((m) => {
                     (m.images || []).forEach((im) => {
-                        if (im && im.url && !seen.has(im.url)) {
-                            seen.add(im.url);
-                            out.push({ url: im.url, prompt: im.prompt || '', convo: c.title || 'Chat' });
+                        const url = storedImageUrl(im);
+                        if (url && !seen.has(url)) {
+                            seen.add(url);
+                            out.push({ url, prompt: (im && im.prompt) || '', convo: c.title || 'Chat' });
                         }
                     });
                     if (m.type === 'bot' && typeof m.content === 'string') {

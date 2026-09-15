@@ -14,6 +14,7 @@ module.exports = [
         console: 'readonly',
         __dirname: 'readonly',
         Buffer: 'readonly',
+        Blob: 'readonly',
         URL: 'readonly',
         URLSearchParams: 'readonly',
         fetch: 'readonly',
@@ -37,6 +38,16 @@ module.exports = [
         window: 'readonly',
         document: 'readonly',
         requestAnimationFrame: 'readonly',
+      },
+    },
+  },
+  {
+    // Also loaded by a <script> tag: the picture index is the browser's own
+    // storage, which node has no form of (the tests pass a stand-in instead).
+    files: ['image-store.js'],
+    languageOptions: {
+      globals: {
+        indexedDB: 'readonly',
       },
     },
   },

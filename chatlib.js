@@ -1145,16 +1145,22 @@ function resolveImageAction(fallback, plan, options = {}) {
 // edit -- without it, multi-turn editing is impossible: no API hands an image
 // model a picture the client cannot name, and re-attaching your own output by
 // hand is not a thing anyone does.
-function lastImageInMessages(messages) {
+// `urlOf` says how to get a showable URL out of one stored entry. It exists
+// because an entry no longer always has one: a picture kept in the index is
+// named by an id, and the page holds the readable form (see image-store.js).
+// The default reads the entry's own url, which is what a link or an inline copy
+// has, so callers that only ever see those need not pass anything.
+function lastImageInMessages(messages, urlOf) {
   const list = Array.isArray(messages) ? messages : [];
+  const read = typeof urlOf === 'function' ? urlOf : (im) => (typeof im.url === 'string' ? im.url : '');
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const entry = list[i];
     const images = entry && Array.isArray(entry.images) ? entry.images : [];
     for (let j = images.length - 1; j >= 0; j -= 1) {
       const image = images[j];
-      if (image && typeof image.url === 'string' && image.url) {
-        return { url: image.url, prompt: String(image.prompt || '') };
-      }
+      if (!image) continue;
+      const url = read(image);
+      if (url) return { url, prompt: String(image.prompt || '') };
     }
   }
   return null;
