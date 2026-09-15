@@ -1051,6 +1051,8 @@ const LLM_PROVIDERS = {
       baseUrlEnv: 'NVIDIA_IMAGES_BASE_URL',
       modelEnv: 'NVIDIA_IMAGE_MODEL',
       defaultModel: 'black-forest-labs/flux.1-schnell',
+      // Run-by-name, like Workers AI: /genai/<model> serves image models only.
+      ownModel: true,
     },
   },
   // Hugging Face Inference Providers: one OpenAI-compatible router
@@ -1266,6 +1268,31 @@ const LLM_PROVIDERS = {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     envVar: 'GEMINI_API_KEY',
     modelIdPrefix: 'models/',
+    // Gemini draws, but not where this app's other providers do. Its OpenAI shim
+    // has no /images/generations at all, so the derived store every other chat
+    // provider gets was a 404 wearing Gemini's name: a Google key could chat and
+    // never make a picture, and the failure arrived as "no image provider is
+    // ready" -- naming a key the operator had already set. The native route is
+    // /interactions with the prompt as input and the picture's shape asked for
+    // through response_format.
+    image: {
+      shape: 'gemini-image',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      baseUrlEnv: 'GEMINI_IMAGES_BASE_URL',
+      modelEnv: 'GEMINI_IMAGE_MODEL',
+      // The generalist Nano Banana: the cheapest one is documented as unfit for
+      // the multi-turn editing this app is built around.
+      defaultModel: 'gemini-3.1-flash-image',
+      // A model from the chat catalogue cannot draw here: that id names a text
+      // model on a text endpoint, where an image request comes back as a 200
+      // with no picture in it -- the one failure this route cannot tell apart
+      // from a service that simply cannot draw. See ownModel in
+      // imageCandidateFor.
+      ownModel: true,
+      // The source picture rides as a second input, which is how a Google edit
+      // is asked for -- and how it stays one turn of the same conversation.
+      edit: 'parts',
+    },
   },
   // Cloudflare Workers AI. The reason it is here is images: its free tier
   // includes text-to-image and resets daily, which after NVIDIA's credits run
@@ -1303,7 +1330,19 @@ const LLM_PROVIDERS = {
       baseUrlEnv: 'CLOUDFLARE_IMAGES_BASE_URL',
       modelEnv: 'CLOUDFLARE_IMAGE_MODEL',
       requiresEnv: 'CLOUDFLARE_ACCOUNT_ID',
+      // The cheapest model in the catalogue, which on a free allocation is the
+      // whole argument: 4.80 neurons per 512x512 tile against 530-1363 for the
+      // Leonardo and FLUX.2 options, and 10,000 neurons a day free. FLUX.2
+      // [klein] is the upgrade if quality matters more than volume.
       defaultModel: '@cf/black-forest-labs/flux-1-schnell',
+      // Run-by-name: the path names a model of the image catalogue, so the
+      // conversation's chat model has no meaning here. Sending it drew a text
+      // model through the image endpoint, which answers 200 and no picture --
+      // a failure this route reports as "the service did not do the job".
+      ownModel: true,
+      // Workers AI takes the pixel pair itself, so a size is never a preference
+      // it could refuse.
+      exactSize: true,
     },
   },
   ollama: {
@@ -1555,6 +1594,50 @@ const LLM_PROVIDERS = {
     kind: 'search',
     note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
   },
+  // Pollinations, which is the answer to "every key this deployment has is a
+  // free key that cannot draw". Its image endpoint is one GET whose path is the
+  // prompt and whose answer is the picture itself -- no signup, no key, no
+  // card, and a width/height it honours exactly. Puter has always drawn for
+  // free, but only in the browser and only for a visitor signed in to it; this
+  // is the same offer from the server, so a deployment with no keys at all
+  // draws too.
+  //
+  // Last in the image order, deliberately. It is a shared community service
+  // with no SLA, and the anonymous tier watermarks what it makes -- which is a
+  // fair price for free and a poor substitute for a key the operator has
+  // already configured.
+  pollinations: {
+    label: 'Pollinations (free)',
+    baseUrl: 'https://image.pollinations.ai',
+    // Optional: a free account key removes the watermark.
+    envVar: 'POLLINATIONS_TOKEN',
+    // POLLINATIONS_FREE=0 refuses it, for a deployment that will not send a
+    // prompt to a public service however free it is.
+    keyless: true,
+    // Nothing to chat on and no catalogue to read, so it is neither a chat
+    // provider nor a discovery candidate.
+    kind: 'image',
+    catalogue: false,
+    models: [],
+    note: 'Pollinations is a free community image service that takes no account. Set POLLINATIONS_TOKEN (free, from pollinations.ai) to drop the watermark.',
+    image: {
+      shape: 'pollinations',
+      baseUrlEnv: 'POLLINATIONS_IMAGES_BASE_URL',
+      modelEnv: 'POLLINATIONS_IMAGE_MODEL',
+      defaultModel: 'flux',
+      // Its own idea of a request is a query string, so the size it is handed
+      // is the size it draws.
+      exactSize: true,
+      edit: 'none',
+      // The anonymous tier stamps its pictures, and `nologo` is documented as
+      // needing an account -- so a token is what removes it, and until then
+      // every picture drawn here says why it carries a mark. Every other drawer
+      // in the order is unwatermarked, which is what makes this the floor rather
+      // than the plan.
+      caveat: (provider) => (provider.key ? ''
+        : 'drawn on Pollinations’ anonymous tier, which watermark its pictures — a free account token for it, or any other provider in the order, draws without one'),
+    },
+  },
 };
 
 // Companion variable names derive from the key variable: NARA_API_KEY pairs
@@ -1569,6 +1652,12 @@ function providerEnvName(envVar, suffix) {
 }
 
 function providerIsConfigured(provider) {
+  // A provider that takes no account at all is configured by existing: there is
+  // no variable that could be missing, which is what makes it the one drawing
+  // service a deployment with no keys of any kind still has. Refusing it is a
+  // single variable, because a prompt going to a public service is the
+  // operator's call even when it is free.
+  if (provider.keyless) return process.env[providerEnvName(provider.envVar, '_FREE')] !== '0';
   if (process.env[provider.envVar]) return true;
   // Key-optional providers (local servers) opt in with an explicit base URL.
   return provider.needsKey === false && !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
@@ -1676,7 +1765,12 @@ function llmHealth(req, res) {
 // Which providers the user can actually pick. A provider with no key stays out
 // of the list rather than appearing and failing on first use.
 function llmProviders(req, res) {
-  sendJson(res, 200, Object.entries(LLM_PROVIDERS).map(([id, provider]) => ({
+  sendJson(res, 200, Object.entries(LLM_PROVIDERS)
+    // A service that only draws is not a chat provider, and listing it as one
+    // would put a row in the model picker that can only ever answer "this
+    // service has no chat API at all". It appears in the image report instead.
+    .filter(([, provider]) => provider.kind !== 'image')
+    .map(([id, provider]) => ({
     id,
     label: provider.label,
     configured: providerIsConfigured(provider),
@@ -2069,6 +2163,11 @@ async function discoverImageModel(req, id) {
 function imageStoreFor(id) {
   const declared = LLM_PROVIDERS[id];
   if (!declared) return null;
+  // A keyless service the operator has refused has no store, which is what
+  // takes it out of the order, out of the report and out of the advice at once.
+  // Anything less would leave a deployment that has refused it being told to
+  // configure the thing it refused.
+  if (declared.keyless && !providerIsConfigured(declared)) return null;
   // A model read from the provider's own catalogue rides on the store, so every
   // reader of "which model would this service draw with" -- the order, the
   // report, the draw -- answers with the same one.
@@ -2102,6 +2201,14 @@ function imageCandidateFor(id, options) {
   const declared = LLM_PROVIDERS[id];
   const store = imageStoreFor(id);
   if (!store) {
+    // Naming a service that needs no account and has been refused is answered
+    // with the variable that refused it, not with "set its key".
+    if (declared && declared.keyless) {
+      return {
+        error: declared.label + ' is turned off on this deployment — unset '
+          + providerEnvName(declared.envVar, '_FREE') + ' (or set it to 1) to use it.',
+      };
+    }
     // A chat provider reaches here only when it has no key: one that is
     // configured has a store now, whether or not it yet has a model, so the
     // missing thing is what it would be drawn with at all.
@@ -2131,7 +2238,14 @@ function imageCandidateFor(id, options) {
   if (!own) {
     return { error: declared.label + ' has no image model named — set ' + (store.modelEnv || declared.envVar) + '.' };
   }
-  const model = imageModelFor(store, options && options.explicitModel);
+  //
+  // Except on a store whose pictures are run by name on an API that serves
+  // nothing else: there the conversation's model is not a weaker choice, it is a
+  // request for a text model through an image endpoint, which answers 200 with
+  // prose in it -- a failure this route reports as the service not doing the
+  // job. The service's own model is the only one that means anything, and an
+  // operator can still pin one with <PROVIDER>_IMAGE_MODEL.
+  const model = imageModelFor(store, store.ownModel ? '' : (options && options.explicitModel));
   // A key restricted to free models cannot draw here, and asking anyway costs a
   // round trip to be told so. OpenRouter's Image API has no free tier at all --
   // the answer is
@@ -2423,6 +2537,12 @@ function nearestDeclaredSize(declared, parts) {
 function resolveImageSize(store, requested, label) {
   const want = String(requested || '').trim();
   if (!want) return { declaredSize: '', preferenceSize: '' };
+  // A store that spells the size in its own body or query -- Workers AI's
+  // width/height pair, Pollinations' query string -- draws whatever it is
+  // handed, so the size is not a preference there: sending it twice, or
+  // offering to drop it after a 400, would be answering a question the
+  // service was never asked.
+  if (store.exactSize) return { declaredSize: want, preferenceSize: '' };
   const declared = Array.isArray(store.sizes) && store.sizes.length ? store.sizes : null;
   if (!declared) return { declaredSize: '', preferenceSize: want };
   const exact = declared.find((entry) => entry.value === want);
@@ -2555,6 +2675,53 @@ async function drawImage(args) {
         openaiAttempt('/images/generations'),
       ];
     }
+    if (store.shape === 'gemini-image') {
+      // Gemini's own image API, which is not the OpenAI shim: a Google key does
+      // not reach /images/generations at all. One call to /interactions with the
+      // prompt as input -- and, for an edit, the source picture as a second
+      // input, which is how Gemini is asked to change an image rather than
+      // describe one. The shape the caller asked for travels in response_format,
+      // whose aspect_ratio is the documented field; on a 400 it is dropped like
+      // any other preference and the picture is drawn at the model's default.
+      const geminiModel = (useModel || '').replace(/^models\//, '');
+      return [(withExtra) => {
+        const input = [{ type: 'text', text: prompt }];
+        if (kind === 'edits' && image) {
+          input.push({ type: 'image', mime_type: image.contentType, data: image.bytes.toString('base64') });
+        }
+        const body = { model: geminiModel, input };
+        if (withExtra && aspect) body.response_format = { type: 'image', aspect_ratio: aspect };
+        return fetch(base + '/interactions', {
+          method: 'POST',
+          signal,
+          headers: {
+            ...auth,
+            // The native API reads its key from here, not from Bearer.
+            ...(provider.key ? { 'x-goog-api-key': provider.key } : {}),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+      }];
+    }
+    if (store.shape === 'pollinations') {
+      // The whole request is its URL. 404 for an edit is the honest answer: this
+      // endpoint generates and does nothing else, so `edit: 'none'` above is
+      // what stops a source picture being dropped silently.
+      return [(withExtra) => {
+        const query = new URLSearchParams();
+        const parts = sizeParts(declaredSize || requestedSize);
+        if (parts) { query.set('width', String(parts.w)); query.set('height', String(parts.h)); }
+        if (withExtra && useModel) query.set('model', useModel);
+        if (withExtra && provider.key) query.set('nologo', 'true');
+        const tail = query.toString();
+        return fetch(base + '/prompt/' + encodeURIComponent(prompt) + (tail ? '?' + tail : ''), {
+          method: 'GET',
+          signal,
+          headers: auth,
+        });
+      }];
+    }
     if (store.shape === 'cloudflare-ai') {
       // Workers AI runs a model by name in the path and answers
       // {result:{image:"<base64>"}}. `steps` and `seed` are the only extras
@@ -2638,7 +2805,15 @@ async function drawImage(args) {
   // Bytes or JSON, whichever this service answers with: hf-inference returns the
   // picture itself, the others return a document that carries it.
   const mediaType = String(response.headers.get('content-type') || '').split(';')[0].trim();
-  const notes = sizeForService.note ? [sizeForService.note] : [];
+  // A service that stamps what it makes says so on every picture, and it says it
+  // where the picture is: the alternative is an image the user only notices is
+  // watermarked after they have used it. The caveat is allowed to depend on the
+  // request -- a free tier that stops watermarking once a token is set is one
+  // sentence with a condition in it, not two stores.
+  const caveat = typeof store.caveat === 'function' ? store.caveat(provider) : store.caveat;
+  const notes = [];
+  if (sizeForService.note) notes.push(sizeForService.note);
+  if (caveat) notes.push(caveat);
   if (/^image\//i.test(mediaType)) {
     const bytes = Buffer.from(await response.arrayBuffer());
     return {
@@ -2657,12 +2832,49 @@ async function drawImage(args) {
     if (cf) {
       return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
     }
+    // Gemini: an interaction whose picture is a base64 block somewhere inside
+    // it. Which field holds it depends on how many images the answer has --
+    // `output_image` names the last one, an interleaved answer spreads them
+    // through its steps -- so the block is found rather than assumed.
+    const gemini = lastImageBlock(payload);
+    if (gemini) {
+      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: gemini.data, media_type: gemini.mime || 'image/png' }] } };
+    }
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
       return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
     }
   }
   return { status: response.status, model: usedModel, notes, data: payload };
+}
+
+// The last picture block in a document, wherever the answer put it. Gemini's
+// own field for it is not the same in every response shape, and an answer that
+// interleaved text and images carries several, so this looks for the shape of a
+// picture rather than a name. MIME can be camel or snake case; a block with no
+// MIME at all is only accepted under a key that says image, so a stray base64
+// string somewhere else in the payload is not mistaken for the drawing.
+function lastImageBlock(value, found) {
+  let last = found;
+  if (!value || typeof value !== 'object') return last;
+  for (const [key, child] of Object.entries(value)) {
+    if (!child || typeof child !== 'object') continue;
+    const data = typeof child.data === 'string' ? child.data : '';
+    const mime = String(child.mime_type || child.mimeType || '');
+    if (data && (/^image\//i.test(mime) || (!mime && /image/i.test(key)))) last = { data, mime };
+    last = lastImageBlock(child, last);
+  }
+  return last;
+}
+
+// Whether a service can be handed the picture that is being edited. The three
+// modes are the three ways one takes it: file parts, a reference URL, or an
+// input alongside the words. A service with none of them is not a weaker choice
+// for an edit, it is a different operation -- it would draw a new picture from
+// the words alone and hand it back as though the one on screen had been
+// changed, which is the one substitution worth refusing outright.
+function storeCanEdit(store) {
+  return !!store && (store.edit === 'multipart' || store.edit === 'references' || store.edit === 'parts');
 }
 
 // The largest source picture an edit will carry, in bytes. The browser already
@@ -2806,6 +3018,14 @@ async function llmImage(req, res, kind) {
       }
       const notes = [];
       for (const candidate of order.candidates) {
+        // An edit needs a service that can take the picture being edited. One
+        // that generates and nothing else is stepped past with the reason said,
+        // rather than asked to draw something new and have it presented as the
+        // change that was requested.
+        if (kind === 'edits' && !storeCanEdit(candidate.store)) {
+          failures.push({ label: candidate.provider.label, reason: 'cannot edit, only generate', status: 400 });
+          continue;
+        }
         // A painted mask is a file part or it is nothing. Handing one to a
         // service that takes a reference would edit the whole picture while the
         // user watches a region they drew being ignored, so the mask is dropped

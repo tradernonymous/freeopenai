@@ -27,8 +27,14 @@ const PROVIDER_VARS = [
   // general, so the variables it reads are cleared like every other provider's.
   'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'MISTRAL_MODELS', 'MISTRAL_IMAGE_MODEL', 'MISTRAL_IMAGES_BASE_URL',
   'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
+  // Gemini's own set: its chat key is one thing and its image store another, so
+  // a test that left either behind made the next test's candidate list depend
+  // on it -- which is exactly how the key leaked into a test that had set no
+  // provider at all.
+  'GEMINI_API_KEY', 'GEMINI_IMAGE_MODEL', 'GEMINI_MODELS', 'GEMINI_IMAGES_BASE_URL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
+  'POLLINATIONS_FREE', 'POLLINATIONS_IMAGE_MODEL', 'POLLINATIONS_IMAGES_BASE_URL',
 ];
 
 function clearProviders() {
@@ -43,6 +49,11 @@ function clearProviders() {
   // that gate, so the baseline is a key with credits on it; the gate has a test
   // of its own below.
   process.env.OPENROUTER_FREE_ONLY = '0';
+  // The keyless drawer is configured by existing, so without this every test
+  // that means "nothing is set up" would instead be a live request to a public
+  // service -- and would pass for the wrong reason. The tests that are about it
+  // turn it back on.
+  process.env.POLLINATIONS_FREE = '0';
 }
 
 // A stand-in upstream that records every request and answers with whatever the
@@ -1236,5 +1247,277 @@ test('a speech service is not made into a drawing key by naming one', async () =
     assert.equal(listed.providers.some((p) => p.id === 'deepgram'), false, 'and it is not reported as a way to draw');
   } finally {
     app.close();
+  }
+});
+
+// --- Pollinations, the keyless one ------------------------------------------
+//
+// Puter has always drawn for free, but in the browser and only for a visitor
+// signed in to it: a deployment whose only key belongs to a service that cannot
+// draw had no picture at all. Pollinations is the same offer from the server --
+// one GET whose path is the prompt, no account, and a width/height it honours
+// exactly -- and it is last in the order because it is a public community
+// service, not because it is a worse picture than a key the operator already has.
+
+test('a deployment with no keys at all draws, on the service that needs none', async () => {
+  const up = await upstreamOf((req, res) => {
+    // The whole request is its URL: the size asked for, and the model.
+    assert.equal(req.headers.authorization, undefined, 'no key means no header, not a bare Bearer');
+    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+    res.end(Buffer.from('JPEGBYTES'));
+  });
+  process.env.POLLINATIONS_FREE = '1';
+  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red fox', size: '1024x576' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'pollinations');
+    assert.equal(body.model, 'flux');
+    assert.equal(up.seen[0].url, '/prompt/a%20red%20fox?width=1024&height=576&model=flux',
+      'the size travels in the pixels it was asked for, not as a size field');
+    // Bytes are normalised where every other shape's are, so the browser has one
+    // reader and the image is not re-encoded on the way.
+    assert.equal(body.data[0].b64_json, Buffer.from('JPEGBYTES').toString('base64'));
+    assert.equal(body.data[0].media_type, 'image/jpeg');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('POLLINATIONS_FREE=0 refuses it, and the old answer comes back', async () => {
+  // Sending a prompt to a public service is the operator's call even when it
+  // costs nothing, so refusing it is one variable -- and a deployment that has
+  // refused it is back to the message that names every key that would help.
+  process.env.POLLINATIONS_FREE = '0';
+  process.env.POLLINATIONS_IMAGES_BASE_URL = 'http://127.0.0.1:1';
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /NARA_API_KEY/);
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
+    assert.equal(listed.providers.some((p) => p.id === 'pollinations'), false);
+  } finally {
+    app.close();
+  }
+});
+
+test('the keyless service is asked last: a key that works is never second choice', async () => {
+  const nara = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/nara.png' }] }));
+  const free = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ b64_json: 'FREE' }] }));
+  process.env.NARA_API_KEY = 'n-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image-1';
+  process.env.NARA_IMAGES_BASE_URL = nara.url;
+  process.env.POLLINATIONS_FREE = '1';
+  process.env.POLLINATIONS_IMAGES_BASE_URL = free.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal((await res.json()).provider, 'nara');
+    assert.equal(free.seen.length, 0, 'a configured key draws before the shared free one');
+  } finally {
+    app.close();
+    await new Promise((r) => nara.server.close(r));
+    await new Promise((r) => free.server.close(r));
+  }
+});
+
+test('the keyless service is what a buried failure falls back to', async () => {
+  // The case the whole provider exists for: the configured service is there and
+  // says no. Before this, the draw ended as "no image provider is ready".
+  const broken = await upstreamOf((req, res) => jsonAnswer(res, 403, { error: { message: 'quota' } }));
+  const free = await upstreamOf((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'image/png' });
+    res.end(Buffer.from('PNG'));
+  });
+  process.env.NARA_API_KEY = 'n-key';
+  process.env.NARA_IMAGE_MODEL = 'nara-image-1';
+  process.env.NARA_IMAGES_BASE_URL = broken.url;
+  process.env.POLLINATIONS_FREE = '1';
+  process.env.POLLINATIONS_IMAGES_BASE_URL = free.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'pollinations');
+    assert.equal(free.seen.length, 1);
+  } finally {
+    app.close();
+    await new Promise((r) => broken.server.close(r));
+    await new Promise((r) => free.server.close(r));
+  }
+});
+
+// --- Gemini, on the endpoint that actually draws ----------------------------
+//
+// A Google key could chat on this app and never make a picture. The OpenAI shim
+// it chats through has no /images/generations, so Gemini is the one provider
+// whose images do not live where its chat does, and the store has to say so.
+
+test('Gemini draws on /interactions, not on the chat shim', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(req.url, '/interactions');
+    assert.equal(req.headers['x-goog-api-key'], 'g-key', 'the native API reads its key from here');
+    assert.deepEqual(JSON.parse(raw), {
+      model: 'gemini-3.1-flash-image',
+      input: [{ type: 'text', text: 'a red fox' }],
+    });
+    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
+  });
+  process.env.GEMINI_API_KEY = 'g-key';
+  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red fox' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'gemini');
+    assert.equal(body.data[0].b64_json, 'QUJD');
+    assert.equal(body.data[0].media_type, 'image/png');
+    assert.equal(up.seen.length, 1, 'and no attempt on the shim, which has no image endpoint');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('Gemini is told the shape that was asked for, in its own field', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.deepEqual(JSON.parse(raw).response_format, { type: 'image', aspect_ratio: '16:9' });
+    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
+  });
+  process.env.GEMINI_API_KEY = 'g-key';
+  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', size: '1640x856' });
+    assert.equal(res.status, 200);
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('a Gemini edit hands over the source picture as a second input', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(req.url, '/interactions');
+    assert.deepEqual(JSON.parse(raw).input, [
+      { type: 'text', text: 'make it red' },
+      { type: 'image', mime_type: 'image/png', data: 'QUJD' },
+    ]);
+    jsonAnswer(res, 200, { output_image: { data: 'RURJVA==', mime_type: 'image/png' } });
+  });
+  process.env.GEMINI_API_KEY = 'g-key';
+  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).data[0].b64_json, 'RURJVA==');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+// --- a picture is not asked for by the chat's model --------------------------
+//
+// The conversation's model is a preference everywhere the drawing API takes a
+// model id -- which is what makes "generate an image" follow the model picker.
+// On the services that run a model *by name* it is not a weaker choice but a
+// different request entirely: a text model sent through an image endpoint
+// answers 200 with prose in it, and this route reads a 200 with no picture as
+// the service failing at the job. The chat's id never reaches those endpoints.
+
+test('Workers AI draws with its own model when the conversation is on a chat one', async () => {
+  const up = await upstreamOf((req, res) => {
+    assert.equal(req.url, '/run/@cf/black-forest-labs/flux-1-schnell',
+      'the gpt-oss chat model is not a name on the image endpoint');
+    jsonAnswer(res, 200, { result: { image: 'QUJD' } });
+  });
+  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
+  process.env.CLOUDFLARE_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: 'cloudflare',
+      model: '@cf/openai/gpt-oss-120b',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).model, '@cf/black-forest-labs/flux-1-schnell');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('Gemini draws with its own model when the conversation is on a chat one', async () => {
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(JSON.parse(raw).model, 'gemini-3.1-flash-image',
+      'a text model asked through the image API answers 200 and no picture');
+    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
+  });
+  process.env.GEMINI_API_KEY = 'g-key';
+  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox',
+      preferProvider: 'gemini',
+      model: 'gemini-3.7-flash',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).model, 'gemini-3.1-flash-image');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('an operator can still pin the model those services draw with', async () => {
+  // ignore-the-chat's-model must not mean ignore-the-operator's.
+  const up = await upstreamOf((req, res, raw) => {
+    assert.equal(JSON.parse(raw).model, 'gemini-3-pro-image');
+    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
+  });
+  process.env.GEMINI_API_KEY = 'g-key';
+  process.env.GEMINI_IMAGE_MODEL = 'gemini-3-pro-image';
+  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).model, 'gemini-3-pro-image');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
+test('an edit is not sent to a service that can only generate', async () => {
+  // The picture on screen is what the request was about. A service that takes
+  // no source picture would answer with a fresh drawing of the same words, and
+  // nothing on screen would say the change had not been made -- so it is
+  // stepped past by name instead.
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ b64_json: 'FRESH' }] }));
+  process.env.POLLINATIONS_FREE = '1';
+  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
+  const app = await startApp();
+  try {
+    const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.match(body.error, /cannot edit, only generate/);
+    assert.deepEqual(body.tried, ['Pollinations (free)']);
+    assert.equal(up.seen.length, 0, 'and no fresh picture was drawn in place of the edit');
+  } finally {
+    app.close();
+    await new Promise((r) => up.server.close(r));
   }
 });

@@ -118,11 +118,15 @@ test('both providers are registered with the shape the server relies on', () => 
   assert.equal(LLM_PROVIDERS.gemini.baseUrl, 'https://generativelanguage.googleapis.com/v1beta/openai');
   assert.equal(LLM_PROVIDERS.gemini.modelIdPrefix, 'models/');
 
-  // Neither declares an image block: Groq draws nothing, and Gemini's pictures
-  // come from a different endpoint than this shim serves. Claiming either
-  // would put a guaranteed failure into the draw order.
+  // Groq draws nothing, and saying otherwise would put a guaranteed failure
+  // into the draw order.
   assert.equal(LLM_PROVIDERS.groq.image, undefined);
-  assert.equal(LLM_PROVIDERS.gemini.image, undefined);
+  // Gemini does draw, but not on this shim: /images/generations does not exist
+  // there, so the store names the native API instead. A store pointed at the
+  // shim would be the same guaranteed failure as Groq's.
+  assert.equal(LLM_PROVIDERS.gemini.image.shape, 'gemini-image');
+  assert.equal(LLM_PROVIDERS.gemini.image.baseUrl, 'https://generativelanguage.googleapis.com/v1beta');
+  assert.notEqual(LLM_PROVIDERS.gemini.image.baseUrl, LLM_PROVIDERS.gemini.baseUrl);
 });
 
 test('neither base URL gets a /v1 bolted on, since both already carry their path', () => {
