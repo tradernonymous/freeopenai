@@ -513,6 +513,75 @@ test('an allowlist pins the picker to exactly those models, in order', async () 
   }
 });
 
+test('the custom endpoint stays off until it has somewhere to send', async () => {
+  // A key with no URL would only fail at use, so unlike the keyed providers
+  // the custom slot activates on CUSTOM_BASE_URL, with the key optional.
+  delete process.env.CUSTOM_API_KEY;
+  delete process.env.CUSTOM_BASE_URL;
+  delete process.env.CUSTOM_MODELS;
+  const app = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => app.listen(0, r));
+  const plain = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
+  app.close();
+  assert.equal(plain.find((p) => p.id === 'custom').configured, false, 'an unconfigured slot reports itself off');
+
+  process.env.CUSTOM_API_KEY = 'k';
+  const keyed = http.createServer(createRequestHandler(__dirname + '/..'));
+  await new Promise((r) => keyed.listen(0, r));
+  const keyedBody = await (await fetch(`http://127.0.0.1:${keyed.address().port}/api/llm/providers`)).json();
+  keyed.close();
+  assert.equal(keyedBody.find((p) => p.id === 'custom').configured, false, 'a key alone still configures nothing');
+  delete process.env.CUSTOM_API_KEY;
+});
+
+test('the custom endpoint serves a self-hosted gateway catalogue whole', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'gateway-gpt' }, { id: 'gateway-claude' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.CUSTOM_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const offered = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
+    assert.equal(offered.find((p) => p.id === 'custom').configured, true, 'a URL alone activates the slot, key or no key');
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=custom`)).json();
+    assert.deepEqual(body.map((m) => m.id), ['gateway-gpt', 'gateway-claude']);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.CUSTOM_BASE_URL;
+    clearModelCache();
+  }
+});
+
+test('CUSTOM_MODELS pins the custom picker to a subset', async () => {
+  clearModelCache();
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [{ id: 'gateway-gpt' }, { id: 'gateway-claude' }] }));
+  });
+  await new Promise((r) => upstream.listen(0, r));
+  process.env.CUSTOM_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.CUSTOM_MODELS = 'gateway-claude';
+  let app;
+  try {
+    app = http.createServer(createRequestHandler(__dirname + '/..'));
+    await new Promise((r) => app.listen(0, r));
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=custom`)).json();
+    assert.deepEqual(body.map((m) => m.id), ['gateway-claude']);
+  } finally {
+    if (app) app.close();
+    upstream.close();
+    delete process.env.CUSTOM_BASE_URL;
+    delete process.env.CUSTOM_MODELS;
+    clearModelCache();
+  }
+});
+
 const { describeProviderError } = require('../server.js');
 
 test('a provider that explains itself is not second-guessed', () => {

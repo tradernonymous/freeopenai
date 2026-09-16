@@ -1153,6 +1153,22 @@ const LLM_PROVIDERS = {
       edit: 'references',
     },
   },
+  custom: {
+    label: 'Custom endpoint',
+    // No default address: a self-hosted OpenAI-compatible gateway -- free-one-api,
+    // Free-GPT4-WEB-API/g4f, Ollama, llama.cpp, vLLM, or anything serving
+    // /models and /chat/completions -- is reached through CUSTOM_BASE_URL,
+    // including the /v1 segment when the gateway serves it there. With no
+    // pinned list the whole live catalogue goes through in its own order, and
+    // CUSTOM_MODELS narrows it the way NARA_MODELS does for Nara.
+    baseUrl: '',
+    envVar: 'CUSTOM_API_KEY',
+    // A key alone means nothing without somewhere to send it, so unlike the
+    // keyed providers this one activates on the URL, with the key optional --
+    // keyless gateways simply get no auth header rather than a bare "Bearer ".
+    needsKey: false,
+    needsBaseUrl: true,
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -1203,6 +1219,9 @@ function providerEnvName(envVar, suffix) {
 }
 
 function providerIsConfigured(provider) {
+  // A provider with no default address (the custom endpoint slot) activates
+  // on the URL alone: a key with nowhere to send it would only fail at use.
+  if (provider.needsBaseUrl) return !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
   if (process.env[provider.envVar]) return true;
   // Key-optional providers (local servers) opt in with an explicit base URL.
   return provider.needsKey === false && !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
