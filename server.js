@@ -867,10 +867,12 @@ const LLM_PROVIDERS = {
     // reach stays out of the list rather than appearing and failing on use.
     models: [
       'agnes-2.5-flash',
+      'agnes-3-flash',
+      'atria-dawn',
       'laguna-s-2.1',
-      'ling-3.0-flash-fin-free',
-      'nemotron-3.5-lightning-free',
       'stepfun-3.7-flash',
+      'deepseek-v4.1-flash-free',
+      'muse-spark-1.3-contributor-free',
     ],
     // Where a picture can come from, on the same key. Declared here rather than
     // inside the image route because the capabilities are the provider's, not

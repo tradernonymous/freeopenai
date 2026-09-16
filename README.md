@@ -253,7 +253,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `WORKSPACE_RUN_TIMEOUT_MS` | `120000` | How long one command may run before it and its process tree are killed. 1s–10min. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
-| `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to five allowed models: agnes-2.5-flash, laguna-s-2.1, ling-3.0-flash-fin-free, nemotron-3.5-lightning-free, stepfun-3.7-flash. |
+| `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to seven allowed models: agnes-2.5-flash, agnes-3-flash, atria-dawn, laguna-s-2.1, stepfun-3.7-flash, deepseek-v4.1-flash-free, muse-spark-1.3-contributor-free. |
 | `NARA_IMAGE_MODEL` | *(read from Nara's catalogue)* | Image-capable alias for the Nara image routes. Without one, Nara's own catalogue is read for a model that reads as an image model; if it names none, Nara is skipped rather than passing on Nara's "Image model is required". Its upstream supports only a fixed set of dimensions — `1024x1024`, `1640x856`, `1024x1280`, `2048x1024` — and a size outside that list is swapped for the nearest one it offers, with the swap reported in `notes` rather than losing the picture (see [Image providers](#image-providers)). |
 | `NARA_IMAGES_BASE_URL` | *(https://api-images.bynara.id)* | Override for the Nara images host (self-hosted endpoint, proxy, or tests). |
 | `NARA_IMAGE_SIZE` | *(unset)* | The size a request is drawn at when the prompt asks for none. Read per service, so it never decides what another provider is asked for. |
