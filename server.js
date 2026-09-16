@@ -1169,6 +1169,20 @@ const LLM_PROVIDERS = {
     needsKey: false,
     needsBaseUrl: true,
   },
+  freegpt4: {
+    label: 'FreeGPT4',
+    // A self-hosted Free-GPT4-WEB-API gateway: plain-text answers over
+    // GET /?text=, model ids from GET /models as a bare string array. Not
+    // OpenAI-shaped, so it carries its own chat shape (llmChatTextQuery)
+    // instead of the shared completions path. Answers arrive whole rather
+    // than streamed, from the gateway's configured default model, with no
+    // conversation memory -- the trade for free, keyless models.
+    baseUrl: '',
+    envVar: 'FREEGPT4_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+    chatShape: 'text-query',
+  },
   // The three below are speech and search services. Probing them directly:
   //
   //   api.deepgram.com/v1/chat/completions   -> 404
@@ -3084,8 +3098,11 @@ function catalogueRows(data) {
   else if (data && Array.isArray(data.models)) rows = data.models;
   else if (Array.isArray(data)) rows = data;
   return rows
-    .filter((m) => m && m.id)
-    .map(normalizeProviderModel);
+    // A catalogue can be a bare string array (Free-GPT4-WEB-API answers
+    // /models with ["gpt-4", ...]). Those become bare ids; anything else
+    // without one is still dropped rather than served unaddressable.
+    .filter((m) => m && (m.id || (typeof m === 'string' && m.trim())))
+    .map((m) => (typeof m === 'string' ? { id: m.trim() } : normalizeProviderModel(m)));
 }
 
 function normalizeProviderModel(m) {
@@ -3108,6 +3125,82 @@ function normalizeProviderModel(m) {
   };
 }
 
+// Text out of OpenAI-shaped message content: plain strings pass through,
+// part arrays contribute their text parts. Images are reported rather than
+// silently dropped -- a text-only gateway must never swallow a picture.
+function textQueryParts(content) {
+  if (typeof content === 'string') return { text: content, hasImage: false };
+  if (!Array.isArray(content)) return { text: '', hasImage: false };
+  const texts = [];
+  let hasImage = false;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'text' && typeof part.text === 'string') texts.push(part.text);
+    else if (part.type === 'image_url' || part.type === 'image') hasImage = true;
+  }
+  return { text: texts.join('\n'), hasImage };
+}
+
+// Free-GPT4-WEB-API speaks plain text over GET /?text=, not OpenAI chat
+// completions: one stateless turn, no tools, no vision, no streaming. The
+// last user message goes out; the raw text comes back wrapped in the OpenAI
+// shape the client already parses, so nothing downstream changes --
+// including the stream path, which receives one SSE frame plus DONE.
+async function llmChatTextQuery(req, res, id, provider, body) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const lastUser = [...messages].reverse().find((m) => m && m.role === 'user');
+  const { text, hasImage } = textQueryParts(lastUser && lastUser.content);
+  if (hasImage) {
+    return sendJson(res, 400, { error: provider.label + ' answers text only and cannot see attached images. Pick a vision model for this turn.' });
+  }
+  if (!text.trim()) return sendJson(res, 400, { error: provider.label + ' needs a text message to send.' });
+  const url = provider.baseUrl.replace(/\/+$/, '') + '/?text=' + encodeURIComponent(text);
+  let result;
+  try {
+    result = await fetchProviderWithRetry(id, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), providerTimeoutMs().chat);
+      try {
+        const upstream = await fetch(url, { signal: controller.signal, headers: providerAuthHeaders(provider, req) });
+        if (!upstream.ok) {
+          const errText = await upstream.text().catch(() => '');
+          return { ok: false, status: upstream.status, data: { error: { message: errText.slice(0, 300) || ('HTTP ' + upstream.status) } } };
+        }
+        return { ok: true, status: 200, data: { text: await upstream.text() } };
+      } catch (err) {
+        if (err && err.name === 'AbortError') {
+          return { ok: false, status: 504, selfTimeout: true, data: { error: { message: provider.label + ' did not respond in time' } } };
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+  } catch (e) {
+    return sendJson(res, 502, { error: e.message });
+  }
+  if (!result.ok) {
+    return sendJson(res, result.status, { error: describeProviderError(result.status, result.data, provider) });
+  }
+  const answer = result.data && typeof result.data.text === 'string' ? result.data.text : '';
+  if (!answer.trim()) {
+    return sendJson(res, 502, { error: provider.label + ' accepted the request but sent nothing readable back. Try again, or pick another model.' });
+  }
+  if (body.stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant', content: answer } }] }) + '\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+  sendJson(res, 200, { choices: [{ message: { role: 'assistant', content: answer } }] });
+}
+
 function llmChat(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
@@ -3118,6 +3211,7 @@ function llmChat(req, res) {
     if (!body || !body.model || !Array.isArray(body.messages)) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
+    if (provider.chatShape === 'text-query') return llmChatTextQuery(req, res, id, provider, body);
     const upstreamBody = JSON.stringify({
       model: body.model,
       messages: body.messages,
