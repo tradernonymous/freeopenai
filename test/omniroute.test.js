@@ -169,6 +169,9 @@ test('a base URL alone puts the gateway in the picker, and the catalogue is fetc
     // OpenRouter's paid ids would fill the picker with guaranteed 402s.
     assert.ok(ids.includes('openrouter/nex-agi/nex-n2.5-pro:free'));
     assert.ok(!ids.includes('openrouter/anthropic/claude-opus-4.5'), 'a paid OpenRouter id must not be offered');
+    // And a namespace with no free tier at all -- a connected OpenAI key --
+    // never follows the named list on its own, however the gateway lists it.
+    assert.ok(!ids.includes('openai/gpt-5.4'), 'a paid namespace must not follow the list');
 
     // Non-chat rows now come through this route and are dropped a layer up,
     // by the same filter the picker renders with -- so the thing to assert is

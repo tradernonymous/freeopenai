@@ -307,7 +307,10 @@ async function main() {
             const r = row.getBoundingClientRect();
             return { label: row.textContent.trim(), h: Math.round(r.height), inside: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1 };
           });
-          const out = { count: rows.length, inside: box.left >= -1 && box.right <= innerWidth + 1 && box.top >= -1 && box.bottom <= innerHeight + 1, rows };
+          // The picker is data-driven from THEME_OPTIONS, so the runner checks
+          // the rendered rows against the option count rather than a literal:
+          // adding a pack must not require touching this file.
+          const out = { count: rows.length, expected: THEME_OPTIONS.length, inside: box.left >= -1 && box.right <= innerWidth + 1 && box.top >= -1 && box.bottom <= innerHeight + 1, rows };
           closeThemeMenu();
           return out;
         })();
@@ -459,7 +462,7 @@ async function main() {
       if (shot.themeButton.left < -1 || shot.themeButton.right > Number(shot.viewport.split('x')[0]) + 1) {
         throw new Error(name + ' puts the appearance toggle off screen: ' + JSON.stringify(shot.themeButton));
       }
-      if (!shot.appearance || shot.appearance.count !== 5) {
+      if (!shot.appearance || shot.appearance.count !== shot.appearance.expected) {
         throw new Error(name + ' cannot offer the appearance choices: ' + JSON.stringify(shot.appearance));
       }
       if (!shot.appearance.inside) throw new Error(name + ' opens the appearance picker off screen: ' + JSON.stringify(shot.appearance));

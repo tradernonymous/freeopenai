@@ -158,6 +158,24 @@ const SKILL_SOURCES = [
   { repo: 'tt-a1i/archify', branch: 'main', dir: 'archify', pick: 'all' },
   // Output shaped for a reader who needs the next action first.
   { repo: 'ayghri/i-have-adhd', branch: 'main', dir: 'skills', pick: 'all' },
+  // Engineering methodology as practised: TDD, review, verification loops,
+  // research-before-coding and API design. Small, self-contained discipline
+  // skills -- the ECC catalogue is 292 wide, so only these five travel.
+  {
+    repo: 'affaan-m/ECC',
+    branch: 'main',
+    dir: 'skills',
+    pick: ['tdd-workflow', 'security-review', 'verification-loop', 'search-first', 'api-design'],
+  },
+  // Interface design guidance a chat app can actually use. The flagship
+  // ui-ux-pro-max skill leans on local search scripts a remote model cannot
+  // run; the self-contained design + styling pair is picked instead.
+  {
+    repo: 'nextlevelbuilder/ui-ux-pro-max-skill',
+    branch: 'main',
+    dir: '.claude/skills',
+    pick: ['design', 'ui-styling'],
+  },
 ];
 
 // The skills in one repo's git tree, as { name, path } pairs.
@@ -418,6 +436,39 @@ function skillNamesMatchesRequest(requestText, skill) {
   return false;
 }
 
+// Task-domain booster: the request's own domain lifts same-domain skills
+// above equally-overlapping ones from other fields (a testing skill wins a
+// testing question over a marketing skill that shares a word with it). It
+// only ever reorders skills that already qualified -- two shared words or a
+// name hit -- because MIN_SKILL_HITS still decides what fires at all. Both
+// sides reuse the router's stemmed tokens, so "styling" meets "style" the
+// same way "tests" meets "test", and substrings ("test" in "latest") never
+// count.
+const TASK_DOMAIN_BOOSTS = [
+  { request: ['design', 'ui', 'ux', 'land', 'layout', 'redesign', 'mockup', 'wireframe', 'styl', 'style', 'css', 'theme'], skill: ['design', 'ui', 'ux', 'styl', 'style', 'css', 'frontend', 'theme'], bonus: 2 },
+  { request: ['test', 'tdd', 'pytest', 'jest', 'vitest', 'unittest'], skill: ['test', 'tdd', 'spec', 'quality', 'verify', 'verification', 'debug'], bonus: 2 },
+  { request: ['bug', 'debug', 'error', 'fail', 'crash', 'exception'], skill: ['debug', 'test', 'verify', 'verification', 'fix'], bonus: 2 },
+  { request: ['security', 'vuln', 'auth', 'exploit', 'xss', 'audit'], skill: ['security', 'audit', 'review', 'quality'], bonus: 2 },
+  { request: ['review', 'refactor', 'clean', 'pr'], skill: ['review', 'refactor', 'quality', 'clean'], bonus: 2 },
+  { request: ['plan', 'architect', 'blueprint', 'roadmap'], skill: ['plan', 'architect', 'blueprint', 'design'], bonus: 2 },
+  // 'email' is deliberately not a request word here: the marketing library
+  // answers launch/pricing mail by overlap, and boosting every email-flavoured
+  // skill would hand those requests to the nearby general skill instead.
+  { request: ['draft', 'copy', 'blog', 'essay', 'document', 'readme'], skill: ['copy', 'humanizer', 'slop', 'ad', 'content'], bonus: 2 },
+  { request: ['image', 'draw', 'diagram', 'picture', 'generate', 'paint', 'logo', 'icon'], skill: ['image', 'diagram', 'draw', 'art', 'design', 'canvas'], bonus: 2 },
+];
+
+function taskDomainBoost(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return 0;
+  const has = new Set([...skillTokens(skill && skill.name), ...skillTokens(skill && skill.description)]);
+  let bonus = 0;
+  for (const rule of TASK_DOMAIN_BOOSTS) {
+    if (rule.request.some((w) => want.has(w)) && rule.skill.some((w) => has.has(w))) bonus += rule.bonus;
+  }
+  return bonus;
+}
+
 // The auto-pick router. Given the user's request, the current mode, and the
 // loaded catalogue ({ source, name, description } rows), returns the skills
 // to inject, best match first:
@@ -430,7 +481,7 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   const processOnly = skillsAllowedForMode(mode) === 'process';
   // Superpowers' process skills — the ones about how to work rather than
   // what to make. In plan mode only these may trigger.
-  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif/i;
+  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif|architect|secur|research/i;
   const pool = skills.filter((s) => s && s.name && s.description)
     // A user-only skill (disable-model-invocation) never auto-pins: only an
     // explicit `/name` brings it in. This is the auto path; deliberate pins
@@ -440,7 +491,10 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   const scored = pool
     .map((s) => ({
       s,
-      score: skillTriggerScore(requestText, s),
+      // The domain booster only reorders: the filter below still admits a
+      // skill on hits/name alone, so a boost can never introduce one the
+      // overlap rule refused.
+      score: skillTriggerScore(requestText, s) + taskDomainBoost(requestText, s),
       hits: skillHitCount(requestText, s),
       named: skillNamesMatchesRequest(requestText, s),
       weight: skillDescriptionWeight(s),
@@ -728,6 +782,7 @@ const CHAT_COMMANDS = [
   { name: 'mode', usage: '/mode chat | plan | build', desc: 'Switch mode' },
   { name: 'clear', usage: '/clear', desc: 'Start a new chat — this one stays in the sidebar' },
   { name: 'compact', usage: '/compact on | off | status', desc: 'Reduce sent history for this session without changing the visible chat' },
+  { name: 'doctor', usage: '/doctor', desc: 'Check providers, skills and mode health' },
 ];
 
 // What a line typed into the composer means:
@@ -1157,6 +1212,7 @@ function lastImageInMessages(messages, urlOf) {
 // escaped up front, so markdown syntax can never smuggle in a live tag.
 function inlineFormat(s) {
   return s
+    .replace(/~~([^~\n]+?)~~/g, '<del>$1</del>')
     .replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^\n_]+?)__/g, '<strong>$1</strong>')
     .replace(/\*([^\n*]+?)\*/g, '<em>$1</em>')
@@ -1166,6 +1222,70 @@ function inlineFormat(s) {
 const CODE_BLOCK_TOKEN = 'CODEBLOCKTOKEN';
 const CODE_SPAN_TOKEN = 'CODESPANTOKEN';
 const LINK_TOKEN = 'LINKTOKEN';
+const AUTOLINK_TOKEN = 'AUTOLINKTOKEN';
+const HTML_TOKEN = 'HTMLTOKEN';
+
+// Raw HTML from a model is untrusted input -- web tools feed page content
+// into answers, which is a live prompt-injection vector -- so tags pass only
+// through this allowlist, and anything else stays literal text for the escape
+// pass. The set is formatting and disclosure only: no images (a remote src
+// phones home on render), no inputs, no tables (GFM covers those), and links
+// reuse the http(s)-only href check. `open` on <details> is the one allowed
+// attribute besides href, because it is boolean and cannot carry a payload.
+const HTML_ALLOWLIST = {
+  details: ['open'],
+  summary: [],
+  b: [], strong: [], i: [], em: [], u: [], s: [], strike: [], del: [],
+  code: [], kbd: [], mark: [], sub: [], sup: [],
+  br: [],
+  a: ['href'],
+};
+const HTML_VOID = { br: true };
+
+// Returns the rebuilt safe tag, or null when the tag must stay literal text.
+// Fail-closed throughout: an unknown attribute, a bad URL, a stray slash or
+// a character the attribute grammar cannot cover rejects the whole tag.
+function sanitizeHtmlTag(tag) {
+  const m = /^<(\/?)([A-Za-z][\w-]*)\s*([^<>]*)>$/.exec(tag);
+  if (!m) return null;
+  const closing = m[1] === '/';
+  const name = m[2].toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(HTML_ALLOWLIST, name)) return null;
+  let rest = m[3];
+  if (closing) {
+    if (rest.trim() !== '' || HTML_VOID[name]) return null;
+    return '</' + name + '>';
+  }
+  if (rest.endsWith('/')) {
+    if (!HTML_VOID[name]) return null;
+    rest = rest.slice(0, -1);
+  }
+  const allowed = HTML_ALLOWLIST[name];
+  const seen = [];
+  const attrPattern = /([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let am;
+  attrPattern.lastIndex = 0;
+  while ((am = attrPattern.exec(rest)) !== null) seen.push(am);
+  const covered = seen.reduce((acc, x) => acc + x[0].length, 0);
+  const spaces = (rest.match(/\s/g) || []).length;
+  if (covered + spaces !== rest.length) return null;
+  const attrs = [];
+  for (const a of seen) {
+    const attrName = a[1].toLowerCase();
+    if (allowed.indexOf(attrName) === -1) return null;
+    const value = a[2] !== undefined ? a[2] : a[3] !== undefined ? a[3] : a[4] !== undefined ? a[4] : null;
+    if (attrName === 'href') {
+      if (value === null || !safeLinkHref(value)) return null;
+      attrs.push('href="' + value.replace(/&/g, '&amp;') + '"');
+    } else if (attrName === 'open') {
+      if (value !== null && value !== '' && value !== 'open') return null;
+      attrs.push('open');
+    } else {
+      return null;
+    }
+  }
+  return '<' + name + (attrs.length ? ' ' + attrs.join(' ') : '') + '>';
+}
 
 // A link only ever becomes an anchor when it is http(s). Everything else --
 // javascript:, data:, vbscript:, a relative path -- stays visible as text.
@@ -1183,22 +1303,338 @@ function safeLinkHref(url) {
 // space (the only way to open a new attribute) cannot appear at all.
 const MARKDOWN_LINK_PATTERN = /\[([^\]\n]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
 
-function renderMarkdownLite(rawText) {
-  const escaped = escapeHtml(rawText);
+// Dependency-free syntax highlighting for fenced code, so a coding answer
+// reads like ChatGPT's or GitHub's instead of a grey well. It scans the raw
+// code (before escaping) and escapes every segment it emits, which keeps the
+// renderer's contract: markdown syntax can never smuggle in a live tag.
+// A language outside this table renders exactly as before.
+const HIGHLIGHT_ALIASES = {
+  js: 'js', javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js',
+  ts: 'ts', typescript: 'ts', tsx: 'ts',
+  py: 'py', python: 'py',
+  json: 'json',
+  sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh',
+  html: 'html', xml: 'html', svg: 'html',
+  sql: 'sql',
+  c: 'c', h: 'c', cpp: 'c', cc: 'c', cxx: 'c', hpp: 'c',
+  java: 'c', cs: 'c', csharp: 'c', go: 'c', rust: 'c', php: 'c',
+  swift: 'c', kt: 'c', kotlin: 'c', rb: 'c', ruby: 'c',
+};
 
+const HIGHLIGHT_DEFS = {
+  js: {
+    keywords: ['await', 'async', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'get', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'set', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'null', 'undefined', 'true', 'false'],
+    lineComment: '//',
+    blockComment: ['/*', '*/'],
+    strings: ['"', "'", '`'],
+  },
+  py: {
+    keywords: ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'],
+    lineComment: '#',
+    strings: ['"', "'"],
+  },
+  json: {
+    keywords: ['true', 'false', 'null'],
+    strings: ['"'],
+    functions: false,
+  },
+  sh: {
+    keywords: ['case', 'do', 'done', 'echo', 'elif', 'else', 'esac', 'exit', 'export', 'fi', 'for', 'function', 'if', 'in', 'local', 'return', 'select', 'then', 'until', 'while'],
+    lineComment: '#',
+    strings: ['"', "'"],
+  },
+  html: {
+    html: true,
+    blockComment: ['<!--', '-->'],
+  },
+  sql: {
+    ci: true,
+    keywords: ['select', 'from', 'where', 'and', 'or', 'not', 'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table', 'alter', 'drop', 'join', 'left', 'right', 'inner', 'outer', 'on', 'as', 'order', 'by', 'group', 'having', 'limit', 'offset', 'distinct', 'union', 'all', 'in', 'is', 'null', 'like', 'between', 'exists', 'case', 'when', 'then', 'else', 'end', 'primary', 'key', 'foreign', 'references', 'index', 'view', 'true', 'false'],
+    lineComment: '--',
+    strings: ["'", '"'],
+  },
+  c: {
+    keywords: ['auto', 'bool', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'delete', 'do', 'double', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'func', 'fn', 'go', 'if', 'implements', 'import', 'int', 'interface', 'let', 'long', 'match', 'mod', 'mut', 'namespace', 'new', 'nil', 'NULL', 'package', 'private', 'protected', 'pub', 'public', 'return', 'short', 'signed', 'sizeof', 'static', 'string', 'struct', 'super', 'switch', 'this', 'throw', 'throws', 'trait', 'true', 'try', 'type', 'unsigned', 'using', 'var', 'virtual', 'void', 'while', 'self'],
+    lineComment: '//',
+    blockComment: ['/*', '*/'],
+    strings: ['"', "'"],
+  },
+};
+// TypeScript shares the JavaScript shapes and adds its own declarations.
+HIGHLIGHT_DEFS.ts = Object.assign({}, HIGHLIGHT_DEFS.js, {
+  keywords: HIGHLIGHT_DEFS.js.keywords.concat(['interface', 'type', 'enum', 'namespace', 'implements', 'readonly', 'declare', 'abstract', 'keyof', 'infer', 'never', 'unknown']),
+});
+
+function isHighlightWordChar(ch) {
+  return /[\w$]/.test(ch);
+}
+
+// A fence without a language still wants colours when the code is obviously
+// one language: models often emit bare fences. Scoring is deliberately
+// conservative -- the winner needs two points and a clear margin, or the
+// block stays plain. A wrong guess only tints words (everything stays
+// escaped), but a plain block is never wrong, so ties and whispers lose.
+const CODE_DETECT_THRESHOLD = 2;
+const CODE_DETECT_MARGIN = 2;
+
+function detectCodeLanguage(src) {
+  const text = String(src || '');
+  if (!text.trim()) return null;
+  // Whole-document JSON parses or it does not -- the one exact signal here.
+  if (/^\s*\{[\s\S]*\}\s*$/.test(text)) {
+    try { JSON.parse(text); return 'json'; } catch { /* not JSON, keep scoring */ }
+  }
+  if (/^#!.*\b(bash|sh|zsh)\b/m.test(text)) return 'sh';
+  const scores = {};
+  function add(lang, pts) { scores[lang] = (scores[lang] || 0) + pts; }
+  if (/\bdef\s+\w+\s*\(/.test(text)) add('py', 2);
+  if (/^\s*(import|from)\s+\w+/m.test(text)) add('py', 2);
+  if (/^ *#/m.test(text)) { add('py', 1); add('sh', 1); }
+  if (/\b(self|elif|None|True|False)\b/.test(text)) add('py', 1);
+  if (/:\s*$/m.test(text)) add('py', 1);
+  if (/\b(const|let|var|function)\b/.test(text)) add('js', 2);
+  if (/=>/.test(text)) add('js', 2);
+  if (/\b(console|require|module\.exports)\b/.test(text)) add('js', 1);
+  if (/===|!==/.test(text)) add('js', 1);
+  if (/\b(for|while)\s*\(/.test(text)) add('js', 1);
+  if (/^\s*import\s+.+\s+from\s+/m.test(text)) add('js', 2);
+  if (/\b(interface|enum)\s+\w+/.test(text)) add('ts', 3);
+  if (/^\s*type\s+\w+\s*=/m.test(text)) add('ts', 3);
+  if (/^ *echo\b/m.test(text)) add('sh', 1);
+  if (/^\s*(fi|done|esac)\s*$/m.test(text)) add('sh', 1);
+  if (/\$\{?\w/.test(text)) add('sh', 1);
+  if (/&&|\|\|/.test(text)) add('sh', 1);
+  if (/^\s*select\b/im.test(text)) add('sql', 2);
+  if (/\binsert\s+into\b/i.test(text)) add('sql', 3);
+  if (/\bcreate\s+table\b/i.test(text)) add('sql', 3);
+  if (/<(div|span|p|a|table|html|script|style|h[1-6]|ul|ol|li|button|input|form|head|body|title|tr|td|th)[\s>]/i.test(text)) add('html', 3);
+  if (/#include\s*</.test(text)) add('c', 3);
+  if (/\bprintf\s*\(/.test(text)) add('c', 2);
+  if (/\bstd::/.test(text)) add('c', 2);
+  if (/\bint\s+main\s*\(/.test(text)) add('c', 2);
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  if (!ranked.length || ranked[0][1] < CODE_DETECT_THRESHOLD) return null;
+  if (ranked.length > 1 && ranked[0][1] - ranked[1][1] < CODE_DETECT_MARGIN) return null;
+  return ranked[0][0];
+}
+
+// A hand scanner rather than an assembled regex: every branch consumes at
+// least one character, so there is no catastrophic backtracking to audit,
+// and the order (comments, then strings, then numbers, then keywords, then
+// calls) is what stops a keyword inside a string from lighting up.
+function highlightCode(raw, lang) {
+  const key = HIGHLIGHT_ALIASES[String(lang || '').toLowerCase()];
+  const def = (key && HIGHLIGHT_DEFS[key]) || null;
+  if (!def) return escapeHtml(raw);
+  const src = String(raw);
+  const n = src.length;
+  let out = '';
+  let i = 0;
+  function span(cls, seg) {
+    return '<span class="' + cls + '">' + escapeHtml(seg) + '</span>';
+  }
+  while (i < n) {
+    const ch = src[i];
+    if (def.blockComment && src.startsWith(def.blockComment[0], i)) {
+      const end = src.indexOf(def.blockComment[1], i + def.blockComment[0].length);
+      const close = end === -1 ? n : end + def.blockComment[1].length;
+      out += span('tok-c', src.slice(i, close));
+      i = close;
+      continue;
+    }
+    if (def.lineComment && src.startsWith(def.lineComment, i)) {
+      let j = src.indexOf('\n', i);
+      if (j === -1) j = n;
+      out += span('tok-c', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (def.html && ch === '<') {
+      const tag = /^<\/?[A-Za-z][^<>\n]*/.exec(src.slice(i));
+      if (tag) {
+        out += span('tok-k', tag[0]);
+        i += tag[0].length;
+        continue;
+      }
+    }
+    if (def.strings && def.strings.indexOf(ch) !== -1) {
+      let j = i + 1;
+      while (j < n && src[j] !== '\n' && src[j] !== ch) {
+        if (src[j] === '\\') j++;
+        j++;
+      }
+      if (j < n && src[j] === ch) j++;
+      out += span('tok-s', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (ch >= '0' && ch <= '9' && (i === 0 || !isHighlightWordChar(src[i - 1]))) {
+      let j = i;
+      while (j < n && /[\d_]/.test(src[j])) j++;
+      if (src[j] === '.' && /\d/.test(src[j + 1] || '')) {
+        j++;
+        while (j < n && /[\d_]/.test(src[j])) j++;
+      }
+      out += span('tok-n', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch) && (i === 0 || !isHighlightWordChar(src[i - 1]))) {
+      let j = i + 1;
+      while (j < n && /[\w$]/.test(src[j])) j++;
+      const word = src.slice(i, j);
+      const lookup = def.ci ? word.toLowerCase() : word;
+      if (def.keywords && def.keywords.indexOf(lookup) !== -1) {
+        out += span('tok-k', word);
+      } else if (def.functions !== false && /^\s*\(/.test(src.slice(j))) {
+        out += span('tok-f', word);
+      } else {
+        out += escapeHtml(word);
+      }
+      i = j;
+      continue;
+    }
+    out += escapeHtml(ch);
+    i++;
+  }
+  return out;
+}
+
+// A GFM table is a header row, a delimiter row of dashes and colons, and body
+// rows with the same cell count. Anything else that merely contains pipes is
+// prose, and stays prose rather than becoming a broken table.
+function splitTableRow(line) {
+  const trimmed = line.trim();
+  if (trimmed.indexOf('|') === -1) return null;
+  let cells = trimmed.split('|').map((cell) => cell.trim());
+  if (cells.length && cells[0] === '') cells = cells.slice(1);
+  if (cells.length && cells[cells.length - 1] === '') cells = cells.slice(0, -1);
+  return cells.length ? cells : null;
+}
+
+function tryParseTable(lines, start) {
+  const head = splitTableRow(lines[start]);
+  if (!head || start + 1 >= lines.length) return null;
+  const delim = splitTableRow(lines[start + 1]);
+  if (!delim || delim.length !== head.length) return null;
+  const aligns = [];
+  for (const cell of delim) {
+    const c = cell.trim();
+    if (!/^:?-+:?$/.test(c)) return null;
+    aligns.push(c.charAt(0) === ':' && c.charAt(c.length - 1) === ':' ? 'center'
+      : c.charAt(c.length - 1) === ':' ? 'right' : 'left');
+  }
+  const rows = [];
+  let i = start + 2;
+  while (i < lines.length) {
+    const cells = splitTableRow(lines[i]);
+    if (!cells || cells.length !== head.length) break;
+    rows.push(cells);
+    i++;
+  }
+  function cell(tag, content, align) {
+    const style = align && align !== 'left' ? ' style="text-align: ' + align + '"' : '';
+    return '<' + tag + style + '>' + inlineFormat(content) + '</' + tag + '>';
+  }
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  head.forEach((content, k) => { html += cell('th', content, aligns[k]); });
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    row.forEach((content, k) => { html += cell('td', content, aligns[k]); });
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return { html, next: i };
+}
+
+// Nested lists build inside out: an item owns every deeper-indented item that
+// follows it, and a run ends where the indent returns. A flat run renders
+// byte-identical to the old single-level lists.
+function buildNestedList(items) {
+  let i = 0;
+  function level(baseIndent) {
+    const first = items[i];
+    const tag = first.ordered ? 'ol' : 'ul';
+    let out = tag === 'ol' && first.number !== 1 ? '<ol start="' + first.number + '">' : '<' + tag + '>';
+    while (i < items.length && items[i].indent === baseIndent && items[i].ordered === first.ordered) {
+      const item = items[i++];
+      let inner = item.task
+        ? '<input type="checkbox" disabled' + (item.task === 'x' ? ' checked' : '') + '> ' + inlineFormat(item.text)
+        : inlineFormat(item.text);
+      if (i < items.length && items[i].indent > baseIndent) inner += level(items[i].indent);
+      out += item.task ? '<li class="task">' + inner + '</li>' : '<li>' + inner + '</li>';
+    }
+    out += '</' + tag + '>';
+    return out;
+  }
+  let html = '';
+  while (i < items.length) html += level(items[i].indent);
+  return html;
+}
+
+// A bare URL becomes a link the way GitHub does, with trailing punctuation
+// left outside it. Code and labelled links are already behind tokens by now,
+// so this pass cannot touch them; a quote entity at the end (a URL typed
+// inside quotes) is trimmed before punctuation, and a closing paren only when
+// it unbalances the ones the URL opened.
+function trimAutolinkUrl(url) {
+  let clean = String(url).replace(/&(?:quot|lt|gt|#39);$/, '');
+  clean = clean.replace(/[.,;:!?'\]}]+$/, '');
+  let depth = 0;
+  for (const ch of clean) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+  }
+  while (depth < 0 && clean.endsWith(')')) {
+    clean = clean.slice(0, -1);
+    depth++;
+  }
+  return clean;
+}
+
+function renderMarkdownLite(rawText) {
+  // Fences come out of the RAW text first: the highlighter scans unescaped
+  // code and escapes every segment it emits, while an unknown language falls
+  // back to a plain escape -- identical output to before for those blocks.
   const codeBlocks = [];
-  let text = escaped.replace(/```[ \t]*(\w*)\r?\n?([\s\S]*?)```/g, (_m, _lang, code) => {
+  let text = String(rawText).replace(/```[ \t]*(\w*)\r?\n?([\s\S]*?)```/g, (_m, lang, code) => {
     const idx = codeBlocks.length;
-    codeBlocks.push(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`);
+    const clean = code.replace(/\n$/, '');
+    const norm = String(lang || '').toLowerCase();
+    // Bare fences get colours too when the code is obviously one language;
+    // detection never adds the label, so an uncertain block stays exactly
+    // the plain <pre><code> it always was.
+    const inner = highlightCode(clean, norm || detectCodeLanguage(clean) || '');
+    if (!norm) {
+      codeBlocks.push(`<pre><code>${inner}</code></pre>`);
+    } else {
+      codeBlocks.push(`<pre data-lang="${escapeHtml(lang)}"><code class="language-${norm}">${inner}</code></pre>`);
+    }
     return `@@${CODE_BLOCK_TOKEN}${idx}@@`;
   });
 
   const codeSpans = [];
   text = text.replace(/`([^`\n]+)`/g, (_m, code) => {
     const idx = codeSpans.length;
-    codeSpans.push(`<code>${code}</code>`);
+    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
     return `@@${CODE_SPAN_TOKEN}${idx}@@`;
   });
+
+  // Allowlisted raw tags are lifted behind tokens while the text is still
+  // raw. A rejected tag is tokenized too, as its escaped self: leaving it in
+  // place would let a later pass (autolink) light up the URL inside a refused
+  // `<a href>`, undoing the refusal. Running after the code passes keeps
+  // `<b>` inside fences and spans literal, the way links already are.
+  const htmlTags = [];
+  text = text.replace(/<\/?[A-Za-z][\w-]*\s*[^<>]*>/g, (tag) => {
+    const clean = sanitizeHtmlTag(tag);
+    const idx = htmlTags.length;
+    htmlTags.push(clean || escapeHtml(tag));
+    return `@@${HTML_TOKEN}${idx}@@`;
+  });
+
+  text = escapeHtml(text);
 
   // Links are held behind a token for the same reason code spans are, and it
   // matters more here: elsewhere in the line the emphasis passes would run
@@ -1214,18 +1650,20 @@ function renderMarkdownLite(rawText) {
     return `@@${LINK_TOKEN}${idx}@@`;
   });
 
-  const htmlParts = [];
-  let listBuffer = [];
-  let listType = null;
-  const textLines = [];
+  const autolinks = [];
+  // A URL sitting inside link syntax -- ](https://...) -- is never autolinked:
+  // a well-formed one is already a token, so what remains is a refused link
+  // (a space or a bad scheme), and lighting up its URL would undo the refusal.
+  text = text.replace(/(?<!\]\()https?:\/\/[^\s<]+/g, (url) => {
+    const clean = trimAutolinkUrl(url);
+    if (!clean) return url;
+    const idx = autolinks.length;
+    autolinks.push(`<a href="${clean}" target="_blank" rel="noopener noreferrer">${clean}</a>`);
+    return `@@${AUTOLINK_TOKEN}${idx}@@${url.slice(clean.length)}`;
+  });
 
-  function flushList() {
-    if (!listBuffer.length) return;
-    const items = listBuffer.map((item) => `<li>${inlineFormat(item)}</li>`).join('');
-    htmlParts.push(`<${listType}>${items}</${listType}>`);
-    listBuffer = [];
-    listType = null;
-  }
+  const htmlParts = [];
+  const textLines = [];
 
   function flushText() {
     if (!textLines.length) return;
@@ -1233,36 +1671,87 @@ function renderMarkdownLite(rawText) {
     textLines.length = 0;
   }
 
-  for (const line of text.split('\n')) {
-    const ulMatch = line.match(/^[-*]\s+(.*)$/);
-    const olMatch = line.match(/^\d+\.\s+(.*)$/);
-    if (ulMatch) {
+  const lines = text.split('\n');
+  let li = 0;
+  while (li < lines.length) {
+    const line = lines[li];
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
       flushText();
-      if (listType !== 'ul') flushList();
-      listType = 'ul';
-      listBuffer.push(ulMatch[1]);
-    } else if (olMatch) {
-      flushText();
-      if (listType !== 'ol') flushList();
-      listType = 'ol';
-      listBuffer.push(olMatch[1]);
-    } else {
-      flushList();
-      textLines.push(line);
+      htmlParts.push(`<h${heading[1].length}>${inlineFormat(heading[2])}</h${heading[1].length}>`);
+      li++;
+      continue;
     }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushText();
+      htmlParts.push('<hr>');
+      li++;
+      continue;
+    }
+    // The `>` arrives escaped (`&gt;`), because the whole text is escaped up
+    // front -- matching the raw `>` here is how a quote silently stopped
+    // rendering. The captured content is already escaped, so inlineFormat on
+    // it only adds the fixed tag set.
+    const quote = line.match(/^&gt;\s?(.*)$/);
+    if (quote) {
+      const quoted = [quote[1]];
+      li++;
+      while (li < lines.length) {
+        const cont = lines[li].match(/^&gt;\s?(.*)$/);
+        if (!cont) break;
+        quoted.push(cont[1]);
+        li++;
+      }
+      flushText();
+      htmlParts.push(`<blockquote>${inlineFormat(quoted.join('\n')).replace(/\n/g, '<br>')}</blockquote>`);
+      continue;
+    }
+    const table = tryParseTable(lines, li);
+    if (table) {
+      flushText();
+      htmlParts.push(table.html);
+      li = table.next;
+      continue;
+    }
+    const listOpen = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (listOpen) {
+      flushText();
+      const run = [];
+      while (li < lines.length) {
+        const m = lines[li].match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+        if (!m) break;
+        const bullet = m[2];
+        const ordered = bullet !== '-' && bullet !== '*';
+        const task = m[3].match(/^\[([ xX])\]\s+(.*)$/);
+        run.push({
+          indent: m[1].replace(/\t/g, '  ').length,
+          ordered,
+          number: ordered ? parseInt(bullet, 10) : 0,
+          task: task ? task[1].toLowerCase() : null,
+          text: task ? task[2] : m[3],
+        });
+        li++;
+      }
+      htmlParts.push(buildNestedList(run));
+      continue;
+    }
+    textLines.push(line);
+    li++;
   }
-  flushList();
   flushText();
 
   const blockTokenPattern = new RegExp(`@@${CODE_BLOCK_TOKEN}(\\d+)@@`, 'g');
   const spanTokenPattern = new RegExp(`@@${CODE_SPAN_TOKEN}(\\d+)@@`, 'g');
   const linkTokenPattern = new RegExp(`@@${LINK_TOKEN}(\\d+)@@`, 'g');
+  const autoTokenPattern = new RegExp(`@@${AUTOLINK_TOKEN}(\\d+)@@`, 'g');
+  const htmlTokenPattern = new RegExp(`@@${HTML_TOKEN}(\\d+)@@`, 'g');
 
-  // Links go back in first: an anchor built from a label like [`code`](url)
-  // still holds a code-span token, and that has to be resolved before the
-  // final string leaves this function.
+  // Raw tags resolve first: a link label may itself hold a formatted tag, and
+  // the anchor has to receive the finished element rather than a placeholder.
   return htmlParts
     .join('')
+    .replace(htmlTokenPattern, (_m, i) => htmlTags[Number(i)])
+    .replace(autoTokenPattern, (_m, i) => autolinks[Number(i)])
     .replace(linkTokenPattern, (_m, i) => links[Number(i)])
     .replace(spanTokenPattern, (_m, i) => codeSpans[Number(i)])
     .replace(blockTokenPattern, (_m, i) => codeBlocks[Number(i)]);
@@ -3493,6 +3982,12 @@ const SYSTEM_PROMPT = [
   '- Fetching and searching are safe and cheap. Just do them.',
   '',
   'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
+  '',
+  'When writing code or files:',
+  '- Say what you assume before you build on it. If two readings are plausible, ask which one is wanted rather than picking silently, and push back when a simpler approach exists.',
+  '- Solve only what was asked: no speculative features, no new abstractions for single-use code, no drive-by improvements to adjacent lines.',
+  '- Change only the lines the request needs, in the style around them. Imports, variables or functions your own edit orphaned are yours to remove; pre-existing dead code is mentioned, not deleted.',
+  '- Verify before handing over: re-read the diff, run the checks the project has, and report what you ran.',
 ].join('\n');
 
 // Puter is the default because it needs no key. The others are direct,
@@ -4151,7 +4646,12 @@ function selectAllowedModels(models, rules) {
   // to OmniRoute added 48 models that a pinned list kept out of the picker
   // entirely. Naming an id that has since been retired simply stops leading
   // rather than removing a model from the list.
-  if (rules.includeRest) (models || []).filter((m) => m && !paid(m)).forEach(take);
+  //
+  // restPrefixes narrows what follows to the namespaces it names -- the ones
+  // on a free tier, on a gateway that prices nothing. An id outside them is
+  // still reachable by naming it in `exact`; it just never follows on its own.
+  const followsOn = (m) => !rules.restPrefixes || rules.restPrefixes.some((prefix) => String(m.id).startsWith(prefix));
+  if (rules.includeRest) (models || []).filter((m) => m && !paid(m) && followsOn(m)).forEach(take);
   return chosen.length ? chosen : models || [];
 }
 
@@ -4417,8 +4917,29 @@ function conversationToMarkdown(messages, title) {
   return lines.join('\n').trim();
 }
 
+// Reads the fragment the Android app opens the page with: "#new" starts a
+// chat, "#share=<text>" drafts shared text into the composer. The fragment
+// never reaches the server, and shared text is only ever placed in the input
+// as a value -- never parsed as HTML or run. Anything else is not ours.
+const MAX_SHARED_TEXT_CHARS = 20000;
+function parseAppLink(hash) {
+  const raw = String(hash || '').replace(/^#/, '');
+  if (raw === 'new') return { action: 'new' };
+  if (!raw.startsWith('share=')) return null;
+  let text;
+  try {
+    text = decodeURIComponent(raw.slice('share='.length));
+  } catch {
+    return null;
+  }
+  text = text.replace(/\r\n?/g, '\n').trim().slice(0, MAX_SHARED_TEXT_CHARS);
+  return text ? { action: 'share', text } : null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    parseAppLink,
+    MAX_SHARED_TEXT_CHARS,
     TRANSCRIPT_BOTTOM_SLACK_PX,
     transcriptAtBottom,
     TRANSCRIPT_JUMP_SOURCES,
@@ -4477,6 +4998,7 @@ if (typeof module !== 'undefined' && module.exports) {
     skillTriggerScore,
     skillTokens,
     stemSkillToken,
+    taskDomainBoost,
     pickSkills,
     renderSkillsPrompt,
     SKILL_COMMAND_ALLOWLIST,
@@ -4488,8 +5010,10 @@ if (typeof module !== 'undefined' && module.exports) {
     MODELS,
     DEFAULT_MODEL,
     isValidModel,
-    escapeHtml,
-    renderMarkdownLite,
+  escapeHtml,
+  renderMarkdownLite,
+  highlightCode,
+  detectCodeLanguage,
     detectsImageIntent,
     detectsImageEditIntent,
     imageAction,

@@ -46,6 +46,23 @@ test('server returns 405 for unsupported methods', async () => {
   assert.equal(status, 405);
 });
 
+test('server serves vendored modules as javascript', async () => {
+  // Mermaid arrives through dynamic import(), which the browser refuses
+  // unless the MIME type is a JavaScript one -- octet-stream fails the load
+  // with no further explanation.
+  const server = http.createServer(createRequestHandler(root));
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  const type = await new Promise((resolve) => {
+    http.get({ port, path: '/vendor/mermaid/mermaid-12.0.0.mjs' }, (res) => {
+      res.resume();
+      resolve(res.headers['content-type']);
+    });
+  });
+  server.close();
+  assert.equal(type, 'text/javascript');
+});
+
 test('server returns real 404 for a missing asset', async () => {
   const server = http.createServer(createRequestHandler(root));
   await new Promise((resolve) => server.listen(0, resolve));

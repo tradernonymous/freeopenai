@@ -1,0 +1,115 @@
+plugins {
+    id("com.android.application")
+    kotlin("android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Build-time defaults, so the first launch has the server (and, if set, the
+// username) already filled in. Neither is a secret: the server address is
+// public and a username on its own opens nothing. The password is never a
+// build input -- an APK can be unpacked by anyone who has it, so anything
+// baked in here is published, not protected. It is typed once on the phone
+// and sealed there (see SecureStore).
+val defaultServer: String = System.getenv("APK_SERVER_URL") ?: (project.findProperty("apkServerUrl") as String?) ?: ""
+val defaultUsername: String = System.getenv("APK_USERNAME") ?: (project.findProperty("apkUsername") as String?) ?: ""
+// CI passes the run number so every build installs over the one before it;
+// Android refuses an update whose versionCode does not go up.
+val buildNumber: Int = System.getenv("APK_VERSION_CODE")?.toIntOrNull() ?: 2
+val keystorePath: String? = System.getenv("APK_KEYSTORE_FILE")
+// Where the app looks for a newer build: version.json in the rolling
+// apk-latest release. CI sets it from the repository; a local build has none
+// and simply never offers updates.
+val updateUrl: String = System.getenv("APK_UPDATE_URL") ?: ""
+
+fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+android {
+    namespace = "com.freeai4u.app"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.freeai4u.app"
+        // Android 10: MediaStore saves into Downloads with no storage
+        // permission, which is what lets the manifest keep INTERNET alone.
+        minSdk = 29
+        targetSdk = 35
+        versionCode = buildNumber
+        versionName = "2.0.$buildNumber"
+        buildConfigField("String", "DEFAULT_SERVER", quoted(defaultServer))
+        buildConfigField("String", "DEFAULT_USERNAME", quoted(defaultUsername))
+        buildConfigField("String", "UPDATE_URL", quoted(updateUrl))
+    }
+
+    signingConfigs {
+        // A release key only when CI (or a developer) supplies one; without
+        // it the release variant is unsigned and cannot install, and the
+        // debug variant below is what gets built instead.
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("APK_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("APK_KEY_ALIAS") ?: "freeai4u"
+                keyPassword = System.getenv("APK_KEY_PASSWORD") ?: System.getenv("APK_KEYSTORE_PASSWORD")
+                storeType = "PKCS12"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // NOT debuggable, even for testing: adb must not be able to attach
+            // and read memory, and logcat must not see app logs. Installs and
+            // runs like any store app; debugging happens through the UI itself.
+            isDebuggable = false
+            applicationIdSuffix = ".debug"
+        }
+        release {
+            // The build that goes on the phone: non-debuggable, minified,
+            // shrunk, signed with the project's own key so each build updates
+            // the last in place.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+dependencies {
+    // Native screens are Compose + Material 3; the web tools screen stays a
+    // plain-view WebView. R8 strips the unused parts of the icon set.
+    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    // Real org.json for local JVM tests only: on device the framework copy is
+    // used and this never ships. (android.jar methods throw "not mocked"
+    // under plain unit tests, so the parser tests need the real thing.)
+    testImplementation("org.json:json:20240303")
+    testImplementation("junit:junit:4.13.2")
+}

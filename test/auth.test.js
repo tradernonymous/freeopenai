@@ -4,10 +4,19 @@ const {
   getConfiguredAccounts,
   verifyCredentials,
   signSession,
+  readSession,
   verifySession,
   parseCookieHeader,
   checkRateLimit,
 } = require('../auth.js');
+
+test('readSession returns the name and the expiry the token was signed with', () => {
+  const token = signSession('shh', 'alice', 1000, 500);
+  assert.deepEqual(readSession('shh', token, 1200), { username: 'alice', exp: 1500 });
+  assert.equal(readSession('shh', token, 1500), null, 'expired at exactly exp');
+  assert.equal(readSession('other', token, 1200), null, 'wrong secret');
+  assert.equal(readSession('shh', 'not-a-token', 1200), null);
+});
 
 test('getConfiguredAccounts reads only complete AUTH_USER_N/AUTH_PASS_N pairs', () => {
   const env = { AUTH_USER_1: 'alice', AUTH_PASS_1: 'p1', AUTH_USER_2: 'bob', AUTH_USER_3: '', AUTH_PASS_3: 'orphan' };

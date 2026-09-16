@@ -226,3 +226,15 @@ __marimo__/
 # The scratch directory shell commands run in (see README: Running a command).
 # Created on the server and inside the container; never committed.
 workspace/
+
+# Android testing APK (CI builds it; never commit SDK state or outputs)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+# The release signing key lives in GitHub secrets and a backup off the repo.
+*.p12
+*.jks
+*.keystore
+

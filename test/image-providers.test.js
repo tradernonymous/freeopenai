@@ -16,25 +16,13 @@ const { createRequestHandler, clearModelCache, clearImageDiscoveryCache, imageMo
 // Every variable that decides which providers are configured. Cleared before
 // each test so one test's key cannot be what makes the next one pass.
 const PROVIDER_VARS = [
-  'NARA_API_KEY', 'NARA_IMAGE_MODEL', 'NARA_IMAGES_BASE_URL', 'NARA_IMAGE_SIZE',
+  'NARA_API_KEY', 'NARA_BASE_URL', 'NARA_MODELS', 'NARA_IMAGE_MODEL', 'NARA_IMAGES_BASE_URL', 'NARA_IMAGE_SIZE',
   'OPENROUTER_API_KEY', 'OPENROUTER_IMAGE_MODEL', 'OPENROUTER_IMAGES_BASE_URL',
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
-  'HF_TOKEN', 'HF_IMAGE_MODEL', 'HF_IMAGES_BASE_URL',
   'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL', 'OMNIROUTE_BASE_URL',
-  'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_IMAGE_MODEL', 'CLOUDFLARE_IMAGES_BASE_URL',
-  'OLLAMA_IMAGE_MODEL',
-  // The generic rule below is tested through one provider and has to stay
-  // general, so the variables it reads are cleared like every other provider's.
-  'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'MISTRAL_MODELS', 'MISTRAL_IMAGE_MODEL', 'MISTRAL_IMAGES_BASE_URL',
   'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
-  // Gemini's own set: its chat key is one thing and its image store another, so
-  // a test that left either behind made the next test's candidate list depend
-  // on it -- which is exactly how the key leaked into a test that had set no
-  // provider at all.
-  'GEMINI_API_KEY', 'GEMINI_IMAGE_MODEL', 'GEMINI_MODELS', 'GEMINI_IMAGES_BASE_URL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
-  'POLLINATIONS_FREE', 'POLLINATIONS_TOKEN', 'POLLINATIONS_IMAGE_MODEL', 'POLLINATIONS_IMAGES_BASE_URL',
 ];
 
 function clearProviders() {
@@ -49,11 +37,6 @@ function clearProviders() {
   // that gate, so the baseline is a key with credits on it; the gate has a test
   // of its own below.
   process.env.OPENROUTER_FREE_ONLY = '0';
-  // The keyless drawer is configured by existing, so without this every test
-  // that means "nothing is set up" would instead be a live request to a public
-  // service -- and would pass for the wrong reason. The tests that are about it
-  // turn it back on.
-  process.env.POLLINATIONS_FREE = '0';
 }
 
 // A stand-in upstream that records every request and answers with whatever the
@@ -214,16 +197,16 @@ test('when every provider fails the message names each one and what it said', as
   const up = await upstreamOf((req, res) => jsonAnswer(res, 500, { error: 'boom' }));
   process.env.OPENROUTER_API_KEY = 'or-key';
   process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
-  process.env.HF_TOKEN = 'hf-key';
-  process.env.HF_IMAGES_BASE_URL = 'http://127.0.0.1:9';
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = 'http://127.0.0.1:9';
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
     assert.equal(res.status, 502);
     const body = await res.json();
     assert.match(body.error, /OpenRouter \(/);
-    assert.match(body.error, /HuggingFace \(/);
-    assert.deepEqual(body.tried, ['OpenRouter', 'HuggingFace']);
+    assert.match(body.error, /NVIDIA \(/);
+    assert.deepEqual(body.tried, ['OpenRouter', 'NVIDIA']);
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
@@ -239,7 +222,7 @@ test('nothing configured at all names every variable that would help', async () 
     assert.match(body.error, /No image provider is ready/);
     assert.match(body.error, /NARA_API_KEY/);
     assert.match(body.error, /OPENROUTER_API_KEY/);
-    assert.match(body.error, /HF_TOKEN/);
+    assert.match(body.error, /NVIDIA_API_KEY/);
     assert.match(body.error, /Puter/, 'and says Puter needs no configuration at all');
   } finally {
     app.close();
@@ -247,32 +230,6 @@ test('nothing configured at all names every variable that would help', async () 
 });
 
 // ---- the shapes -------------------------------------------------------------
-
-test('the HuggingFace task route is read as bytes, not as a document', async () => {
-  // Text-to-image on HF is not the OpenAI-compatible router: it is the task
-  // route, {inputs, parameters} in and the picture itself out.
-  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const up = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/models/stabilityai/stable-diffusion-3-medium-diffusers');
-    assert.deepEqual(JSON.parse(raw), { inputs: 'a fox', parameters: { width: 1024, height: 1024 } });
-    res.writeHead(200, { 'Content-Type': 'image/png' });
-    res.end(png);
-  });
-  process.env.HF_TOKEN = 'hf-key';
-  process.env.HF_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', size: '1024x1024' });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.provider, 'huggingface');
-    assert.equal(body.data[0].b64_json, png.toString('base64'));
-    assert.equal(body.data[0].media_type, 'image/png');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
 
 test('the NVCF GenAI shape is normalized, and its 404 falls through to the OpenAI one', async () => {
   let attempt = 0;
@@ -583,22 +540,21 @@ test('a chat model that cannot draw is not the end of the provider', async () =>
 });
 
 test('a preference is not a pin: a provider that cannot draw is stepped past', async () => {
-  const hugging = await upstreamOf((req, res, raw) => {
+  const nvidia = await upstreamOf((req, res, raw) => {
     // Deliberately not the store's default: this test is about the order
     // carrying on past a preference, and an explicit model that happened to
     // equal the default would not show the override was honoured.
-    assert.equal(req.url, '/models/stabilityai/stable-diffusion-xl-base-1.0');
-    assert.equal(JSON.parse(raw).inputs, 'a fox');
-    res.writeHead(200, { 'Content-Type': 'image/png' });
-    res.end(Buffer.from([0xff, 0xd8, 0xff]));
+    assert.equal(req.url, '/genai/black-forest-labs/flux.1-dev');
+    assert.equal(JSON.parse(raw).prompt, 'a fox');
+    jsonAnswer(res, 200, { artifacts: [{ base64: 'WFla' }] });
   });
   const nara = await upstreamOf((req, res) => jsonAnswer(res, 500, { error: 'down' }));
   process.env.NARA_API_KEY = 'nara-key';
   process.env.NARA_IMAGE_MODEL = 'nara-image';
   process.env.NARA_IMAGES_BASE_URL = nara.url;
-  process.env.HF_TOKEN = 'hf';
-  process.env.HF_IMAGE_MODEL = 'stabilityai/stable-diffusion-xl-base-1.0';
-  process.env.HF_IMAGES_BASE_URL = hugging.url;
+  process.env.NVIDIA_API_KEY = 'nv';
+  process.env.NVIDIA_IMAGE_MODEL = 'black-forest-labs/flux.1-dev';
+  process.env.NVIDIA_IMAGES_BASE_URL = nvidia.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', {
@@ -607,11 +563,11 @@ test('a preference is not a pin: a provider that cannot draw is stepped past', a
       model: 'nara-chat-model',
     });
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).provider, 'huggingface', 'the order carries on behind the preference');
+    assert.equal((await res.json()).provider, 'nvidia', 'the order carries on behind the preference');
   } finally {
     app.close();
     await new Promise((r) => nara.server.close(r));
-    await new Promise((r) => hugging.server.close(r));
+    await new Promise((r) => nvidia.server.close(r));
   }
 });
 
@@ -737,18 +693,6 @@ test('a shape the service rejects is dropped and retried, on 422 as well as 400'
   }
 });
 
-test('the HuggingFace default is a model that provider still serves', async () => {
-  // FLUX.1-schnell was retired from hf-inference and answers 410 "deprecated
-  // and no longer supported", which made HuggingFace a guaranteed failure in
-  // the chain rather than a fallback.
-  const { LLM_PROVIDERS } = require('../server.js');
-  assert.equal(
-    LLM_PROVIDERS.huggingface.image.defaultModel,
-    'stabilityai/stable-diffusion-3-medium-diffusers',
-  );
-  assert.doesNotMatch(LLM_PROVIDERS.huggingface.image.defaultModel, /FLUX\.1-schnell/);
-});
-
 test('a service that never answers costs its own slice, not everyone else’s', async () => {
   // The failure this reproduces: one shared 55s clock for the whole order, so
   // the first unreachable service — a gateway behind a dead tunnel — spent the
@@ -865,91 +809,15 @@ test('an image model of its own still takes the chat model as a preference', asy
   }
 });
 
-// --- Cloudflare Workers AI -------------------------------------------------
+// ---- the model a provider draws with, when nothing ships one ----------------
 //
-// Added because it was the last free drawer standing: NVIDIA's signup credit
-// runs out once, HuggingFace's allowance is monthly, and Cloudflare's is a
-// daily one that refills. Its API is unlike the others in two ways worth
-// pinning: the account id is in the URL, and the picture comes back as base64
-// inside `result` rather than in an OpenAI-shaped document.
+// One variable names the model, or the provider's own catalogue is read for
+// one, and the provider then draws on the same key it chats on. Nara stands in
+// for that shape here because it is the service in the order that ships no
+// default image model: the host is a stand-in, and what these assert is the
+// rule rather than anything about Nara.
 
-test('Cloudflare runs the model by name and reads the picture out of result', async () => {
-  const up = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/run/@cf/black-forest-labs/flux-1-schnell', 'the model is named in the path');
-    assert.deepEqual(JSON.parse(raw), { prompt: 'a fox' });
-    jsonAnswer(res, 200, { result: { image: 'QUJD' }, success: true });
-  });
-  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
-  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
-  process.env.CLOUDFLARE_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.provider, 'cloudflare');
-    // Normalised where every other shape is, so the browser has one reader.
-    assert.equal(body.data[0].b64_json, 'QUJD');
-    assert.equal(up.seen[0].headers.authorization, 'Bearer cf-token');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('Cloudflare without an account id says which variable is missing', async () => {
-  // The address contains the account id, so a key alone cannot build a URL.
-  // Left to fail later it would read as a malformed-URL crash, which names
-  // nothing the operator can act on.
-  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
-  const app = await startApp();
-  try {
-    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    const cf = listed.providers.find((p) => p.id === 'cloudflare');
-    assert.equal(cf.ready, false);
-    assert.match(cf.reason, /CLOUDFLARE_ACCOUNT_ID/);
-  } finally {
-    app.close();
-  }
-});
-
-test('Cloudflare leads the metered services, because its allowance refills', async () => {
-  const { LLM_PROVIDERS } = require('../server.js');
-  assert.ok(LLM_PROVIDERS.cloudflare.image, 'cloudflare has to declare an image store to be a candidate');
-  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { result: { image: 'QUJD' } }));
-  const nv = await upstreamOf((req, res) => jsonAnswer(res, 200, { artifacts: [{ base64: 'WFla' }] }));
-  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
-  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
-  process.env.CLOUDFLARE_IMAGES_BASE_URL = up.url;
-  process.env.NVIDIA_API_KEY = 'nv-key';
-  process.env.NVIDIA_IMAGES_BASE_URL = nv.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    assert.equal((await res.json()).provider, 'cloudflare');
-    assert.equal(nv.seen.length, 0, 'the daily allowance is asked before the one that runs out');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-    await new Promise((r) => nv.server.close(r));
-  }
-});
-
-// ---- any provider, not only the seven --------------------------------------
-//
-// Only seven providers could draw, and the list was code. So a chat on anything
-// else -- a Google key, a proxy in front of one, an OpenAI-shaped gateway -- could
-// produce a picture only through Puter, in the browser, on the visitor's own
-// account: the one service the reader had not chosen. The conversation's provider
-// was not merely last, it was dropped, and naming one outright answered
-// "Unknown image provider".
-//
-// Mistral stands in for that shape here. Nothing below is Mistral's business
-// beyond the name: the host is a stand-in, and what these assert is the rule the
-// chat path already speaks -- one variable names the model, and the provider then
-// draws on the same URL and key it chats on.
-
-const OFF_ORDER = 'mistral';
+const OFF_ORDER = 'nara';
 const OFF_ORDER_MODEL = 'some/image-model-one';
 
 // The off-order provider, served by a stand-in that answers the way any
@@ -963,72 +831,30 @@ async function offOrderUpstream() {
     }
     jsonAnswer(res, 200, { data: [{ url: 'https://img.test/off-order.png' }] });
   });
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
-  process.env.MISTRAL_IMAGE_MODEL = OFF_ORDER_MODEL;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
+  process.env.NARA_IMAGE_MODEL = OFF_ORDER_MODEL;
   return up;
 }
-
-test('a provider outside the built-in order draws with the image model its operator named', async () => {
-  const up = await offOrderUpstream();
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', {
-      prompt: 'a fox',
-      preferProvider: OFF_ORDER,
-      model: 'a-chat-model',
-    });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.data[0].url, 'https://img.test/off-order.png');
-    assert.equal(body.provider, OFF_ORDER);
-    // The chat's own model is asked first, because that is the model the
-    // conversation is on -- and the answer names the model that actually drew,
-    // which is the provider's own image model, not the one the request opened
-    // with.
-    assert.equal(body.model, OFF_ORDER_MODEL);
-    assert.equal(up.seen.length, 2, 'one free 400 on the chat model, then the model that can draw');
-    assert.equal(JSON.parse(up.seen[0].body).model, 'a-chat-model');
-    assert.equal(JSON.parse(up.seen[1].body).model, OFF_ORDER_MODEL);
-    assert.equal(up.seen[0].url, '/images/generations');
-    assert.equal(up.seen[0].headers.authorization, 'Bearer mistral-key');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('naming an off-order provider is honoured, not refused as unknown', async () => {
-  const up = await offOrderUpstream();
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: OFF_ORDER });
-    assert.equal(res.status, 200);
-    assert.equal((await res.json()).provider, OFF_ORDER);
-    assert.equal(up.seen.length, 1, 'a service whose model is its own is asked once');
-    assert.equal(JSON.parse(up.seen[0].body).model, OFF_ORDER_MODEL);
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
 
 test('an off-order provider whose catalogue publishes no image model answers with its own variable', async () => {
   // Read first, named second: the catalogue is asked for an image model, and
   // only when it has none does the operator have to supply one.
   const up = await upstreamOf((req, res) => {
     assert.equal(req.url, '/models');
-    jsonAnswer(res, 200, { data: [{ id: 'mistral-large-latest' }, { id: 'mistral-embed' }] });
+    jsonAnswer(res, 200, { data: [{ id: 'nara-large-latest' }, { id: 'nara-embed' }] });
   });
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: OFF_ORDER });
     assert.equal(res.status, 400);
     // Naming one provider asks a question about that provider, so the answer is
     // about that provider rather than a list of seven services to set up.
-    assert.match((await res.json()).error, /MISTRAL_IMAGE_MODEL/);
+    assert.match((await res.json()).error, /NARA_IMAGE_MODEL/);
     assert.equal(up.seen.length, 1, 'and its catalogue was read before the variable was named');
   } finally {
     app.close();
@@ -1040,16 +866,19 @@ test('the provider report lists a configured chat provider that cannot draw yet'
   // "My provider is not in this list at all" is the question the report exists to
   // answer, and a provider that draws with one more variable is the answer that
   // needs the variable named.
-  process.env.MISTRAL_API_KEY = 'mistral-key';
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ id: 'nara-large-latest' }] }));
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
   const app = await startApp();
   try {
     const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    const mistral = listed.providers.find((p) => p.id === OFF_ORDER);
-    assert.ok(mistral, 'a configured provider that could draw is listed');
-    assert.equal(mistral.ready, false);
-    assert.match(mistral.reason, /MISTRAL_IMAGE_MODEL/);
+    const nara = listed.providers.find((p) => p.id === OFF_ORDER);
+    assert.ok(nara, 'a configured provider that could draw is listed');
+    assert.equal(nara.ready, false);
+    assert.match(nara.reason, /NARA_IMAGE_MODEL/);
   } finally {
     app.close();
+    await new Promise((r) => up.server.close(r));
   }
 });
 
@@ -1058,9 +887,9 @@ test('the report lists it as ready once the model is named', async () => {
   const app = await startApp();
   try {
     const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    const mistral = listed.providers.find((p) => p.id === OFF_ORDER);
-    assert.equal(mistral.ready, true);
-    assert.equal(mistral.model, OFF_ORDER_MODEL);
+    const nara = listed.providers.find((p) => p.id === OFF_ORDER);
+    assert.equal(nara.ready, true);
+    assert.equal(nara.model, OFF_ORDER_MODEL);
     // Report and draw agree, which is the property the report is read for.
     assert.deepEqual(listed.providers.filter((p) => p.ready).map((p) => p.id), [OFF_ORDER]);
   } finally {
@@ -1071,9 +900,10 @@ test('the report lists it as ready once the model is named', async () => {
 
 test('nothing can draw, and the sentence leads with the provider the chat is on', async () => {
   const up = await upstreamOf((req, res) =>
-    jsonAnswer(res, 200, { data: [{ id: 'mistral-large-latest' }, { id: 'mistral-small' }] }));
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
+    jsonAnswer(res, 200, { data: [{ id: 'nara-large-latest' }, { id: 'nara-small' }] }));
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
@@ -1082,8 +912,8 @@ test('nothing can draw, and the sentence leads with the provider the chat is on'
     // A deployment whose chats run through a proxy has no Nara key and never
     // will, and the old sentence never once mentioned the provider the user had
     // just been chatting on.
-    assert.match(message, /^No image provider is ready\. mistral \(/);
-    assert.match(message, /MISTRAL_IMAGE_MODEL/);
+    assert.match(message, /^No image provider is ready\. nara \(/);
+    assert.match(message, /NARA_IMAGE_MODEL/);
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
@@ -1094,12 +924,12 @@ test('nothing can draw, and the sentence leads with the provider the chat is on'
 
 // A catalogue with everything on it: a chat model, an indexer, a vision model
 // whose id says image, and the one model that can actually draw.
-const MISTRAL_CATALOGUE = {
+const NARA_CATALOGUE = {
   data: [
-    { id: 'mistral-large-latest' },
-    { id: 'mistral-embed' },
+    { id: 'nara-large-latest' },
+    { id: 'nara-embed' },
     { id: 'pixtral-vision-large' },
-    { id: 'mistral-image-latest' },
+    { id: 'nara-image-latest' },
   ],
 };
 
@@ -1127,28 +957,29 @@ test('a provider that publishes an image model draws with no variable named', as
   // `gemini-2.5-flash-image` through this same catalogue, and neither reaches
   // it through a default this app could ship.
   const up = await upstreamOf((req, res, raw) => {
-    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
+    if (req.url === '/models') return jsonAnswer(res, 200, NARA_CATALOGUE);
     const body = JSON.parse(raw);
-    if (body.model !== 'mistral-image-latest') {
+    if (body.model !== 'nara-image-latest') {
       return jsonAnswer(res, 400, { error: { message: body.model + ' makes no pictures' } });
     }
     jsonAnswer(res, 200, { data: [{ url: 'https://img.test/discovered.png' }] });
   });
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', {
       prompt: 'a fox',
       preferProvider: OFF_ORDER,
-      model: 'mistral-large-latest',
+      model: 'nara-large-latest',
     });
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.provider, OFF_ORDER);
     // The answer names the model that actually drew: the catalogue's, not the
     // chat model the request opened with.
-    assert.equal(body.model, 'mistral-image-latest');
+    assert.equal(body.model, 'nara-image-latest');
     assert.equal(body.data[0].url, 'https://img.test/discovered.png');
     assert.deepEqual(up.seen.map((s) => s.url), ['/models', '/images/generations', '/images/generations'],
       'its catalogue is read, the chat model is tried, then the model that can draw');
@@ -1158,7 +989,7 @@ test('a provider that publishes an image model draws with no variable named', as
     const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
     const row = listed.providers.find((p) => p.id === OFF_ORDER);
     assert.equal(row.ready, true);
-    assert.equal(row.model, 'mistral-image-latest');
+    assert.equal(row.model, 'nara-image-latest');
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
@@ -1167,18 +998,19 @@ test('a provider that publishes an image model draws with no variable named', as
 
 test('a catalogue is read once, not once per draw', async () => {
   const up = await upstreamOf((req, res, raw) => {
-    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
-    assert.equal(JSON.parse(raw).model, 'mistral-image-latest');
+    if (req.url === '/models') return jsonAnswer(res, 200, NARA_CATALOGUE);
+    assert.equal(JSON.parse(raw).model, 'nara-image-latest');
     jsonAnswer(res, 200, { data: [{ url: 'https://img.test/twice.png' }] });
   });
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     for (let i = 0; i < 2; i++) {
       const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox ' + i, preferProvider: OFF_ORDER });
       assert.equal(res.status, 200);
-      assert.equal((await res.json()).model, 'mistral-image-latest');
+      assert.equal((await res.json()).model, 'nara-image-latest');
     }
     assert.equal(up.seen.filter((s) => s.url === '/models').length, 1);
     assert.deepEqual(up.seen.map((s) => s.url), ['/models', '/images/generations', '/images/generations']);
@@ -1193,13 +1025,14 @@ test('a catalogue that cannot be read is not a failed request', async () => {
   // which is where this route stood before anything was read: the draw answers a
   // 400 naming the variable, rather than an error about the catalogue.
   const up = await upstreamOf((req, res) => jsonAnswer(res, 500, { error: { message: 'catalogue is down' } }));
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /MISTRAL_IMAGE_MODEL/);
+    assert.match((await res.json()).error, /NARA_IMAGE_MODEL/);
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
@@ -1212,18 +1045,19 @@ test('a discovered model never leaks into the picker’s list', async () => {
   // apart from it on purpose: writing raw catalogue ids there is how a picker
   // comes to show hundreds of models nobody can pick from.
   const up = await upstreamOf((req, res) => {
-    if (req.url === '/models') return jsonAnswer(res, 200, MISTRAL_CATALOGUE);
+    if (req.url === '/models') return jsonAnswer(res, 200, NARA_CATALOGUE);
     jsonAnswer(res, 200, { data: [{ url: 'https://img.test/one.png' }] });
   });
-  process.env.MISTRAL_API_KEY = 'mistral-key';
-  process.env.MISTRAL_BASE_URL = up.url;
-  process.env.MISTRAL_MODELS = 'mistral-large-latest';
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = up.url;
+  process.env.NARA_IMAGES_BASE_URL = up.url;
+  process.env.NARA_MODELS = 'nara-large-latest';
   const app = await startApp();
   try {
     const drawn = await post(app, '/api/llm/images/generations', { prompt: 'a fox', preferProvider: OFF_ORDER });
     assert.equal(drawn.status, 200);
-    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=mistral`)).json();
-    assert.deepEqual(listed.map((m) => m.id), ['mistral-large-latest'],
+    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=nara`)).json();
+    assert.deepEqual(listed.map((m) => m.id), ['nara-large-latest'],
       'the picker still shows exactly what the operator declared');
   } finally {
     app.close();
@@ -1250,261 +1084,52 @@ test('a speech service is not made into a drawing key by naming one', async () =
   }
 });
 
-// --- Pollinations, the keyless one ------------------------------------------
-//
-// Puter has always drawn for free, but in the browser and only for a visitor
-// signed in to it: a deployment whose only key belongs to a service that cannot
-// draw had no picture at all. Pollinations is the same offer from the server --
-// one GET whose path is the prompt, no account, and a width/height it honours
-// exactly -- and it is last in the order because it is a public community
-// service, not because it is a worse picture than a key the operator already has.
-
-test('a deployment with no keys at all draws, on the service that needs none', async () => {
-  const up = await upstreamOf((req, res) => {
-    // The whole request is its URL: the size asked for, and the model.
-    assert.equal(req.headers.authorization, undefined, 'no key means no header, not a bare Bearer');
-    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-    res.end(Buffer.from('JPEGBYTES'));
-  });
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red fox', size: '1024x576' });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.provider, 'pollinations');
-    assert.equal(body.model, 'flux');
-    assert.equal(up.seen[0].url, '/prompt/a%20red%20fox?width=1024&height=576&model=flux',
-      'the size travels in the pixels it was asked for, not as a size field');
-    // Bytes are normalised where every other shape's are, so the browser has one
-    // reader and the image is not re-encoded on the way.
-    assert.equal(body.data[0].b64_json, Buffer.from('JPEGBYTES').toString('base64'));
-    assert.equal(body.data[0].media_type, 'image/jpeg');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('a request that names no size still draws, because this service needs one', async () => {
-  // Asked without width and height, image.pollinations.ai answers 200 with an
-  // empty body -- and this route reads a 200 with no picture as the service
-  // failing at the job, so a caller who named no size was told "Image
-  // generation failed on Pollinations (free): answered without a picture" for a
-  // request the service never refused. The pair is not optional here.
-  const up = await upstreamOf((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-    res.end(Buffer.from('JPEGBYTES'));
-  });
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red fox' });
-    assert.equal(res.status, 200);
-    assert.equal(up.seen[0].url, '/prompt/a%20red%20fox?width=1024&height=1024&model=flux');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('POLLINATIONS_FREE=0 refuses it, and the old answer comes back', async () => {
-  // Sending a prompt to a public service is the operator's call even when it
-  // costs nothing, so refusing it is one variable -- and a deployment that has
-  // refused it is back to the message that names every key that would help.
-  process.env.POLLINATIONS_FREE = '0';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = 'http://127.0.0.1:1';
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /NARA_API_KEY/);
-    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    assert.equal(listed.providers.some((p) => p.id === 'pollinations'), false);
-  } finally {
-    app.close();
-  }
-});
-
-test('the keyless service is asked last: a key that works is never second choice', async () => {
-  const nara = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/nara.png' }] }));
-  const free = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ b64_json: 'FREE' }] }));
-  process.env.NARA_API_KEY = 'n-key';
-  process.env.NARA_IMAGE_MODEL = 'nara-image-1';
-  process.env.NARA_IMAGES_BASE_URL = nara.url;
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = free.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    assert.equal((await res.json()).provider, 'nara');
-    assert.equal(free.seen.length, 0, 'a configured key draws before the shared free one');
-  } finally {
-    app.close();
-    await new Promise((r) => nara.server.close(r));
-    await new Promise((r) => free.server.close(r));
-  }
-});
-
-test('the keyless service is what a buried failure falls back to', async () => {
-  // The case the whole provider exists for: the configured service is there and
-  // says no. Before this, the draw ended as "no image provider is ready".
-  const broken = await upstreamOf((req, res) => jsonAnswer(res, 403, { error: { message: 'quota' } }));
-  const free = await upstreamOf((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'image/png' });
-    res.end(Buffer.from('PNG'));
-  });
-  process.env.NARA_API_KEY = 'n-key';
-  process.env.NARA_IMAGE_MODEL = 'nara-image-1';
-  process.env.NARA_IMAGES_BASE_URL = broken.url;
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = free.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.provider, 'pollinations');
-    assert.equal(free.seen.length, 1);
-  } finally {
-    app.close();
-    await new Promise((r) => broken.server.close(r));
-    await new Promise((r) => free.server.close(r));
-  }
-});
-
-// --- Gemini, on the endpoint that actually draws ----------------------------
-//
-// A Google key could chat on this app and never make a picture. The OpenAI shim
-// it chats through has no /images/generations, so Gemini is the one provider
-// whose images do not live where its chat does, and the store has to say so.
-
-test('Gemini draws on /interactions, not on the chat shim', async () => {
-  const up = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/interactions');
-    assert.equal(req.headers['x-goog-api-key'], 'g-key', 'the native API reads its key from here');
-    assert.deepEqual(JSON.parse(raw), {
-      model: 'gemini-3.1-flash-image',
-      input: [{ type: 'text', text: 'a red fox' }],
-    });
-    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
-  });
-  process.env.GEMINI_API_KEY = 'g-key';
-  process.env.GEMINI_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a red fox' });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.provider, 'gemini');
-    assert.equal(body.data[0].b64_json, 'QUJD');
-    assert.equal(body.data[0].media_type, 'image/png');
-    assert.equal(up.seen.length, 1, 'and no attempt on the shim, which has no image endpoint');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('Gemini is told the shape that was asked for, in its own field', async () => {
-  const up = await upstreamOf((req, res, raw) => {
-    assert.deepEqual(JSON.parse(raw).response_format, { type: 'image', aspect_ratio: '16:9' });
-    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
-  });
-  process.env.GEMINI_API_KEY = 'g-key';
-  process.env.GEMINI_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', size: '1640x856' });
-    assert.equal(res.status, 200);
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('a Gemini edit hands over the source picture as a second input', async () => {
-  const up = await upstreamOf((req, res, raw) => {
-    assert.equal(req.url, '/interactions');
-    assert.deepEqual(JSON.parse(raw).input, [
-      { type: 'text', text: 'make it red' },
-      { type: 'image', mime_type: 'image/png', data: 'QUJD' },
-    ]);
-    jsonAnswer(res, 200, { output_image: { data: 'RURJVA==', mime_type: 'image/png' } });
-  });
-  process.env.GEMINI_API_KEY = 'g-key';
-  process.env.GEMINI_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
-    assert.equal(res.status, 200);
-    assert.equal((await res.json()).data[0].b64_json, 'RURJVA==');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
 // --- a picture is not asked for by the chat's model --------------------------
 //
 // The conversation's model is a preference everywhere the drawing API takes a
 // model id -- which is what makes "generate an image" follow the model picker.
-// On the services that run a model *by name* it is not a weaker choice but a
-// different request entirely: a text model sent through an image endpoint
-// answers 200 with prose in it, and this route reads a 200 with no picture as
-// the service failing at the job. The chat's id never reaches those endpoints.
+// On a service that runs a model *by name* -- NVIDIA's /genai/<model> -- it is
+// not a weaker choice but a different request entirely: a text model sent
+// through an image endpoint answers 200 with prose in it, and this route reads
+// a 200 with no picture as the service failing at the job. The chat's id never
+// reaches that endpoint.
 
 test('a run-by-name service draws with its own model, not the conversation\u2019s', async () => {
-  // One rule, two shapes that need it: Workers AI names the model in the path
-  // and Gemini names it in the body, and on both a chat id is a request for a
-  // text model through an image endpoint -- which answers 200 with prose in it,
-  // the one failure this route cannot tell apart from a service that cannot
-  // draw. Each store has to say so itself, so each is asked here.
-  const cf = await upstreamOf((req, res) => {
-    assert.equal(req.url, '/run/@cf/black-forest-labs/flux-1-schnell',
-      'the gpt-oss chat model is not a name on Workers AI\u2019s image endpoint');
-    jsonAnswer(res, 200, { result: { image: 'QUJD' } });
+  const nv = await upstreamOf((req, res) => {
+    assert.equal(req.url, '/genai/black-forest-labs/flux.1-schnell',
+      'a chat model is not a name on NVIDIA\u2019s image endpoint');
+    jsonAnswer(res, 200, { artifacts: [{ base64: 'WFla' }] });
   });
-  const gem = await upstreamOf((req, res, raw) => {
-    assert.equal(JSON.parse(raw).model, 'gemini-3.1-flash-image',
-      'and a Gemini text model is not a model its image API can run');
-    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
-  });
-  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
-  process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-1';
-  process.env.CLOUDFLARE_IMAGES_BASE_URL = cf.url;
-  process.env.GEMINI_API_KEY = 'g-key';
-  process.env.GEMINI_IMAGES_BASE_URL = gem.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = nv.url;
   const app = await startApp();
   try {
-    const drew = async (provider, model) => (await (await post(app, '/api/llm/images/generations', {
-      prompt: 'a fox', preferProvider: provider, model,
-    })).json()).model;
-    assert.equal(await drew('cloudflare', '@cf/openai/gpt-oss-120b'), '@cf/black-forest-labs/flux-1-schnell');
-    assert.equal(await drew('gemini', 'gemini-3.7-flash'), 'gemini-3.1-flash-image');
+    const res = await post(app, '/api/llm/images/generations', {
+      prompt: 'a fox', preferProvider: 'nvidia', model: 'nvidia/llama-3.3-nemotron-super-49b-v1',
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).model, 'black-forest-labs/flux.1-schnell');
+    assert.equal(nv.seen.length, 1, 'and no round trip was spent on the chat model');
   } finally {
     app.close();
-    await new Promise((r) => cf.server.close(r));
-    await new Promise((r) => gem.server.close(r));
+    await new Promise((r) => nv.server.close(r));
   }
 });
 
 test('an operator can still pin the model those services draw with', async () => {
   // ignore-the-chat's-model must not mean ignore-the-operator's.
-  const up = await upstreamOf((req, res, raw) => {
-    assert.equal(JSON.parse(raw).model, 'gemini-3-pro-image');
-    jsonAnswer(res, 200, { output_image: { data: 'QUJD', mime_type: 'image/png' } });
+  const up = await upstreamOf((req, res) => {
+    assert.equal(req.url, '/genai/black-forest-labs/flux.1-dev');
+    jsonAnswer(res, 200, { artifacts: [{ base64: 'WFla' }] });
   });
-  process.env.GEMINI_API_KEY = 'g-key';
-  process.env.GEMINI_IMAGE_MODEL = 'gemini-3-pro-image';
-  process.env.GEMINI_IMAGES_BASE_URL = up.url;
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGE_MODEL = 'black-forest-labs/flux.1-dev';
+  process.env.NVIDIA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox' });
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).model, 'gemini-3-pro-image');
+    assert.equal((await res.json()).model, 'black-forest-labs/flux.1-dev');
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
@@ -1515,10 +1140,10 @@ test('an edit is not sent to a service that can only generate', async () => {
   // The picture on screen is what the request was about. A service that takes
   // no source picture would answer with a fresh drawing of the same words, and
   // nothing on screen would say the change had not been made -- so it is
-  // stepped past by name instead.
-  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ b64_json: 'FRESH' }] }));
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
+  // stepped past by name instead. NVIDIA's GenAI shape generates and nothing else.
+  const up = await upstreamOf((req, res) => jsonAnswer(res, 200, { artifacts: [{ base64: 'FRESH' }] }));
+  process.env.NVIDIA_API_KEY = 'nv-key';
+  process.env.NVIDIA_IMAGES_BASE_URL = up.url;
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
@@ -1526,10 +1151,10 @@ test('an edit is not sent to a service that can only generate', async () => {
     const body = await res.json();
     assert.match(body.error, /cannot edit, only generate/);
     // What to do about it, because "cannot edit, only generate" on a deployment
-    // whose only drawer is the keyless one is otherwise the end of the road.
+    // whose only drawer cannot edit is otherwise the end of the road.
     assert.match(body.error, /An edit needs a service that takes the picture being edited/);
     assert.match(body.error, /Draw with Puter/);
-    assert.deepEqual(body.tried, ['Pollinations (free)']);
+    assert.deepEqual(body.tried, ['NVIDIA']);
     assert.equal(up.seen.length, 0, 'and no fresh picture was drawn in place of the edit');
   } finally {
     app.close();
@@ -1537,28 +1162,3 @@ test('an edit is not sent to a service that can only generate', async () => {
   }
 });
 
-test('a picture drawn on a watermarked free tier says so, and a token silences it', async () => {
-  // The mark is the service's, not this app's, and it cannot be removed without
-  // an account -- so the one thing the app owes the user is to say it before
-  // they use the picture somewhere the mark would be a problem.
-  const up = await upstreamOf((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-    res.end(Buffer.from('JPEG'));
-  });
-  process.env.POLLINATIONS_FREE = '1';
-  process.env.POLLINATIONS_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const anonymous = await (await post(app, '/api/llm/images/generations', { prompt: 'a fox' })).json();
-    assert.match((anonymous.notes || []).join(' '), /watermark/i);
-    assert.equal(up.seen[0].url.includes('nologo'), false, 'nothing claims a token it does not have');
-
-    process.env.POLLINATIONS_TOKEN = 'tok';
-    const withToken = await (await post(app, '/api/llm/images/generations', { prompt: 'a fox' })).json();
-    assert.ok(!(withToken.notes || []).join(' ').match(/watermark/i), 'an account tier is not told about a mark it avoids');
-    assert.match(up.seen[1].url, /nologo=true/);
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});

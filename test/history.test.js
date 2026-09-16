@@ -73,6 +73,15 @@ test('the system prompt forbids the behaviour that wasted the tokens', () => {
   assert.match(SYSTEM_PROMPT, /hope this helps/i);
 });
 
+test('the system prompt carries the coding discipline: assumptions, scope, surgery, verification', () => {
+  // Karpathy's four failure modes, as instructions: silent assumptions, speculative
+  // bloat, orthogonal edits, and unverified handovers.
+  assert.match(SYSTEM_PROMPT, /Say what you assume before you build on it/);
+  assert.match(SYSTEM_PROMPT, /Solve only what was asked/);
+  assert.match(SYSTEM_PROMPT, /Change only the lines the request needs/);
+  assert.match(SYSTEM_PROMPT, /Verify before handing over/);
+});
+
 const {
   PUTER_PROVIDER,
   normalizeProviderReply,

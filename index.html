@@ -28,7 +28,10 @@
             --border-strong: #4d4d4d;
             --text: #ececec;
             --text-dim: #b4b4b4;
-            --text-muted: #8e8e8e;
+            /* #8e8e8e sat at 4.1:1 on the composer's surface-2 step, below
+               the 4.5:1 small-text bar -- which is why muted labels inside
+               the composer read as smudges. #9e9e9e clears it at ~5:1. */
+            --text-muted: #9e9e9e;
             --accent: #ffffff;
             --accent-bg: rgba(255,255,255,0.1);
             --danger: #ff6b6b;
@@ -117,7 +120,9 @@
             --border-strong: #565f89;
             --text: #c0caf5;
             --text-dim: #a9b1d6;
-            --text-muted: #737aa2;
+            /* #737aa2 measured 3.5:1 on the pack's own surface -- small muted
+               labels failed AA outright. #8b9bb8 restores the ladder at ~5.2:1. */
+            --text-muted: #8b9bb8;
             --accent: #7aa2f7;
             --accent-bg: rgba(122,162,247,.14);
             --danger: #f7768e;
@@ -132,11 +137,36 @@
             --border-strong: #7c6f64;
             --text: #ebdbb2;
             --text-dim: #d5c4a1;
-            --text-muted: #928374;
+            /* #928374 fell to 3.2:1 on surface and 2.4:1 on surface-2 rows --
+               the pack's own light2 step (#bdae93) keeps the hue and clears
+               5.2:1 on surface. */
+            --text-muted: #bdae93;
             --accent: #fabd2f;
             --accent-bg: rgba(250,189,47,.12);
             --danger: #fb4934;
             --glass: rgba(40,40,40,.78);
+        }
+        /* Verdant pack: GitHub-dark-green neutrals under an emerald accent.
+           ChatGPT's send button and GitHub's primary buttons are both a
+           saturated green on near-black, so the accent is GitHub's #3fb950
+           and the ladder is green-tinted rather than grey. Muted text was
+           picked against surface-2 from the start (#8fae9a clears 6:1). */
+        html[data-theme="green"] {
+            --bg: #0d1512;
+            --bg-elevated: #0a100d;
+            --surface: #12201a;
+            --surface-2: #16281e;
+            --border: #21382b;
+            --border-strong: #3d5c46;
+            --text: #e8f3ec;
+            --text-dim: #b9cec1;
+            --text-muted: #8fae9a;
+            --accent: #3fb950;
+            --accent-bg: rgba(63,185,80,.14);
+            --danger: #f47067;
+            --glass: rgba(13,21,18,.8);
+            --bubble-user: #16281e;
+            --bubble-edge: rgba(63,185,80,.22);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -184,6 +214,9 @@
             overscroll-behavior-y: contain;
         }
         a { color: inherit; text-decoration: none; }
+        /* Selected text takes the accent, VS Code-style, instead of the
+           browser's default grey wash that ignores whichever theme is on. */
+        ::selection { background: var(--accent); color: var(--bg); }
 
         /* Scrollbars. The browser default is a grey slab that ignores the
            theme; this keeps the same monochrome palette and uses the same
@@ -680,6 +713,10 @@
             box-shadow: var(--lift);
         }
         .model-dropdown-search:focus { border-color: var(--border-strong); box-shadow: var(--glow); }
+        /* The Models view reuses the dropdown's search control, full-width
+           above the card grid -- one search look everywhere, it-tools style. */
+        .models-search { margin: 0 0 10px; width: 100%; }
+        .models-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         .model-dropdown-list { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
         .model-dropdown-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -866,6 +903,81 @@
             font-size: 13px;
             font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
+        /* Rich replies: headings, quotes, rules, tables, tasks, highlighted
+           code. The renderer only emits these tags; this is what makes them
+           read as structure instead of grey text. */
+        .message-text h1, .message-text h2, .message-text h3,
+        .message-text h4, .message-text h5, .message-text h6 {
+            font-weight: 700; line-height: 1.35; margin: 12px 0 6px;
+        }
+        .message-text h1 { font-size: 1.25em; }
+        .message-text h2 { font-size: 1.18em; }
+        .message-text h3 { font-size: 1.1em; }
+        .message-text h4, .message-text h5, .message-text h6 { font-size: 1em; }
+        .message-text blockquote {
+            border-left: 3px solid var(--border-strong);
+            padding: 2px 0 2px 12px; margin: 8px 0; color: var(--text-dim);
+        }
+        .message-text hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+        /* Tables scroll sideways instead of squeezing the bubble, ChatGPT-style. */
+        .table-wrap { overflow-x: auto; margin: 8px 0; border: 1px solid var(--border); border-radius: var(--r-sm); max-width: 100%; }
+        .message-text table { border-collapse: collapse; width: 100%; font-size: 13px; }
+        .message-text th, .message-text td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+        .message-text thead th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+        .message-text tbody tr:last-child td { border-bottom: none; }
+        /* Task lists read as checkboxes, GitHub-style; disabled, because the
+           reply is a record, not a control. */
+        .message-text li.task { list-style: none; }
+        .message-text li.task input { accent-color: var(--accent); margin-right: 6px; }
+        /* Token colours for highlighted code. The code well stays dark in
+           every theme, so one palette serves all of them. */
+        .message-text pre code .tok-k { color: #ff7b72; }
+        .message-text pre code .tok-s { color: #a5d6ff; }
+        .message-text pre code .tok-n { color: #79c0ff; }
+        .message-text pre code .tok-c { color: #8b949e; font-style: italic; }
+        .message-text pre code .tok-f { color: #d2a8ff; }
+        /* Language chip in the block header, beside the Copy button. */
+        .code-lang {
+            position: absolute; top: 6px; left: 10px;
+            font-size: 11px; color: var(--text-muted);
+            font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+        /* Preview chip for HTML blocks: left of Copy in the header. */
+        .code-preview-btn {
+            position: absolute;
+            top: 6px;
+            right: 66px;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: var(--ctl-r);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .code-preview-btn:hover { color: var(--text); border-color: var(--accent); }
+        /* Sandboxed HTML stage: a white canvas like Claude's artifacts. */
+        .html-preview-frame { width: 100%; height: 60vh; border: none; border-radius: var(--r-sm); background: #ffffff; }
+        /* Diagram chip for mermaid blocks, and the drawing surface. */
+        .code-diagram-btn {
+            position: absolute;
+            top: 6px;
+            right: 66px;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: var(--ctl-r);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .code-diagram-btn:hover { color: var(--text); border-color: var(--accent); }
+        .diagram-wrap { margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); overflow-x: auto; }
+        .diagram-wrap[hidden] { display: none; }
+        .diagram-loading { font-size: 12px; color: var(--text-muted); }
+        .diagram-svg svg { max-width: 100%; height: auto; display: block; margin-inline: auto; }
 
         /* Generated images */
         .message-image-wrap { width: min(340px, 100%); margin-top: 6px; }
@@ -1052,6 +1164,9 @@
         }
         .theme-menu button:hover, .theme-menu button:focus-visible { background: var(--ctl-bg-hover); }
         .theme-menu button[aria-checked="true"] { color: var(--accent); font-weight: 600; }
+        /* The current theme gets a leading check, macOS-menu-style, so the
+           eye lands on it without reading every row. */
+        .theme-menu .check { font-style: normal; color: var(--accent); font-weight: 700; width: 14px; flex-shrink: 0; }
         .theme-menu button .hint { margin-left: auto; color: var(--text-muted); font-size: 11px; font-weight: 400; }
         .theme-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); flex-shrink: 0; }
         @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
@@ -1177,7 +1292,9 @@
            on phones. */
         .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; width: 100%; max-width: 560px; }
         .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
-        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift-lg); transform: translateY(-2px); }
+        /* Suggestion tiles lift toward the reader on hover, ChatGPT-style,
+           instead of only changing shade. */
+        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift-lg); transform: translateY(-2px); border-color: var(--accent); }
         .hero-card:active { transform: translateY(0); }
         .hero-card strong { font-size: 13px; color: var(--text); letter-spacing: .01em; }
         .hero-card span { font-size: 12px; color: var(--text-muted); }
@@ -1210,12 +1327,13 @@
         .hero-card:focus-visible, .hero-start:focus-visible, .drawer-nav-btn:focus-visible,
         .dl-menu button:focus-visible, .theme-menu button:focus-visible, .history-item:focus-visible,
         .gallery-tile:focus-visible, .caption-copy:focus-visible, .msg-action-btn:focus-visible,
-        .message-image:focus-visible {
+        .message-image:focus-visible, .model-trigger:focus-visible, .effort-select:focus-visible {
             outline: none; box-shadow: var(--glow);
         }
         .hero-card:active, .hero-start:active, .icon-btn:active, .icon-btn-text:active,
         .modal-close:active, .menu-trigger-btn:active, .drawer-nav-btn:active,
-        .caption-copy:active, .composer-send:active:not(:disabled) {
+        .caption-copy:active, .composer-send:active:not(:disabled),
+        .model-trigger:active, .effort-select:active {
             transform: translateY(1px);
         }
         /* A gallery tile is a figure with a click handler, so it needs to be a
@@ -1434,7 +1552,9 @@
             font-size: 14px; font-family: inherit;
             outline: none; resize: none;
         }
-        .composer-input::placeholder { color: var(--text-muted); }
+        /* Firefox fades placeholders to ~54% on top of the colour, which
+           pushed an already-muted hint below legibility there. */
+        .composer-input::placeholder { color: var(--text-muted); opacity: 1; }
         .composer-send {
             background: var(--accent);
             color: #000;
@@ -1445,6 +1565,10 @@
         .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
         /* Red stop square while a reply is in flight. */
         .composer-send.stop { background: var(--danger); font-size: 20px; }
+        /* The send button fills with the accent, which is near-black in the
+           light theme -- a black glyph on it vanishes. The glyph goes white
+           there, the way GitHub keeps white text on its dark button fills. */
+        html[data-theme="light"] .composer-send { color: #ffffff; }
 
         /* Status bar - minimal */
         .status-bar {
@@ -1453,7 +1577,9 @@
             padding: 0 16px;
             border-top: 1px solid var(--border);
             background: var(--bg-elevated);
-            font-size: 11px; color: var(--text-muted);
+            /* 11px muted sat under 4.5:1 on this bar; the status line is read,
+               not decoration, so it takes the dim step. */
+            font-size: 11px; color: var(--text-dim);
         }
         .status-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
         #statusMessage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2331,6 +2457,7 @@
                     </div>
                 </div>
                 <div class="settings-body">
+                    <input type="text" class="model-dropdown-search models-search" id="modelCardSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelCards(this.value)">
                     <div class="models-list" id="modelsList"></div>
                 </div>
             </div>
@@ -3243,7 +3370,32 @@
             }
             if (parsed.name === 'skill') return applySkillCommand(parsed.args);
             if (parsed.name === 'compact') return applyCompactCommand(parsed.args);
+            if (parsed.name === 'doctor') return runDoctorCommand();
             return null;
+        }
+
+        // Health check in the claw-doctor / ecc-doctor spirit: providers that
+        // can answer, skills installed and pinned, and the current mode -- the
+        // three things that decide whether the next message can work at all.
+        // Reads page state through an optional env so the sandbox tests can
+        // drive it without a browser; the composer calls it bare.
+        async function runDoctorCommand(env) {
+            const f = env && typeof env.fetch === 'function' ? env.fetch : fetch;
+            const lines = ['Doctor'];
+            try {
+                const res = await f('/api/llm/providers');
+                const providers = await res.json();
+                const configured = providers.filter((p) => p && p.configured).map((p) => p.id);
+                lines.push('Providers: ' + configured.length + '/' + providers.length + ' configured' + (configured.length ? ' (' + configured.join(', ') + ')' : '') + '.');
+            } catch (error) {
+                lines.push('Providers: unreachable (' + (error && error.message ? error.message : error) + ').');
+            }
+            const skills = (env && Array.isArray(env.skills)) ? env.skills : ((typeof skillsCatalog !== 'undefined' && Array.isArray(skillsCatalog)) ? skillsCatalog : []);
+            const pinned = (env && Array.isArray(env.pinned)) ? env.pinned : ((typeof activeSkillNames !== 'undefined' && Array.isArray(activeSkillNames)) ? activeSkillNames : []);
+            lines.push('Skills: ' + skills.length + ' installed, ' + pinned.length + ' pinned to this chat.');
+            const mode = (env && typeof env.mode === 'string') ? env.mode : ((typeof selectedMode !== 'undefined' && typeof selectedMode === 'string') ? selectedMode : 'chat');
+            lines.push('Mode: ' + mode.toUpperCase() + '.');
+            return lines.join('\n');
         }
 
         function applySkillCommand(args) {
@@ -3348,11 +3500,11 @@
         // that use them: applyTheme() runs during initializeApp(), so these
         // must be initialized before that call or the whole init throws and
         // setupEventListeners() never runs (dead picker, dead composer keys).
-        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'auto'];
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'green', 'auto'];
         // The colour the browser paints its own chrome with, so the tab bar and
         // the status bar match the app instead of framing it in black. These
         // follow the palettes below rather than the old pure-white-on-black.
-        const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
+        const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828', green: '#0d1512' };
         const loadedScripts = {};
         // Every attachment decision is in attachment-helpers.js, the script tag
         // above: what a picked file becomes, whether its bytes are text, and what a
@@ -3582,6 +3734,24 @@
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
         document.getElementById('routingCheck').checked = routingMode === 'auto';
+        applyAppLink();
+        window.addEventListener('hashchange', applyAppLink);
+
+        // The Android app's shortcuts and share sheet arrive as a fragment
+        // (see parseAppLink). It is cleared as soon as it is read, so a reload
+        // or a back step never replays it.
+        function applyAppLink() {
+            const link = parseAppLink(location.hash);
+            if (!link) return;
+            history.replaceState(null, '', location.pathname + location.search);
+            if (link.action === 'new') {
+                startNewConversation();
+            } else if (link.action === 'share') {
+                chatInput.value = chatInput.value ? chatInput.value + '\n\n' + link.text : link.text;
+                autoResize(chatInput);
+            }
+            chatInput.focus();
+        }
 
         function initializeApp() {
             if (typeof puter === 'undefined') {
@@ -3698,6 +3868,32 @@
             });
 
             defaultModelSelect.value = selectedModel;
+            // A re-render rebuilds every card unhidden; the view's filter, if
+            // any, goes right back on so the grid does not forget what it showed.
+            const cardSearch = document.getElementById('modelCardSearch');
+            if (cardSearch) filterModelCards(cardSearch.value);
+        }
+
+        // The Models view is a card grid, and a grid with dozens of rows needs
+        // the same filter the dropdown already has: same substring rule, same
+        // empty note, same hidden attribute the CSS already respects.
+        function filterModelCards(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            modelsList.querySelectorAll('.model-card').forEach((card) => {
+                const match = !needle || card.textContent.toLowerCase().includes(needle);
+                card.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = modelsList.querySelector('.models-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'models-empty';
+                empty.textContent = 'No model matches that.';
+                modelsList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
         }
 
         function setupEventListeners() {
@@ -4004,7 +4200,10 @@
                     showStatus('error', 'Sign-in is not supported');
                 }
             } catch (error) {
-                showStatus('error', 'Auth failed: ' + error.message);
+                // Puter rejects a closed or cancelled sign-in window with a bare
+                // object (or nothing), which used to read "Auth failed: undefined".
+                const reason = (error && (error.message || error.error || error.msg)) || 'the Puter sign-in window closed before it finished';
+                showStatus('error', 'Puter sign-in failed: ' + reason);
             }
         }
 
@@ -5311,12 +5510,10 @@
         function downloadWorkspaceFile(path) {
             const text = activeWorkspace()[path];
             if (typeof text !== 'string') return;
-            const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = path.split('/').pop();
-            link.click();
-            URL.revokeObjectURL(url);
+            // Through saveBlobAs, which revokes the URL on a later tick: the
+            // Android app fetches the blob back out of the page to save it, and
+            // a URL revoked in the same tick is gone before that fetch starts.
+            saveBlobAs(new Blob([text], { type: 'text/plain;charset=utf-8' }), path.split('/').pop());
         }
 
         function deleteWorkspaceFile(path) {
@@ -8610,6 +8807,58 @@
             const textEl = el.querySelector('.message-text');
             textEl.innerHTML = renderMarkdownLite(content);
             textEl.querySelectorAll('pre').forEach((pre) => {
+                // The renderer tags fenced blocks with their language; surface
+                // it as a header chip, GitHub-style, beside the Copy button.
+                // textContent keeps a hostile language name inert.
+                if (pre.dataset && pre.dataset.lang) {
+                    const tag = document.createElement('span');
+                    tag.className = 'code-lang';
+                    tag.setAttribute('aria-hidden', 'true');
+                    tag.textContent = pre.dataset.lang;
+                    pre.insertBefore(tag, pre.firstChild);
+                }
+                // An HTML block can show itself: the preview runs the snippet
+                // in an opaque-origin frame (sandbox without same-origin), so
+                // page script reaches neither this document nor its storage,
+                // and it only ever runs on an explicit tap.
+                if (pre.dataset && pre.dataset.lang === 'html') {
+                    const view = document.createElement('button');
+                    view.type = 'button';
+                    view.className = 'code-preview-btn';
+                    view.textContent = 'Preview';
+                    view.setAttribute('aria-label', 'Preview this HTML in a sandbox');
+                    view.addEventListener('click', () => {
+                        const code = pre.querySelector('code');
+                        openHtmlPreview(code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(view);
+                }
+                // A mermaid block can draw itself on tap. Rendering stays
+                // click-to-run (never on arrival), behind the diagram-type
+                // gate, with the code left in place whatever the outcome.
+                if (pre.dataset && pre.dataset.lang === 'mermaid') {
+                    const draw = document.createElement('button');
+                    draw.type = 'button';
+                    draw.className = 'code-diagram-btn';
+                    draw.textContent = 'Diagram';
+                    draw.setAttribute('aria-label', 'Render this diagram');
+                    draw.addEventListener('click', () => {
+                        if (pre._diagramHolder) {
+                            pre._diagramHolder.hidden = true;
+                            pre._diagramHolder.innerHTML = '';
+                            pre._diagramHolder = null;
+                            return;
+                        }
+                        const code = pre.querySelector('code');
+                        const holder = document.createElement('div');
+                        holder.className = 'diagram-wrap';
+                        holder.hidden = true;
+                        pre.parentNode.insertBefore(holder, pre.nextSibling);
+                        pre._diagramHolder = holder;
+                        renderDiagram(holder, code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(draw);
+                }
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'code-copy-btn';
@@ -8621,6 +8870,124 @@
                 });
                 pre.appendChild(btn);
             });
+        }
+
+        // A sandboxed stage for HTML blocks: the frame carries sandbox without
+        // allow-same-origin, so it runs on an opaque origin -- no parent DOM,
+        // no cookies, no storage -- and the document is a snapshot, assigned
+        // once through the property (never an attribute, so there is no
+        // quoting to escape and nothing for a later pass to rewrite).
+        function openHtmlPreview(code) {
+            closeHtmlPreview();
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'htmlPreviewOverlay';
+            const dialog = document.createElement('div');
+            dialog.className = 'modal modal-wide';
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-label', 'HTML preview');
+            const head = document.createElement('div');
+            head.className = 'modal-header';
+            const title = document.createElement('h3');
+            title.textContent = 'Preview';
+            const close = document.createElement('button');
+            close.className = 'modal-close';
+            close.setAttribute('aria-label', 'Close preview');
+            close.textContent = '×';
+            close.addEventListener('click', closeHtmlPreview);
+            head.appendChild(title);
+            head.appendChild(close);
+            const frame = document.createElement('iframe');
+            frame.className = 'html-preview-frame';
+            frame.setAttribute('sandbox', 'allow-scripts');
+            frame.setAttribute('title', 'Sandboxed HTML preview');
+            frame.srcdoc = String(code);
+            dialog.appendChild(head);
+            dialog.appendChild(frame);
+            overlay.appendChild(dialog);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeHtmlPreview();
+            });
+            document.body.appendChild(overlay);
+        }
+
+        function closeHtmlPreview() {
+            const overlay = document.getElementById('htmlPreviewOverlay');
+            if (overlay && typeof overlay.remove === 'function') overlay.remove();
+        }
+
+        // Diagrams, still behind a tap. Mermaid is vendored (vendor/mermaid,
+        // mermaid 12.0.0, MIT -- provenance and byte hashes in
+        // vendor/mermaid/SOURCES.json, closure assembled by
+        // tools/assemble-mermaid.js) rather than a CDN script: same-origin
+        // bytes with no supply-chain lookup at view time, and no offline
+        // breakage. The engine only ever loads on an explicit Diagram tap,
+        // only for a recognised diagram type, in strict mode -- and whatever
+        // the outcome, the code block it came from stays exactly where it was.
+        // NOTE: rendered SVG output has not yet been eyeballed in a browser;
+        // this branch stays unmerged until that happens.
+        const MERMAID_SRC = './vendor/mermaid/mermaid-12.0.0.mjs';
+        const MERMAID_TYPES = ['graph', 'flowchart', 'sequenceDiagram', 'pie', 'mindmap', 'timeline', 'journey', 'gitGraph', 'stateDiagram', 'stateDiagram-v2', 'classDiagram', 'classDiagram-v2', 'erDiagram', 'gantt', 'quadrantChart', 'requirementDiagram', 'c4Context', 'c4Container', 'c4Component', 'c4Dynamic', 'c4Deployment', 'kanban', 'sankey', 'block-beta'];
+
+        // The first content line names the diagram; config comments and blank
+        // lines do not. Anything else is prose, and prose must never spend a
+        // megabyte of engine download to be told it is not a diagram.
+        function mermaidDiagramType(code) {
+            const lines = String(code || '').split('\n');
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (!line || line.startsWith('%%')) continue;
+                const word = (line.match(/^[A-Za-z][\w-]*/) || [])[0] || '';
+                return MERMAID_TYPES.indexOf(word) !== -1 ? word : null;
+            }
+            return null;
+        }
+
+        let mermaidPromise = null;
+        function ensureMermaid() {
+            if (mermaidPromise) return mermaidPromise;
+            mermaidPromise = import(MERMAID_SRC).then((mod) => {
+                const api = mod.default || mod;
+                api.initialize({ startOnLoad: false, securityLevel: 'strict' });
+                return api;
+            });
+            mermaidPromise.catch(() => { mermaidPromise = null; });
+            return mermaidPromise;
+        }
+
+        async function renderDiagram(holder, code) {
+            const type = mermaidDiagramType(code);
+            if (!type) {
+                showStatus('error', 'That block is not a diagram this app draws -- the code stays as it is.');
+                return;
+            }
+            holder.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'diagram-loading';
+            note.textContent = 'Drawing the ' + type + ' diagram…';
+            holder.appendChild(note);
+            holder.hidden = false;
+            let api;
+            try {
+                api = await ensureMermaid();
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'The diagram engine failed to load; the code is untouched.');
+                return;
+            }
+            try {
+                const id = 'freeai-diagram-' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
+                const result = await api.render(id, code);
+                holder.innerHTML = '';
+                const wrap = document.createElement('div');
+                wrap.className = 'diagram-svg';
+                wrap.innerHTML = result.svg;
+                holder.appendChild(wrap);
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'Mermaid could not draw that block; the code is untouched.');
+            }
         }
 
         // Reasoning models (Claude extended thinking, the GPT "pro reasoning" tiers)
@@ -9220,7 +9587,7 @@
             }
         }
 
-        // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
+        // Themes cycle dark -> light -> tokyonight -> gruvbox -> green. Guarded
         // throughout: the boot-test stub DOM has no theme machinery, so every
         // DOM touch checks first. (THEMES/THEME_META live up with the state.)
         // 'auto' follows the OS; anything unknown falls back to dark.
@@ -9273,6 +9640,7 @@
             { id: 'dark', label: 'Dark', swatch: '#212121' },
             { id: 'tokyonight', label: 'Tokyo Night', hint: 'Pack', swatch: '#1a1b26' },
             { id: 'gruvbox', label: 'Gruvbox', hint: 'Pack', swatch: '#282828' },
+            { id: 'green', label: 'Green', hint: 'Pack', swatch: '#0d1512' },
         ];
 
         function storedTheme() {
@@ -9292,6 +9660,13 @@
                 row.type = 'button';
                 row.setAttribute('role', 'menuitemradio');
                 row.setAttribute('aria-checked', String(option.id === current));
+                if (option.id === current) {
+                    const check = document.createElement('i');
+                    check.className = 'check';
+                    check.setAttribute('aria-hidden', 'true');
+                    check.textContent = '✓';
+                    row.appendChild(check);
+                }
                 const swatch = document.createElement('i');
                 swatch.className = 'theme-swatch';
                 swatch.style.background = option.swatch;

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS only, system trust anchors only. No cleartext, no user-installed
+  CAs: a "helpful" proxy CA on the device must not be able to sit between
+  this app and the server. Certificate pinning is deliberately NOT used:
+  short-lived public CA certificates rotate faster than a sideloaded testing
+  build gets updated, and a stale pin bricks the app with no recovery path.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FreeAI4U</string>
+    <string name="server_hint">Server (https://…)</string>
+    <string name="username_hint">Username</string>
+    <string name="password_hint">Password</string>
+    <string name="sign_in">Sign in</string>
+    <string name="retry">Retry</string>
+    <string name="change_server">Change server</string>
+    <string name="signing_in">Signing in…</string>
+    <string name="connecting">Connecting…</string>
+    <string name="stored_note">Kept on this phone only, sealed by the Android Keystore. Sign out inside the app to forget it.</string>
+    <string name="saved_to">Saved to Downloads/FreeAI4U/%1$s</string>
+    <string name="save_failed">Could not save the file.</string>
+    <string name="app_settings">App settings</string>
+    <string name="settings_title">App settings · v%1$s</string>
+    <string name="settings_lock_on">Turn on fingerprint / screen lock</string>
+    <string name="settings_lock_off">Turn off fingerprint / screen lock</string>
+    <string name="settings_check_update">Check for updates</string>
+    <string name="settings_copy_crash">Copy last crash log</string>
+    <string name="settings_forget">Sign out and forget password</string>
+    <string name="forget_confirm">Sign out and remove the saved password from this phone?</string>
+    <string name="unlock">Unlock</string>
+    <string name="lock_title">Unlock FreeAI4U</string>
+    <string name="lock_subtitle">Use your fingerprint or screen lock to open your chats.</string>
+    <string name="lock_enabled">App lock is on.</string>
+    <string name="lock_disabled">App lock is off.</string>
+    <string name="lock_needs_screen_lock">Set a screen lock (PIN, pattern or fingerprint) in Android settings first.</string>
+    <string name="crash_copied">Crash log copied. Paste it into a GitHub issue.</string>
+    <string name="shortcut_new_chat">New chat</string>
+    <string name="tile_label">New AI chat</string>
+    <string name="shared_image_ready">Tap the attach button to add the shared image.</string>
+    <string name="server_waking">Server is starting up… retry %1$d of %2$d</string>
+    <string name="update_title">Update available: %1$s</string>
+    <string name="update_message">You have %1$s. Download the new APK and open it to install; your chats and sign-in stay.</string>
+    <string name="update_download">Download</string>
+    <string name="update_later">Later</string>
+    <string name="update_current">You have the latest version (%1$s).</string>
+    <string name="update_failed">Could not check for updates. Try again later.</string>
+    <string name="update_unavailable">Update checks are off in this build.</string>
+    <string name="puter_social_title">Use your Puter username instead</string>
+    <string name="puter_social_message">Google, Apple and Microsoft block their sign-in buttons inside apps, so they cannot finish here. In this window, sign in to Puter with your Puter username (or email) and password. If your Puter account only has Google sign-in: open puter.com in Chrome, sign in with Google, then set a password under Settings, Account. The app server models (NVIDIA, OpenRouter and others) work without Puter.</string>
+    <string name="process_text_label">Ask FreeAI4U</string>
+</resources>

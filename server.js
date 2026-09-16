@@ -12,6 +12,7 @@ const {
   getConfiguredAccounts,
   verifyCredentials,
   signSession,
+  readSession,
   verifySession,
   parseCookieHeader,
   checkRateLimit,
@@ -135,8 +136,8 @@ async function retryProviderRequest(providerId, attempt) {
     // not a transient refusal to retry through.
     if (result.selfTimeout) return result;
     // A spent allowance is not a transient refusal — retrying it re-spends the
-    // same wait for the same answer. Ollama Cloud's monthly cap and the
-    // Antigravity proxy's "Quota Exhausted" both 429 with a body that says so.
+    // same wait for the same answer. Ollama Cloud's monthly cap and a
+    // gateway's "Quota Exhausted" both 429 with a body that says so.
     if (result && result.__quotaExhausted) return result;
     if (isQuotaExhausted(packetErrorMessage(result))) return result;
     if (!isRetryableStatus(status)) return result;
@@ -291,6 +292,27 @@ function handleLogout(req, res) {
   clearSessionCookie(res);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
+}
+
+// GET /api/session: who this request is signed in as. The Android app asks
+// this on every launch, before it loads the page, so an expired session is
+// found out in a 401 here rather than half-way through a chat.
+//
+// A session past half its life is renewed on the way out. The web page has
+// no launch step to hang a renewal on, so its sessions run the full seven
+// days and then ask again; the app, which does, stays signed in for as long
+// as it is opened at least once a week. The gate itself is unchanged: the
+// route sits behind it like every other /api/ path, so a request that gets
+// here at all is either signed in or on a deployment with no accounts set.
+function sessionStatus(req, res) {
+  if (getConfiguredAccounts(process.env).length === 0) {
+    return sendJson(res, 200, { gate: false, user: null });
+  }
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const session = readSession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
+  if (!session) return sendJson(res, 401, { error: 'Not signed in' });
+  if (session.exp - Date.now() < SESSION_TTL_MS / 2) setSessionCookie(res, session.username, req);
+  return sendJson(res, 200, { gate: true, user: session.username, expiresAt: session.exp });
 }
 
 function sendJson(res, status, body, headers = {}) {
@@ -852,41 +874,6 @@ function githubDeleteFile(req, res) {
   });
 }
 
-function isSecretFile(path) {
-  const secretNames = ['.env', '.env.local', '.env.*', '.claude-local', '.claude.json', '.freebuff', 'antigravity-accounts.json', 'token.json', 'config.yaml', 'opencode.json', '.github/workflows/', 'deploy/antigravity-proxy/data/'];
-  const p = String(path || '').toLowerCase();
-  return secretNames.some((n) => p.includes(n.toLowerCase()));
-}
-
-function enforceNoSecretWrites(req) {
-  // P2 enforcement hook: workspace_write_file to protected paths is
-  // refused. We check the message arguments directly because the body has
-  // no filePath field at this layer; if a path argument is present and
-  // names a secret, the turn is blocked with a clear reason.
-  const dangerousWrites = {
-    workspace_write_file: true,
-    workspace_edit_file: true,
-    workspace_delete_file: true,
-    github_commit_file: true,
-    github_delete_file: true,
-  };
-  if (req.body && Array.isArray(req.body.tools)) {
-    const dangerous = req.body.tools.filter((t) => dangerousWrites[t.function?.name]);
-    const firstDangerous = dangerous[0];
-    if (firstDangerous && firstDangerous.function && firstDangerous.function.arguments) {
-      try {
-        const argsStr = String(firstDangerous.function.arguments || '');
-        const args = JSON.parse(argsStr);
-        const path = args.path || args.file || args.file_path || args.filePath || '';
-        if (path && isSecretFile(String(path))) {
-          return { blocked: true, reason: 'Write to a protected file (.env, secrets, proxy/auth data, .claude/.freebuff, .github/workflows) refused by enforcement hook. Read/version/rename instead, or ask explicitly.' };
-        }
-      } catch { /* arguments not JSON; no file path detectable; pass through */ }
-    }
-  }
-  return null; // not a blocked case
-}
-
 // Direct provider access, as an alternative to Puter. Each of these is
 // OpenAI-compatible, so one adapter covers all of them: only the base URL, the
 // key and a couple of headers differ.
@@ -902,10 +889,12 @@ const LLM_PROVIDERS = {
     // reach stays out of the list rather than appearing and failing on use.
     models: [
       'agnes-2.5-flash',
+      'agnes-3-flash',
+      'atria-dawn',
       'laguna-s-2.1',
-      'ling-3.0-flash-fin-free',
-      'nemotron-3.5-lightning-free',
       'stepfun-3.7-flash',
+      'deepseek-v4.1-flash-free',
+      'muse-spark-1.3-contributor-free',
     ],
     // Where a picture can come from, on the same key. Declared here rather than
     // inside the image route because the capabilities are the provider's, not
@@ -1055,383 +1044,43 @@ const LLM_PROVIDERS = {
       ownModel: true,
     },
   },
-  // Hugging Face Inference Providers: one OpenAI-compatible router
-  // (router.huggingface.co/v1) in front of every serverless provider on the
-  // Hub, metered in monthly inference credits (~$0.10/mo on a free account).
-  // There is no such thing as a "free model list" on it: the
-  // huggingface.co/models?other=free page filters nothing (the API ignores
-  // other=<anything> and returns the unfiltered trending set), and the 29
-  // models under the page's 'free' chip carry a community-authored tag that
-  // no inference provider honours — all 29 were checked against the router
-  // on 2026-09-12 and none is served. The real free tier is credits, so what
-  // matters is price per model. The allowlist below is therefore the
-  // router's full live chat catalogue (138 models, verified 2026-09-12),
-  // ordered cheapest first, with the five zero-priced offerings up top. When
-  // HF retires an id, the intersection with the live catalogue drops it from
-  // the picker instead of failing on use — the same contract as the
-  // OpenRouter list above. HF's own docs and clients standardise on
-  // HF_TOKEN, so that is the variable here too, and HF_MODELS replaces the
-  // list wholesale for an operator who wants a different cut.
-  huggingface: {
-    label: 'HuggingFace',
-    baseUrl: 'https://router.huggingface.co/v1',
-    envVar: 'HF_TOKEN',
-    models: [
-      // Served at zero price (ovhcloud / novita / together) — these never touch credits.
-      "Qwen/Qwen3.8-27B",
-      "inclusionAI/Ling-3.0-flash-VL",
-      "prism-ml/Ternary-Bonsai-27B-gguf",
-      "inclusionAI/Ling-3.0-flash-Fin",
-      "prism-ml/Ternary-Bonsai-27B-AWQ-4bit",
-      // Under ~$0.15/M blended — a $0.10 monthly credit goes a long way here.
-      "Qwen/Qwen3-4B-Instruct-2507",
-      "Qwen/Qwen2.5-Coder-7B-Instruct",
-      "Qwen/Qwen2.5-Coder-3B-Instruct",
-      "Qwen/Qwen3-4B-Thinking-2507",
-      "meta-llama/Llama-3.1-8B-Instruct",
-      "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-      "Sao10K/L3-8B-Stheno-v3.2",
-      "Sao10K/L3-8B-Lunaris-v1",
-      "ibm-granite/granite-4.2-3b",
-      "google/gemma-3-4b-it",
-      "openai/gpt-oss-20b",
-      "zai-org/AutoGLM-Phone-9B-Multilingual",
-      "google/gemma-3-12b-it",
-      "openai/gpt-oss-120b",
-      "microsoft/phi-4",
-      "deepseek-ai/DeepSeek-V4-Flash-0731",
-      "inclusionAI/Ling-3.0-flash",
-      "google/gemma-3-27b-it",
-      "Qwen/Qwen3.5-9B",
-      "Qwen/Qwen3-8B",
-      "Qwen/Qwen2.5-Coder-32B-Instruct",
-      "deepseek-ai/DeepSeek-V4-Flash",
-      "Qwen/Qwen3-14B",
-      // Mid-priced.
-      "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-      "swiss-ai/Apertus-v1.5-8B",
-      "swiss-ai/Apertus-8B-Instruct-2509",
-      "ibm-granite/granite-4.2-8b",
-      "Qwen/Qwen3-32B",
-      "meta-llama/Llama-Guard-4-12B",
-      "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-      "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-      "stepfun-ai/Step-3.5-Flash",
-      "google/gemma-4-26B-A4B-it",
-      "XiaomiMiMo/MiMo-V2.5",
-      "zai-org/GLM-4.7-Flash",
-      "google/gemma-4-31B-it",
-      "meta-llama/Llama-3.3-70B-Instruct",
-      "Qwen/Qwen2.5-7B-Instruct",
-      "aisingapore/Gemma-SEA-LION-v4-27B-IT",
-      "Qwen/Qwen3-30B-A3B",
-      "deepseek-ai/DeepSeek-V3.2",
-      "Qwen/Qwen3-235B-A22B-Instruct-2507",
-      "zai-org/GLM-5.3-Flash",
-      "deepseek-ai/DeepSeek-V3.2-Exp",
-      "tencent/Hy3",
-      "Qwen/Qwen3-VL-30B-A3B-Instruct",
-      "aisingapore/Qwen-SEA-LION-v4-32B-IT",
-      "Qwen/Qwen2.5-72B-Instruct",
-      "speakleash/Bielik-11B-v3.0-Instruct",
-      "Qwen/Qwen3-235B-A22B",
-      "ibm-granite/granite-4.2-30b",
-      "zai-org/GLM-4.5-Air",
-      "Qwen/Qwen3.6-35B-A3B",
-      "Qwen/Qwen3-VL-235B-A22B-Instruct",
-      "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-      "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-      "Qwen/Qwen3.5-35B-A3B",
-      "deepseek-ai/DeepSeek-V3-0324",
-      "Qwen/Qwen3-Next-80B-A3B-Instruct",
-      // Premium flagships — spend credits here deliberately.
-      "deepseek-ai/DeepSeek-V3.1",
-      "zai-org/GLM-4.6V-Flash",
-      "deepseek-ai/DeepSeek-V3",
-      "deepseek-ai/DeepSeek-V3.1-Terminus",
-      "alpindale/WizardLM-2-8x22B",
-      "MiniMaxAI/MiniMax-M2.7",
-      "stepfun-ai/Step-3.7-Flash",
-      "MiniMaxAI/MiniMax-M3",
-      "NousResearch/Hermes-3-Llama-3.1-70B",
-      "deepseek-ai/DeepSeek-V4.1-Flash",
-      "meta-models/Muse-Glimmer-30B",
-      "MiniMaxAI/MiniMax-M2",
-      "MiniMaxAI/MiniMax-M2.1",
-      "MiniMaxAI/MiniMax-M2.5",
-      "XiaomiMiMo/MiMo-V2.5-Pro",
-      "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-      "thinkingmachines/Inkling-Small",
-      "baidu/ERNIE-4.5-VL-424B-A47B-Base-PT",
-      "Qwen/Qwen3-Coder-Next",
-      "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
-      "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-      "Qwen/Qwen2.5-VL-72B-Instruct",
-      "zai-org/GLM-4.7",
-      "zai-org/GLM-4-32B-0414",
-      "zai-org/GLM-4.5V",
-      "zai-org/GLM-4.6",
-      "Qwen/Qwen3-235B-A22B-Thinking-2507",
-      "deepseek-ai/DeepSeek-R1-0528",
-      "zai-org/GLM-5",
-      "Qwen/Qwen3.5-122B-A10B",
-      "Qwen/Qwen3.5-27B",
-      "moonshotai/Kimi-K2.5",
-      "MiniMaxAI/MiniMax-M1-80k",
-      "moonshotai/Kimi-K2-Instruct",
-      "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4",
-      "moonshotai/Kimi-K2-Instruct-0905",
-      "zai-org/GLM-5.2",
-      "deepseek-ai/DeepSeek-R1",
-      "Qwen/Qwen3.5-397B-A17B",
-      "Qwen/Qwen3.6-27B",
-      "swiss-ai/Apertus-v1.5-70B",
-      "deepseek-ai/DeepSeek-V4-Pro",
-      "deepseek-ai/DeepSeek-V4-Pro-0813",
-      "moonshotai/Kimi-K2.7-Code",
-      "moonshotai/Kimi-K2.6",
-      "zai-org/GLM-5.1",
-      "Qwen/Qwen3-VL-235B-A22B-Thinking",
-      "thinkingmachines/Inkling",
-      "zai-org/GLM-5.3",
-      "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
-      "Qwen/Qwen3.8-2.4T-A95B",
-      "moonshotai/Kimi-K3",
-      // No pricing published in the catalogue (CohereLabs) — cost unknown, so they ride last.
-      "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
-      "zai-org/GLM-5.3-Flash-BF16",
-      "zai-org/GLM-5.3-BF16",
-      "openai/gpt-oss-safeguard-20b",
-      "CohereLabs/aya-vision-32b",
-      "zai-org/GLM-4.5V-FP8",
-      "zai-org/GLM-4.6V",
-      "zai-org/GLM-4.6V-FP8",
-      "zai-org/GLM-4.6-FP8",
-      "zai-org/GLM-4.7-FP8",
-      "CohereLabs/c4ai-command-r-08-2024",
-      "zai-org/GLM-5.2-FP8",
-      "CohereLabs/aya-expanse-32b",
-      "CohereLabs/c4ai-command-r7b-12-2024",
-      "CohereLabs/c4ai-command-r7b-arabic-02-2025",
-      "CohereLabs/c4ai-command-a-03-2025",
-      "CohereLabs/command-a-reasoning-08-2025",
-      "CohereLabs/command-a-translate-08-2025",
-      "CohereLabs/tiny-aya-global",
-      "CohereLabs/tiny-aya-water",
-      "CohereLabs/tiny-aya-earth",
-      "CohereLabs/tiny-aya-fire",
-    ],
-    // Text-to-image is not on the OpenAI-compatible router: it is the task
-    // route, {inputs, parameters} in and raw image bytes out. The model is a
-    // repo id, so HF_IMAGE_MODEL picks which one (FLUX.1-schnell by default:
-    // fast, and one of the models HF's own docs lead with).
-    image: {
-      shape: 'hf-inference',
-      baseUrl: 'https://router.huggingface.co/hf-inference',
-      baseUrlEnv: 'HF_IMAGES_BASE_URL',
-      modelEnv: 'HF_IMAGE_MODEL',
-      // FLUX.1-schnell was retired from hf-inference and answers
-      //   410 "The requested model is deprecated and no longer supported"
-      // Checked against the Hub's own provider mapping on 2026-09-15: SD3
-      // Medium is the text-to-image model hf-inference still serves live.
-      //
-      // It is gated (`gated: auto`), so a token that has not accepted the
-      // licence on the model page gets a 403 rather than a picture. That is a
-      // one-off click, and the alternative -- shipping a default that is
-      // deprecated -- is a provider that cannot draw at all.
-      defaultModel: 'stabilityai/stable-diffusion-3-medium-diffusers',
-    },
-  },
-  mistral: {
-    label: 'Mistral',
-    baseUrl: 'https://api.mistral.ai/v1',
-    envVar: 'MISTRAL_API_KEY',
-  },
-  // Groq serves an OpenAI-compatible surface at /openai/v1, and its free
-  // developer tier needs no card -- rate limits are the only gate. No pinned
-  // list: what is free there is reshuffled often (Llama 3.3 70B and 3.1 8B
-  // left the free plan in August 2026), and a list pinned here would decide
-  // on this app's release schedule which models an account may see.
-  groq: {
-    label: 'Groq',
-    baseUrl: 'https://api.groq.com/openai/v1',
-    envVar: 'GROQ_API_KEY',
-  },
-  // Google's OpenAI compatibility shim, which is a different surface from the
-  // native Gemini API: same bearer key as every other provider here, so no
-  // second adapter. Its catalogue names models the way the REST API does --
-  // `models/gemini-2.5-flash` -- while the shim's own docs pass the bare id,
-  // so the prefix comes off on the way in rather than leaking a shape no
-  // other provider uses into the picker, the history and the status line.
-  gemini: {
-    label: 'Gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    envVar: 'GEMINI_API_KEY',
-    modelIdPrefix: 'models/',
-    // Gemini draws, but not where this app's other providers do. Its OpenAI shim
-    // has no /images/generations at all, so the derived store every other chat
-    // provider gets was a 404 wearing Gemini's name: a Google key could chat and
-    // never make a picture, and the failure arrived as "no image provider is
-    // ready" -- naming a key the operator had already set. The native route is
-    // /interactions with the prompt as input and the picture's shape asked for
-    // through response_format.
-    image: {
-      shape: 'gemini-image',
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-      baseUrlEnv: 'GEMINI_IMAGES_BASE_URL',
-      modelEnv: 'GEMINI_IMAGE_MODEL',
-      // The generalist Nano Banana: the cheapest one is documented as unfit for
-      // the multi-turn editing this app is built around.
-      defaultModel: 'gemini-3.1-flash-image',
-      // A model from the chat catalogue cannot draw here: that id names a text
-      // model on a text endpoint, where an image request comes back as a 200
-      // with no picture in it -- the one failure this route cannot tell apart
-      // from a service that simply cannot draw. See ownModel in
-      // imageCandidateFor.
-      ownModel: true,
-      // The source picture rides as a second input, which is how a Google edit
-      // is asked for -- and how it stays one turn of the same conversation.
-      edit: 'parts',
-    },
-  },
-  // Cloudflare Workers AI. The reason it is here is images: its free tier
-  // includes text-to-image and resets daily, which after NVIDIA's credits run
-  // out and HuggingFace's monthly allowance is spent is the only free drawer
-  // left standing. Chat rides the same key through its OpenAI-compatible
-  // endpoint.
+  // Cloudflare Workers AI: an official free allowance on every Cloudflare
+  // account (10,000 Neurons a day, no card), used with an API token the
+  // account owner creates from the "Workers AI" template. Nothing here is
+  // borrowed or impersonated.
   //
-  // Its address carries the account id, so baseUrl is built rather than
-  // written: https://api.cloudflare.com/client/v4/accounts/<id>/ai
+  // The account id is part of every URL, so the provider needs two variables:
+  // CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. Chat is OpenAI-compatible
+  // under the account's /ai/v1. That path has no GET /models, so the list is
+  // pinned (catalogue: false); CLOUDFLARE_MODELS replaces it.
+  //
+  // Drawing uses Workers AI's own run-by-name endpoint rather than an images
+  // API: POST /ai/run/<model> with {prompt, steps}, answered by FLUX.1
+  // [schnell] as {result:{image:<base64 JPEG>}}. It is the image service this
+  // app tries first, because it is free and needs nothing but the token.
   cloudflare: {
-    label: 'Cloudflare',
-    baseUrl: () => {
-      const account = String(process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
-      return account ? 'https://api.cloudflare.com/client/v4/accounts/' + account + '/ai/v1' : '';
-    },
+    label: 'Cloudflare Workers AI',
+    baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1',
     envVar: 'CLOUDFLARE_API_TOKEN',
-    // Workers AI publishes no OpenAI-shaped /models route, so the list is
-    // declared rather than fetched -- and CLOUDFLARE_MODELS replaces it when
-    // the catalogue moves, as every other provider's override does.
+    accountEnv: 'CLOUDFLARE_ACCOUNT_ID',
     catalogue: false,
     models: [
       '@cf/openai/gpt-oss-120b',
-      '@cf/openai/gpt-oss-20b',
       '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      '@cf/moonshotai/kimi-k2.7-code',
-      '@cf/deepseek-ai/deepseek-v4-flash-0731',
-      '@cf/zai-org/glm-5.3',
+      '@cf/meta/llama-4-scout-17b-16e-instruct',
+      '@cf/qwen/qwen2.5-coder-32b-instruct',
+      '@cf/qwen/qwq-32b',
+      '@cf/mistralai/mistral-small-3.1-24b-instruct',
+      '@cf/openai/gpt-oss-20b',
     ],
     image: {
-      shape: 'cloudflare-ai',
-      baseUrl: () => {
-        const account = String(process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
-        return account ? 'https://api.cloudflare.com/client/v4/accounts/' + account + '/ai' : '';
-      },
+      shape: 'cloudflare-run',
+      baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai',
       baseUrlEnv: 'CLOUDFLARE_IMAGES_BASE_URL',
       modelEnv: 'CLOUDFLARE_IMAGE_MODEL',
-      requiresEnv: 'CLOUDFLARE_ACCOUNT_ID',
-      // The cheapest model in the catalogue, which on a free allocation is the
-      // whole argument: 4.80 neurons per 512x512 tile against 530-1363 for the
-      // Leonardo and FLUX.2 options, and 10,000 neurons a day free. FLUX.2
-      // [klein] is the upgrade if quality matters more than volume.
       defaultModel: '@cf/black-forest-labs/flux-1-schnell',
-      // Run-by-name: the path names a model of the image catalogue, so the
-      // conversation's chat model has no meaning here. Sending it drew a text
-      // model through the image endpoint, which answers 200 and no picture --
-      // a failure this route reports as "the service did not do the job".
       ownModel: true,
     },
-  },
-  ollama: {
-    label: 'Ollama',
-    baseUrl: 'http://localhost:11434/v1',
-    // A key alone means Ollama Cloud rather than a local server: no key is
-    // needed to reach a local instance (it usually sends none), while a real
-    // OLLAMA_API_KEY from ollama.com pairs with its hosted /v1 endpoint.
-    // An explicit OLLAMA_BASE_URL always wins, so a self-hosted install or a
-    // different gateway is reachable with the same key anyway.
-    cloudBaseUrl: 'https://ollama.com/v1',
-    envVar: 'OLLAMA_API_KEY',
-    // Local servers usually take no key. Appearing is opt-in: a key or an
-    // explicit base URL puts it in the picker, and an empty key sends no
-    // auth header at all rather than a bare "Bearer ".
-    needsKey: false,
-    // Pinned to the allowed set, in picker order. Anything else the key can
-    // reach stays out of the list rather than appearing and failing on use.
-    models: [
-      'hf.co/unsloth/GLM-5.3-GGUF:latest',
-      'deepseek-r1:8b',
-      'deepseek-r1:70b',
-      'hf.co/unsloth/kimi-k2.7-code-7b-GGUF:latest',
-      'qwen3:8b',
-      'qwen3:4b',
-      'minimax/m3-20b',
-      'minimax/m2.7-9b',
-      'z-ai/glm-5.2',
-      'hf.co/unsloth/glm-5.1-GGUF:latest',
-      'devstral:24b',
-      'devstral:7b',
-      'qwen3-coder:32b',
-      'qwen3-coder:7b',
-      'nvidia/nemotron-3.5-lightning',
-      'mistralai/mistral-medium-3.5-128b',
-      'openai/gpt-oss-120b',
-      'openai/gpt-oss-20b',
-      'hf.co/unsloth/muse-glimmer-30b-GGUF:latest',
-      'qwen2.5-coder:32b',
-      'ibm/granite-4.2b-instruct:latest',
-      'rnj-1:latest',
-      'hf.co/unsloth/north-mini-code-1.0-GGUF:latest',
-      'deepseek-r1:14b',
-    ],
-    // A local server may well have an image model pulled, and this app has no
-    // catalogue that says which -- so this is opt-in by name. Without it,
-    // Ollama is simply not a candidate for drawing, which is what keeps a
-    // local chat server from being picked over a provider that really can.
-    image: {
-      shape: 'openai-images',
-      modelEnv: 'OLLAMA_IMAGE_MODEL',
-    },
-  },
-  // Google Antigravity through CLIProxyAPI (deploy/cliproxyapi), which owns the
-  // Google accounts -- they are signed in once locally and carried to the
-  // service as a variable, and it stays on the operator's side. The proxy
-  // speaks plain OpenAI, so this is an ordinary provider with two
-  // differences: the key is the service's API key rather than a provider key,
-  // and it appears only once its base URL (or a key) is set.
-  //
-  // It publishes a catalogue, but the catalogue is the proxy's whole world
-  // (every model any configured provider could serve) rather than this
-  // provider's allowlist, so `catalogue: false` serves the pinned list below
-  // instead: these ids are the ones probed live against the service, and
-  // ANTIGRAVITY_MODELS replaces the list without a code change.
-  //
-  // Every id below was verified against the live v2 service on 2026-09-14
-  // (tiny "hi" over /v1/chat/completions, plus SSE streaming and a tool_calls
-  // round-trip). Anything not on this list failed on every account, so
-  // pinning it would only offer a picker row that cannot answer:
-  // - gemini-3.1-pro-high: Google answers 400 INVALID_ARGUMENT everywhere --
-  //   the target name is retired, not a network problem. gemini-pro-agent
-  //   serves the same tier under its current name.
-  // - gemini-2.5-flash: absent from the v2 catalogue, and on the old proxy
-  //   the only form that answered is retired with it.
-  // - gemini-3-pro-high, gemini-2.5-pro, sonnet-4-5 and the opus thinking
-  //   tiers: retired upstream or never served by this proxy.
- antigravity: {
-    label: 'Antigravity',
-    baseUrl: 'http://localhost:3000/v1',
-    envVar: 'ANTIGRAVITY_API_KEY',
-    needsKey: false,
-    catalogue: false,
-    models: [
-      // The reason this provider is worth wiring up at all: Opus and Sonnet
-      // through a quota the user already has, plus Gemini alongside them.
-      'claude-opus-4-6-thinking',
-      'claude-sonnet-4-6',
-      'gemini-3-flash',
-      'gemini-3.1-pro-low',
-      'gemini-pro-agent',
-    ],
   },
   // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
   // one OpenAI-compatible endpoint in front of hundreds of upstream providers
@@ -1490,9 +1139,11 @@ const LLM_PROVIDERS = {
         'auto/smart',
         // Then the best of what a free-tier account actually reaches here,
         // read off a live catalogue rather than guessed: Kiro's frontier tier,
-        // GitHub Copilot, Mistral, Groq, Gemini, DeepSeek, SambaNova, Ollama
-        // Cloud, LLM7 and Cloudflare. The page keeps the first 60 usable rows,
-        // so what leads this list is what can be picked by name.
+        // GitHub Copilot, Mistral, Groq, Gemini, SambaNova, Ollama Cloud, LLM7
+        // and Cloudflare. The page keeps the first 60 usable rows, so what
+        // leads this list is what can be picked by name. DeepSeek's own API
+        // (`ds/`) is not here: it sells no free tier, and Ollama Cloud's Kimi
+        // K3 answered 402 "requires a subscription" on the free plan.
         'kr/claude-sonnet-5',
         'kr/claude-sonnet-4.5',
         'kr/claude-haiku-4.5',
@@ -1516,9 +1167,6 @@ const LLM_PROVIDERS = {
         'gemini/gemini-3-flash-preview',
         'gemini/gemini-2.5-pro',
         'gemini/gemini-2.5-flash',
-        'ds/deepseek-v4-pro',
-        'ds/deepseek-v4-flash',
-        'ollamacloud/kimi-k3',
         'ollamacloud/glm-5.2',
         'ollamacloud/gpt-oss:120b',
         'samba/DeepSeek-V3.2',
@@ -1535,6 +1183,16 @@ const LLM_PROVIDERS = {
         'agentrouter/gpt-5.6-sol',
       ],
       includeRest: true,
+      // The rest of the catalogue follows the named list -- but only from
+      // namespaces that are on a free tier. The gateway publishes no prices,
+      // so the namespace is the only thing that says whether a model can be
+      // used without a card: a connected OpenAI or Anthropic key would
+      // otherwise fill the picker with models that can only answer 402.
+      restPrefixes: [
+        'auto/', 'kr/', 'gh/', 'mistral/', 'groq/', 'gemini/', 'samba/',
+        'ollamacloud/', 'cf/', 'llm7/', 'antigravity/', 'agentrouter/',
+        'openrouter/',
+      ],
       // OpenRouter reaches this gateway as 1,091 of its 2,330 ids, almost all
       // of them paid, on a key that is free-only -- so passing them through
       // would fill the picker with models that can only answer 402. It is
@@ -1555,22 +1213,35 @@ const LLM_PROVIDERS = {
       edit: 'references',
     },
   },
-  // Any OpenAI-compatible endpoint of the operator's own: LiteLLM and one-api
-  // (proxies that front many providers and free tiers behind one address),
-  // vLLM, LM Studio, llama.cpp's server, or a gateway this app has never heard
-  // of. The contract is the one every direct provider here already speaks --
-  // GET /models, POST /chat/completions -- so the whole entry is an address and
-  // an optional key. No pinned model list on purpose: what the proxy serves is
-  // the operator's choice, and its own catalogue is the only honest answer to
-  // "which models are there".
-  'openai-compat': {
-    label: 'OpenAI-compatible',
+  custom: {
+    label: 'Custom endpoint',
+    // No default address: a self-hosted OpenAI-compatible gateway -- free-one-api,
+    // Free-GPT4-WEB-API/g4f, Ollama, llama.cpp, vLLM, or anything serving
+    // /models and /chat/completions -- is reached through CUSTOM_BASE_URL,
+    // including the /v1 segment when the gateway serves it there. With no
+    // pinned list the whole live catalogue goes through in its own order, and
+    // CUSTOM_MODELS narrows it the way NARA_MODELS does for Nara.
     baseUrl: '',
-    envVar: 'OPENAI_COMPAT_API_KEY',
-    // A local proxy usually has no key of its own. Setting the base URL is what
-    // puts this provider in the picker; a key is sent when there is one, and no
-    // auth header at all when there is not (never a bare "Bearer ").
+    envVar: 'CUSTOM_API_KEY',
+    // A key alone means nothing without somewhere to send it, so unlike the
+    // keyed providers this one activates on the URL, with the key optional --
+    // keyless gateways simply get no auth header rather than a bare "Bearer ".
     needsKey: false,
+    needsBaseUrl: true,
+  },
+  freegpt4: {
+    label: 'FreeGPT4',
+    // A self-hosted Free-GPT4-WEB-API gateway: plain-text answers over
+    // GET /?text=, model ids from GET /models as a bare string array. Not
+    // OpenAI-shaped, so it carries its own chat shape (llmChatTextQuery)
+    // instead of the shared completions path. Answers arrive whole rather
+    // than streamed, from the gateway's configured default model, with no
+    // conversation memory -- the trade for free, keyless models.
+    baseUrl: '',
+    envVar: 'FREEGPT4_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+    chatShape: 'text-query',
   },
   // The three below are speech and search services. Probing them directly:
   //
@@ -1608,51 +1279,6 @@ const LLM_PROVIDERS = {
     kind: 'search',
     note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
   },
-  // Pollinations, which is the answer to "every key this deployment has is a
-  // free key that cannot draw". Its image endpoint is one GET whose path is the
-  // prompt and whose answer is the picture itself -- no signup, no key, no
-  // card, and a width/height it honours exactly. Puter has always drawn for
-  // free, but only in the browser and only for a visitor signed in to it; this
-  // is the same offer from the server, so a deployment with no keys at all
-  // draws too.
-  //
-  // Last in the image order, deliberately. It is a shared community service
-  // with no SLA, and the anonymous tier watermarks what it makes -- which is a
-  // fair price for free and a poor substitute for a key the operator has
-  // already configured.
-  pollinations: {
-    label: 'Pollinations (free)',
-    baseUrl: 'https://image.pollinations.ai',
-    // Optional: a free account key removes the watermark.
-    envVar: 'POLLINATIONS_TOKEN',
-    // POLLINATIONS_FREE=0 refuses it, for a deployment that will not send a
-    // prompt to a public service however free it is.
-    keyless: true,
-    // Nothing to chat on and no catalogue to read, so it is neither a chat
-    // provider nor a discovery candidate.
-    kind: 'image',
-    catalogue: false,
-    models: [],
-    note: 'Pollinations is a free community image service that takes no account. Set POLLINATIONS_TOKEN (free, from pollinations.ai) to drop the watermark.',
-    image: {
-      shape: 'pollinations',
-      baseUrlEnv: 'POLLINATIONS_IMAGES_BASE_URL',
-      modelEnv: 'POLLINATIONS_IMAGE_MODEL',
-      // What it is asked for. The free tier serves a model of its own choosing
-      // and answers under this name either way, so this is a preference rather
-      // than a claim about what made the picture.
-      defaultModel: 'flux',
-      // No `edit`: it generates and nothing else, which is what makes the route
-      // step past it for an edit rather than draw a new picture in place of one.
-      // The anonymous tier stamps its pictures, and `nologo` is documented as
-      // needing an account -- so a token is what removes it, and until then
-      // every picture drawn here says why it carries a mark. No other drawer in
-      // the order stamps a visible one, which is what makes this the floor
-      // rather than the plan.
-      caveat: (provider) => (provider.key ? ''
-        : 'drawn on Pollinations’ anonymous tier, which watermark its pictures — a free account token for it, or any other provider in the order, draws without a visible one'),
-    },
-  },
 };
 
 // Companion variable names derive from the key variable: NARA_API_KEY pairs
@@ -1666,23 +1292,36 @@ function providerEnvName(envVar, suffix) {
   return stem === envVar ? envVar + suffix : stem + suffix;
 }
 
+// The account a provider's URLs are scoped to (Cloudflare), trimmed, or ''.
+function providerAccount(provider) {
+  return provider && provider.accountEnv ? String(process.env[provider.accountEnv] || '').trim() : '';
+}
+
+// A declared URL with its {account} placeholder filled. A malformed id is
+// refused by providerConfig before anything is fetched, so the encoding here
+// only matters for a value that was already going to be rejected.
+function withAccount(provider, url) {
+  if (!url || !String(url).includes('{account}')) return url;
+  return String(url).replace('{account}', encodeURIComponent(providerAccount(provider)));
+}
+
 function providerIsConfigured(provider) {
-  // A provider that takes no account at all is configured by existing: there is
-  // no variable that could be missing, which is what makes it the one drawing
-  // service a deployment with no keys of any kind still has. Refusing it is a
-  // single variable, because a prompt going to a public service is the
-  // operator's call even when it is free.
-  if (provider.keyless) return process.env[providerEnvName(provider.envVar, '_FREE')] !== '0';
+  // A provider whose URLs name an account is not configured without one: the
+  // token alone has nowhere to go.
+  if (provider.accountEnv && !providerAccount(provider)) return false;
+  // A provider with no default address (the custom endpoint slot) activates
+  // on the URL alone: a key with nowhere to send it would only fail at use.
+  if (provider.needsBaseUrl) return !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
   if (process.env[provider.envVar]) return true;
   // Key-optional providers (local servers) opt in with an explicit base URL.
   return provider.needsKey === false && !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
 }
 
-// Providers whose documented base URL stops short of the OpenAI path. Ollama
-// and the Antigravity proxy both accept "http://host:port", and both serve
+// Providers whose documented base URL stops short of the OpenAI path. The
+// OmniRoute gateway accepts "http://host:port" and serves
 // /v1/... underneath it, so the version segment is added when it is missing
 // rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['ollama', 'antigravity', 'huggingface', 'omniroute', 'openai-compat']);
+const V1_APPENDED_PROVIDERS = new Set(['omniroute']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
@@ -1697,12 +1336,9 @@ function providerConfig(id) {
   const key = (process.env[provider.envVar] || '').trim();
   // A base URL override lets the same adapter reach a self-hosted NIM or a
   // proxy, and lets the tests point at a local stand-in. Without one, a
-  // key-less/local provider keeps its default address — except a provider
-  // that ships a cloudBaseUrl: there a real key means the hosted endpoint,
-  // and the local default only applies when it is the operator's own install.
+  // key-less/local provider keeps its default address.
   const override = process.env[providerEnvName(provider.envVar, '_BASE_URL')];
-  const declaredBase = typeof provider.baseUrl === 'function' ? provider.baseUrl() : provider.baseUrl;
-  const rawBaseUrl = override || (key && provider.cloudBaseUrl) || declaredBase;
+  const rawBaseUrl = override || withAccount(provider, provider.baseUrl);
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
@@ -1730,6 +1366,12 @@ function providerConfig(id) {
   // fetch throw "Cannot convert argument to a ByteString" — a crash that
   // names neither the key nor the provider. Name both, before any fetch.
   const bad = unsafeHeaderChar(key);
+  const account = providerAccount(provider);
+  if (provider.accountEnv && account && !/^[0-9a-f]{32}$/i.test(account)) {
+    configured.keyError =
+      `${provider.accountEnv} should be the 32-character account id from the ${provider.label} dashboard, not a name or an email. ` +
+      `Copy it from the account home page.`;
+  }
   if (bad) {
     configured.keyError =
       `${provider.envVar} contains a non-ASCII character '${bad.char}' (U+${bad.code.toString(16).toUpperCase()}) at position ${bad.index}. ` +
@@ -1996,15 +1638,14 @@ async function llmFetch(req, res) {
 //
 // Keys stay server-side: the browser sends prompt + image data, never
 // credentials. Each provider declares how it draws in its own entry (see the
-// `image` block on LLM_PROVIDERS), and what differs between them is one of three
+// `image` block on LLM_PROVIDERS), and what differs between them is one of two
 // request shapes:
 //
 //   openai-images  {model, prompt, ...} -> {data:[{b64_json|url}]}
-//   hf-inference   {inputs, parameters} -> raw image bytes
 //   nvidia-genai   {prompt, ...} -> {artifacts:[{base64}]}
 //
 // Every answer is normalized to the OpenAI images shape (data[].b64_json), which
-// is what the browser already reads -- one reader for three services is one
+// is what the browser already reads -- one reader for every service is one
 // place a picture can go missing.
 //
 // Nara serves images from a host of its own rather than the router that carries
@@ -2014,17 +1655,13 @@ async function llmFetch(req, res) {
 // The order image requests fall back through, best first. Nara leads because it
 // is what this route has always fronted: an operator who has it configured sees
 // exactly the behaviour they had, and one who does not gets their next key.
-// Ollama and OmniRoute are last because their image models are named by the
-// operator rather than published, so they can only be offered when asked for.
-// Cloudflare sits ahead of the metered services on purpose: its free tier is a
-// daily allowance that resets, where NVIDIA's is signup credit that runs out
-// once and HuggingFace's is a monthly pot. Asking the one that refills first is
-// what keeps drawing working on free keys.
-const IMAGE_PROVIDER_ORDER = ['nara', 'cloudflare', 'openrouter', 'nvidia', 'huggingface', 'omniroute', 'ollama'];
+// OmniRoute is last because its image model is named by the operator or read
+// from the gateway's catalogue rather than published here.
+const IMAGE_PROVIDER_ORDER = ['cloudflare', 'nara', 'openrouter', 'nvidia', 'omniroute'];
 
 // Which model name to ask for: the request's own, then the operator's variable,
 // then the store's default, then one read from the provider's own catalogue (see
-// discoverImageModel). A store with no default (Nara, Ollama, OmniRoute) is
+// discoverImageModel). A store with no default (Nara, OmniRoute) is
 // therefore usable once the operator names a model -- which is the point, since
 // nothing here can know what a local server or a gateway has loaded -- or once
 // the service publishes one that can be read.
@@ -2146,10 +1783,8 @@ async function discoverImageModel(req, id) {
     // Through the *configured* provider, not the declared one: an operator's
     // base URL override is how a proxy or a gateway is reached at all, and the
     // key that reaches its catalogue is the same key that draws.
-    const result = id === 'ollama'
-      ? await fetchOllamaModels(req, config, IMAGE_DISCOVERY_TIMEOUT_MS)
-      : await providerFetch(req, config, config.modelsPath || '/models', {}, IMAGE_DISCOVERY_TIMEOUT_MS);
-    if (result && result.ok) model = imageModelFromCatalogue(catalogueRows(result.data, provider));
+    const result = await providerFetch(req, config, config.modelsPath || '/models', {}, IMAGE_DISCOVERY_TIMEOUT_MS);
+    if (result && result.ok) model = imageModelFromCatalogue(catalogueRows(result.data));
   } catch {
     model = '';
   }
@@ -2170,7 +1805,7 @@ async function discoverImageModel(req, id) {
 //
 // A derived store is not a guess at what a service can do: it exists only once
 // the operator has named a model with <PROVIDER>_IMAGE_MODEL, which is the same
-// thing they have to do for Nara, Ollama and OmniRoute. The shape is OpenAI's,
+// thing they have to do for Nara and OmniRoute. The shape is OpenAI's,
 // because that is what "OpenAI-compatible" means, and a service that answers
 // its chat on /v1/chat/completions answers /v1/images/generations one level the
 // same way -- which is why the chat path's own URL resolution is reused rather
@@ -2178,11 +1813,6 @@ async function discoverImageModel(req, id) {
 function imageStoreFor(id) {
   const declared = LLM_PROVIDERS[id];
   if (!declared) return null;
-  // A keyless service the operator has refused has no store, which is what
-  // takes it out of the order, out of the report and out of the advice at once.
-  // Anything less would leave a deployment that has refused it being told to
-  // configure the thing it refused.
-  if (declared.keyless && !providerIsConfigured(declared)) return null;
   // A model read from the provider's own catalogue rides on the store, so every
   // reader of "which model would this service draw with" -- the order, the
   // report, the draw -- answers with the same one.
@@ -2216,14 +1846,6 @@ function imageCandidateFor(id, options) {
   const declared = LLM_PROVIDERS[id];
   const store = imageStoreFor(id);
   if (!store) {
-    // Naming a service that needs no account and has been refused is answered
-    // with the variable that refused it, not with "set its key".
-    if (declared && declared.keyless) {
-      return {
-        error: declared.label + ' is turned off on this deployment — unset '
-          + providerEnvName(declared.envVar, '_FREE') + ' (or set it to 1) to use it.',
-      };
-    }
     // A chat provider reaches here only when it has no key: one that is
     // configured has a store now, whether or not it yet has a model, so the
     // missing thing is what it would be drawn with at all.
@@ -2275,9 +1897,6 @@ function imageCandidateFor(id, options) {
   // Read from the environment rather than from `declared.freeOnly`, which is
   // evaluated once when this module loads. Whether a provider may draw is a
   // per-request decision, the same as its key and base URL are.
-  if (store.requiresEnv && !String(process.env[store.requiresEnv] || '').trim()) {
-    return { error: declared.label + ' needs ' + store.requiresEnv + ' as well as its key — its API address contains the account id.' };
-  }
   const freeOnlyVar = providerEnvName(declared.envVar, '_FREE_ONLY');
   if ('freeOnly' in declared && process.env[freeOnlyVar] !== '0') {
     return {
@@ -2322,8 +1941,8 @@ function imageOrderIds(preferredId) {
 //
 // Nothing named and nothing preferred means fall through, and that is what makes
 // this route cover every provider instead of the first one that happens to be
-// configured: an OpenRouter key draws without NARA_API_KEY, a HuggingFace key
-// draws without either, and so on down the order. Ollama and OmniRoute come last
+// configured: an OpenRouter key draws without NARA_API_KEY, an NVIDIA key
+// draws without either, and so on down the order. OmniRoute comes last
 // because their model names are the operator's to supply, so they can only ever
 // be reached when one was.
 function imageDrawOrder(requested, options) {
@@ -2404,16 +2023,15 @@ async function imageProvidersReport(req) {
 function imageUnavailableMessage(preferredId) {
   const rows = [];
   // The conversation's own service leads when it is the one this request was
-  // about. On a deployment whose provider is not one of the seven -- which is
-  // every deployment reaching an image through a proxy or a Google key -- a
-  // sentence listing seven services the operator does not have is advice they
-  // cannot take, and it never once mentioned the provider they were chatting on.
+  // about. A sentence listing services the operator does not have is advice
+  // they cannot take, and it used to never once mention the provider they were
+  // chatting on.
   const preferred = String(preferredId || '').trim();
   for (const id of new Set([preferred, ...imageOrderIds('')])) {
     const provider = LLM_PROVIDERS[id];
     if (!provider) continue;
     const declares = !!provider.image;
-    // Only the seven, plus the one this request named: listing every chat
+    // Only the built-in order, plus the one this request named: listing every chat
     // provider's missing variable would turn a sentence into a form.
     if (!declares && id !== preferred) continue;
     // A speech or search service is not a drawing service however it is keyed.
@@ -2441,7 +2059,7 @@ function imageUnavailableMessage(preferredId) {
 // and there it is normalised the same way the chat path normalises it.
 function imageBaseFor(id, provider, store) {
   const override = store.baseUrlEnv ? String(process.env[store.baseUrlEnv] || '').trim() : '';
-  const declared = override || (typeof store.baseUrl === 'function' ? store.baseUrl() : store.baseUrl);
+  const declared = override || withAccount(provider, store.baseUrl);
   if (declared) return declared.replace(/\/+$/, '');
   return normalizeProviderBaseUrl(id, provider.baseUrl);
 }
@@ -2487,10 +2105,9 @@ function imageDrawFailureMessage(what, failures) {
   // Every candidate stepped past for the one reason that is about the request
   // rather than about a service: this deployment has nothing that takes a source
   // picture. "cannot edit, only generate" says what happened and not what to do
-  // about it -- and on a deployment whose only drawer is the keyless one, that
-  // refusal is the end of the road for an edit.
+  // about it.
   const editHint = failures.every((f) => f.reason === 'cannot edit, only generate')
-    ? ' An edit needs a service that takes the picture being edited: add a key for one (Gemini and OpenRouter both do), or turn on “Draw with Puter” to edit it in your browser.'
+    ? ' An edit needs a service that takes the picture being edited: add a key for one (Nara and OpenRouter both do), or turn on “Draw with Puter” to edit it in your browser.'
     : '';
   if (failures.length === 1) return what + ' failed on ' + failures[0].label + ': ' + failures[0].reason + '.' + editHint;
   return (
@@ -2615,7 +2232,7 @@ function imageEditMultipart(args) {
 async function drawImage(args) {
   const { id, provider, store, model, explicitModel, kind, prompt, image, mask, source, options, headers, signal } = args;
   const base = imageBaseFor(id, provider, store);
-  // A keyless local server (Ollama) sends no auth header at all rather than a
+  // A keyless self-hosted gateway (OmniRoute) sends no auth header at all rather than a
   // bare "Bearer ", which some fronts read as a malformed token. A provider's
   // own headers ride along for the same reason they do on the chat path: they
   // are the service's, not the route's, and a draw is billed the same way.
@@ -2678,6 +2295,12 @@ async function drawImage(args) {
       });
     };
 
+    if (store.shape === 'cloudflare-run') {
+      // Workers AI runs a model by name. FLUX.1 [schnell] takes a prompt and a
+      // step count (at most 8; 4 is its documented default) and nothing else,
+      // so sizes and counts are not sent at all rather than refused upstream.
+      return [() => postJson(base + '/run/' + useModel, { prompt, steps: 4 }, false)];
+    }
     if (store.shape === 'nvidia-genai') {
       return [
         (withExtra) => {
@@ -2691,79 +2314,6 @@ async function drawImage(args) {
         // API instead of that shape, so a 404 moves here.
         openaiAttempt('/images/generations'),
       ];
-    }
-    if (store.shape === 'gemini-image') {
-      // Gemini's own image API, which is not the OpenAI shim: a Google key does
-      // not reach /images/generations at all. One call to /interactions with the
-      // prompt as input -- and, for an edit, the source picture as a second
-      // input, which is how Gemini is asked to change an image rather than
-      // describe one. The shape the caller asked for travels in response_format,
-      // whose aspect_ratio is the documented field; on a 400 it is dropped like
-      // any other preference and the picture is drawn at the model's default.
-      const geminiModel = (useModel || '').replace(/^models\//, '');
-      return [(withExtra) => {
-        const input = [{ type: 'text', text: prompt }];
-        if (kind === 'edits' && image) {
-          input.push({ type: 'image', mime_type: image.contentType, data: image.bytes.toString('base64') });
-        }
-        const body = { model: geminiModel, input };
-        if (withExtra && aspect) body.response_format = { type: 'image', aspect_ratio: aspect };
-        return fetch(base + '/interactions', {
-          method: 'POST',
-          signal,
-          headers: {
-            ...auth,
-            // The native API reads its key from here, not from Bearer.
-            ...(provider.key ? { 'x-goog-api-key': provider.key } : {}),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body),
-        });
-      }];
-    }
-    if (store.shape === 'pollinations') {
-      // The whole request is its URL: the prompt in the path, the shape in the
-      // query. No account, no key -- which is the entire point of it.
-      //
-      // The pair is not optional here. Asked without width and height this
-      // service answers `200` with an empty body, which this route reads as
-      // "answered without a picture" and blames on the provider -- so a caller
-      // who named no size got a failure for a request the service never refused.
-      return [(withExtra) => {
-        const query = new URLSearchParams();
-        const parts = sizeParts(requestedSize) || { w: 1024, h: 1024 };
-        query.set('width', String(parts.w));
-        query.set('height', String(parts.h));
-        if (withExtra && useModel) query.set('model', useModel);
-        if (withExtra && provider.key) query.set('nologo', 'true');
-        const tail = query.toString();
-        return fetch(base + '/prompt/' + encodeURIComponent(prompt) + (tail ? '?' + tail : ''), {
-          method: 'GET',
-          signal,
-          headers: auth,
-        });
-      }];
-    }
-    if (store.shape === 'cloudflare-ai') {
-      // Workers AI runs a model by name in the path and answers
-      // {result:{image:"<base64>"}}. `steps` and `seed` are the only extras
-      // it documents for FLUX, so nothing else is offered to it.
-      return [(withExtra) => {
-        const body = { prompt };
-        const parts = sizeParts(requestedSize);
-        if (withExtra && parts) { body.width = parts.w; body.height = parts.h; }
-        return postJson(base + '/run/' + useModel, body, false);
-      }];
-    }
-    if (store.shape === 'hf-inference') {
-      // The task route, not the router: {inputs, parameters} in, image bytes out.
-      return [(withExtra) => {
-        const parameters = {};
-        const parts = sizeParts(requestedSize);
-        if (parts) { parameters.width = parts.w; parameters.height = parts.h; }
-        if (withExtra && extra.n > 1) parameters.num_images = extra.n;
-        return postJson(base + '/models/' + useModel, { inputs: prompt, parameters }, false);
-      }];
     }
     if (kind === 'edits' && store.edit === 'multipart') return [multipartAttempt];
     // Two paths where a service describes its own endpoint two ways.
@@ -2824,18 +2374,10 @@ async function drawImage(args) {
     console.warn('image ' + kind + ': ' + provider.label + ' refused the chat model ' + models[index] + ' — retrying with its own image model, ' + models[index + 1]);
   }
 
-  // Bytes or JSON, whichever this service answers with: hf-inference returns the
-  // picture itself, the others return a document that carries it.
+  // Bytes or JSON, whichever this service answers with: a service may return
+  // the picture itself rather than a document that carries it.
   const mediaType = String(response.headers.get('content-type') || '').split(';')[0].trim();
-  // A service that stamps what it makes says so on every picture, and it says it
-  // where the picture is: the alternative is an image the user only notices is
-  // watermarked after they have used it. The caveat is allowed to depend on the
-  // request -- a free tier that stops watermarking once a token is set is one
-  // sentence with a condition in it, not two stores.
-  const caveat = typeof store.caveat === 'function' ? store.caveat(provider) : store.caveat;
-  const notes = [];
-  if (sizeForService.note) notes.push(sizeForService.note);
-  if (caveat) notes.push(caveat);
+  const notes = sizeForService.note ? [sizeForService.note] : [];
   if (/^image\//i.test(mediaType)) {
     const bytes = Buffer.from(await response.arrayBuffer());
     return {
@@ -2848,18 +2390,11 @@ async function drawImage(args) {
   const payload = await response.json().catch(() => null);
   // The NVCF shape ({artifacts:[{base64}]}) is normalized here rather than at
   // the caller, so there is one place a picture could be misread.
+  if (payload && !payload.data && payload.result && typeof payload.result.image === 'string' && payload.result.image) {
+    // Workers AI: {result:{image:<base64>}}. FLUX.1 [schnell] answers JPEG.
+    return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: payload.result.image, media_type: 'image/jpeg' }] } };
+  }
   if (payload && !payload.data) {
-    // Workers AI: {result:{image:"<base64>"}, success:true}.
-    const cf = payload.result && typeof payload.result.image === 'string' ? payload.result.image : '';
-    if (cf) {
-      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: cf, media_type: 'image/jpeg' }] } };
-    }
-    // Gemini: an interaction carries its picture as `output_image`, which its
-    // own docs name as the last generated image block.
-    const gemini = payload.output_image;
-    if (gemini && typeof gemini.data === 'string') {
-      return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: gemini.data, media_type: gemini.mime_type || 'image/png' }] } };
-    }
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
       return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: artifact.base64, media_type: 'image/png' }] } };
@@ -3234,7 +2769,9 @@ function isSelfExplanatory(message) {
 
 function describeProviderError(status, data, provider) {
   const who = provider && provider.label ? provider.label : 'The provider';
-  const raw = data && (data.error || data.message || data.detail);
+  // Cloudflare's API wraps failures as {errors:[{code, message}]}.
+  const envelope = data && Array.isArray(data.errors) && data.errors[0] ? data.errors[0] : null;
+  const raw = data && (data.error || data.message || data.detail || envelope);
   let message = '';
   if (typeof raw === 'string') message = raw;
   else if (raw && typeof raw === 'object') message = raw.message || raw.code || JSON.stringify(raw);
@@ -3292,7 +2829,7 @@ function providerTimeoutMs() {
 
 // Most use "Authorization: Bearer <key>", but not all: Deepgram wants
 // "Token", AssemblyAI wants the bare key, You.com wants its own header,
-// and keyless local servers (Ollama) send no auth header at all rather
+// and a keyless self-hosted gateway (OmniRoute) sends no auth header at all rather
 // than a bare "Bearer ".
 function providerAuthHeaders(provider, req) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
@@ -3341,8 +2878,8 @@ async function providerFetch(req, provider, path, init = {}, budgetMs = 0) {
         data: { error: { message: `${provider.label} did not respond within ${Math.round(budget / 1000)}s` } },
       };
     }
-    // A keyless provider is one the operator runs themselves: Ollama and the
-    // Antigravity proxy. There is no "their side" to blame and no key to check,
+    // A keyless provider is one the operator runs themselves: the OmniRoute
+    // gateway. There is no "their side" to blame and no key to check,
     // and the address is one the operator typed -- so this says so, in the
     // message rather than the generic hint below (an explained message is long
     // enough to be treated as speaking for itself, which is right for the
@@ -3359,40 +2896,6 @@ async function providerFetch(req, provider, path, init = {}, budgetMs = 0) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function fetchOllamaModels(req, provider, budgetMs = 0) {
-  const openai = await providerFetch(req, provider, '/models', {}, budgetMs);
-  if (openai.ok && openai.data && Array.isArray(openai.data.data) && openai.data.data.length) {
-    return openai;
-  }
-
-  // Ollama's native catalogue is available even on installations that do not
-  // expose the OpenAI-compatible route. Reuse the same auth/timeout adapter,
-  // but remove /v1 before requesting /api/tags.
-  const nativeProvider = {
-    ...provider,
-    baseUrl: provider.baseUrl.replace(/\/v1\/?$/i, ''),
-  };
-  const native = await providerFetch(req, nativeProvider, '/api/tags', {}, budgetMs);
-  if (native.ok && native.data && Array.isArray(native.data.models)) {
-    return {
-      ...native,
-      data: {
-        object: 'list',
-        data: native.data.models
-          .map((model) => {
-            const id = model && (model.name || model.model || model.id);
-            return id ? { id, name: id, owned_by: 'ollama' } : null;
-          })
-          .filter(Boolean),
-      },
-    };
-  }
-
-  // Preserve the OpenAI error because it is usually the useful one when both
-  // routes are unavailable (bad host, cold service, or auth failure).
-  return openai;
 }
 
 // Model lists are read from the provider at runtime rather than hardcoded, so
@@ -3434,9 +2937,7 @@ async function llmModels(req, res) {
     return sendJson(res, 200, cached.models);
   }
   try {
-    const result = id === 'ollama'
-      ? await fetchOllamaModels(req, provider)
-      : await providerFetch(req, provider, provider.modelsPath || '/models');
+    const result = await providerFetch(req, provider, provider.modelsPath || '/models');
     const { ok, status, data } = result;
     if (!ok) {
       // Nara's catalogue endpoint occasionally answers 500 ("An internal
@@ -3685,26 +3186,22 @@ async function llmSkillContent(req, res) {
 // which used to flow on as an empty 200 and the client's "this provider returned
 // no chat models". One reader, because the picker and the image route's
 // discovery both have to understand the same provider.
-function catalogueRows(data, provider) {
+function catalogueRows(data) {
   let rows = [];
   if (data && Array.isArray(data.data)) rows = data.data;
   else if (data && Array.isArray(data.models)) rows = data.models;
   else if (Array.isArray(data)) rows = data;
   return rows
-    .filter((m) => m && m.id)
-    .map((m) => normalizeProviderModel(m, provider));
+    // A catalogue can be a bare string array (Free-GPT4-WEB-API answers
+    // /models with ["gpt-4", ...]). Those become bare ids; anything else
+    // without one is still dropped rather than served unaddressable.
+    .filter((m) => m && (m.id || (typeof m === 'string' && m.trim())))
+    .map((m) => (typeof m === 'string' ? { id: m.trim() } : normalizeProviderModel(m)));
 }
 
-function normalizeProviderModel(m, provider) {
+function normalizeProviderModel(m) {
   const architecture = m.architecture || {};
-  // A catalogue that namespaces its ids (Gemini's shim answers
-  // `models/gemini-2.5-flash`) is trimmed to the id that provider's own chat
-  // endpoint documents. One place knows about the prefix, rather than the
-  // picker, the router and the status line each learning to ignore it.
-  const prefix = provider && provider.modelIdPrefix;
-  const id = prefix && typeof m.id === 'string' && m.id.startsWith(prefix)
-    ? m.id.slice(prefix.length)
-    : m.id;
+  const id = m.id;
   const inputModalities = m.input_modalities || architecture.input_modalities;
   return {
     id,
@@ -3722,22 +3219,93 @@ function normalizeProviderModel(m, provider) {
   };
 }
 
+// Text out of OpenAI-shaped message content: plain strings pass through,
+// part arrays contribute their text parts. Images are reported rather than
+// silently dropped -- a text-only gateway must never swallow a picture.
+function textQueryParts(content) {
+  if (typeof content === 'string') return { text: content, hasImage: false };
+  if (!Array.isArray(content)) return { text: '', hasImage: false };
+  const texts = [];
+  let hasImage = false;
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'text' && typeof part.text === 'string') texts.push(part.text);
+    else if (part.type === 'image_url' || part.type === 'image') hasImage = true;
+  }
+  return { text: texts.join('\n'), hasImage };
+}
+
+// Free-GPT4-WEB-API speaks plain text over GET /?text=, not OpenAI chat
+// completions: one stateless turn, no tools, no vision, no streaming. The
+// last user message goes out; the raw text comes back wrapped in the OpenAI
+// shape the client already parses, so nothing downstream changes --
+// including the stream path, which receives one SSE frame plus DONE.
+async function llmChatTextQuery(req, res, id, provider, body) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const lastUser = [...messages].reverse().find((m) => m && m.role === 'user');
+  const { text, hasImage } = textQueryParts(lastUser && lastUser.content);
+  if (hasImage) {
+    return sendJson(res, 400, { error: provider.label + ' answers text only and cannot see attached images. Pick a vision model for this turn.' });
+  }
+  if (!text.trim()) return sendJson(res, 400, { error: provider.label + ' needs a text message to send.' });
+  const url = provider.baseUrl.replace(/\/+$/, '') + '/?text=' + encodeURIComponent(text);
+  let result;
+  try {
+    result = await fetchProviderWithRetry(id, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), providerTimeoutMs().chat);
+      try {
+        const upstream = await fetch(url, { signal: controller.signal, headers: providerAuthHeaders(provider, req) });
+        if (!upstream.ok) {
+          const errText = await upstream.text().catch(() => '');
+          return { ok: false, status: upstream.status, data: { error: { message: errText.slice(0, 300) || ('HTTP ' + upstream.status) } } };
+        }
+        return { ok: true, status: 200, data: { text: await upstream.text() } };
+      } catch (err) {
+        if (err && err.name === 'AbortError') {
+          return { ok: false, status: 504, selfTimeout: true, data: { error: { message: provider.label + ' did not respond in time' } } };
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+  } catch (e) {
+    return sendJson(res, 502, { error: e.message });
+  }
+  if (!result.ok) {
+    return sendJson(res, result.status, { error: describeProviderError(result.status, result.data, provider) });
+  }
+  const answer = result.data && typeof result.data.text === 'string' ? result.data.text : '';
+  if (!answer.trim()) {
+    return sendJson(res, 502, { error: provider.label + ' accepted the request but sent nothing readable back. Try again, or pick another model.' });
+  }
+  if (body.stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant', content: answer } }] }) + '\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+  sendJson(res, 200, { choices: [{ message: { role: 'assistant', content: answer } }] });
+}
+
 function llmChat(req, res) {
   const id = new URL(req.url, 'http://x').searchParams.get('provider');
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
   if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
-  // P2 enforcement hook: prevent writing to protected files through
-  // workspace_write_file from corrupting secrets or proxy state.
-  if (provider.id === 'antigravity') {
-    const guard = enforceNoSecretWrites(req);
-    if (guard && guard.blocked) return sendJson(res, 400, { error: guard.reason });
-  }
   readJsonBody(req, 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     if (!body || !body.model || !Array.isArray(body.messages)) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
+    if (provider.chatShape === 'text-query') return llmChatTextQuery(req, res, id, provider, body);
     const upstreamBody = JSON.stringify({
       model: body.model,
       messages: body.messages,
@@ -3898,6 +3466,10 @@ function llmChat(req, res) {
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
+  // Vendored ES modules (mermaid) load through dynamic import(), which the
+  // browser refuses unless the MIME type is a JavaScript one -- octet-stream
+  // answers fail the module load with no further explanation.
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.json': 'application/json',
   '.png': 'image/png',
@@ -4307,6 +3879,7 @@ function createRequestHandler(root) {
     }
 
     if (urlPath === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
+    if (urlPath === '/api/session' && req.method === 'GET') return sessionStatus(req, res);
     if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
@@ -4400,7 +3973,6 @@ module.exports = {
   providerConfig,
   parseRetryAfterMs,
   retryBackoffMs,
-  fetchOllamaModels,
   describeProviderError,
   fetchFailureReason,
   fetchProviderWithRetry,
