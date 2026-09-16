@@ -13,6 +13,7 @@
     <script src="provider-routing.js"></script>
     <script src="transcript-controller.js"></script>
     <script src="attachment-helpers.js"></script>
+    <script src="command-state.js"></script>
     <style>
         /* The palette is the ChatGPT one: a near-neutral grey ladder where the
            chrome (rail, bar) sits one step darker than the conversation, and the
@@ -2980,11 +2981,10 @@
         function updateCommandState() {
             const state = document.getElementById('commandState');
             if (!state) return;
-            const mode = String(selectedMode || 'chat').toLowerCase();
-            const value = isTyping ? 'running' : imageMode ? 'draw' : mode === 'plan' ? 'plan' : mode === 'build' ? 'build' : 'ready';
+            const value = FreeOpenAICommandState.commandStateOf({ isTyping, imageMode, selectedMode });
             state.dataset.state = value;
-            state.textContent = value.toUpperCase();
-            state.title = value === 'draw' ? 'Next message will be read as image work' : value === 'running' ? 'A response is being generated' : value === 'ready' ? 'Chat ready' : mode.toUpperCase() + ' mode';
+            state.textContent = FreeOpenAICommandState.commandStateLabel(value);
+            state.title = value === 'draw' ? 'Next message will be read as image work' : value === 'running' ? 'A response is being generated' : value === 'ready' ? 'Chat ready' : value.toUpperCase() + ' mode';
         }
 
         function updateModeChip() {
