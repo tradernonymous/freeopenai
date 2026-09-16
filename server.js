@@ -1071,7 +1071,6 @@ const LLM_PROVIDERS = {
       '@cf/qwen/qwen2.5-coder-32b-instruct',
       '@cf/qwen/qwq-32b',
       '@cf/mistralai/mistral-small-3.1-24b-instruct',
-      '@cf/google/gemma-3-12b-it',
       '@cf/openai/gpt-oss-20b',
     ],
     image: {
