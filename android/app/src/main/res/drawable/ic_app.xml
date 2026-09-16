@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal chat-bubble mark: rounded body plus tail, nothing else. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#3FB950"
+        android:pathData="M24,20 L84,20 A8,8 0 0 1 92,28 L92,68 A8,8 0 0 1 84,76 L44,76 L30,90 L32,76 L24,76 A8,8 0 0 1 16,68 L16,28 A8,8 0 0 1 24,20 Z" />
+    <path
+        android:fillColor="#0D1512"
+        android:pathData="M34,40 L74,40 M34,52 L64,52 M34,64 L56,64"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeColor="#0D1512" />
+</vector>
