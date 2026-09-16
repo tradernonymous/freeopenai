@@ -291,6 +291,13 @@ async function main() {
         // and the appearance picker has to open onto the viewport rather than
         // hanging off it. The theme toggle was once the first thing to be hidden
         // on a narrow phone, which left tapping the sun/moon impossible there.
+        const commandState = (() => {
+          const node = el('#commandState');
+          if (!node) return null;
+          const box = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return { display: style.display, text: node.textContent.trim(), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height) };
+        })();
         const themeTrigger = el('#themeToggle');
         const themeButton = (() => {
           if (!themeTrigger) return null;
@@ -420,6 +427,7 @@ async function main() {
           attach: rect('#attachTrigger'),
           header,
           composerControls,
+          commandState,
           themeButton,
           appearance,
           session,
@@ -456,6 +464,12 @@ async function main() {
     // Every size the app is used at keeps the same controls, the same
     // appearance picker, and one height for every icon button in the header.
     for (const [name, shot] of Object.entries({ desktop, wideDesktop, portrait, landscape, small })) {
+      if (!shot.commandState || shot.commandState.display === 'none' || shot.commandState.width < 40) {
+        throw new Error(name + ' hides the live command state: ' + JSON.stringify(shot.commandState));
+      }
+      if (shot.commandState.left < -1 || shot.commandState.right > Number(shot.viewport.split('x')[0]) + 1) {
+        throw new Error(name + ' puts the live command state off screen: ' + JSON.stringify(shot.commandState));
+      }
       if (!shot.themeButton || shot.themeButton.display === 'none' || shot.themeButton.w < 24) {
         throw new Error(name + ' hides the appearance toggle: ' + JSON.stringify(shot.themeButton));
       }

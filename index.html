@@ -1834,7 +1834,10 @@
                the model trigger + provider select it is what pushes the header
                past a 375px screen. The browser's own reload still covers it. */
             #refreshBtn { display: none; }
-            #viewChat .chat-bar-title span:last-child { display: none; }
+            /* Keep the live command state visible on phones; only the brand name
+               yields space to the action buttons. */
+            #viewChat .chat-bar-title .brand-name { display: none; }
+            .command-state { font-size: 8px; letter-spacing: .08em; padding-inline: 6px; }
             /* Same reason: `.composer-controls .model-trigger #modelLabel` is what
                the wide rule uses, so this has to be too. */
             .composer-controls .model-trigger #modelLabel {
@@ -2021,7 +2024,8 @@
                lives in here, and hiding it strands the sidebar on a 375px
                phone with no way to open it. */
             #viewChat .chat-bar-title .dot,
-            #viewChat .chat-bar-title span { display: none; }
+            #viewChat .chat-bar-title .brand-name { display: none; }
+            .command-state { font-size: 8px; padding-inline: 5px; }
             .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 76px; }
             .composer-controls .model-trigger #modelLabel { max-width: 68px; }
             /* The mode chip joined the composer row; on a 360px screen its
@@ -2218,7 +2222,7 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M3 6h18"/><path d="M3 18h18"/></svg>
                             </button>
                             <span class="dot"></span>
-                            <span>FreeAi4U</span>
+                            <span class="brand-name">FreeAi4U</span>
                             <span class="command-state" id="commandState" data-state="ready" aria-live="polite">READY</span>
                         </div>
                         <div class="chat-bar-actions">
