@@ -41,6 +41,9 @@ function runSetMessageContent(content, langs) {
   const deps = {
     renderMarkdownLite,
     copyText: () => {},
+    // The Preview button delegates to the staging function, which has its
+    // own tests below -- here it is only a collaborator that must exist.
+    openHtmlPreview: () => {},
     document: { createElement: (tag) => makeNode(tag) },
   };
   assertScannerCanRead(['setMessageContent']);
@@ -67,4 +70,68 @@ test('a fenced block without a language gets only the Copy button', () => {
   assert.equal(run.inserted.length, 0);
   assert.equal(run.appended.length, 1);
   assert.equal(run.appended[0].textContent, 'Copy');
+});
+
+test('an HTML block gets a Preview button; other languages do not', () => {
+  const html = runSetMessageContent('```html\n<b>hi</b>\n```', ['html']);
+  const labels = html.appended.map((node) => node.textContent);
+  assert.ok(labels.includes('Preview'), 'the HTML block has no way to show itself');
+  assert.ok(labels.includes('Copy'));
+  const js = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
+  assert.ok(!js.appended.map((node) => node.textContent).includes('Preview'), 'a JS block cannot run here, so it must not offer to');
+});
+
+function runHtmlPreview(code) {
+  const added = [];
+  let current = null;
+  function makeNode(tag) {
+    return {
+      tag,
+      className: '',
+      textContent: '',
+      id: '',
+      children: [],
+      attrs: {},
+      removed: false,
+      setAttribute(name, value) { this.attrs[name] = value; },
+      addEventListener() {},
+      appendChild(node) { this.children.push(node); },
+      remove() { this.removed = true; },
+    };
+  }
+  const fakeDocument = {
+    createElement: (tag) => makeNode(tag),
+    body: { appendChild: (node) => added.push(node) },
+    getElementById: (id) => (current && current.id === id ? current : null),
+  };
+  const deps = { document: fakeDocument };
+  assertScannerCanRead(['openHtmlPreview', 'closeHtmlPreview']);
+  assertSandboxCovers(['openHtmlPreview', 'closeHtmlPreview'], deps);
+  const page = loadFromIndex(['openHtmlPreview', 'closeHtmlPreview'], deps);
+  page.openHtmlPreview(code);
+  current = added[0];
+  return { page, overlay: current, added };
+}
+
+test('openHtmlPreview stages the snippet in an opaque-origin frame', () => {
+  // The sandbox value is the whole security story: allow-scripts without
+  // allow-same-origin means an opaque origin -- no parent DOM, no cookies,
+  // no storage. Anything else here is a containment failure, not a feature.
+  const { overlay } = runHtmlPreview('<b>hi</b>');
+  assert.equal(overlay.className, 'modal-overlay');
+  assert.equal(overlay.id, 'htmlPreviewOverlay');
+  const dialog = overlay.children[0];
+  const frame = dialog.children[dialog.children.length - 1];
+  assert.equal(frame.tag, 'iframe');
+  assert.equal(frame.attrs.sandbox, 'allow-scripts');
+  assert.ok(!frame.attrs.sandbox.includes('same-origin'), 'the frame must never rejoin this origin');
+  assert.equal(frame.srcdoc, '<b>hi</b>');
+});
+
+test('closeHtmlPreview removes the stage', () => {
+  const { page, overlay } = runHtmlPreview('x');
+  assert.equal(overlay.removed, false);
+  page.closeHtmlPreview();
+  assert.equal(overlay.removed, true);
+  page.closeHtmlPreview();
 });

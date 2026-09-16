@@ -1168,6 +1168,69 @@ const CODE_BLOCK_TOKEN = 'CODEBLOCKTOKEN';
 const CODE_SPAN_TOKEN = 'CODESPANTOKEN';
 const LINK_TOKEN = 'LINKTOKEN';
 const AUTOLINK_TOKEN = 'AUTOLINKTOKEN';
+const HTML_TOKEN = 'HTMLTOKEN';
+
+// Raw HTML from a model is untrusted input -- web tools feed page content
+// into answers, which is a live prompt-injection vector -- so tags pass only
+// through this allowlist, and anything else stays literal text for the escape
+// pass. The set is formatting and disclosure only: no images (a remote src
+// phones home on render), no inputs, no tables (GFM covers those), and links
+// reuse the http(s)-only href check. `open` on <details> is the one allowed
+// attribute besides href, because it is boolean and cannot carry a payload.
+const HTML_ALLOWLIST = {
+  details: ['open'],
+  summary: [],
+  b: [], strong: [], i: [], em: [], u: [], s: [], strike: [], del: [],
+  code: [], kbd: [], mark: [], sub: [], sup: [],
+  br: [],
+  a: ['href'],
+};
+const HTML_VOID = { br: true };
+
+// Returns the rebuilt safe tag, or null when the tag must stay literal text.
+// Fail-closed throughout: an unknown attribute, a bad URL, a stray slash or
+// a character the attribute grammar cannot cover rejects the whole tag.
+function sanitizeHtmlTag(tag) {
+  const m = /^<(\/?)([A-Za-z][\w-]*)\s*([^<>]*)>$/.exec(tag);
+  if (!m) return null;
+  const closing = m[1] === '/';
+  const name = m[2].toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(HTML_ALLOWLIST, name)) return null;
+  let rest = m[3];
+  if (closing) {
+    if (rest.trim() !== '' || HTML_VOID[name]) return null;
+    return '</' + name + '>';
+  }
+  if (rest.endsWith('/')) {
+    if (!HTML_VOID[name]) return null;
+    rest = rest.slice(0, -1);
+  }
+  const allowed = HTML_ALLOWLIST[name];
+  const seen = [];
+  const attrPattern = /([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let am;
+  attrPattern.lastIndex = 0;
+  while ((am = attrPattern.exec(rest)) !== null) seen.push(am);
+  const covered = seen.reduce((acc, x) => acc + x[0].length, 0);
+  const spaces = (rest.match(/\s/g) || []).length;
+  if (covered + spaces !== rest.length) return null;
+  const attrs = [];
+  for (const a of seen) {
+    const attrName = a[1].toLowerCase();
+    if (allowed.indexOf(attrName) === -1) return null;
+    const value = a[2] !== undefined ? a[2] : a[3] !== undefined ? a[3] : a[4] !== undefined ? a[4] : null;
+    if (attrName === 'href') {
+      if (value === null || !safeLinkHref(value)) return null;
+      attrs.push('href="' + value.replace(/&/g, '&amp;') + '"');
+    } else if (attrName === 'open') {
+      if (value !== null && value !== '' && value !== 'open') return null;
+      attrs.push('open');
+    } else {
+      return null;
+    }
+  }
+  return '<' + name + (attrs.length ? ' ' + attrs.join(' ') : '') + '>';
+}
 
 // A link only ever becomes an anchor when it is http(s). Everything else --
 // javascript:, data:, vbscript:, a relative path -- stays visible as text.
@@ -1496,14 +1559,27 @@ function renderMarkdownLite(rawText) {
     return `@@${CODE_BLOCK_TOKEN}${idx}@@`;
   });
 
-  text = escapeHtml(text);
-
   const codeSpans = [];
   text = text.replace(/`([^`\n]+)`/g, (_m, code) => {
     const idx = codeSpans.length;
-    codeSpans.push(`<code>${code}</code>`);
+    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
     return `@@${CODE_SPAN_TOKEN}${idx}@@`;
   });
+
+  // Allowlisted raw tags are lifted behind tokens while the text is still
+  // raw. A rejected tag is tokenized too, as its escaped self: leaving it in
+  // place would let a later pass (autolink) light up the URL inside a refused
+  // `<a href>`, undoing the refusal. Running after the code passes keeps
+  // `<b>` inside fences and spans literal, the way links already are.
+  const htmlTags = [];
+  text = text.replace(/<\/?[A-Za-z][\w-]*\s*[^<>]*>/g, (tag) => {
+    const clean = sanitizeHtmlTag(tag);
+    const idx = htmlTags.length;
+    htmlTags.push(clean || escapeHtml(tag));
+    return `@@${HTML_TOKEN}${idx}@@`;
+  });
+
+  text = escapeHtml(text);
 
   // Links are held behind a token for the same reason code spans are, and it
   // matters more here: elsewhere in the line the emphasis passes would run
@@ -1613,12 +1689,13 @@ function renderMarkdownLite(rawText) {
   const spanTokenPattern = new RegExp(`@@${CODE_SPAN_TOKEN}(\\d+)@@`, 'g');
   const linkTokenPattern = new RegExp(`@@${LINK_TOKEN}(\\d+)@@`, 'g');
   const autoTokenPattern = new RegExp(`@@${AUTOLINK_TOKEN}(\\d+)@@`, 'g');
+  const htmlTokenPattern = new RegExp(`@@${HTML_TOKEN}(\\d+)@@`, 'g');
 
-  // Links go back in first: an anchor built from a label like [`code`](url)
-  // still holds a code-span token, and that has to be resolved before the
-  // final string leaves this function.
+  // Raw tags resolve first: a link label may itself hold a formatted tag, and
+  // the anchor has to receive the finished element rather than a placeholder.
   return htmlParts
     .join('')
+    .replace(htmlTokenPattern, (_m, i) => htmlTags[Number(i)])
     .replace(autoTokenPattern, (_m, i) => autolinks[Number(i)])
     .replace(linkTokenPattern, (_m, i) => links[Number(i)])
     .replace(spanTokenPattern, (_m, i) => codeSpans[Number(i)])

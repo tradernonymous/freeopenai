@@ -901,6 +901,23 @@
             font-size: 11px; color: var(--text-muted);
             font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
         }
+        /* Preview chip for HTML blocks: left of Copy in the header. */
+        .code-preview-btn {
+            position: absolute;
+            top: 6px;
+            right: 66px;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: var(--ctl-r);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .code-preview-btn:hover { color: var(--text); border-color: var(--accent); }
+        /* Sandboxed HTML stage: a white canvas like Claude's artifacts. */
+        .html-preview-frame { width: 100%; height: 60vh; border: none; border-radius: var(--r-sm); background: #ffffff; }
 
         /* Generated images */
         .message-image-wrap { width: min(340px, 100%); margin-top: 6px; }
@@ -8660,6 +8677,22 @@
                     tag.textContent = pre.dataset.lang;
                     pre.insertBefore(tag, pre.firstChild);
                 }
+                // An HTML block can show itself: the preview runs the snippet
+                // in an opaque-origin frame (sandbox without same-origin), so
+                // page script reaches neither this document nor its storage,
+                // and it only ever runs on an explicit tap.
+                if (pre.dataset && pre.dataset.lang === 'html') {
+                    const view = document.createElement('button');
+                    view.type = 'button';
+                    view.className = 'code-preview-btn';
+                    view.textContent = 'Preview';
+                    view.setAttribute('aria-label', 'Preview this HTML in a sandbox');
+                    view.addEventListener('click', () => {
+                        const code = pre.querySelector('code');
+                        openHtmlPreview(code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(view);
+                }
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'code-copy-btn';
@@ -8671,6 +8704,51 @@
                 });
                 pre.appendChild(btn);
             });
+        }
+
+        // A sandboxed stage for HTML blocks: the frame carries sandbox without
+        // allow-same-origin, so it runs on an opaque origin -- no parent DOM,
+        // no cookies, no storage -- and the document is a snapshot, assigned
+        // once through the property (never an attribute, so there is no
+        // quoting to escape and nothing for a later pass to rewrite).
+        function openHtmlPreview(code) {
+            closeHtmlPreview();
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'htmlPreviewOverlay';
+            const dialog = document.createElement('div');
+            dialog.className = 'modal modal-wide';
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-label', 'HTML preview');
+            const head = document.createElement('div');
+            head.className = 'modal-header';
+            const title = document.createElement('h3');
+            title.textContent = 'Preview';
+            const close = document.createElement('button');
+            close.className = 'modal-close';
+            close.setAttribute('aria-label', 'Close preview');
+            close.textContent = '×';
+            close.addEventListener('click', closeHtmlPreview);
+            head.appendChild(title);
+            head.appendChild(close);
+            const frame = document.createElement('iframe');
+            frame.className = 'html-preview-frame';
+            frame.setAttribute('sandbox', 'allow-scripts');
+            frame.setAttribute('title', 'Sandboxed HTML preview');
+            frame.srcdoc = String(code);
+            dialog.appendChild(head);
+            dialog.appendChild(frame);
+            overlay.appendChild(dialog);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeHtmlPreview();
+            });
+            document.body.appendChild(overlay);
+        }
+
+        function closeHtmlPreview() {
+            const overlay = document.getElementById('htmlPreviewOverlay');
+            if (overlay && typeof overlay.remove === 'function') overlay.remove();
         }
 
         // Reasoning models (Claude extended thinking, the GPT "pro reasoning" tiers)

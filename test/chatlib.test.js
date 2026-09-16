@@ -155,10 +155,46 @@ test('renderMarkdownLite leaves pipe text without a delimiter row alone', () => 
   assert.equal(renderMarkdownLite('| a | b |\nno delimiter here'), '| a | b |<br>no delimiter here');
 });
 
-test('renderMarkdownLite escapes table cells and formats their inline markdown', () => {
-  const out = renderMarkdownLite('| a | b |\n|---|---|\n| <b> | **c** |');
-  assert.ok(!out.includes('<b>'));
-  assert.match(out, /<td>&lt;b&gt;<\/td><td><strong>c<\/strong><\/td>/);
+test('renderMarkdownLite formats table cells with the same rules as prose', () => {
+  // Raw formatting tags render everywhere prose does, including cells -- the
+  // refusal cases below (script, handlers, bad schemes) are what stay escaped.
+  const out = renderMarkdownLite('| a | b |\n|---|---|\n| <b>x</b> | **c** |');
+  assert.match(out, /<td><b>x<\/b><\/td><td><strong>c<\/strong><\/td>/);
+});
+
+test('renderMarkdownLite renders an allowlisted HTML subset and escapes the rest', () => {
+  assert.equal(
+    renderMarkdownLite('<details><summary>Why</summary>Because.</details>'),
+    '<details><summary>Why</summary>Because.</details>',
+  );
+  assert.equal(renderMarkdownLite('Press <kbd>Ctrl</kbd> + <kbd>P</kbd>'), 'Press <kbd>Ctrl</kbd> + <kbd>P</kbd>');
+  assert.equal(renderMarkdownLite('<B>loud</B>'), '<b>loud</b>');
+  assert.equal(
+    renderMarkdownLite('<a href="https://example.com">Docs</a>'),
+    '<a href="https://example.com">Docs</a>',
+  );
+  // Refusals stay visible as text: a script tag, a hostile scheme, an event
+  // handler, a tracking pixel, and an unclosed bracket never become elements.
+  // (The words survive escaped -- `&lt;a onclick=...` -- which is exactly the
+  // safe outcome; what must never appear is the live element itself.)
+  const refusals = [
+    ['<script>alert(1)</script>', '<script'],
+    ['<a href="javascript:alert(1)">x</a>', '<a '],
+    ['<a onclick="alert(1)" href="https://example.com">x</a>', '<a '],
+    ['<img src="https://example.com/p.png">', '<img'],
+    ['<b oops', '<b'],
+    ['<!-- hidden -->', '<!--'],
+    ['<a title="t" href="https://example.com">x</a>', '<a '],
+  ];
+  for (const [source, liveBit] of refusals) {
+    const out = renderMarkdownLite(source);
+    assert.ok(!out.includes(liveBit), `${source} grew a live element`);
+  }
+  assert.match(renderMarkdownLite('<details open>Hi</details>'), /<details open>Hi<\/details>/);
+});
+
+test('renderMarkdownLite leaves allowlisted tags inside code alone', () => {
+  assert.equal(renderMarkdownLite('`<b>`'), '<code>&lt;b&gt;</code>');
 });
 
 test('renderMarkdownLite renders task lists as disabled checkboxes', () => {
