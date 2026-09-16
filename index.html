@@ -676,6 +676,10 @@
             box-shadow: var(--lift);
         }
         .model-dropdown-search:focus { border-color: var(--border-strong); box-shadow: var(--glow); }
+        /* The Models view reuses the dropdown's search control, full-width
+           above the card grid -- one search look everywhere, it-tools style. */
+        .models-search { margin: 0 0 10px; width: 100%; }
+        .models-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         .model-dropdown-list { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
         .model-dropdown-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -2388,6 +2392,7 @@
                     </div>
                 </div>
                 <div class="settings-body">
+                    <input type="text" class="model-dropdown-search models-search" id="modelCardSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelCards(this.value)">
                     <div class="models-list" id="modelsList"></div>
                 </div>
             </div>
@@ -2646,12 +2651,6 @@
         <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="imageEditTitle" onclick="event.stopPropagation();">
             <div class="modal-header">
                 <h3 id="imageEditTitle">Edit image</h3>
-                <div class="image-size-picker" aria-label="Image size options">
-                <button type="button" onclick="selectSize('1024x1024')" aria-pressed="false" title="Square (1:1) — 1024x1024">1024²</button>
-                <button type="button" onclick="selectSize('1640x856')" aria-pressed="true" title="Cover — 1640x856 (wide, your reference)">Cover</button>
-                <button type="button" onclick="selectSize('1024x1280')" aria-pressed="false" title="Portrait (4:5) — 1024x1280">Port</button>
-                <button type="button" onclick="selectSize('2048x1024')" aria-pressed="false" title="Banner (2:1) — 2048x1024">Banner</button>
-                </div>
                 <button class="modal-close" onclick="closeImageEdit();" aria-label="Close">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -3775,6 +3774,32 @@
             });
 
             defaultModelSelect.value = selectedModel;
+            // A re-render rebuilds every card unhidden; the view's filter, if
+            // any, goes right back on so the grid does not forget what it showed.
+            const cardSearch = document.getElementById('modelCardSearch');
+            if (cardSearch) filterModelCards(cardSearch.value);
+        }
+
+        // The Models view is a card grid, and a grid with dozens of rows needs
+        // the same filter the dropdown already has: same substring rule, same
+        // empty note, same hidden attribute the CSS already respects.
+        function filterModelCards(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            modelsList.querySelectorAll('.model-card').forEach((card) => {
+                const match = !needle || card.textContent.toLowerCase().includes(needle);
+                card.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = modelsList.querySelector('.models-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'models-empty';
+                empty.textContent = 'No model matches that.';
+                modelsList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
         }
 
         function setupEventListeners() {
@@ -8260,13 +8285,6 @@
         // Mask editor state. editState.mask is black with the painted region
         // in white; editState.img keeps the source element for clearing.
         let editState = null;
-        let selectedImageSize = '1024x1024';
-        function selectSize(value) {
-            selectedImageSize = value;
-            document.querySelectorAll('.image-size-picker button').forEach((btn) => btn.setAttribute('aria-pressed', 'false'));
-            const selectedBtn = document.querySelector('.image-size-picker button[onclick*="' + value + '"]');
-            if (selectedBtn) selectedBtn.setAttribute('aria-pressed', 'true');
-        }
         let maskBrush = 24;
 
         function openImageEdit(src, promptText) {
