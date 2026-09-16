@@ -136,45 +136,6 @@ fun ChatScreen() {
         }
     }
 
-    fun signIn() {
-        val user = loginUser.trim()
-        if (user.isEmpty() || loginPass.isEmpty() || signingIn) return
-        val api = apiOrNull() ?: return
-        signingIn = true
-        loginError = null
-        scope.launch {
-            try {
-                val cookie = withContext(Dispatchers.IO) { api.login(user, loginPass) }
-                activity.runOnUiThread {
-                    sessionCookie = cookie
-                    prefs.edit().putString(KEY_SESSION, cookie).apply()
-                    loginPass = ""
-                    loginError = null
-                    showLogin = false
-                    refreshAll()
-                }
-            } catch (e: ApiException) {
-                activity.runOnUiThread { loginError = e.message }
-            } catch (e: Exception) {
-                activity.runOnUiThread { loginError = e.message ?: "Sign-in failed." }
-            } finally {
-                activity.runOnUiThread { signingIn = false }
-            }
-        }
-    }
-
-    fun signOut() {
-        val api = apiOrNull()
-        sessionCookie = null
-        prefs.edit().remove(KEY_SESSION).apply()
-        showLogin = false
-        if (api != null) {
-            scope.launch {
-                withContext(Dispatchers.IO) { api.logout() }
-            }
-        }
-    }
-
     fun refreshAll() {
         val api = apiOrNull() ?: return
         loading = true
@@ -292,6 +253,45 @@ fun ChatScreen() {
                     if (e is ApiException && e.authRequired) showLogin = true
                     sending = false
                 }
+            }
+        }
+    }
+
+    fun signIn() {
+        val user = loginUser.trim()
+        if (user.isEmpty() || loginPass.isEmpty() || signingIn) return
+        val api = apiOrNull() ?: return
+        signingIn = true
+        loginError = null
+        scope.launch {
+            try {
+                val cookie = withContext(Dispatchers.IO) { api.login(user, loginPass) }
+                activity.runOnUiThread {
+                    sessionCookie = cookie
+                    prefs.edit().putString(KEY_SESSION, cookie).apply()
+                    loginPass = ""
+                    loginError = null
+                    showLogin = false
+                    refreshAll()
+                }
+            } catch (e: ApiException) {
+                activity.runOnUiThread { loginError = e.message }
+            } catch (e: Exception) {
+                activity.runOnUiThread { loginError = e.message ?: "Sign-in failed." }
+            } finally {
+                activity.runOnUiThread { signingIn = false }
+            }
+        }
+    }
+
+    fun signOut() {
+        val api = apiOrNull()
+        sessionCookie = null
+        prefs.edit().remove(KEY_SESSION).apply()
+        showLogin = false
+        if (api != null) {
+            scope.launch {
+                withContext(Dispatchers.IO) { api.logout() }
             }
         }
     }
