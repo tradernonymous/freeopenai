@@ -56,9 +56,11 @@ function signSession(secret, username, now = Date.now(), ttlMs = SESSION_TTL_MS)
   return `${payload}.${hmac(secret, payload)}`;
 }
 
-// Returns the session's username if the cookie value is well-formed,
-// correctly signed, and not expired; otherwise null.
-function verifySession(secret, cookieValue, now = Date.now()) {
+// The session behind a cookie value -- `{ username, exp }` -- if it is
+// well-formed, correctly signed, and not expired; otherwise null. The expiry
+// comes back with the name so a caller can renew a session that is running
+// low without having to trust anything but the signature it just checked.
+function readSession(secret, cookieValue, now = Date.now()) {
   if (!cookieValue || typeof cookieValue !== 'string') return null;
   const dot = cookieValue.lastIndexOf('.');
   if (dot === -1) return null;
@@ -69,10 +71,17 @@ function verifySession(secret, cookieValue, now = Date.now()) {
   try {
     const { u, exp } = JSON.parse(base64UrlDecode(payload));
     if (typeof u !== 'string' || typeof exp !== 'number' || exp <= now) return null;
-    return u;
+    return { username: u, exp };
   } catch {
     return null;
   }
+}
+
+// Returns the session's username if the cookie value is well-formed,
+// correctly signed, and not expired; otherwise null.
+function verifySession(secret, cookieValue, now = Date.now()) {
+  const session = readSession(secret, cookieValue, now);
+  return session ? session.username : null;
 }
 
 function parseCookieHeader(header) {
@@ -108,6 +117,7 @@ module.exports = {
   getConfiguredAccounts,
   verifyCredentials,
   signSession,
+  readSession,
   verifySession,
   parseCookieHeader,
   checkRateLimit,

@@ -1,7 +1,10 @@
 package com.freeai4u.app
 
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,9 +14,9 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
-// Protocol parsing only: no Android framework, no network. These run with
-// plain JUnit on CI (testDebugUnitTest), which is why the HTTP layer above is
-// kept thin and everything decidable lives in pure functions.
+// Protocol and policy only: no Android framework, no network. These run with
+// plain JUnit on CI (testDebugUnitTest), which is why the HTTP layer is kept
+// thin and everything decidable lives in pure functions.
 class ApiTest {
 
     @Test
@@ -31,8 +34,7 @@ class ApiTest {
 
     @Test
     fun baseUrl_refusesCleartextOffDevice() {
-        val result = normalizeBaseUrl("http://evil.example.com")
-        assertTrue(result is BaseUrlResult.Problem)
+        assertTrue(normalizeBaseUrl("http://evil.example.com") is BaseUrlResult.Problem)
     }
 
     @Test
@@ -48,45 +50,86 @@ class ApiTest {
         assertTrue(normalizeBaseUrl("   ") is BaseUrlResult.Problem)
     }
 
+    // --- Where the shell lets a navigation go -----------------------------
+
     @Test
-    fun freePricing_missingOrZeroIsFree() {
-        assertTrue(isFreePricing(null))
-        assertTrue(isFreePricing(JSONObject()))
-        assertTrue(isFreePricing(JSONObject("{\"prompt\":\"0\",\"completion\":\"0\"}")))
-        assertTrue(isFreePricing(JSONObject("{\"prompt\":0,\"completion\":0}")))
+    fun origin_dropsPathAndDefaultPort() {
+        assertEquals("https://abc.up.railway.app", originOf("https://ABC.up.railway.app/chat?x=1"))
+        assertEquals("https://abc.up.railway.app", originOf("https://abc.up.railway.app:443/"))
+        assertEquals("http://192.168.1.10:8080", originOf("http://192.168.1.10:8080/login.html"))
     }
 
     @Test
-    fun freePricing_pricedIsNotFree() {
-        assertTrue(!isFreePricing(JSONObject("{\"prompt\":\"0.000003\",\"completion\":\"0.000009\"}")))
-        assertTrue(!isFreePricing(JSONObject("{\"prompt\":0}")))
+    fun sameOrigin_isSchemeHostAndPort() {
+        val origin = "https://abc.up.railway.app"
+        assertTrue(sameOrigin(origin, "https://abc.up.railway.app/api/llm/chat"))
+        assertFalse(sameOrigin(origin, "http://abc.up.railway.app/"))
+        assertFalse(sameOrigin(origin, "https://abc.up.railway.app.evil.com/"))
+        assertFalse(sameOrigin(origin, "https://evil.com/abc.up.railway.app"))
+        assertFalse(sameOrigin(origin, "not a url"))
+        assertFalse(sameOrigin("", "https://abc.up.railway.app/"))
     }
 
     @Test
-    fun sse_deltaFrameYieldsText() {
-        val event = parseSseLine("data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}")
-        assertTrue(event is SseEvent.Delta)
-        assertEquals("Hel", (event as SseEvent.Delta).text)
+    fun staysInShell_ownOriginAndGithubSignInOnly() {
+        val origin = "https://abc.up.railway.app"
+        assertTrue(staysInShell(origin, "https://abc.up.railway.app/"))
+        assertTrue(staysInShell(origin, "https://github.com/login/oauth/authorize?client_id=x"))
+        assertFalse(staysInShell(origin, "http://github.com/login"))
+        assertFalse(staysInShell(origin, "https://gist.github.com/x"))
+        assertFalse(staysInShell(origin, "https://example.com/"))
     }
 
     @Test
-    fun sse_leadingSpaceBelongsToTheMessage() {
-        // The spec strips exactly one space after the colon; a second one is
-        // message content, and eating it would glue words together mid-stream.
-        val event = parseSseLine("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}")
-        assertEquals(" world", (event as SseEvent.Delta).text)
+    fun popupAllowed_puterAndOwnOriginOnly() {
+        val origin = "https://abc.up.railway.app"
+        assertTrue(popupAllowed(origin, "https://puter.com/action/sign-in"))
+        assertTrue(popupAllowed(origin, "https://api.puter.com/x"))
+        assertTrue(popupAllowed(origin, "https://abc.up.railway.app/x"))
+        assertFalse(popupAllowed(origin, "https://notputer.com/"))
+        assertFalse(popupAllowed(origin, "https://puter.com.evil.com/"))
+        assertFalse(popupAllowed(origin, "http://puter.com/"))
+        assertFalse(popupAllowed(origin, null))
+    }
+
+    // --- What happens at launch -------------------------------------------
+
+    @Test
+    fun launch_asksForTheServerFirst() {
+        assertEquals(Launch.ASK_SERVER, launchStep(null, "u", "p", "s"))
+        assertEquals(Launch.ASK_SERVER, launchStep("  ", "u", "p", "s"))
     }
 
     @Test
-    fun sse_doneAndNoise() {
-        assertTrue(parseSseLine("data: [DONE]") is SseEvent.Done)
-        assertTrue(parseSseLine("") is SseEvent.Skip)
-        assertTrue(parseSseLine(":keepalive") is SseEvent.Skip)
-        assertTrue(parseSseLine("data: not-json{{{") is SseEvent.Skip)
+    fun launch_checksAStoredSessionBeforeAnythingElse() {
+        assertEquals(Launch.CHECK_SESSION, launchStep("https://x", null, null, "sess"))
+        assertEquals(Launch.CHECK_SESSION, launchStep("https://x", "u", "p", "sess"))
     }
 
-    // A fake transport: the login/session contract is HTTP-shaped, so it is
-    // tested over HTTP-shaped fakes rather than described.
+    @Test
+    fun launch_signsInFromTheStoredPasswordWhenThereIsNoSession() {
+        assertEquals(Launch.SIGN_IN, launchStep("https://x", "u", "p", null))
+        assertEquals(Launch.ASK_PASSWORD, launchStep("https://x", "u", null, null))
+        assertEquals(Launch.ASK_PASSWORD, launchStep("https://x", null, "p", ""))
+    }
+
+    // --- Downloads --------------------------------------------------------
+
+    @Test
+    fun dataUrl_base64AndPlain() {
+        val png = decodeDataUrl("data:image/png;base64,aGVsbG8=")
+        assertEquals("image/png", png!!.first)
+        assertArrayEquals("hello".toByteArray(), png.second)
+        val text = decodeDataUrl("data:text/plain,hi%20there")
+        assertEquals("text/plain", text!!.first)
+        assertEquals("hi there", String(text.second))
+        assertEquals("application/octet-stream", decodeDataUrl("data:,x")!!.first)
+        assertNull(decodeDataUrl("blob:https://x/abc"))
+        assertNull(decodeDataUrl("data:image/png;base64"))
+    }
+
+    // --- The session contract, over HTTP-shaped fakes ---------------------
+
     private class FakeConnection(url: URL) : HttpURLConnection(url) {
         var code = 200
         var body = ""
@@ -148,30 +191,57 @@ class ApiTest {
     }
 
     @Test
-    fun authedCallsCarryTheCookie() {
-        val fake = FakeConnection(URL("http://x/api/llm/models"))
-        fake.code = 200
-        fake.body = "[]"
+    fun login_throttleIsNotAWrongPassword() {
+        val fake = FakeConnection(URL("http://x/api/login"))
+        fake.code = 429
         val api = ChatApi("http://x", opener = { fake })
-        api.sessionCookie = "sess.123"
-        api.models("nara")
-        assertEquals("fo_auth=sess.123", fake.sentHeaders["Cookie"])
+        val thrown = assertThrows(ApiException::class.java) { api.login("a", "b") }
+        assertFalse("a throttle must not make the app forget the password", thrown.authRequired)
     }
 
     @Test
-    fun expiredSessionSurfacesAuthRequired() {
-        val fake = FakeConnection(URL("http://x/api/llm/models"))
+    fun session_carriesTheCookieAndReadsWhoIsSignedIn() {
+        val fake = FakeConnection(URL("http://x/api/session"))
+        fake.code = 200
+        fake.body = "{\"gate\":true,\"user\":\"phone\",\"expiresAt\":1}"
+        val api = ChatApi("http://x", opener = { fake })
+        api.sessionCookie = "sess.123"
+        val state = api.session()
+        assertEquals("fo_auth=sess.123", fake.sentHeaders["Cookie"])
+        assertTrue(state.gated)
+        assertEquals("phone", state.user)
+        assertNull("no renewal offered, none taken", api.renewedCookie)
+    }
+
+    @Test
+    fun session_keepsARenewedCookie() {
+        val fake = FakeConnection(URL("http://x/api/session"))
+        fake.code = 200
+        fake.body = "{\"gate\":true,\"user\":\"phone\"}"
+        fake.setCookie = "fo_auth=fresh.token; HttpOnly; Path=/; Max-Age=604800"
+        val api = ChatApi("http://x", opener = { fake })
+        api.sessionCookie = "old.token"
+        api.session()
+        assertEquals("fresh.token", api.renewedCookie)
+    }
+
+    @Test
+    fun session_openDeploymentIsUngated() {
+        val fake = FakeConnection(URL("http://x/api/session"))
+        fake.code = 200
+        fake.body = "{\"gate\":false,\"user\":null}"
+        val state = ChatApi("http://x", opener = { fake }).session()
+        assertFalse(state.gated)
+        assertNull(state.user)
+    }
+
+    @Test
+    fun session_expiredSurfacesAuthRequired() {
+        val fake = FakeConnection(URL("http://x/api/session"))
         fake.code = 401
         val api = ChatApi("http://x", opener = { fake })
         api.sessionCookie = "stale"
-        val thrown = assertThrows(ApiException::class.java) { api.models("nara") }
+        val thrown = assertThrows(ApiException::class.java) { api.session() }
         assertTrue(thrown.authRequired)
-    }
-
-    @Test
-    fun sse_errorShapesBecomeFailures() {
-        assertEquals("boom", ((parseSseLine("data: {\"error\":\"boom\"}") as SseEvent.Failure).message))
-        assertEquals("nope", ((parseSseLine("data: {\"error\":{\"message\":\"nope\"}}") as SseEvent.Failure).message))
-        assertEquals("half there", ((parseSseLine("data: {\"partial\":true,\"notice\":\"half there\"}") as SseEvent.Failure).message))
     }
 }

@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  FreeAI4U testing APK. Security posture, deliberately:
-  - INTERNET is the only permission. No storage, contacts, camera, location.
-  - No backup (adb or cloud) can lift the configured server URL or chats.
-  - No WebView anywhere: there is no script surface to inject into.
-  - Exactly one exported component (the launcher activity); every intent
-    filter beyond MAIN/LAUNCHER would widen who can start what.
-  - Cleartext is off here AND refused in code (Api.normalizeBaseUrl):
-    chat content must never cross the network unencrypted.
+  FreeAI4U Android app: the deployed web app in a hardened WebView, with a
+  native sign-in that keeps the phone logged in. Security posture:
+  - INTERNET is the only permission. Files come in through the system picker
+    and go out through MediaStore, neither of which needs storage access.
+  - No backup (adb or cloud) can lift the server, the sealed password, the
+    session, or the chats the page keeps in its own storage.
+  - Exactly one exported component (the launcher activity); no intent filter
+    beyond MAIN/LAUNCHER, so nothing else can start it with data.
+  - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
+    content never crosses the network unencrypted.
+  - The WebView itself is locked down in WebShell.kt: no file or content
+    URLs, no JavaScript bridge, no geolocation, mixed content refused, and
+    navigation held to the configured server.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -16,6 +21,7 @@
     <application
         android:allowBackup="false"
         android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@drawable/ic_app"
         android:label="FreeAI4U"
         android:supportsRtl="true"
@@ -25,7 +31,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

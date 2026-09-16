@@ -1,0 +1,108 @@
+package com.freeai4u.app
+
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import java.security.KeyStore
+import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+/** App-private settings. The password and the session are sealed with an
+ * AES-256-GCM key that lives in the Android Keystore -- hardware-backed on
+ * any recent phone -- so the preferences file holds ciphertext, and nothing
+ * outside this app's uid, on this device, can turn it back into either.
+ * Backup is off in the manifest, so neither leaves the phone.
+ *
+ * The password is kept at all only because the user asked the app to stay
+ * signed in without typing: the server's sessions last a week, and this is
+ * what signs in again when one lapses. Signing out inside the app clears it. */
+class SecureStore(context: Context) {
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    var server: String?
+        get() = prefs.getString(KEY_SERVER, null)?.ifEmpty { null }
+        set(value) = put(KEY_SERVER, value)
+
+    var username: String?
+        get() = prefs.getString(KEY_USERNAME, null)?.ifEmpty { null }
+        set(value) = put(KEY_USERNAME, value)
+
+    var password: String?
+        get() = open(prefs.getString(KEY_PASSWORD, null))
+        set(value) = put(KEY_PASSWORD, value?.let { seal(it) })
+
+    var session: String?
+        get() = open(prefs.getString(KEY_SESSION, null))
+        set(value) = put(KEY_SESSION, value?.let { seal(it) })
+
+    fun clearSession() {
+        prefs.edit().remove(KEY_SESSION).apply()
+    }
+
+    /** What sign-out forgets: the password and the session. The server and
+     * the username stay, so the next sign-in is one field. */
+    fun clearSecrets() {
+        prefs.edit().remove(KEY_PASSWORD).remove(KEY_SESSION).apply()
+    }
+
+    private fun put(key: String, value: String?) {
+        val editor = prefs.edit()
+        if (value.isNullOrEmpty()) editor.remove(key) else editor.putString(key, value)
+        editor.apply()
+    }
+
+    private fun key(): SecretKey {
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+        generator.init(
+            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    private fun seal(plain: String): String {
+        val cipher = Cipher.getInstance(TRANSFORM)
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        val encoder = Base64.getEncoder()
+        return encoder.encodeToString(cipher.iv) + ":" + encoder.encodeToString(sealed)
+    }
+
+    /** Null for anything that does not open cleanly -- a key the OS rotated,
+     * a value from an older build -- which reads as "not saved" and asks for
+     * the password again, never as a crash. */
+    private fun open(sealed: String?): String? {
+        if (sealed.isNullOrEmpty()) return null
+        return try {
+            val cut = sealed.indexOf(':')
+            if (cut <= 0) return null
+            val decoder = Base64.getDecoder()
+            val iv = decoder.decode(sealed.substring(0, cut))
+            val body = decoder.decode(sealed.substring(cut + 1))
+            val cipher = Cipher.getInstance(TRANSFORM)
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(body), Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private companion object {
+        const val PREFS = "freeai4u"
+        const val KEY_SERVER = "base_url"
+        const val KEY_USERNAME = "username"
+        const val KEY_PASSWORD = "password_sealed"
+        const val KEY_SESSION = "session_sealed"
+        const val KEYSTORE = "AndroidKeyStore"
+        const val ALIAS = "freeai4u-secrets"
+        const val TRANSFORM = "AES/GCM/NoPadding"
+    }
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FreeAI4U</string>
+    <string name="server_hint">Server (https://…)</string>
+    <string name="username_hint">Username</string>
+    <string name="password_hint">Password</string>
+    <string name="sign_in">Sign in</string>
+    <string name="retry">Retry</string>
+    <string name="change_server">Change server</string>
+    <string name="signing_in">Signing in…</string>
+    <string name="connecting">Connecting…</string>
+    <string name="stored_note">Kept on this phone only, sealed by the Android Keystore. Sign out inside the app to forget it.</string>
+    <string name="saved_to">Saved to Downloads/FreeAI4U/%1$s</string>
+    <string name="save_failed">Could not save the file.</string>
+</resources>

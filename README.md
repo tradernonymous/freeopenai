@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
   <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-914%20passing-22c55e?style=for-the-badge" alt="914 tests passing">
+  <img src="https://img.shields.io/badge/tests-970%20passing-22c55e?style=for-the-badge" alt="970 tests passing">
   <img src="https://img.shields.io/badge/API%20keys-none%20needed-f472b6?style=for-the-badge" alt="No API keys">
   <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
 </p>
@@ -36,6 +36,7 @@
 - ⚙️ [Configuration](#config)
 - ☁️ [Deploy to Railway](#deploy)
 - 📱 [On a phone](#on-a-phone)
+- 📲 [The Android app](#android-app)
 - 🏗️ [Architecture](#architecture)
 - ⚠️ [Disclaimer](#disclaimer)
 
@@ -568,6 +569,29 @@ Attach draws at 34×44 rather than 44×44: the row needs the width back, but a 3
 One more width came free along the way: the model button was carrying the **iOS zoom guard**, the `font-size: 16px` that stops iOS zooming the viewport when a field is focused. That guard is for fields — `input`, `select`, `textarea` — and the model picker is a `<button>`, which iOS never zooms for. It did nothing there except make the widest control in the row a third wider than it needed to be, on every phone. Its dropdown holds a real search input, and that still has it.
 
 Two checks now make this class of bug hard to reintroduce. `npm test` walks the stylesheet, scores specificity, and fails when a declaration inside a `@media` is beaten by one outside it — ignoring rivals that need a state, since `.chat-shell.history-hidden .history-sidebar` only applies while the sidebar is closed and cannot be said to win. And `npm run smoke` measures every control in the row at all five viewports rather than asking whether it exists: that it is on screen, that attach leads, that the row is one line and cannot overflow, and that nothing has collapsed. It caught the 390px case immediately, which the existence check had been passing for months.
+
+<a name="android-app"></a>
+
+### 📲 The Android app
+
+`android/` is a small Android app (**FreeAI4U**) that wraps your deployed site in a locked-down WebView and adds the one thing a browser tab cannot do: **sign in once and stay signed in.** It is the site — every feature the web app has on a phone is there because it *is* the web app — so nothing here is a second chat client to keep in step with the first. An earlier build did reimplement chat natively; it was replaced because a 10,000-line page cannot be kept in parity by hand, and the user wanted parity.
+
+**Install it (first time)**
+
+1. On the phone, open **https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest** and tap `freeai4u.apk`.
+2. Chrome asks whether it may install apps from this source — allow it. OPPO's ColorOS adds its own warning for any app outside its store; tap **Install anyway** (it may make you wait a few seconds first).
+3. If the older testing build is still on the phone (the one from the Actions artifact), uninstall it first: it is a different package (`com.freeai4u.app.debug`) under a different key, and the two do not update each other.
+4. Open the app. The server address is already filled in; type the username (`AUTH_USER_1`) and its password once and tap **Sign in.** From then on the app opens straight into the chat.
+
+**Updating.** Open the same link, download, install over the top — the app keeps its data. Every push to `main` that touches `android/` rebuilds it, so the release always holds the latest build; the build number is in the release notes.
+
+**How it stays signed in.** The server's sessions last seven days. The app checks its session on every launch through `GET /api/session`, which reports who is signed in and — when the session is past half its life — issues a fresh one, so a phone that opens the app at least weekly never sees the login again. If the session has lapsed anyway (a fortnight away, a server restart with a new `SESSION_SECRET`), the app signs in again on its own with the password it holds. That password is kept only for this, and only on the phone: it is sealed with an AES-256-GCM key that lives in the Android Keystore (hardware-backed on any recent phone), so the preferences file holds ciphertext that nothing outside this app, on this device, can open. Backup is off, so it never leaves the phone. Sign out inside the app (Settings → Sign out) and the phone forgets both the password and the session; the server and the username stay, so the next sign-in is one field.
+
+Why the password is not simply built into the APK: an APK can be unpacked by anyone who has it, so a value baked in at build time is published, not protected — and it is the first thing a security scanner flags. What *is* baked in are the two harmless defaults: the server address and, optionally, the username, from the repository variables `APK_SERVER_URL` and `APK_USERNAME`.
+
+**What the shell locks down.** `INTERNET` is the only permission — files come in through the system picker and go out through MediaStore into `Downloads/FreeAI4U/`, neither of which needs storage access. HTTPS only, system trust anchors only (a "helpful" proxy CA on the device cannot sit between the app and the server); `http://` is refused outside your own network. No file or content URLs in the WebView, no mixed content, no geolocation, no JavaScript bridge of any kind — the app never hands the page a handle into itself. Navigation stays on the configured server: a link in a reply opens in the phone's browser, GitHub's sign-in is the one exception (the page's "connect GitHub" flow round-trips through it and back), and the popup Puter's sign-in needs opens in its own locked-down WebView that may load Puter and nothing else. The window is flagged secure, so screenshots, screen recordings and the recents thumbnail all come out blank. The build is non-debuggable in both variants, minified and shrunk in release.
+
+**Building and signing.** CI (`.github/workflows/android.yml`) builds on every push that touches `android/`, runs the JVM unit tests (`ApiTest` — URL policy, session contract, download decoding, launch decisions) and, when the repository holds a signing key, builds the release APK and publishes it to the rolling `apk-latest` release. The key is a PKCS12 keystore held in four secrets — `APK_KEYSTORE_BASE64`, `APK_KEYSTORE_PASSWORD`, `APK_KEY_ALIAS`, `APK_KEY_PASSWORD` — and **it must be backed up off GitHub**: Android only installs an update signed with the same key as the app it replaces, so a lost key means uninstalling (and losing the app's data) to move to a new one. Without the secrets the workflow builds the debug variant as an artifact instead, so a fork still builds. Each build's `versionCode` is the run number plus 100, which is what lets every build install over the one before.
 
 ### 🖼️ Image providers
 

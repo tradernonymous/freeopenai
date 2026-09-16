@@ -12,6 +12,7 @@ const {
   getConfiguredAccounts,
   verifyCredentials,
   signSession,
+  readSession,
   verifySession,
   parseCookieHeader,
   checkRateLimit,
@@ -291,6 +292,27 @@ function handleLogout(req, res) {
   clearSessionCookie(res);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
+}
+
+// GET /api/session: who this request is signed in as. The Android app asks
+// this on every launch, before it loads the page, so an expired session is
+// found out in a 401 here rather than half-way through a chat.
+//
+// A session past half its life is renewed on the way out. The web page has
+// no launch step to hang a renewal on, so its sessions run the full seven
+// days and then ask again; the app, which does, stays signed in for as long
+// as it is opened at least once a week. The gate itself is unchanged: the
+// route sits behind it like every other /api/ path, so a request that gets
+// here at all is either signed in or on a deployment with no accounts set.
+function sessionStatus(req, res) {
+  if (getConfiguredAccounts(process.env).length === 0) {
+    return sendJson(res, 200, { gate: false, user: null });
+  }
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const session = readSession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
+  if (!session) return sendJson(res, 401, { error: 'Not signed in' });
+  if (session.exp - Date.now() < SESSION_TTL_MS / 2) setSessionCookie(res, session.username, req);
+  return sendJson(res, 200, { gate: true, user: session.username, expiresAt: session.exp });
 }
 
 function sendJson(res, status, body, headers = {}) {
@@ -3785,6 +3807,7 @@ function createRequestHandler(root) {
     }
 
     if (urlPath === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
+    if (urlPath === '/api/session' && req.method === 'GET') return sessionStatus(req, res);
     if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);

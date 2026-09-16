@@ -1,8 +1,11 @@
 name: Android
 
-# The testing APK builds here because no developer machine in this project
-# carries the Android SDK: the runner installs the toolchain, runs the JVM
-# unit tests, and uploads the debug APK as an installable artifact.
+# The APK builds here because no developer machine in this project carries
+# the Android SDK: the runner installs the toolchain, runs the JVM unit
+# tests, builds the signed release APK and publishes it to the rolling
+# `apk-latest` GitHub release, where a phone can download it straight from
+# the browser. Without a signing key in the repository's secrets it falls
+# back to the debug variant as an artifact, so a fork still builds.
 on:
   push:
     branches: [main]
@@ -11,12 +14,24 @@ on:
       - '.github/workflows/android.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: android
+    env:
+      # Repository *variables* (not secrets): baked into the APK as the
+      # first launch's defaults. The password is never a build input.
+      APK_SERVER_URL: ${{ vars.APK_SERVER_URL }}
+      APK_USERNAME: ${{ vars.APK_USERNAME }}
+      APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
+      APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
+      APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+      HAS_KEYSTORE: ${{ secrets.APK_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -35,10 +50,38 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
+      # Every build's versionCode goes up, so each installs over the last.
+      - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - run: gradle :app:testDebugUnitTest
-      - run: gradle :app:assembleDebug
+      - name: Restore the signing key
+        if: env.HAS_KEYSTORE == 'true'
+        run: |
+          printf '%s' "${{ secrets.APK_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.p12"
+          echo "APK_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+      - name: Build the signed release APK
+        if: env.HAS_KEYSTORE == 'true'
+        run: |
+          gradle :app:assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/freeai4u.apk"
+      - name: Build the debug APK (no signing key configured)
+        if: env.HAS_KEYSTORE != 'true'
+        run: |
+          gradle :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/freeai4u.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: freeai4u-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
-          retention-days: 21
+          name: freeai4u-apk
+          path: ${{ runner.temp }}/freeai4u.apk
+          retention-days: 30
+      - name: Publish to the rolling apk-latest release
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="FreeAI4U Android app, build $APK_VERSION_CODE (from $GITHUB_SHA). Every push to main that touches android/ replaces freeai4u.apk here; install it over the previous build, it keeps its data."
+          if gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit apk-latest --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+          else
+            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "FreeAI4U Android app (latest build)" --notes "$NOTES"
+          fi
+          gh release upload apk-latest "$RUNNER_TEMP/freeai4u.apk" --repo "$GITHUB_REPOSITORY" --clobber

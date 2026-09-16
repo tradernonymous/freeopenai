@@ -5432,12 +5432,10 @@
         function downloadWorkspaceFile(path) {
             const text = activeWorkspace()[path];
             if (typeof text !== 'string') return;
-            const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = path.split('/').pop();
-            link.click();
-            URL.revokeObjectURL(url);
+            // Through saveBlobAs, which revokes the URL on a later tick: the
+            // Android app fetches the blob back out of the page to save it, and
+            // a URL revoked in the same tick is gone before that fetch starts.
+            saveBlobAs(new Blob([text], { type: 'text/plain;charset=utf-8' }), path.split('/').pop());
         }
 
         function deleteWorkspaceFile(path) {
