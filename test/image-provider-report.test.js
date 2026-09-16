@@ -7,13 +7,19 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 test('image session tab gives users actionable provider diagnostics', () => {
   assert.match(html, /id="imageProviderReport"[^>]*aria-live="polite"/);
-  assert.match(html, /id="imageProviderReportStatus">Checking…/);
+  assert.match(html, /id="imageProviderReport"[^>]*aria-busy/);
+  assert.match(html, /image-provider-report-note/);
+  assert.match(html, /id="imageProviderReportStatus"[^>]*>Checking…/);
   assert.match(html, /id="chatProviderList"/);
   assert.match(html, /id="imageProviderList"/);
   assert.match(html, /onclick="loadImageProviderReport\(\)"/);
   assert.match(html, /read\('\/api\/llm\/providers'/);
   assert.match(html, /read\('\/api\/llm\/images\/providers'/);
   assert.match(html, /Could not check image services/);
+  assert.match(html, /status\.dataset\.state = 'ready'/);
+  assert.match(html, /report\.setAttribute\('aria-busy', 'false'\)/);
+  assert.match(html, /var imageProviderReportRequest = null/);
+  assert.match(html, /if \(imageProviderReportRequest\) return imageProviderReportRequest/);
 });
 
 test('provider diagnostics render provider names as text, not HTML', () => {

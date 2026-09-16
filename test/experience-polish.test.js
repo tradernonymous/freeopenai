@@ -186,6 +186,12 @@ test('every control shares one focus ring and one press', () => {
   }
 });
 
+test('the closed session panel is hidden from keyboard and assistive technology', () => {
+  assert.match(HTML, /id="sessionPanel"[^>]*aria-hidden="true"[^>]*inert/);
+  assert.match(HTML, /panel\.setAttribute\('aria-hidden', String\(hidden\)\)/);
+  assert.match(HTML, /panel\.toggleAttribute\('inert', hidden\)/);
+});
+
 test('an empty sidebar says what will fill it', () => {
   assert.ok(HTML.includes('No chats yet. Describe anything in the composer and it is saved here'), 'the empty sidebar copy is back to answering a question nobody asked');
   assert.doesNotMatch(HTML, /'No chats yet\.'/, 'the one-line empty state is back');

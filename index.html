@@ -415,8 +415,12 @@
         .image-provider-report { margin: 0 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--surface); }
         .image-provider-report-head { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-dim); }
         .image-provider-report-head strong { font-size: 11px; color: var(--text); }
-        .image-provider-report-head button { margin-left: auto; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: 10px; padding: 2px 4px; }
-        .image-provider-report-head button:hover { color: var(--accent); }
+        .image-provider-report-head > span { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+        .image-provider-report-head > span[data-state="ready"] { color: #22c55e; }
+        .image-provider-report-head > span[data-state="error"] { color: var(--danger); }
+        .image-provider-report-head button { margin-left: auto; min-height: 26px; border: 1px solid var(--border); border-radius: var(--ctl-r); background: var(--ctl-bg); color: var(--text-muted); cursor: pointer; font: inherit; font-size: 10px; padding: 0 7px; transition: var(--transition); }
+        .image-provider-report-head button:hover { color: var(--accent); background: var(--ctl-bg-hover); border-color: var(--accent); }
+        .image-provider-report-head button:active { transform: scale(.97); }
         .image-provider-list { display: flex; flex-direction: column; }
         .image-provider-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 7px; align-items: start; padding: 7px 9px; border-bottom: 1px solid var(--border); font-size: 10px; }
         .image-provider-row:last-child { border-bottom: 0; }
@@ -426,6 +430,9 @@
         .image-provider-detail { display: block; margin-top: 2px; color: var(--text-muted); overflow-wrap: anywhere; line-height: 1.45; }
         .image-provider-state { color: var(--text-muted); white-space: nowrap; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
         .image-provider-report.is-loading .image-provider-list { opacity: .55; }
+        .image-provider-report.is-loading .image-provider-report-head strong::after { content: ' · checking'; color: var(--text-muted); font-weight: 400; }
+        .image-provider-report-note { margin: 0; padding: 6px 9px; color: var(--text-muted); font-size: 10px; line-height: 1.45; border-bottom: 1px solid var(--border); }
+        .image-provider-report-empty { padding: 8px 9px; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
         .image-provider-report-error { padding: 8px 9px; color: var(--danger); font-size: 10px; line-height: 1.5; }
         .image-provider-subhead { margin: 0; padding: 7px 9px 4px; border-bottom: 1px solid var(--border); }
         .session-subhead {
@@ -2410,8 +2417,8 @@
                          skills card, the todo card, and the three composer
                          controls that switched them, so the chat bar and the
                          composer each carry one button for it. -->
-                    <div class="session-scrim" id="sessionScrim" onclick="toggleSessionPanel(false)"></div>
-                    <aside class="session-panel" id="sessionPanel" aria-label="Session — skills, plan and image for this chat">
+                    <div class="session-scrim" id="sessionScrim" aria-hidden="true" onclick="toggleSessionPanel(false)"></div>
+                    <aside class="session-panel" id="sessionPanel" aria-label="Session — skills, plan and image for this chat" aria-hidden="true" inert>
                         <div class="rail-head">
                             <span>Session</span>
                             <span class="rail-count" id="sessionCount">nothing on yet</span>
@@ -2462,12 +2469,13 @@
                             <h4 class="session-subhead">Shape</h4>
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
-                            <div class="image-provider-report" id="imageProviderReport" aria-live="polite">
-                                <div class="image-provider-report-head"><strong>Provider readiness</strong><span id="imageProviderReportStatus">Checking…</span><button type="button" onclick="loadImageProviderReport()">Refresh</button></div>
+                            <div class="image-provider-report" id="imageProviderReport" aria-live="polite" aria-busy="false">
+                                <div class="image-provider-report-head"><strong>Provider readiness</strong><span id="imageProviderReportStatus" data-state="loading">Checking…</span><button type="button" onclick="loadImageProviderReport()">Refresh</button></div>
+                                <p class="image-provider-report-note">Green means ready now. Setup tells you the next configuration step; it does not spend a request.</p>
                                 <h4 class="session-subhead image-provider-subhead">Chat services</h4>
-                                <div class="image-provider-list" id="chatProviderList"><div class="image-provider-report-error">Open this tab to see configured chat services.</div></div>
+                                <div class="image-provider-list" id="chatProviderList"><div class="image-provider-report-empty">Open this tab to see configured chat services.</div></div>
                                 <h4 class="session-subhead image-provider-subhead">Image services</h4>
-                                <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-error">Open this tab to see which configured services can draw and what each one needs.</div></div>
+                                <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-empty">Open this tab to see which configured services can draw and what each one needs.</div></div>
                             </div>
                         </section>
                     </aside>
@@ -5112,6 +5120,15 @@
             if (!shell) return;
             const hidden = force === undefined ? !shell.classList.contains('session-hidden') : !force;
             shell.classList.toggle('session-hidden', hidden);
+            const panel = document.getElementById('sessionPanel');
+            const scrim = document.getElementById('sessionScrim');
+            if (panel) {
+                panel.setAttribute('aria-hidden', String(hidden));
+                if (typeof panel.toggleAttribute === 'function') panel.toggleAttribute('inert', hidden);
+                else if (hidden) panel.setAttribute('inert', '');
+                else if (typeof panel.removeAttribute === 'function') panel.removeAttribute('inert');
+            }
+            if (scrim) scrim.setAttribute('aria-hidden', String(hidden));
             for (const [id, pressed] of [['sessionToggle', true], ['sessionChip', false]]) {
                 const btn = document.getElementById(id);
                 if (!btn) continue;
@@ -5169,14 +5186,22 @@
             }
         }
 
+        var imageProviderReportRequest = null;
         function loadImageProviderReport() {
             const report = document.getElementById('imageProviderReport');
             const imageList = document.getElementById('imageProviderList');
             const chatList = document.getElementById('chatProviderList');
             const status = document.getElementById('imageProviderReportStatus');
+            const refresh = report && report.querySelector('button');
             if (!report || !imageList || !chatList || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+            if (imageProviderReportRequest) return imageProviderReportRequest;
             report.classList.add('is-loading');
-            if (status) status.textContent = 'Checking…';
+            report.setAttribute('aria-busy', 'true');
+            if (refresh) refresh.disabled = true;
+            if (status) {
+                status.textContent = 'Checking…';
+                status.dataset.state = 'loading';
+            }
             const read = (url) => window.fetch(url, { cache: 'no-store' }).then((response) => {
                 if (!response.ok) throw new Error('status ' + response.status);
                 return response.json();
@@ -5195,21 +5220,32 @@
                     row.querySelector('.image-provider-state').textContent = stateFor(provider);
                     list.appendChild(row);
                 });
-                if (!rows.length) list.innerHTML = '<div class="image-provider-report-error">' + emptyText + '</div>';
+                if (!rows.length) list.innerHTML = '<div class="image-provider-report-empty">' + emptyText + '</div>';
             };
-            Promise.all([read('/api/llm/providers'), read('/api/llm/images/providers')]).then(([chatProviders, imageBody]) => {
+            imageProviderReportRequest = Promise.all([read('/api/llm/providers'), read('/api/llm/images/providers')]).then(([chatProviders, imageBody]) => {
                 const chats = Array.isArray(chatProviders) ? chatProviders.filter((provider) => provider && provider.configured && (!provider.kind || provider.kind === 'chat')) : [];
                 const images = [imageBody && imageBody.browser].concat(imageBody && Array.isArray(imageBody.providers) ? imageBody.providers : []).filter(Boolean);
                 renderRows(chatList, chats, 'No server chat providers configured. Puter chat remains available in the browser.', (provider) => provider.note || 'Configured; models load when selected.', () => 'configured');
                 renderRows(imageList, images, 'No image services were reported.', (provider) => provider.ready
                     ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
                     : (provider.reason || provider.note || 'Not configured'), (provider) => provider.ready ? 'ready' : 'setup');
-                if (status) status.textContent = chats.length + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
+                if (status) {
+                    status.textContent = chats.length + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
+                    status.dataset.state = 'ready';
+                }
             }).catch(() => {
                 chatList.innerHTML = '<div class="image-provider-report-error">Could not check chat services.</div>';
                 imageList.innerHTML = '<div class="image-provider-report-error">Could not check image services. Try Refresh, or send a draw to see the provider’s exact error.</div>';
-                if (status) status.textContent = 'Unavailable';
-            }).finally(() => report.classList.remove('is-loading'));
+                if (status) {
+                    status.textContent = 'Unavailable';
+                    status.dataset.state = 'error';
+                }
+            }).finally(() => {
+                report.classList.remove('is-loading');
+                report.setAttribute('aria-busy', 'false');
+                if (refresh) refresh.disabled = false;
+                imageProviderReportRequest = null;
+            });
         }
 
         function restoreSessionPanel() {
