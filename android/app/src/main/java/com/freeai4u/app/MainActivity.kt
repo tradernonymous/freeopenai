@@ -538,6 +538,14 @@ class MainActivity : ComponentActivity() {
                 override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
                     val url = request.url.toString()
                     if (popupAllowed(origin, url)) return false
+                    if (blockedInWebView(url)) {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle(R.string.puter_social_title)
+                            .setMessage(R.string.puter_social_message)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show()
+                        return true
+                    }
                     openExternally(request.url)
                     return true
                 }

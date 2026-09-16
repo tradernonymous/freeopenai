@@ -88,6 +88,27 @@ fun popupAllowed(origin: String, url: String?): Boolean {
     return host == "puter.com" || host.endsWith(".puter.com")
 }
 
+private val WEBVIEW_BLOCKED_SIGN_IN_HOSTS = setOf(
+    "accounts.google.com",
+    "appleid.apple.com",
+    "login.live.com",
+    "login.microsoftonline.com",
+    "www.facebook.com",
+    "m.facebook.com",
+)
+
+/** "Continue with Google / Apple / Microsoft" pages. Those providers refuse to
+ * sign in inside an app's embedded browser (Google answers
+ * disallowed_useragent), and a round trip through the phone's browser cannot
+ * hand the result back to the popup that asked. So the app says so plainly
+ * instead of opening a flow that can only dead-end. Disguising the WebView as
+ * a browser to get past that check is exactly what those providers ban. */
+fun blockedInWebView(url: String?): Boolean {
+    if (url == null) return false
+    val host = httpsHost(url) ?: return false
+    return host in WEBVIEW_BLOCKED_SIGN_IN_HOSTS
+}
+
 /** Which launch step follows from what the phone holds. Pure, so it is the
  * part of the sign-in flow that is tested rather than described. */
 enum class Launch { ASK_SERVER, ASK_PASSWORD, CHECK_SESSION, SIGN_IN }

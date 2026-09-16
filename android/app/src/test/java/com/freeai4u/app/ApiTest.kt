@@ -92,6 +92,16 @@ class ApiTest {
         assertFalse(popupAllowed(origin, null))
     }
 
+    @Test
+    fun socialSignIn_isRecognisedSoItIsNotSentToTheBrowser() {
+        assertTrue(blockedInWebView("https://accounts.google.com/o/oauth2/v2/auth?client_id=x"))
+        assertTrue(blockedInWebView("https://appleid.apple.com/auth/authorize"))
+        assertFalse(blockedInWebView("https://puter.com/action/sign-in"))
+        assertFalse(blockedInWebView("https://accounts.google.com.evil.com/"))
+        assertFalse(blockedInWebView("http://accounts.google.com/"))
+        assertFalse(blockedInWebView(null))
+    }
+
     // --- What happens at launch -------------------------------------------
 
     @Test

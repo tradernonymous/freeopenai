@@ -38,4 +38,6 @@
     <string name="update_current">You have the latest version (%1$s).</string>
     <string name="update_failed">Could not check for updates. Try again later.</string>
     <string name="update_unavailable">Update checks are off in this build.</string>
+    <string name="puter_social_title">Use your Puter username instead</string>
+    <string name="puter_social_message">Google, Apple and Microsoft block their sign-in buttons inside apps, so they cannot finish here. In this window, sign in to Puter with your Puter username (or email) and password. If your Puter account only has Google sign-in: open puter.com in Chrome, sign in with Google, then set a password under Settings, Account. The app server models (NVIDIA, OpenRouter and others) work without Puter.</string>
 </resources>

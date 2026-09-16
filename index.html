@@ -4143,7 +4143,10 @@
                     showStatus('error', 'Sign-in is not supported');
                 }
             } catch (error) {
-                showStatus('error', 'Auth failed: ' + error.message);
+                // Puter rejects a closed or cancelled sign-in window with a bare
+                // object (or nothing), which used to read "Auth failed: undefined".
+                const reason = (error && (error.message || error.error || error.msg)) || 'the Puter sign-in window closed before it finished';
+                showStatus('error', 'Puter sign-in failed: ' + reason);
             }
         }
 
