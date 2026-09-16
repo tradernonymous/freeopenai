@@ -1044,6 +1044,45 @@ const LLM_PROVIDERS = {
       ownModel: true,
     },
   },
+  // Cloudflare Workers AI: an official free allowance on every Cloudflare
+  // account (10,000 Neurons a day, no card), used with an API token the
+  // account owner creates from the "Workers AI" template. Nothing here is
+  // borrowed or impersonated.
+  //
+  // The account id is part of every URL, so the provider needs two variables:
+  // CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. Chat is OpenAI-compatible
+  // under the account's /ai/v1. That path has no GET /models, so the list is
+  // pinned (catalogue: false); CLOUDFLARE_MODELS replaces it.
+  //
+  // Drawing uses Workers AI's own run-by-name endpoint rather than an images
+  // API: POST /ai/run/<model> with {prompt, steps}, answered by FLUX.1
+  // [schnell] as {result:{image:<base64 JPEG>}}. It is the image service this
+  // app tries first, because it is free and needs nothing but the token.
+  cloudflare: {
+    label: 'Cloudflare Workers AI',
+    baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1',
+    envVar: 'CLOUDFLARE_API_TOKEN',
+    accountEnv: 'CLOUDFLARE_ACCOUNT_ID',
+    catalogue: false,
+    models: [
+      '@cf/openai/gpt-oss-120b',
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      '@cf/meta/llama-4-scout-17b-16e-instruct',
+      '@cf/qwen/qwen2.5-coder-32b-instruct',
+      '@cf/qwen/qwq-32b',
+      '@cf/mistralai/mistral-small-3.1-24b-instruct',
+      '@cf/google/gemma-3-12b-it',
+      '@cf/openai/gpt-oss-20b',
+    ],
+    image: {
+      shape: 'cloudflare-run',
+      baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai',
+      baseUrlEnv: 'CLOUDFLARE_IMAGES_BASE_URL',
+      modelEnv: 'CLOUDFLARE_IMAGE_MODEL',
+      defaultModel: '@cf/black-forest-labs/flux-1-schnell',
+      ownModel: true,
+    },
+  },
   // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
   // one OpenAI-compatible endpoint in front of hundreds of upstream providers
   // (OpenAI, Anthropic, Google, GLM, DeepSeek, Mistral, Kimi, plus dozens of
@@ -1254,7 +1293,23 @@ function providerEnvName(envVar, suffix) {
   return stem === envVar ? envVar + suffix : stem + suffix;
 }
 
+// The account a provider's URLs are scoped to (Cloudflare), trimmed, or ''.
+function providerAccount(provider) {
+  return provider && provider.accountEnv ? String(process.env[provider.accountEnv] || '').trim() : '';
+}
+
+// A declared URL with its {account} placeholder filled. A malformed id is
+// refused by providerConfig before anything is fetched, so the encoding here
+// only matters for a value that was already going to be rejected.
+function withAccount(provider, url) {
+  if (!url || !String(url).includes('{account}')) return url;
+  return String(url).replace('{account}', encodeURIComponent(providerAccount(provider)));
+}
+
 function providerIsConfigured(provider) {
+  // A provider whose URLs name an account is not configured without one: the
+  // token alone has nowhere to go.
+  if (provider.accountEnv && !providerAccount(provider)) return false;
   // A provider with no default address (the custom endpoint slot) activates
   // on the URL alone: a key with nowhere to send it would only fail at use.
   if (provider.needsBaseUrl) return !!process.env[providerEnvName(provider.envVar, '_BASE_URL')];
@@ -1284,7 +1339,7 @@ function providerConfig(id) {
   // proxy, and lets the tests point at a local stand-in. Without one, a
   // key-less/local provider keeps its default address.
   const override = process.env[providerEnvName(provider.envVar, '_BASE_URL')];
-  const rawBaseUrl = override || provider.baseUrl;
+  const rawBaseUrl = override || withAccount(provider, provider.baseUrl);
   const baseUrl = normalizeProviderBaseUrl(id, rawBaseUrl);
   // A model list can be declared outright, which matters for a provider whose
   // catalogue is missing or whose ids move between releases: setting
@@ -1312,6 +1367,12 @@ function providerConfig(id) {
   // fetch throw "Cannot convert argument to a ByteString" — a crash that
   // names neither the key nor the provider. Name both, before any fetch.
   const bad = unsafeHeaderChar(key);
+  const account = providerAccount(provider);
+  if (provider.accountEnv && account && !/^[0-9a-f]{32}$/i.test(account)) {
+    configured.keyError =
+      `${provider.accountEnv} should be the 32-character account id from the ${provider.label} dashboard, not a name or an email. ` +
+      `Copy it from the account home page.`;
+  }
   if (bad) {
     configured.keyError =
       `${provider.envVar} contains a non-ASCII character '${bad.char}' (U+${bad.code.toString(16).toUpperCase()}) at position ${bad.index}. ` +
@@ -1597,7 +1658,7 @@ async function llmFetch(req, res) {
 // exactly the behaviour they had, and one who does not gets their next key.
 // OmniRoute is last because its image model is named by the operator or read
 // from the gateway's catalogue rather than published here.
-const IMAGE_PROVIDER_ORDER = ['nara', 'openrouter', 'nvidia', 'omniroute'];
+const IMAGE_PROVIDER_ORDER = ['cloudflare', 'nara', 'openrouter', 'nvidia', 'omniroute'];
 
 // Which model name to ask for: the request's own, then the operator's variable,
 // then the store's default, then one read from the provider's own catalogue (see
@@ -1999,7 +2060,7 @@ function imageUnavailableMessage(preferredId) {
 // and there it is normalised the same way the chat path normalises it.
 function imageBaseFor(id, provider, store) {
   const override = store.baseUrlEnv ? String(process.env[store.baseUrlEnv] || '').trim() : '';
-  const declared = override || store.baseUrl;
+  const declared = override || withAccount(provider, store.baseUrl);
   if (declared) return declared.replace(/\/+$/, '');
   return normalizeProviderBaseUrl(id, provider.baseUrl);
 }
@@ -2235,6 +2296,12 @@ async function drawImage(args) {
       });
     };
 
+    if (store.shape === 'cloudflare-run') {
+      // Workers AI runs a model by name. FLUX.1 [schnell] takes a prompt and a
+      // step count (at most 8; 4 is its documented default) and nothing else,
+      // so sizes and counts are not sent at all rather than refused upstream.
+      return [() => postJson(base + '/run/' + useModel, { prompt, steps: 4 }, false)];
+    }
     if (store.shape === 'nvidia-genai') {
       return [
         (withExtra) => {
@@ -2324,6 +2391,10 @@ async function drawImage(args) {
   const payload = await response.json().catch(() => null);
   // The NVCF shape ({artifacts:[{base64}]}) is normalized here rather than at
   // the caller, so there is one place a picture could be misread.
+  if (payload && !payload.data && payload.result && typeof payload.result.image === 'string' && payload.result.image) {
+    // Workers AI: {result:{image:<base64>}}. FLUX.1 [schnell] answers JPEG.
+    return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: payload.result.image, media_type: 'image/jpeg' }] } };
+  }
   if (payload && !payload.data) {
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;
     if (artifact && artifact.base64) {
@@ -2699,7 +2770,9 @@ function isSelfExplanatory(message) {
 
 function describeProviderError(status, data, provider) {
   const who = provider && provider.label ? provider.label : 'The provider';
-  const raw = data && (data.error || data.message || data.detail);
+  // Cloudflare's API wraps failures as {errors:[{code, message}]}.
+  const envelope = data && Array.isArray(data.errors) && data.errors[0] ? data.errors[0] : null;
+  const raw = data && (data.error || data.message || data.detail || envelope);
   let message = '';
   if (typeof raw === 'string') message = raw;
   else if (raw && typeof raw === 'object') message = raw.message || raw.code || JSON.stringify(raw);
