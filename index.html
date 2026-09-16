@@ -427,6 +427,7 @@
         .image-provider-state { color: var(--text-muted); white-space: nowrap; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
         .image-provider-report.is-loading .image-provider-list { opacity: .55; }
         .image-provider-report-error { padding: 8px 9px; color: var(--danger); font-size: 10px; line-height: 1.5; }
+        .image-provider-subhead { margin: 0; padding: 7px 9px 4px; border-bottom: 1px solid var(--border); }
         .session-subhead {
             display: flex; align-items: center; gap: 6px;
             margin: 0; padding: 10px 12px 4px;
@@ -2462,7 +2463,10 @@
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
                             <div class="image-provider-report" id="imageProviderReport" aria-live="polite">
-                                <div class="image-provider-report-head"><strong>Image services</strong><span id="imageProviderReportStatus">Checking…</span><button type="button" onclick="loadImageProviderReport()">Refresh</button></div>
+                                <div class="image-provider-report-head"><strong>Provider readiness</strong><span id="imageProviderReportStatus">Checking…</span><button type="button" onclick="loadImageProviderReport()">Refresh</button></div>
+                                <h4 class="session-subhead image-provider-subhead">Chat services</h4>
+                                <div class="image-provider-list" id="chatProviderList"><div class="image-provider-report-error">Open this tab to see configured chat services.</div></div>
+                                <h4 class="session-subhead image-provider-subhead">Image services</h4>
                                 <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-error">Open this tab to see which configured services can draw and what each one needs.</div></div>
                             </div>
                         </section>
@@ -5167,35 +5171,43 @@
 
         function loadImageProviderReport() {
             const report = document.getElementById('imageProviderReport');
-            const list = document.getElementById('imageProviderList');
+            const imageList = document.getElementById('imageProviderList');
+            const chatList = document.getElementById('chatProviderList');
             const status = document.getElementById('imageProviderReportStatus');
-            if (!report || !list || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+            if (!report || !imageList || !chatList || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
             report.classList.add('is-loading');
             if (status) status.textContent = 'Checking…';
-            window.fetch('/api/llm/images/providers', { cache: 'no-store' }).then((response) => {
+            const read = (url) => window.fetch(url, { cache: 'no-store' }).then((response) => {
                 if (!response.ok) throw new Error('status ' + response.status);
                 return response.json();
-            }).then((body) => {
-                const rows = [body.browser].concat(Array.isArray(body.providers) ? body.providers : []).filter(Boolean);
+            });
+            const renderRows = (list, rows, emptyText, detailFor, stateFor) => {
                 list.innerHTML = '';
                 rows.forEach((provider) => {
                     const row = document.createElement('div');
-                    row.className = 'image-provider-row' + (provider.ready ? ' ready' : '');
-                    const detail = provider.ready
-                        ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
-                        : (provider.reason || provider.note || 'Not configured');
+                    const ready = provider.ready === true;
+                    row.className = 'image-provider-row' + (ready ? ' ready' : '');
                     row.innerHTML = '<span class="image-provider-dot" aria-hidden="true"></span>'
                         + '<span><span class="image-provider-name"></span><span class="image-provider-detail"></span></span>'
                         + '<span class="image-provider-state"></span>';
                     row.querySelector('.image-provider-name').textContent = provider.label || provider.id || 'Service';
-                    row.querySelector('.image-provider-detail').textContent = detail;
-                    row.querySelector('.image-provider-state').textContent = provider.ready ? 'ready' : 'setup';
+                    row.querySelector('.image-provider-detail').textContent = detailFor(provider);
+                    row.querySelector('.image-provider-state').textContent = stateFor(provider);
                     list.appendChild(row);
                 });
-                if (!rows.length) list.innerHTML = '<div class="image-provider-report-error">No image services were reported.</div>';
-                if (status) status.textContent = rows.filter((provider) => provider.ready).length + ' ready';
+                if (!rows.length) list.innerHTML = '<div class="image-provider-report-error">' + emptyText + '</div>';
+            };
+            Promise.all([read('/api/llm/providers'), read('/api/llm/images/providers')]).then(([chatProviders, imageBody]) => {
+                const chats = Array.isArray(chatProviders) ? chatProviders.filter((provider) => provider && provider.configured && (!provider.kind || provider.kind === 'chat')) : [];
+                const images = [imageBody && imageBody.browser].concat(imageBody && Array.isArray(imageBody.providers) ? imageBody.providers : []).filter(Boolean);
+                renderRows(chatList, chats, 'No server chat providers configured. Puter chat remains available in the browser.', (provider) => provider.note || 'Configured; models load when selected.', () => 'configured');
+                renderRows(imageList, images, 'No image services were reported.', (provider) => provider.ready
+                    ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
+                    : (provider.reason || provider.note || 'Not configured'), (provider) => provider.ready ? 'ready' : 'setup');
+                if (status) status.textContent = chats.length + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
             }).catch(() => {
-                list.innerHTML = '<div class="image-provider-report-error">Could not check image services. Try Refresh, or send a draw to see the provider’s exact error.</div>';
+                chatList.innerHTML = '<div class="image-provider-report-error">Could not check chat services.</div>';
+                imageList.innerHTML = '<div class="image-provider-report-error">Could not check image services. Try Refresh, or send a draw to see the provider’s exact error.</div>';
                 if (status) status.textContent = 'Unavailable';
             }).finally(() => report.classList.remove('is-loading'));
         }
