@@ -1,0 +1,221 @@
+package com.freeai4u.app.data
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+// The server protocol the native screens speak, as pure functions: request
+// bodies, the SSE stream the chat route relays, and the JSON the provider,
+// model and image routes answer with. The same routes serve the web page, so
+// these mirror what index.html reads.
+
+data class ProviderInfo(val id: String, val label: String, val configured: Boolean, val kind: String)
+
+data class ModelInfo(val id: String, val name: String, val contextLength: Int)
+
+sealed interface ChatEvent {
+    data class Delta(val content: String, val reasoning: String) : ChatEvent
+    data class Failure(val message: String) : ChatEvent
+    /** Some text arrived, then the stream failed; the text is kept. */
+    data class Partial(val notice: String) : ChatEvent
+    data object Done : ChatEvent
+}
+
+/** Only chat providers that are configured can be picked. */
+fun parseProviders(body: String): List<ProviderInfo> = try {
+    val array = JSONArray(body)
+    (0 until array.length()).mapNotNull { index ->
+        val obj = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = obj.optString("id", "")
+        if (id.isEmpty()) null else ProviderInfo(id, obj.optString("label", id), obj.optBoolean("configured", false), obj.optString("kind", "chat"))
+    }
+} catch (e: Exception) {
+    emptyList()
+}
+
+fun chatProviders(all: List<ProviderInfo>): List<ProviderInfo> = all.filter { it.configured && it.kind == "chat" }
+
+fun parseModels(body: String): List<ModelInfo> = try {
+    val array = JSONArray(body)
+    (0 until array.length()).mapNotNull { index ->
+        val obj = array.optJSONObject(index)
+        val id = obj?.optString("id", "") ?: array.optString(index, "")
+        if (id.isNullOrEmpty()) null else ModelInfo(
+            id,
+            obj?.optString("name", "")?.ifEmpty { id } ?: id,
+            obj?.optInt("contextLength", 0) ?: 0,
+        )
+    }
+} catch (e: Exception) {
+    emptyList()
+}
+
+/** One `data:` payload of the relayed stream. Returns null for keep-alives and
+ * anything that carries nothing to show. */
+fun parseSseData(data: String): ChatEvent? {
+    val text = data.trim()
+    if (text.isEmpty()) return null
+    if (text == "[DONE]") return ChatEvent.Done
+    return try {
+        val obj = JSONObject(text)
+        if (obj.has("error")) {
+            val error = obj.opt("error")
+            val message = when (error) {
+                is JSONObject -> error.optString("message", error.toString())
+                else -> error?.toString() ?: "The provider failed."
+            }
+            return ChatEvent.Failure(message)
+        }
+        if (obj.optBoolean("partial", false)) return ChatEvent.Partial(obj.optString("notice", "The reply stopped early."))
+        val choices = obj.optJSONArray("choices") ?: return null
+        val first = choices.optJSONObject(0) ?: return null
+        val delta = first.optJSONObject("delta") ?: first.optJSONObject("message") ?: return null
+        val content = delta.optString("content", "").let { if (delta.isNull("content")) "" else it }
+        val reasoning = listOf("reasoning_content", "reasoning")
+            .map { key -> if (delta.isNull(key)) "" else delta.optString(key, "") }
+            .firstOrNull { it.isNotEmpty() } ?: ""
+        if (content.isEmpty() && reasoning.isEmpty()) null else ChatEvent.Delta(content, reasoning)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** How many past messages ride along with each turn. Free models have small
+ * context windows, and a long chat would otherwise fail on its own weight. */
+const val MAX_HISTORY_MESSAGES = 30
+
+/** The body for POST /api/llm/chat?provider=... : the persona's instructions
+ * first, then the recent history minus failed replies, streamed. */
+fun buildChatBody(model: String, systemPrompt: String, history: List<ChatMessage>, maxHistory: Int = MAX_HISTORY_MESSAGES): String {
+    val messages = JSONArray()
+    if (systemPrompt.isNotBlank()) messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
+    history.filter { !it.error && (it.content.isNotBlank() || it.images.isNotEmpty()) && (it.role == "user" || it.role == "assistant") }
+        .takeLast(maxHistory)
+        .forEach { message ->
+            if (message.role == "user" && message.images.isNotEmpty()) {
+                // OpenAI vision shape: text part first, then one part per photo.
+                val parts = JSONArray().put(JSONObject().put("type", "text").put("text", message.content))
+                message.images.forEach { url ->
+                    parts.put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", url)))
+                }
+                messages.put(JSONObject().put("role", "user").put("content", parts))
+            } else {
+                messages.put(JSONObject().put("role", message.role).put("content", message.content))
+            }
+        }
+    return JSONObject().put("model", model).put("messages", messages).put("stream", true).toString()
+}
+
+data class ImagePayload(val base64: String?, val url: String?, val mime: String)
+
+/** The image route's answer, normalized to data[].b64_json or url. */
+fun parseImageResult(body: String): Pair<String, List<ImagePayload>> = try {
+    val obj = JSONObject(body)
+    val rows = obj.optJSONArray("data") ?: JSONArray()
+    val list = (0 until rows.length()).mapNotNull { index ->
+        val row = rows.optJSONObject(index) ?: return@mapNotNull null
+        val b64 = row.optString("b64_json", "").ifEmpty { null }
+        val url = row.optString("url", "").ifEmpty { null }
+        if (b64 == null && url == null) null else ImagePayload(b64, url, row.optString("media_type", "image/png"))
+    }
+    obj.optString("provider", "") to list
+} catch (e: Exception) {
+    "" to emptyList()
+}
+
+/** The error text a route answered with, or a fallback. */
+fun errorMessage(body: String?, status: Int): String {
+    val fromBody = try {
+        val obj = JSONObject(body ?: "")
+        when (val error = obj.opt("error")) {
+            is JSONObject -> error.optString("message", "")
+            null -> ""
+            else -> error.toString()
+        }
+    } catch (e: Exception) {
+        ""
+    }
+    return fromBody.ifEmpty { "Server answered HTTP $status." }
+}
+
+/** A chat's title from its first message: one line, at most 48 characters. */
+fun deriveTitle(text: String): String {
+    val line = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: return "New chat"
+    val clean = line.replace(Regex("\\s+"), " ")
+    return if (clean.length <= 48) clean else clean.take(47).trimEnd() + "…"
+}
+
+/** Prompts matching what follows a leading "/" in the composer. */
+fun matchPrompts(input: String, prompts: List<PromptTemplate>): List<PromptTemplate> {
+    if (!input.startsWith("/")) return emptyList()
+    val query = input.drop(1).trim().lowercase()
+    if (query.contains('\n')) return emptyList()
+    return prompts.filter { query.isEmpty() || it.title.lowercase().contains(query) || it.text.lowercase().contains(query) }.take(8)
+}
+
+/** Chats matching a search, pinned first, newest first. */
+fun filterConversations(all: List<Conversation>, query: String): List<Conversation> {
+    val needle = query.trim().lowercase()
+    return all.filter { conversation ->
+        needle.isEmpty() || conversation.title.lowercase().contains(needle) ||
+            conversation.messages.any { it.content.lowercase().contains(needle) }
+    }.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
+}
+
+/** A conversation as Markdown, for sharing and saving. Failed replies are
+ * left out: they are the app talking, not the exchange. */
+fun conversationMarkdown(conversation: Conversation, personaName: String, now: Long = System.currentTimeMillis()): String {
+    val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(now))
+    val out = StringBuilder()
+    out.append("# ").append(conversation.title.ifBlank { "Chat" }).append("\n\n")
+    out.append("_").append(personaName).append(" · ").append(conversation.model.ifBlank { "model" })
+        .append(" · exported ").append(stamp).append("_\n\n")
+    conversation.messages.filter { !it.error && it.content.isNotBlank() }.forEach { message ->
+        out.append(if (message.role == "user") "## You" else "## Assistant").append("\n\n")
+        out.append(message.content.trim()).append("\n\n")
+    }
+    return out.toString().trimEnd() + "\n"
+}
+
+/** A file name that works on every filesystem the export may land on. */
+fun safeFileName(title: String, extension: String): String {
+    val base = title.replace(Regex("[^A-Za-z0-9 _-]"), "").trim().replace(Regex("\\s+"), "-").take(40).ifEmpty { "chat" }
+    return "$base.$extension"
+}
+
+/** Splits a reply into prose and fenced code blocks for rendering. */
+data class Segment(val code: Boolean, val language: String, val text: String)
+
+fun splitCodeBlocks(text: String): List<Segment> {
+    val segments = mutableListOf<Segment>()
+    val lines = text.split("\n")
+    val buffer = StringBuilder()
+    var inCode = false
+    var language = ""
+    fun flush(code: Boolean) {
+        val chunk = buffer.toString().trimEnd('\n')
+        if (chunk.isNotEmpty() || code) segments.add(Segment(code, language, chunk))
+        buffer.setLength(0)
+    }
+    for (line in lines) {
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("```")) {
+            if (inCode) {
+                flush(true)
+                inCode = false
+                language = ""
+            } else {
+                flush(false)
+                inCode = true
+                language = trimmed.removePrefix("```").trim()
+            }
+            continue
+        }
+        buffer.append(line).append("\n")
+    }
+    // An unclosed fence (a reply still streaming) renders as code so far.
+    flush(inCode)
+    return segments.filter { it.code || it.text.isNotBlank() }
+}

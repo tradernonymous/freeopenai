@@ -48,13 +48,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
-// The deployed web app, in a hardened WebView, behind a native sign-in that
+// The full web app (opened from the native app's Tools tab), in a hardened
+// WebView, behind a native sign-in that
 // keeps the phone logged in. The page is the product -- every feature the
 // site has on a phone is here because it *is* the site -- and the shell's
 // job is the part a browser tab cannot do: sign in once and stay signed in,
 // keep navigation on the configured server, pick files, save downloads, and
 // never let a screenshot or a backup carry any of it off the phone.
-class MainActivity : ComponentActivity() {
+class WebActivity : ComponentActivity() {
     private enum class Mode { SIGN_IN, OFFLINE, BUSY, LOCKED }
 
     private lateinit var store: SecureStore
@@ -79,8 +80,6 @@ class MainActivity : ComponentActivity() {
     private var mainFrameFailed = false
     private var reloginAttempts = 0
     private var serverRetries = 0
-    private var unlocked = false
-    private var backgroundedAt = 0L
     private var locking = false
     /** A fragment to open the page on next (#new, #share=...). */
     private var pendingFragment: String? = null
@@ -115,7 +114,6 @@ class MainActivity : ComponentActivity() {
         store = SecureStore(this)
         bindViews()
         setUpWebView()
-        publishShortcuts()
         watchNetwork()
         takeIntent(intent)
         onBackPressedDispatcher.addCallback(this) {
@@ -127,7 +125,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!lockIfDue()) launch()
-        checkForUpdate(manual = false)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -144,7 +141,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations) backgroundedAt = System.currentTimeMillis()
+        if (!isChangingConfigurations) AppLock.backgroundedAt = System.currentTimeMillis()
     }
 
     override fun onResume() {
@@ -529,9 +526,9 @@ class MainActivity : ComponentActivity() {
          * anything else it tries goes to the browser. */
         override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
             if (!isUserGesture) return false
-            val popup = WebView(this@MainActivity)
+            val popup = WebView(this@WebActivity)
             WebShell.harden(popup, userAgentSuffix(), popup = true)
-            val dialog = Dialog(this@MainActivity, android.R.style.Theme_Material_NoActionBar)
+            val dialog = Dialog(this@WebActivity, android.R.style.Theme_Material_NoActionBar)
             dialog.window?.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
             dialog.setContentView(popup, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             popup.webViewClient = object : WebViewClient() {
@@ -539,7 +536,7 @@ class MainActivity : ComponentActivity() {
                     val url = request.url.toString()
                     if (popupAllowed(origin, url)) return false
                     if (blockedInWebView(url)) {
-                        AlertDialog.Builder(this@MainActivity)
+                        AlertDialog.Builder(this@WebActivity)
                             .setTitle(R.string.puter_social_title)
                             .setMessage(R.string.puter_social_message)
                             .setPositiveButton(android.R.string.ok, null)
@@ -688,12 +685,12 @@ class MainActivity : ComponentActivity() {
             val newChat = ShortcutInfo.Builder(this, "new_chat")
                 .setShortLabel(getString(R.string.shortcut_new_chat))
                 .setIcon(icon)
-                .setIntent(Intent(this, MainActivity::class.java).setAction(ACTION_NEW_CHAT))
+                .setIntent(Intent(this, NativeActivity::class.java).setAction(ACTION_NEW_CHAT))
                 .build()
             val settings = ShortcutInfo.Builder(this, "settings")
                 .setShortLabel(getString(R.string.app_settings))
                 .setIcon(icon)
-                .setIntent(Intent(this, MainActivity::class.java).setAction(ACTION_SETTINGS))
+                .setIntent(Intent(this, NativeActivity::class.java).setAction(ACTION_SETTINGS))
                 .build()
             manager.dynamicShortcuts = listOf(newChat, settings)
         } catch (ignored: Exception) {
@@ -731,8 +728,8 @@ class MainActivity : ComponentActivity() {
     private fun lockIfDue(): Boolean {
         if (mode == Mode.LOCKED) return true
         val enabled = store.appLock && AppLock.available(this)
-        if (!lockDue(enabled, unlocked, backgroundedAt, System.currentTimeMillis(), AppLock.GRACE_MS)) return false
-        unlocked = false
+        if (!lockDue(enabled, AppLock.unlocked, AppLock.backgroundedAt, System.currentTimeMillis(), AppLock.GRACE_MS)) return false
+        AppLock.unlocked = false
         web.visibility = View.INVISIBLE
         showCard(Mode.LOCKED, null)
         main.post { unlock() }
@@ -744,8 +741,8 @@ class MainActivity : ComponentActivity() {
         locking = true
         AppLock.prompt(this, onUnlocked = {
             locking = false
-            unlocked = true
-            backgroundedAt = 0L
+            AppLock.unlocked = true
+            AppLock.backgroundedAt = 0L
             mode = Mode.BUSY
             if (pageLoaded) {
                 showPage()
@@ -800,7 +797,7 @@ class MainActivity : ComponentActivity() {
         // nobody locks themselves behind a prompt that cannot show.
         AppLock.prompt(this, onUnlocked = {
             store.appLock = true
-            unlocked = true
+            AppLock.unlocked = true
             toast(getString(R.string.lock_enabled))
         }, onFailed = { reason -> toast(reason) })
     }

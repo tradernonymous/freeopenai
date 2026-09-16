@@ -19,8 +19,8 @@ class NewChatTileService : TileService() {
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
-        val intent = Intent(this, MainActivity::class.java)
-            .setAction(MainActivity.ACTION_NEW_CHAT)
+        val intent = Intent(this, NativeActivity::class.java)
+            .setAction(NativeActivity.ACTION_NEW_CHAT)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)

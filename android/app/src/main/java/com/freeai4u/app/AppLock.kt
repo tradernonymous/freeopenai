@@ -15,6 +15,11 @@ import android.os.CancellationSignal
 object AppLock {
     const val GRACE_MS = 2 * 60 * 1000L
 
+    /** Process-wide, so the native screens and the web tools screen share one
+     * unlock instead of each asking again. */
+    @Volatile var unlocked = false
+    @Volatile var backgroundedAt = 0L
+
     /** A lock only makes sense on a phone that has a screen lock at all. */
     fun available(context: Context): Boolean {
         val keyguard = context.getSystemService(KeyguardManager::class.java)

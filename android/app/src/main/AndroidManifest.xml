@@ -9,10 +9,13 @@
     neither of which needs storage access.
   - No backup (adb or cloud) can lift the server, the sealed password, the
     session, or the chats the page keeps in its own storage.
-  - Exported: the launcher activity, which also accepts shared text and
-    images (treated as untrusted: text is percent-encoded into a fragment,
-    images only reach the page's own file picker), and the Quick Settings
-    tile, which only the system can bind.
+  - Exported: the native launcher activity, which also accepts shared text,
+    shared images and selected text (all treated as untrusted input that only
+    ever lands in a chat composer), and the Quick Settings tile, which only
+    the system can bind. The web tools activity and the FileProvider are not
+    exported.
+  - Chats, pictures, personas and prompts are sealed with a Keystore
+    AES-256-GCM key in app-private storage (data/Storage.kt).
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
     content never crosses the network unencrypted.
   - The WebView itself is locked down in WebShell.kt: no file or content
@@ -36,7 +39,7 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="false">
         <activity
-            android:name=".MainActivity"
+            android:name=".NativeActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
@@ -56,7 +59,30 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
+            <!-- "Ask FreeAI4U" in the text-selection menu of other apps. -->
+            <intent-filter android:label="@string/process_text_label">
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
+        <!-- The full web app. Not exported: only this app can open it. -->
+        <activity
+            android:name=".WebActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- Share / PDF exports: private cache files handed out one at a time
+             with a temporary read grant. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <service
             android:name=".NewChatTileService"
             android:exported="true"

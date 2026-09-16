@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     kotlin("android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // Build-time defaults, so the first launch has the server (and, if set, the
@@ -85,6 +86,7 @@ android {
     }
     buildFeatures {
         buildConfig = true
+        compose = true
     }
     packaging {
         resources {
@@ -94,11 +96,17 @@ android {
 }
 
 dependencies {
-    // Plain views on purpose: a WebView shell needs no UI toolkit, and
-    // leaving Compose out takes megabytes off the APK and seconds off
-    // start-up on a phone.
+    // Native screens are Compose + Material 3; the web tools screen stays a
+    // plain-view WebView. R8 strips the unused parts of the icon set.
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     // Real org.json for local JVM tests only: on device the framework copy is
     // used and this never ships. (android.jar methods throw "not mocked"
     // under plain unit tests, so the parser tests need the real thing.)

@@ -1,4 +1,4 @@
-# Release shrink rules. The app is plain Kotlin + the framework WebView with
-# reflection-free JSON (org.json), so the defaults are enough; app classes
-# are kept by name for crash-report readability.
+# Release shrink rules. JSON is org.json (no reflection) and Compose ships its
+# own consumer rules. App classes are kept by name so a copied crash log
+# points at readable class names.
 -keep class com.freeai4u.app.** { *; }
