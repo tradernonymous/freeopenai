@@ -7,6 +7,7 @@ const {
   escapeHtml,
   renderMarkdownLite,
   highlightCode,
+  detectCodeLanguage,
   detectsImageIntent,
   isVisionCapable,
   DEFAULT_VISION_MODEL,
@@ -212,6 +213,34 @@ test('highlightCode lights keywords, strings, numbers, calls and comments', () =
     /<span class="tok-k">&lt;div class=&quot;a&quot;<\/span>&gt;/,
   );
   assert.equal(highlightCode('x = 1', 'cobol'), 'x = 1');
+});
+
+test('detectCodeLanguage names an obvious language and stays quiet otherwise', () => {
+  // Conservative by design: the winner needs two points and a clear margin,
+  // so ties (import x from "y" reads as both JS and Python) and whispers
+  // stay plain rather than guessing wrong.
+  assert.equal(detectCodeLanguage('def foo():\n    return None'), 'py');
+  assert.equal(detectCodeLanguage('const x = () => 1;'), 'js');
+  assert.equal(detectCodeLanguage('{"a": 1}'), 'json');
+  assert.equal(detectCodeLanguage('SELECT *\nFROM users'), 'sql');
+  assert.equal(detectCodeLanguage('#!/bin/bash\necho hi'), 'sh');
+  assert.equal(detectCodeLanguage('<div class="a">x</div>'), 'html');
+  assert.equal(detectCodeLanguage('#include <stdio.h>\nint main() { }'), 'c');
+  assert.equal(detectCodeLanguage('import x from "y";'), null);
+  assert.equal(detectCodeLanguage('npm test'), null);
+  assert.equal(detectCodeLanguage('x = 1'), null);
+  assert.equal(detectCodeLanguage('hello world'), null);
+  assert.equal(detectCodeLanguage('done'), null);
+});
+
+test('renderMarkdownLite highlights a bare fence when the language is obvious, without labelling it', () => {
+  // Detection colours the inside only: no data-lang is ever guessed, so an
+  // uncertain block stays exactly the plain <pre><code> it always was.
+  assert.equal(
+    renderMarkdownLite('```\nconst x = 1;\n```'),
+    '<pre><code><span class="tok-k">const</span> x = <span class="tok-n">1</span>;</code></pre>',
+  );
+  assert.equal(renderMarkdownLite('```\nnpm test\n```'), '<pre><code>npm test</code></pre>');
 });
 
 test('renderMarkdownLite refuses link schemes that could execute script', () => {

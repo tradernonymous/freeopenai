@@ -1251,6 +1251,55 @@ function isHighlightWordChar(ch) {
   return /[\w$]/.test(ch);
 }
 
+// A fence without a language still wants colours when the code is obviously
+// one language: models often emit bare fences. Scoring is deliberately
+// conservative -- the winner needs two points and a clear margin, or the
+// block stays plain. A wrong guess only tints words (everything stays
+// escaped), but a plain block is never wrong, so ties and whispers lose.
+const CODE_DETECT_THRESHOLD = 2;
+const CODE_DETECT_MARGIN = 2;
+
+function detectCodeLanguage(src) {
+  const text = String(src || '');
+  if (!text.trim()) return null;
+  // Whole-document JSON parses or it does not -- the one exact signal here.
+  if (/^\s*\{[\s\S]*\}\s*$/.test(text)) {
+    try { JSON.parse(text); return 'json'; } catch { /* not JSON, keep scoring */ }
+  }
+  if (/^#!.*\b(bash|sh|zsh)\b/m.test(text)) return 'sh';
+  const scores = {};
+  function add(lang, pts) { scores[lang] = (scores[lang] || 0) + pts; }
+  if (/\bdef\s+\w+\s*\(/.test(text)) add('py', 2);
+  if (/^\s*(import|from)\s+\w+/m.test(text)) add('py', 2);
+  if (/^ *#/m.test(text)) { add('py', 1); add('sh', 1); }
+  if (/\b(self|elif|None|True|False)\b/.test(text)) add('py', 1);
+  if (/:\s*$/m.test(text)) add('py', 1);
+  if (/\b(const|let|var|function)\b/.test(text)) add('js', 2);
+  if (/=>/.test(text)) add('js', 2);
+  if (/\b(console|require|module\.exports)\b/.test(text)) add('js', 1);
+  if (/===|!==/.test(text)) add('js', 1);
+  if (/\b(for|while)\s*\(/.test(text)) add('js', 1);
+  if (/^\s*import\s+.+\s+from\s+/m.test(text)) add('js', 2);
+  if (/\b(interface|enum)\s+\w+/.test(text)) add('ts', 3);
+  if (/^\s*type\s+\w+\s*=/m.test(text)) add('ts', 3);
+  if (/^ *echo\b/m.test(text)) add('sh', 1);
+  if (/^\s*(fi|done|esac)\s*$/m.test(text)) add('sh', 1);
+  if (/\$\{?\w/.test(text)) add('sh', 1);
+  if (/&&|\|\|/.test(text)) add('sh', 1);
+  if (/^\s*select\b/im.test(text)) add('sql', 2);
+  if (/\binsert\s+into\b/i.test(text)) add('sql', 3);
+  if (/\bcreate\s+table\b/i.test(text)) add('sql', 3);
+  if (/<(div|span|p|a|table|html|script|style|h[1-6]|ul|ol|li|button|input|form|head|body|title|tr|td|th)[\s>]/i.test(text)) add('html', 3);
+  if (/#include\s*</.test(text)) add('c', 3);
+  if (/\bprintf\s*\(/.test(text)) add('c', 2);
+  if (/\bstd::/.test(text)) add('c', 2);
+  if (/\bint\s+main\s*\(/.test(text)) add('c', 2);
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  if (!ranked.length || ranked[0][1] < CODE_DETECT_THRESHOLD) return null;
+  if (ranked.length > 1 && ranked[0][1] - ranked[1][1] < CODE_DETECT_MARGIN) return null;
+  return ranked[0][0];
+}
+
 // A hand scanner rather than an assembled regex: every branch consumes at
 // least one character, so there is no catastrophic backtracking to audit,
 // and the order (comments, then strings, then numbers, then keywords, then
@@ -1435,7 +1484,10 @@ function renderMarkdownLite(rawText) {
     const idx = codeBlocks.length;
     const clean = code.replace(/\n$/, '');
     const norm = String(lang || '').toLowerCase();
-    const inner = highlightCode(clean, norm);
+    // Bare fences get colours too when the code is obviously one language;
+    // detection never adds the label, so an uncertain block stays exactly
+    // the plain <pre><code> it always was.
+    const inner = highlightCode(clean, norm || detectCodeLanguage(clean) || '');
     if (!norm) {
       codeBlocks.push(`<pre><code>${inner}</code></pre>`);
     } else {
@@ -4801,6 +4853,7 @@ if (typeof module !== 'undefined' && module.exports) {
   escapeHtml,
   renderMarkdownLite,
   highlightCode,
+  detectCodeLanguage,
     detectsImageIntent,
     detectsImageEditIntent,
     imageAction,
