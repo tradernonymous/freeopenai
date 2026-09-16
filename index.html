@@ -2074,6 +2074,12 @@
         <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="imageEditTitle" onclick="event.stopPropagation();">
             <div class="modal-header">
                 <h3 id="imageEditTitle">Edit image</h3>
+                <div class="image-size-picker" aria-label="Image size options">
+                <button type="button" onclick="selectSize('1024x1024')" aria-pressed="false" title="Square (1:1) — 1024x1024">1024²</button>
+                <button type="button" onclick="selectSize('1640x856')" aria-pressed="true" title="Cover — 1640x856 (wide, your reference)">Cover</button>
+                <button type="button" onclick="selectSize('1024x1280')" aria-pressed="false" title="Portrait (4:5) — 1024x1280">Port</button>
+                <button type="button" onclick="selectSize('2048x1024')" aria-pressed="false" title="Banner (2:1) — 2048x1024">Banner</button>
+                </div>
                 <button class="modal-close" onclick="closeImageEdit();" aria-label="Close">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -6340,6 +6346,13 @@
         // Mask editor state. editState.mask is black with the painted region
         // in white; editState.img keeps the source element for clearing.
         let editState = null;
+        let selectedImageSize = '1024x1024';
+        function selectSize(value) {
+            selectedImageSize = value;
+            document.querySelectorAll('.image-size-picker button').forEach((btn) => btn.setAttribute('aria-pressed', 'false'));
+            const selectedBtn = document.querySelector('.image-size-picker button[onclick*="' + value + '"]');
+            if (selectedBtn) selectedBtn.setAttribute('aria-pressed', 'true');
+        }
         let maskBrush = 24;
 
         function openImageEdit(src, promptText) {
