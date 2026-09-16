@@ -6,6 +6,7 @@ const {
   isValidModel,
   escapeHtml,
   renderMarkdownLite,
+  highlightCode,
   detectsImageIntent,
   isVisionCapable,
   DEFAULT_VISION_MODEL,
@@ -67,9 +68,31 @@ test('renderMarkdownLite renders unordered and ordered lists', () => {
   assert.equal(ol, '<ol><li>one</li><li>two</li></ol>');
 });
 
-test('renderMarkdownLite renders a fenced code block and escapes its contents', () => {
+test('renderMarkdownLite renders a fenced code block with a language label and highlighting', () => {
+  // The fence used to come out as a bare <pre><code>; a coding answer wants
+  // the ChatGPT/GitHub shape -- a labelled, highlighted block -- so the
+  // language rides along as data-lang/language-* and the inside is lit.
   const out = renderMarkdownLite('```js\nconst x = "<b>";\n```');
-  assert.equal(out, '<pre><code>const x = &quot;&lt;b&gt;&quot;;</code></pre>');
+  assert.equal(
+    out,
+    '<pre data-lang="js"><code class="language-js"><span class="tok-k">const</span> x = ' +
+      '<span class="tok-s">&quot;&lt;b&gt;&quot;</span>;</code></pre>',
+  );
+});
+
+test('renderMarkdownLite leaves an unknown language unhighlighted but labelled', () => {
+  assert.equal(
+    renderMarkdownLite('```brainfuck\n++[->+<]\n```'),
+    '<pre data-lang="brainfuck"><code class="language-brainfuck">++[-&gt;+&lt;]</code></pre>',
+  );
+});
+
+test('renderMarkdownLite never lets a fence language smuggle in a live tag', () => {
+  // ```<img> cannot even open a fence (the language slot is \w*), so the
+  // whole thing stays literal text -- which the escape then neutralizes.
+  const out = renderMarkdownLite('```<img>\ncode\n```');
+  assert.ok(!out.includes('<img'));
+  assert.match(out, /&lt;img&gt;/);
 });
 
 test('renderMarkdownLite mixes prose, a list, and a code block in one message', () => {
@@ -107,6 +130,88 @@ test('renderMarkdownLite formats a link label with the other inline rules', () =
     '<a href="https://example.com" target="_blank" rel="noopener noreferrer">' +
       '<strong>Bold</strong> and <code>code</code></a>',
   );
+});
+
+test('renderMarkdownLite renders headings, and leaves a hash without a space alone', () => {
+  assert.equal(renderMarkdownLite('## Title'), '<h2>Title</h2>');
+  assert.equal(renderMarkdownLite('#hashtag stays'), '#hashtag stays');
+});
+
+test('renderMarkdownLite renders blockquotes and horizontal rules', () => {
+  assert.equal(renderMarkdownLite('> hello\n> world'), '<blockquote>hello<br>world</blockquote>');
+  assert.equal(renderMarkdownLite('---'), '<hr>');
+});
+
+test('renderMarkdownLite renders a GFM table with alignment', () => {
+  assert.equal(
+    renderMarkdownLite('| a | b |\n|:---|---:|\n| c | d |'),
+    '<div class="table-wrap"><table><thead><tr><th>a</th><th style="text-align: right">b</th></tr></thead>' +
+      '<tbody><tr><td>c</td><td style="text-align: right">d</td></tr></tbody></table></div>',
+  );
+});
+
+test('renderMarkdownLite leaves pipe text without a delimiter row alone', () => {
+  assert.equal(renderMarkdownLite('| a | b |\nno delimiter here'), '| a | b |<br>no delimiter here');
+});
+
+test('renderMarkdownLite escapes table cells and formats their inline markdown', () => {
+  const out = renderMarkdownLite('| a | b |\n|---|---|\n| <b> | **c** |');
+  assert.ok(!out.includes('<b>'));
+  assert.match(out, /<td>&lt;b&gt;<\/td><td><strong>c<\/strong><\/td>/);
+});
+
+test('renderMarkdownLite renders task lists as disabled checkboxes', () => {
+  assert.equal(
+    renderMarkdownLite('- [ ] todo\n- [x] done'),
+    '<ul><li class="task"><input type="checkbox" disabled> todo</li>' +
+      '<li class="task"><input type="checkbox" disabled checked> done</li></ul>',
+  );
+});
+
+test('renderMarkdownLite renders strikethrough', () => {
+  assert.equal(renderMarkdownLite('~~gone~~ stays'), '<del>gone</del> stays');
+});
+
+test('renderMarkdownLite keeps a continued ordered list numbered from its start', () => {
+  assert.equal(renderMarkdownLite('3. a\n4. b'), '<ol start="3"><li>a</li><li>b</li></ol>');
+});
+
+test('renderMarkdownLite nests a two-space-indented list inside its parent', () => {
+  assert.equal(
+    renderMarkdownLite('- a\n  - b\n- c'),
+    '<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>',
+  );
+});
+
+test('renderMarkdownLite autolinks a bare URL and leaves trailing punctuation outside', () => {
+  assert.equal(
+    renderMarkdownLite('See https://example.com/a.'),
+    'See <a href="https://example.com/a" target="_blank" rel="noopener noreferrer">https://example.com/a</a>.',
+  );
+});
+
+test('renderMarkdownLite keeps balanced parens inside an autolinked URL', () => {
+  assert.match(
+    renderMarkdownLite('(see https://en.wikipedia.org/wiki/Foo_(bar))'),
+    /href="https:\/\/en\.wikipedia\.org\/wiki\/Foo_\(bar\)"/,
+  );
+});
+
+test('renderMarkdownLite never autolinks inside code', () => {
+  assert.equal(renderMarkdownLite('`https://example.com`'), '<code>https://example.com</code>');
+});
+
+test('highlightCode lights keywords, strings, numbers, calls and comments', () => {
+  assert.equal(
+    highlightCode('const x = foo(42); // hi', 'js'),
+    '<span class="tok-k">const</span> x = <span class="tok-f">foo</span>(<span class="tok-n">42</span>); <span class="tok-c">// hi</span>',
+  );
+  assert.match(highlightCode('SELECT * FROM t WHERE a = 1', 'sql'), /<span class="tok-k">SELECT<\/span>/);
+  assert.match(
+    highlightCode('<div class="a">x</div>', 'html'),
+    /<span class="tok-k">&lt;div class=&quot;a&quot;<\/span>&gt;/,
+  );
+  assert.equal(highlightCode('x = 1', 'cobol'), 'x = 1');
 });
 
 test('renderMarkdownLite refuses link schemes that could execute script', () => {

@@ -1157,6 +1157,7 @@ function lastImageInMessages(messages, urlOf) {
 // escaped up front, so markdown syntax can never smuggle in a live tag.
 function inlineFormat(s) {
   return s
+    .replace(/~~([^~\n]+?)~~/g, '<del>$1</del>')
     .replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^\n_]+?)__/g, '<strong>$1</strong>')
     .replace(/\*([^\n*]+?)\*/g, '<em>$1</em>')
@@ -1166,6 +1167,7 @@ function inlineFormat(s) {
 const CODE_BLOCK_TOKEN = 'CODEBLOCKTOKEN';
 const CODE_SPAN_TOKEN = 'CODESPANTOKEN';
 const LINK_TOKEN = 'LINKTOKEN';
+const AUTOLINK_TOKEN = 'AUTOLINKTOKEN';
 
 // A link only ever becomes an anchor when it is http(s). Everything else --
 // javascript:, data:, vbscript:, a relative path -- stays visible as text.
@@ -1183,15 +1185,266 @@ function safeLinkHref(url) {
 // space (the only way to open a new attribute) cannot appear at all.
 const MARKDOWN_LINK_PATTERN = /\[([^\]\n]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
 
-function renderMarkdownLite(rawText) {
-  const escaped = escapeHtml(rawText);
+// Dependency-free syntax highlighting for fenced code, so a coding answer
+// reads like ChatGPT's or GitHub's instead of a grey well. It scans the raw
+// code (before escaping) and escapes every segment it emits, which keeps the
+// renderer's contract: markdown syntax can never smuggle in a live tag.
+// A language outside this table renders exactly as before.
+const HIGHLIGHT_ALIASES = {
+  js: 'js', javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js',
+  ts: 'ts', typescript: 'ts', tsx: 'ts',
+  py: 'py', python: 'py',
+  json: 'json',
+  sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh',
+  html: 'html', xml: 'html', svg: 'html',
+  sql: 'sql',
+  c: 'c', h: 'c', cpp: 'c', cc: 'c', cxx: 'c', hpp: 'c',
+  java: 'c', cs: 'c', csharp: 'c', go: 'c', rust: 'c', php: 'c',
+  swift: 'c', kt: 'c', kotlin: 'c', rb: 'c', ruby: 'c',
+};
 
+const HIGHLIGHT_DEFS = {
+  js: {
+    keywords: ['await', 'async', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'from', 'function', 'get', 'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'set', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield', 'null', 'undefined', 'true', 'false'],
+    lineComment: '//',
+    blockComment: ['/*', '*/'],
+    strings: ['"', "'", '`'],
+  },
+  py: {
+    keywords: ['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield'],
+    lineComment: '#',
+    strings: ['"', "'"],
+  },
+  json: {
+    keywords: ['true', 'false', 'null'],
+    strings: ['"'],
+    functions: false,
+  },
+  sh: {
+    keywords: ['case', 'do', 'done', 'echo', 'elif', 'else', 'esac', 'exit', 'export', 'fi', 'for', 'function', 'if', 'in', 'local', 'return', 'select', 'then', 'until', 'while'],
+    lineComment: '#',
+    strings: ['"', "'"],
+  },
+  html: {
+    html: true,
+    blockComment: ['<!--', '-->'],
+  },
+  sql: {
+    ci: true,
+    keywords: ['select', 'from', 'where', 'and', 'or', 'not', 'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table', 'alter', 'drop', 'join', 'left', 'right', 'inner', 'outer', 'on', 'as', 'order', 'by', 'group', 'having', 'limit', 'offset', 'distinct', 'union', 'all', 'in', 'is', 'null', 'like', 'between', 'exists', 'case', 'when', 'then', 'else', 'end', 'primary', 'key', 'foreign', 'references', 'index', 'view', 'true', 'false'],
+    lineComment: '--',
+    strings: ["'", '"'],
+  },
+  c: {
+    keywords: ['auto', 'bool', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'delete', 'do', 'double', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'func', 'fn', 'go', 'if', 'implements', 'import', 'int', 'interface', 'let', 'long', 'match', 'mod', 'mut', 'namespace', 'new', 'nil', 'NULL', 'package', 'private', 'protected', 'pub', 'public', 'return', 'short', 'signed', 'sizeof', 'static', 'string', 'struct', 'super', 'switch', 'this', 'throw', 'throws', 'trait', 'true', 'try', 'type', 'unsigned', 'using', 'var', 'virtual', 'void', 'while', 'self'],
+    lineComment: '//',
+    blockComment: ['/*', '*/'],
+    strings: ['"', "'"],
+  },
+};
+// TypeScript shares the JavaScript shapes and adds its own declarations.
+HIGHLIGHT_DEFS.ts = Object.assign({}, HIGHLIGHT_DEFS.js, {
+  keywords: HIGHLIGHT_DEFS.js.keywords.concat(['interface', 'type', 'enum', 'namespace', 'implements', 'readonly', 'declare', 'abstract', 'keyof', 'infer', 'never', 'unknown']),
+});
+
+function isHighlightWordChar(ch) {
+  return /[\w$]/.test(ch);
+}
+
+// A hand scanner rather than an assembled regex: every branch consumes at
+// least one character, so there is no catastrophic backtracking to audit,
+// and the order (comments, then strings, then numbers, then keywords, then
+// calls) is what stops a keyword inside a string from lighting up.
+function highlightCode(raw, lang) {
+  const key = HIGHLIGHT_ALIASES[String(lang || '').toLowerCase()];
+  const def = (key && HIGHLIGHT_DEFS[key]) || null;
+  if (!def) return escapeHtml(raw);
+  const src = String(raw);
+  const n = src.length;
+  let out = '';
+  let i = 0;
+  function span(cls, seg) {
+    return '<span class="' + cls + '">' + escapeHtml(seg) + '</span>';
+  }
+  while (i < n) {
+    const ch = src[i];
+    if (def.blockComment && src.startsWith(def.blockComment[0], i)) {
+      const end = src.indexOf(def.blockComment[1], i + def.blockComment[0].length);
+      const close = end === -1 ? n : end + def.blockComment[1].length;
+      out += span('tok-c', src.slice(i, close));
+      i = close;
+      continue;
+    }
+    if (def.lineComment && src.startsWith(def.lineComment, i)) {
+      let j = src.indexOf('\n', i);
+      if (j === -1) j = n;
+      out += span('tok-c', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (def.html && ch === '<') {
+      const tag = /^<\/?[A-Za-z][^<>\n]*/.exec(src.slice(i));
+      if (tag) {
+        out += span('tok-k', tag[0]);
+        i += tag[0].length;
+        continue;
+      }
+    }
+    if (def.strings && def.strings.indexOf(ch) !== -1) {
+      let j = i + 1;
+      while (j < n && src[j] !== '\n' && src[j] !== ch) {
+        if (src[j] === '\\') j++;
+        j++;
+      }
+      if (j < n && src[j] === ch) j++;
+      out += span('tok-s', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (ch >= '0' && ch <= '9' && (i === 0 || !isHighlightWordChar(src[i - 1]))) {
+      let j = i;
+      while (j < n && /[\d_]/.test(src[j])) j++;
+      if (src[j] === '.' && /\d/.test(src[j + 1] || '')) {
+        j++;
+        while (j < n && /[\d_]/.test(src[j])) j++;
+      }
+      out += span('tok-n', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch) && (i === 0 || !isHighlightWordChar(src[i - 1]))) {
+      let j = i + 1;
+      while (j < n && /[\w$]/.test(src[j])) j++;
+      const word = src.slice(i, j);
+      const lookup = def.ci ? word.toLowerCase() : word;
+      if (def.keywords && def.keywords.indexOf(lookup) !== -1) {
+        out += span('tok-k', word);
+      } else if (def.functions !== false && /^\s*\(/.test(src.slice(j))) {
+        out += span('tok-f', word);
+      } else {
+        out += escapeHtml(word);
+      }
+      i = j;
+      continue;
+    }
+    out += escapeHtml(ch);
+    i++;
+  }
+  return out;
+}
+
+// A GFM table is a header row, a delimiter row of dashes and colons, and body
+// rows with the same cell count. Anything else that merely contains pipes is
+// prose, and stays prose rather than becoming a broken table.
+function splitTableRow(line) {
+  const trimmed = line.trim();
+  if (trimmed.indexOf('|') === -1) return null;
+  let cells = trimmed.split('|').map((cell) => cell.trim());
+  if (cells.length && cells[0] === '') cells = cells.slice(1);
+  if (cells.length && cells[cells.length - 1] === '') cells = cells.slice(0, -1);
+  return cells.length ? cells : null;
+}
+
+function tryParseTable(lines, start) {
+  const head = splitTableRow(lines[start]);
+  if (!head || start + 1 >= lines.length) return null;
+  const delim = splitTableRow(lines[start + 1]);
+  if (!delim || delim.length !== head.length) return null;
+  const aligns = [];
+  for (const cell of delim) {
+    const c = cell.trim();
+    if (!/^:?-+:?$/.test(c)) return null;
+    aligns.push(c.charAt(0) === ':' && c.charAt(c.length - 1) === ':' ? 'center'
+      : c.charAt(c.length - 1) === ':' ? 'right' : 'left');
+  }
+  const rows = [];
+  let i = start + 2;
+  while (i < lines.length) {
+    const cells = splitTableRow(lines[i]);
+    if (!cells || cells.length !== head.length) break;
+    rows.push(cells);
+    i++;
+  }
+  function cell(tag, content, align) {
+    const style = align && align !== 'left' ? ' style="text-align: ' + align + '"' : '';
+    return '<' + tag + style + '>' + inlineFormat(content) + '</' + tag + '>';
+  }
+  let html = '<div class="table-wrap"><table><thead><tr>';
+  head.forEach((content, k) => { html += cell('th', content, aligns[k]); });
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    row.forEach((content, k) => { html += cell('td', content, aligns[k]); });
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return { html, next: i };
+}
+
+// Nested lists build inside out: an item owns every deeper-indented item that
+// follows it, and a run ends where the indent returns. A flat run renders
+// byte-identical to the old single-level lists.
+function buildNestedList(items) {
+  let i = 0;
+  function level(baseIndent) {
+    const first = items[i];
+    const tag = first.ordered ? 'ol' : 'ul';
+    let out = tag === 'ol' && first.number !== 1 ? '<ol start="' + first.number + '">' : '<' + tag + '>';
+    while (i < items.length && items[i].indent === baseIndent && items[i].ordered === first.ordered) {
+      const item = items[i++];
+      let inner = item.task
+        ? '<input type="checkbox" disabled' + (item.task === 'x' ? ' checked' : '') + '> ' + inlineFormat(item.text)
+        : inlineFormat(item.text);
+      if (i < items.length && items[i].indent > baseIndent) inner += level(items[i].indent);
+      out += item.task ? '<li class="task">' + inner + '</li>' : '<li>' + inner + '</li>';
+    }
+    out += '</' + tag + '>';
+    return out;
+  }
+  let html = '';
+  while (i < items.length) html += level(items[i].indent);
+  return html;
+}
+
+// A bare URL becomes a link the way GitHub does, with trailing punctuation
+// left outside it. Code and labelled links are already behind tokens by now,
+// so this pass cannot touch them; a quote entity at the end (a URL typed
+// inside quotes) is trimmed before punctuation, and a closing paren only when
+// it unbalances the ones the URL opened.
+function trimAutolinkUrl(url) {
+  let clean = String(url).replace(/&(?:quot|lt|gt|#39);$/, '');
+  clean = clean.replace(/[.,;:!?'\]}]+$/, '');
+  let depth = 0;
+  for (const ch of clean) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+  }
+  while (depth < 0 && clean.endsWith(')')) {
+    clean = clean.slice(0, -1);
+    depth++;
+  }
+  return clean;
+}
+
+function renderMarkdownLite(rawText) {
+  // Fences come out of the RAW text first: the highlighter scans unescaped
+  // code and escapes every segment it emits, while an unknown language falls
+  // back to a plain escape -- identical output to before for those blocks.
   const codeBlocks = [];
-  let text = escaped.replace(/```[ \t]*(\w*)\r?\n?([\s\S]*?)```/g, (_m, _lang, code) => {
+  let text = String(rawText).replace(/```[ \t]*(\w*)\r?\n?([\s\S]*?)```/g, (_m, lang, code) => {
     const idx = codeBlocks.length;
-    codeBlocks.push(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`);
+    const clean = code.replace(/\n$/, '');
+    const norm = String(lang || '').toLowerCase();
+    const inner = highlightCode(clean, norm);
+    if (!norm) {
+      codeBlocks.push(`<pre><code>${inner}</code></pre>`);
+    } else {
+      codeBlocks.push(`<pre data-lang="${escapeHtml(lang)}"><code class="language-${norm}">${inner}</code></pre>`);
+    }
     return `@@${CODE_BLOCK_TOKEN}${idx}@@`;
   });
+
+  text = escapeHtml(text);
 
   const codeSpans = [];
   text = text.replace(/`([^`\n]+)`/g, (_m, code) => {
@@ -1214,18 +1467,20 @@ function renderMarkdownLite(rawText) {
     return `@@${LINK_TOKEN}${idx}@@`;
   });
 
-  const htmlParts = [];
-  let listBuffer = [];
-  let listType = null;
-  const textLines = [];
+  const autolinks = [];
+  // A URL sitting inside link syntax -- ](https://...) -- is never autolinked:
+  // a well-formed one is already a token, so what remains is a refused link
+  // (a space or a bad scheme), and lighting up its URL would undo the refusal.
+  text = text.replace(/(?<!\]\()https?:\/\/[^\s<]+/g, (url) => {
+    const clean = trimAutolinkUrl(url);
+    if (!clean) return url;
+    const idx = autolinks.length;
+    autolinks.push(`<a href="${clean}" target="_blank" rel="noopener noreferrer">${clean}</a>`);
+    return `@@${AUTOLINK_TOKEN}${idx}@@${url.slice(clean.length)}`;
+  });
 
-  function flushList() {
-    if (!listBuffer.length) return;
-    const items = listBuffer.map((item) => `<li>${inlineFormat(item)}</li>`).join('');
-    htmlParts.push(`<${listType}>${items}</${listType}>`);
-    listBuffer = [];
-    listType = null;
-  }
+  const htmlParts = [];
+  const textLines = [];
 
   function flushText() {
     if (!textLines.length) return;
@@ -1233,36 +1488,86 @@ function renderMarkdownLite(rawText) {
     textLines.length = 0;
   }
 
-  for (const line of text.split('\n')) {
-    const ulMatch = line.match(/^[-*]\s+(.*)$/);
-    const olMatch = line.match(/^\d+\.\s+(.*)$/);
-    if (ulMatch) {
+  const lines = text.split('\n');
+  let li = 0;
+  while (li < lines.length) {
+    const line = lines[li];
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
       flushText();
-      if (listType !== 'ul') flushList();
-      listType = 'ul';
-      listBuffer.push(ulMatch[1]);
-    } else if (olMatch) {
-      flushText();
-      if (listType !== 'ol') flushList();
-      listType = 'ol';
-      listBuffer.push(olMatch[1]);
-    } else {
-      flushList();
-      textLines.push(line);
+      htmlParts.push(`<h${heading[1].length}>${inlineFormat(heading[2])}</h${heading[1].length}>`);
+      li++;
+      continue;
     }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushText();
+      htmlParts.push('<hr>');
+      li++;
+      continue;
+    }
+    // The `>` arrives escaped (`&gt;`), because the whole text is escaped up
+    // front -- matching the raw `>` here is how a quote silently stopped
+    // rendering. The captured content is already escaped, so inlineFormat on
+    // it only adds the fixed tag set.
+    const quote = line.match(/^&gt;\s?(.*)$/);
+    if (quote) {
+      const quoted = [quote[1]];
+      li++;
+      while (li < lines.length) {
+        const cont = lines[li].match(/^&gt;\s?(.*)$/);
+        if (!cont) break;
+        quoted.push(cont[1]);
+        li++;
+      }
+      flushText();
+      htmlParts.push(`<blockquote>${inlineFormat(quoted.join('\n')).replace(/\n/g, '<br>')}</blockquote>`);
+      continue;
+    }
+    const table = tryParseTable(lines, li);
+    if (table) {
+      flushText();
+      htmlParts.push(table.html);
+      li = table.next;
+      continue;
+    }
+    const listOpen = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (listOpen) {
+      flushText();
+      const run = [];
+      while (li < lines.length) {
+        const m = lines[li].match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+        if (!m) break;
+        const bullet = m[2];
+        const ordered = bullet !== '-' && bullet !== '*';
+        const task = m[3].match(/^\[([ xX])\]\s+(.*)$/);
+        run.push({
+          indent: m[1].replace(/\t/g, '  ').length,
+          ordered,
+          number: ordered ? parseInt(bullet, 10) : 0,
+          task: task ? task[1].toLowerCase() : null,
+          text: task ? task[2] : m[3],
+        });
+        li++;
+      }
+      htmlParts.push(buildNestedList(run));
+      continue;
+    }
+    textLines.push(line);
+    li++;
   }
-  flushList();
   flushText();
 
   const blockTokenPattern = new RegExp(`@@${CODE_BLOCK_TOKEN}(\\d+)@@`, 'g');
   const spanTokenPattern = new RegExp(`@@${CODE_SPAN_TOKEN}(\\d+)@@`, 'g');
   const linkTokenPattern = new RegExp(`@@${LINK_TOKEN}(\\d+)@@`, 'g');
+  const autoTokenPattern = new RegExp(`@@${AUTOLINK_TOKEN}(\\d+)@@`, 'g');
 
   // Links go back in first: an anchor built from a label like [`code`](url)
   // still holds a code-span token, and that has to be resolved before the
   // final string leaves this function.
   return htmlParts
     .join('')
+    .replace(autoTokenPattern, (_m, i) => autolinks[Number(i)])
     .replace(linkTokenPattern, (_m, i) => links[Number(i)])
     .replace(spanTokenPattern, (_m, i) => codeSpans[Number(i)])
     .replace(blockTokenPattern, (_m, i) => codeBlocks[Number(i)]);
@@ -4493,8 +4798,9 @@ if (typeof module !== 'undefined' && module.exports) {
     MODELS,
     DEFAULT_MODEL,
     isValidModel,
-    escapeHtml,
-    renderMarkdownLite,
+  escapeHtml,
+  renderMarkdownLite,
+  highlightCode,
     detectsImageIntent,
     detectsImageEditIntent,
     imageAction,
