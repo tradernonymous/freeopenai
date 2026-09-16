@@ -9,6 +9,8 @@ const {
   BUILD_CORE_SKILLS,
   skillsAllowedForMode,
   skillTriggerScore,
+  taskDomainBoost,
+  skillEntriesFromTree,
   pickSkills,
   renderSkillsPrompt,
   filterToolsBySkills,
@@ -102,6 +104,56 @@ test('plan mode pulls planning skills but not library skills', () => {
 
 test('chat mode never picks skills', () => {
   assert.deepEqual(pickSkills('write tests and a beautiful redesign plan for the pdf importer', 'chat', CATALOG), []);
+});
+
+test('the task domain lifts the matching skill above an equally-overlapping rival', () => {
+  // Both descriptions share exactly the same words with the request, so the
+  // overlap scores tie -- and the tie used to break alphabetically toward
+  // copy-qa. The design words in the request break it toward design-qa.
+  const lib = [
+    { source: 'x', name: 'design-qa', description: 'Use when testing page layout and visual regressions' },
+    { source: 'x', name: 'copy-qa', description: 'Use when testing page layout and visual regressions' },
+  ];
+  const names = pickSkills('redesign the landing page layout', 'build', lib).map((s) => s.name);
+  assert.deepEqual(names, ['design-qa', 'copy-qa']);
+});
+
+test('the domain boost never introduces a skill the overlap rule refused', () => {
+  // One shared word with a testing-flavoured skill, on a testing-flavoured
+  // request: the domain matches, but a single word is still a coincidence.
+  const lib = [{ source: 'x', name: 'alpha', description: 'when the user wants to test something' }];
+  assert.deepEqual(pickSkills('run the test suite', 'build', lib), []);
+  assert.equal(taskDomainBoost('run the test suite', lib[0]), 2, 'the boost fired but the gate held');
+});
+
+test('plan mode admits architecture process skills but still holds back capability ones', () => {
+  const lib = [
+    { source: 'x', name: 'system-architect', description: 'Blueprints and architecture diagrams for new systems' },
+    { source: 'x', name: 'frontend-design', description: 'Guidance for visual design and layout' },
+  ];
+  const names = pickSkills('draw an architecture blueprint for billing', 'plan', lib).map((s) => s.name);
+  assert.ok(names.includes('system-architect'), 'architecture process skill admitted: ' + names.join(','));
+  assert.ok(!names.includes('frontend-design'), 'capability skill still held back: ' + names.join(','));
+});
+
+test('ecc and ui-ux sources arrive as lite picks with exact names', () => {
+  const ecc = SKILL_SOURCES.find((s) => s.repo === 'affaan-m/ECC');
+  assert.ok(ecc, 'ECC source present');
+  assert.equal(ecc.dir, 'skills');
+  assert.deepEqual([...ecc.pick].sort(), ['api-design', 'search-first', 'security-review', 'tdd-workflow', 'verification-loop']);
+  const uiux = SKILL_SOURCES.find((s) => s.repo === 'nextlevelbuilder/ui-ux-pro-max-skill');
+  assert.ok(uiux, 'ui-ux source present');
+  assert.equal(uiux.dir, '.claude/skills');
+  assert.deepEqual([...uiux.pick].sort(), ['design', 'ui-styling']);
+  const tree = [
+    { type: 'blob', path: '.claude/skills/design/SKILL.md' },
+    { type: 'blob', path: '.claude/skills/ui-styling/SKILL.md' },
+    { type: 'blob', path: '.claude/skills/slides/SKILL.md' },
+  ];
+  assert.deepEqual(
+    skillEntriesFromTree(tree, { repo: 'nextlevelbuilder/ui-ux-pro-max-skill', dir: '.claude/skills', pick: ['design', 'ui-styling'] }).map((e) => e.name),
+    ['design', 'ui-styling'],
+  );
 });
 
 test('a request matching nothing picks nothing, core included', () => {

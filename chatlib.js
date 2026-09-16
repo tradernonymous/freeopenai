@@ -158,6 +158,24 @@ const SKILL_SOURCES = [
   { repo: 'tt-a1i/archify', branch: 'main', dir: 'archify', pick: 'all' },
   // Output shaped for a reader who needs the next action first.
   { repo: 'ayghri/i-have-adhd', branch: 'main', dir: 'skills', pick: 'all' },
+  // Engineering methodology as practised: TDD, review, verification loops,
+  // research-before-coding and API design. Small, self-contained discipline
+  // skills -- the ECC catalogue is 292 wide, so only these five travel.
+  {
+    repo: 'affaan-m/ECC',
+    branch: 'main',
+    dir: 'skills',
+    pick: ['tdd-workflow', 'security-review', 'verification-loop', 'search-first', 'api-design'],
+  },
+  // Interface design guidance a chat app can actually use. The flagship
+  // ui-ux-pro-max skill leans on local search scripts a remote model cannot
+  // run; the self-contained design + styling pair is picked instead.
+  {
+    repo: 'nextlevelbuilder/ui-ux-pro-max-skill',
+    branch: 'main',
+    dir: '.claude/skills',
+    pick: ['design', 'ui-styling'],
+  },
 ];
 
 // The skills in one repo's git tree, as { name, path } pairs.
@@ -418,6 +436,39 @@ function skillNamesMatchesRequest(requestText, skill) {
   return false;
 }
 
+// Task-domain booster: the request's own domain lifts same-domain skills
+// above equally-overlapping ones from other fields (a testing skill wins a
+// testing question over a marketing skill that shares a word with it). It
+// only ever reorders skills that already qualified -- two shared words or a
+// name hit -- because MIN_SKILL_HITS still decides what fires at all. Both
+// sides reuse the router's stemmed tokens, so "styling" meets "style" the
+// same way "tests" meets "test", and substrings ("test" in "latest") never
+// count.
+const TASK_DOMAIN_BOOSTS = [
+  { request: ['design', 'ui', 'ux', 'land', 'layout', 'redesign', 'mockup', 'wireframe', 'styl', 'style', 'css', 'theme'], skill: ['design', 'ui', 'ux', 'styl', 'style', 'css', 'frontend', 'theme'], bonus: 2 },
+  { request: ['test', 'tdd', 'pytest', 'jest', 'vitest', 'unittest'], skill: ['test', 'tdd', 'spec', 'quality', 'verify', 'verification', 'debug'], bonus: 2 },
+  { request: ['bug', 'debug', 'error', 'fail', 'crash', 'exception'], skill: ['debug', 'test', 'verify', 'verification', 'fix'], bonus: 2 },
+  { request: ['security', 'vuln', 'auth', 'exploit', 'xss', 'audit'], skill: ['security', 'audit', 'review', 'quality'], bonus: 2 },
+  { request: ['review', 'refactor', 'clean', 'pr'], skill: ['review', 'refactor', 'quality', 'clean'], bonus: 2 },
+  { request: ['plan', 'architect', 'blueprint', 'roadmap'], skill: ['plan', 'architect', 'blueprint', 'design'], bonus: 2 },
+  // 'email' is deliberately not a request word here: the marketing library
+  // answers launch/pricing mail by overlap, and boosting every email-flavoured
+  // skill would hand those requests to the nearby general skill instead.
+  { request: ['draft', 'copy', 'blog', 'essay', 'document', 'readme'], skill: ['copy', 'humanizer', 'slop', 'ad', 'content'], bonus: 2 },
+  { request: ['image', 'draw', 'diagram', 'picture', 'generate', 'paint', 'logo', 'icon'], skill: ['image', 'diagram', 'draw', 'art', 'design', 'canvas'], bonus: 2 },
+];
+
+function taskDomainBoost(requestText, skill) {
+  const want = new Set(skillTokens(requestText));
+  if (!want.size) return 0;
+  const has = new Set([...skillTokens(skill && skill.name), ...skillTokens(skill && skill.description)]);
+  let bonus = 0;
+  for (const rule of TASK_DOMAIN_BOOSTS) {
+    if (rule.request.some((w) => want.has(w)) && rule.skill.some((w) => has.has(w))) bonus += rule.bonus;
+  }
+  return bonus;
+}
+
 // The auto-pick router. Given the user's request, the current mode, and the
 // loaded catalogue ({ source, name, description } rows), returns the skills
 // to inject, best match first:
@@ -430,7 +481,7 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   const processOnly = skillsAllowedForMode(mode) === 'process';
   // Superpowers' process skills — the ones about how to work rather than
   // what to make. In plan mode only these may trigger.
-  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif/i;
+  const PROCESS_HINT = /debug|plan|brainstorm|review|worktree|subagent|TDD|test-driven|verif|architect|secur|research/i;
   const pool = skills.filter((s) => s && s.name && s.description)
     // A user-only skill (disable-model-invocation) never auto-pins: only an
     // explicit `/name` brings it in. This is the auto path; deliberate pins
@@ -440,7 +491,10 @@ function pickSkills(requestText, mode, skills, limit = 3) {
   const scored = pool
     .map((s) => ({
       s,
-      score: skillTriggerScore(requestText, s),
+      // The domain booster only reorders: the filter below still admits a
+      // skill on hits/name alone, so a boost can never introduce one the
+      // overlap rule refused.
+      score: skillTriggerScore(requestText, s) + taskDomainBoost(requestText, s),
       hits: skillHitCount(requestText, s),
       named: skillNamesMatchesRequest(requestText, s),
       weight: skillDescriptionWeight(s),
@@ -4916,6 +4970,7 @@ if (typeof module !== 'undefined' && module.exports) {
     skillTriggerScore,
     skillTokens,
     stemSkillToken,
+    taskDomainBoost,
     pickSkills,
     renderSkillsPrompt,
     SKILL_COMMAND_ALLOWLIST,
