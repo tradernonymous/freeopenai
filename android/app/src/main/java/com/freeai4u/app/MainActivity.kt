@@ -1,15 +1,24 @@
 package com.freeai4u.app
 
+import android.app.AlertDialog
 import android.app.Dialog
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.Parcelable
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -46,7 +55,7 @@ import java.util.concurrent.Executors
 // keep navigation on the configured server, pick files, save downloads, and
 // never let a screenshot or a backup carry any of it off the phone.
 class MainActivity : ComponentActivity() {
-    private enum class Mode { SIGN_IN, OFFLINE, BUSY }
+    private enum class Mode { SIGN_IN, OFFLINE, BUSY, LOCKED }
 
     private lateinit var store: SecureStore
     private lateinit var web: WebView
@@ -69,6 +78,15 @@ class MainActivity : ComponentActivity() {
     private var pageLoaded = false
     private var mainFrameFailed = false
     private var reloginAttempts = 0
+    private var serverRetries = 0
+    private var unlocked = false
+    private var backgroundedAt = 0L
+    private var locking = false
+    /** A fragment to open the page on next (#new, #share=...). */
+    private var pendingFragment: String? = null
+    /** Images shared in, handed to the page's next file picker. */
+    private var pendingUris: Array<Uri> = emptyArray()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastSessionCheck = 0L
     @Volatile private var signedOutByPage = false
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -93,9 +111,13 @@ class MainActivity : ComponentActivity() {
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             WindowInsetsCompat.CONSUMED
         }
+        CrashLog.install(this)
         store = SecureStore(this)
         bindViews()
         setUpWebView()
+        publishShortcuts()
+        watchNetwork()
+        takeIntent(intent)
         onBackPressedDispatcher.addCallback(this) {
             if (web.visibility == View.VISIBLE && web.canGoBack()) {
                 web.goBack()
@@ -104,7 +126,25 @@ class MainActivity : ComponentActivity() {
                 onBackPressedDispatcher.onBackPressed()
             }
         }
-        launch()
+        if (!lockIfDue()) launch()
+        checkForUpdate(manual = false)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        takeIntent(intent)
+        if (pageLoaded && mode != Mode.LOCKED) deliverPending()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        lockIfDue()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) backgroundedAt = System.currentTimeMillis()
     }
 
     override fun onResume() {
@@ -117,6 +157,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        networkCallback?.let {
+            try {
+                getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(it)
+            } catch (ignored: Exception) {
+            }
+        }
+        main.removeCallbacksAndMessages(null)
         web.destroy()
         io.shutdownNow()
         super.onDestroy()
@@ -135,7 +182,9 @@ class MainActivity : ComponentActivity() {
         progress = findViewById(R.id.progress)
         note = findViewById(R.id.note)
         primary.setOnClickListener { onPrimary() }
-        secondary.setOnClickListener { showCard(Mode.SIGN_IN, null) }
+        secondary.setOnClickListener {
+            if (mode == Mode.OFFLINE) showCard(Mode.SIGN_IN, null) else showSettings()
+        }
         passwordField.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 onPrimary()
@@ -177,6 +226,9 @@ class MainActivity : ComponentActivity() {
     // --- The native card ---------------------------------------------------
 
     private fun showCard(newMode: Mode, text: String?) {
+        // Nothing replaces the lock screen but the unlock itself; the sign-in
+        // flow carries on underneath and shows its result once unlocked.
+        if (mode == Mode.LOCKED && newMode != Mode.LOCKED) return
         mode = newMode
         card.visibility = View.VISIBLE
         val signIn = newMode == Mode.SIGN_IN
@@ -190,11 +242,14 @@ class MainActivity : ComponentActivity() {
         progress.visibility = if (newMode == Mode.BUSY) View.VISIBLE else View.GONE
         primary.visibility = if (newMode == Mode.BUSY) View.GONE else View.VISIBLE
         primary.text = getString(if (signIn) R.string.sign_in else R.string.retry)
-        secondary.visibility = if (newMode == Mode.OFFLINE) View.VISIBLE else View.GONE
+        secondary.visibility = if (newMode == Mode.OFFLINE || signIn) View.VISIBLE else View.GONE
+        secondary.text = getString(if (newMode == Mode.OFFLINE) R.string.change_server else R.string.app_settings)
+        if (newMode == Mode.LOCKED) primary.text = getString(R.string.unlock)
         message.text = when (newMode) {
             Mode.SIGN_IN -> "Sign in with one of this server's app accounts. The phone stays signed in from then on."
-            Mode.OFFLINE -> "Could not reach the server."
+            Mode.OFFLINE -> "Could not reach the server. It retries by itself when the connection comes back."
             Mode.BUSY -> text ?: getString(R.string.connecting)
+            Mode.LOCKED -> getString(R.string.lock_subtitle)
         }
         if (signIn) {
             if (serverField.text.isEmpty()) serverField.setText(store.server ?: BuildConfig.DEFAULT_SERVER)
@@ -205,6 +260,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPage() {
+        if (mode == Mode.LOCKED) return
         card.visibility = View.GONE
         web.visibility = View.VISIBLE
     }
@@ -215,7 +271,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onPrimary() {
+        if (mode == Mode.LOCKED) {
+            unlock()
+            return
+        }
         if (mode == Mode.OFFLINE) {
+            serverRetries = 0
             launch()
             return
         }
@@ -333,7 +394,9 @@ class MainActivity : ComponentActivity() {
         }
         showCard(Mode.BUSY, "Loading…")
         mainFrameFailed = false
-        web.loadUrl(baseUrl + "/")
+        val fragment = pendingFragment
+        pendingFragment = null
+        web.loadUrl(baseUrl + "/" + (if (fragment != null) "#" + fragment else ""))
     }
 
     /** The page ran into the login gate -- a redirect to /login.html or a 401
@@ -394,7 +457,9 @@ class MainActivity : ComponentActivity() {
             if (Uri.parse(url).path == "/login.html") return
             pageLoaded = true
             reloginAttempts = 0
+            serverRetries = 0
             showPage()
+            deliverPending()
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -405,8 +470,22 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
-            if (request.isForMainFrame && errorResponse.statusCode == 401 && sameOrigin(origin, request.url.toString())) {
+            if (!request.isForMainFrame || !sameOrigin(origin, request.url.toString())) return
+            val status = errorResponse.statusCode
+            if (status == 401) {
                 onSessionLost()
+            } else if (status >= 500) {
+                // Railway answers 502/503 while a deployment starts or wakes:
+                // wait and try again a few times before calling it offline.
+                mainFrameFailed = true
+                pageLoaded = false
+                if (serverRetries < SERVER_RETRIES) {
+                    serverRetries++
+                    showCard(Mode.BUSY, getString(R.string.server_waking, serverRetries, SERVER_RETRIES))
+                    main.postDelayed({ if (mode == Mode.BUSY) openPage(reload = true) }, SERVER_RETRY_DELAY_MS)
+                } else {
+                    showCard(Mode.OFFLINE, "Server answered HTTP " + status + ".")
+                }
             }
         }
 
@@ -426,6 +505,14 @@ class MainActivity : ComponentActivity() {
             fileChooserParams: FileChooserParams
         ): Boolean {
             fileCallback?.onReceiveValue(null)
+            if (pendingUris.isNotEmpty()) {
+                // A shared image goes straight into the picker the page opened.
+                val uris = pendingUris
+                pendingUris = emptyArray()
+                val multiple = fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+                filePathCallback.onReceiveValue(if (multiple) uris else arrayOf(uris[0]))
+                return true
+            }
             fileCallback = filePathCallback
             return try {
                 pickFile.launch(fileChooserParams.createIntent())
@@ -543,6 +630,235 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // --- Share sheet, shortcuts, tile --------------------------------------
+
+    /** Reads what the launcher, a shortcut, the tile or the share sheet asked
+     * for. Everything in the intent is untrusted: text becomes an encoded
+     * fragment, images become content URIs for the page's own file picker. */
+    private fun takeIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_NEW_CHAT -> pendingFragment = NEW_CHAT_FRAGMENT
+            ACTION_SETTINGS -> main.post { showSettings() }
+            Intent.ACTION_SEND -> {
+                val type = intent.type ?: ""
+                if (type.startsWith("image/")) {
+                    streamUris(intent)?.let { pendingUris = it }
+                }
+                shareFragment(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT))
+                    ?.let { pendingFragment = it }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> streamUris(intent)?.let { pendingUris = it }
+        }
+    }
+
+    private fun streamUris(intent: Intent): Array<Uri>? {
+        val found = mutableListOf<Uri>()
+        @Suppress("DEPRECATION")
+        val single = intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM)
+        (single as? Uri)?.let { found.add(it) }
+        @Suppress("DEPRECATION")
+        val many = intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)
+        many?.forEach { item -> (item as? Uri)?.let { found.add(it) } }
+        val uris = found.filter { it.scheme == "content" }.take(MAX_SHARED_IMAGES)
+        return if (uris.isEmpty()) null else uris.toTypedArray()
+    }
+
+    /** Hands whatever is pending to a page that is already open. */
+    private fun deliverPending() {
+        val fragment = pendingFragment
+        if (fragment != null) {
+            pendingFragment = null
+            web.evaluateJavascript("location.hash=" + JSONObject.quote(fragment) + ";", null)
+        }
+        if (pendingUris.isNotEmpty()) toast(getString(R.string.shared_image_ready))
+    }
+
+    private fun publishShortcuts() {
+        try {
+            val manager = getSystemService(ShortcutManager::class.java) ?: return
+            val icon = Icon.createWithResource(this, R.drawable.ic_app)
+            val newChat = ShortcutInfo.Builder(this, "new_chat")
+                .setShortLabel(getString(R.string.shortcut_new_chat))
+                .setIcon(icon)
+                .setIntent(Intent(this, MainActivity::class.java).setAction(ACTION_NEW_CHAT))
+                .build()
+            val settings = ShortcutInfo.Builder(this, "settings")
+                .setShortLabel(getString(R.string.app_settings))
+                .setIcon(icon)
+                .setIntent(Intent(this, MainActivity::class.java).setAction(ACTION_SETTINGS))
+                .build()
+            manager.dynamicShortcuts = listOf(newChat, settings)
+        } catch (ignored: Exception) {
+            // Launchers without shortcut support simply show none.
+        }
+    }
+
+    // --- Connectivity ------------------------------------------------------
+
+    /** When the phone gets a connection back while the offline card is up,
+     * try again without waiting for a tap. */
+    private fun watchNetwork() {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                main.post {
+                    if (mode == Mode.OFFLINE && card.visibility == View.VISIBLE) {
+                        serverRetries = 0
+                        launch()
+                    }
+                }
+            }
+        }
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (ignored: Exception) {
+        }
+    }
+
+    // --- App lock ----------------------------------------------------------
+
+    /** Covers the page and asks for the fingerprint or screen lock when due.
+     * Returns true when the app is now locked. */
+    private fun lockIfDue(): Boolean {
+        if (mode == Mode.LOCKED) return true
+        val enabled = store.appLock && AppLock.available(this)
+        if (!lockDue(enabled, unlocked, backgroundedAt, System.currentTimeMillis(), AppLock.GRACE_MS)) return false
+        unlocked = false
+        web.visibility = View.INVISIBLE
+        showCard(Mode.LOCKED, null)
+        main.post { unlock() }
+        return true
+    }
+
+    private fun unlock() {
+        if (locking) return
+        locking = true
+        AppLock.prompt(this, onUnlocked = {
+            locking = false
+            unlocked = true
+            backgroundedAt = 0L
+            mode = Mode.BUSY
+            if (pageLoaded) {
+                showPage()
+                deliverPending()
+            } else {
+                launch()
+            }
+        }, onFailed = { reason ->
+            locking = false
+            showError(reason)
+        })
+    }
+
+    // --- Settings ----------------------------------------------------------
+
+    private fun showSettings() {
+        if (mode == Mode.LOCKED) return
+        val lockOn = store.appLock
+        val crash = CrashLog.read(this)
+        val labels = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        labels.add(getString(if (lockOn) R.string.settings_lock_off else R.string.settings_lock_on))
+        actions.add { toggleLock(!lockOn) }
+        labels.add(getString(R.string.settings_check_update))
+        actions.add { checkForUpdate(manual = true) }
+        if (crash != null) {
+            labels.add(getString(R.string.settings_copy_crash))
+            actions.add { copyCrashLog(crash) }
+        }
+        if (store.password != null || store.session != null) {
+            labels.add(getString(R.string.settings_forget))
+            actions.add { forgetSignIn() }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_title, BuildConfig.VERSION_NAME))
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun toggleLock(on: Boolean) {
+        if (!on) {
+            store.appLock = false
+            toast(getString(R.string.lock_disabled))
+            return
+        }
+        if (!AppLock.available(this)) {
+            toast(getString(R.string.lock_needs_screen_lock))
+            return
+        }
+        // Prove the prompt works on this phone before relying on it, so
+        // nobody locks themselves behind a prompt that cannot show.
+        AppLock.prompt(this, onUnlocked = {
+            store.appLock = true
+            unlocked = true
+            toast(getString(R.string.lock_enabled))
+        }, onFailed = { reason -> toast(reason) })
+    }
+
+    private fun copyCrashLog(text: String) {
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText("FreeAI4U crash log", text))
+        CrashLog.clear(this)
+        toast(getString(R.string.crash_copied))
+    }
+
+    private fun forgetSignIn() {
+        AlertDialog.Builder(this)
+            .setMessage(R.string.forget_confirm)
+            .setPositiveButton(R.string.settings_forget) { _, _ ->
+                val client = ChatApi(baseUrl)
+                client.sessionCookie = store.session
+                if (baseUrl.isNotEmpty()) io.execute { client.logout() }
+                store.clearSecrets()
+                WebShell.setSessionCookie(baseUrl, null)
+                pageLoaded = false
+                web.loadUrl("about:blank")
+                web.visibility = View.INVISIBLE
+                passwordField.setText("")
+                showCard(Mode.SIGN_IN, null)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    // --- Updates -----------------------------------------------------------
+
+    /** Once a day (or on request) reads version.json from the apk-latest
+     * release. A newer build is offered as a link that opens in the browser;
+     * Android installs it over this one because both carry the same key. */
+    private fun checkForUpdate(manual: Boolean) {
+        val url = BuildConfig.UPDATE_URL
+        if (url.isEmpty()) {
+            if (manual) toast(getString(R.string.update_unavailable))
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (!manual && now - store.lastUpdateCheck < UPDATE_CHECK_MS) return
+        store.lastUpdateCheck = now
+        io.execute {
+            val info = fetchUpdateInfo(url)
+            main.post {
+                if (isFinishing || isDestroyed) return@post
+                when {
+                    info != null && updateAvailable(info, BuildConfig.VERSION_CODE) -> offerUpdate(info)
+                    manual && info == null -> toast(getString(R.string.update_failed))
+                    manual -> toast(getString(R.string.update_current, BuildConfig.VERSION_NAME))
+                }
+            }
+        }
+    }
+
+    private fun offerUpdate(info: UpdateInfo) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_title, info.versionName))
+            .setMessage(getString(R.string.update_message, BuildConfig.VERSION_NAME))
+            .setPositiveButton(R.string.update_download) { _, _ -> openExternally(Uri.parse(info.url)) }
+            .setNegativeButton(R.string.update_later, null)
+            .show()
+    }
+
     // --- Helpers -----------------------------------------------------------
 
     private fun openExternally(uri: Uri) {
@@ -559,7 +875,13 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
     }
 
-    private companion object {
-        const val SESSION_RECHECK_MS = 6 * 60 * 60 * 1000L
+    companion object {
+        const val ACTION_NEW_CHAT = "com.freeai4u.app.NEW_CHAT"
+        const val ACTION_SETTINGS = "com.freeai4u.app.SETTINGS"
+        private const val SESSION_RECHECK_MS = 6 * 60 * 60 * 1000L
+        private const val UPDATE_CHECK_MS = 24 * 60 * 60 * 1000L
+        private const val SERVER_RETRIES = 4
+        private const val SERVER_RETRY_DELAY_MS = 5000L
+        private const val MAX_SHARED_IMAGES = 5
     }
 }

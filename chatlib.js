@@ -4917,8 +4917,29 @@ function conversationToMarkdown(messages, title) {
   return lines.join('\n').trim();
 }
 
+// Reads the fragment the Android app opens the page with: "#new" starts a
+// chat, "#share=<text>" drafts shared text into the composer. The fragment
+// never reaches the server, and shared text is only ever placed in the input
+// as a value -- never parsed as HTML or run. Anything else is not ours.
+const MAX_SHARED_TEXT_CHARS = 20000;
+function parseAppLink(hash) {
+  const raw = String(hash || '').replace(/^#/, '');
+  if (raw === 'new') return { action: 'new' };
+  if (!raw.startsWith('share=')) return null;
+  let text;
+  try {
+    text = decodeURIComponent(raw.slice('share='.length));
+  } catch {
+    return null;
+  }
+  text = text.replace(/\r\n?/g, '\n').trim().slice(0, MAX_SHARED_TEXT_CHARS);
+  return text ? { action: 'share', text } : null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    parseAppLink,
+    MAX_SHARED_TEXT_CHARS,
     TRANSCRIPT_BOTTOM_SLACK_PX,
     transcriptAtBottom,
     TRANSCRIPT_JUMP_SOURCES,

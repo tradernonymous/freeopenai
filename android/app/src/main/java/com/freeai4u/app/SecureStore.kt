@@ -38,6 +38,15 @@ class SecureStore(context: Context) {
         get() = open(prefs.getString(KEY_SESSION, null))
         set(value) = put(KEY_SESSION, value?.let { seal(it) })
 
+    /** Plain settings: neither is a secret. */
+    var appLock: Boolean
+        get() = prefs.getBoolean(KEY_APP_LOCK, false)
+        set(value) = prefs.edit().putBoolean(KEY_APP_LOCK, value).apply()
+
+    var lastUpdateCheck: Long
+        get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
+        set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK, value).apply()
+
     fun clearSession() {
         prefs.edit().remove(KEY_SESSION).apply()
     }
@@ -101,6 +110,8 @@ class SecureStore(context: Context) {
         const val KEY_USERNAME = "username"
         const val KEY_PASSWORD = "password_sealed"
         const val KEY_SESSION = "session_sealed"
+        const val KEY_APP_LOCK = "app_lock"
+        const val KEY_UPDATE_CHECK = "last_update_check"
         const val KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "freeai4u-secrets"
         const val TRANSFORM = "AES/GCM/NoPadding"

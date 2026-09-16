@@ -3677,6 +3677,24 @@
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
         document.getElementById('routingCheck').checked = routingMode === 'auto';
+        applyAppLink();
+        window.addEventListener('hashchange', applyAppLink);
+
+        // The Android app's shortcuts and share sheet arrive as a fragment
+        // (see parseAppLink). It is cleared as soon as it is read, so a reload
+        // or a back step never replays it.
+        function applyAppLink() {
+            const link = parseAppLink(location.hash);
+            if (!link) return;
+            history.replaceState(null, '', location.pathname + location.search);
+            if (link.action === 'new') {
+                startNewConversation();
+            } else if (link.action === 'share') {
+                chatInput.value = chatInput.value ? chatInput.value + '\n\n' + link.text : link.text;
+                autoResize(chatInput);
+            }
+            chatInput.focus();
+        }
 
         function initializeApp() {
             if (typeof puter === 'undefined') {

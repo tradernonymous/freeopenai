@@ -244,4 +244,82 @@ class ApiTest {
         val thrown = assertThrows(ApiException::class.java) { api.session() }
         assertTrue(thrown.authRequired)
     }
+
+    // --- Share sheet ------------------------------------------------------
+
+    @Test
+    fun share_encodesTheWholeTextIntoTheFragment() {
+        val fragment = shareFragment("Title", "a b&c#d\n<script>")!!
+        assertTrue(fragment.startsWith("share="))
+        val encoded = fragment.removePrefix("share=")
+        assertFalse(encoded.contains('#'))
+        assertFalse(encoded.contains(' '))
+        assertFalse(encoded.contains('<'))
+        assertEquals("Title\n\na b&c#d\n<script>", java.net.URLDecoder.decode(encoded, "UTF-8"))
+    }
+
+    @Test
+    fun share_skipsEmptyAndDuplicateParts() {
+        assertNull(shareFragment(null, "   "))
+        assertNull(shareFragment("", null))
+        assertEquals("share=https%3A%2F%2Fx.io", shareFragment("https://x.io", "https://x.io"))
+    }
+
+    @Test
+    fun share_isCapped() {
+        val fragment = shareFragment(null, "y".repeat(MAX_SHARED_TEXT_CHARS + 10))!!
+        assertEquals(MAX_SHARED_TEXT_CHARS, fragment.removePrefix("share=").length)
+    }
+
+    // --- App lock ---------------------------------------------------------
+
+    @Test
+    fun lock_offNeverAsks() {
+        assertFalse(lockDue(enabled = false, unlocked = false, backgroundedAt = 0, now = 10, graceMs = 1))
+    }
+
+    @Test
+    fun lock_asksOnColdStartAndAfterTheGracePeriod() {
+        assertTrue(lockDue(true, unlocked = false, backgroundedAt = 0, now = 0, graceMs = 60_000))
+        assertFalse(lockDue(true, unlocked = true, backgroundedAt = 0, now = 999_999, graceMs = 60_000))
+        assertFalse(lockDue(true, unlocked = true, backgroundedAt = 1_000, now = 30_000, graceMs = 60_000))
+        assertTrue(lockDue(true, unlocked = true, backgroundedAt = 1_000, now = 61_000, graceMs = 60_000))
+    }
+
+    // --- Update check -----------------------------------------------------
+
+    private val manifest = "{\"versionCode\":150,\"versionName\":\"2.0.150\"," +
+        "\"url\":\"https://github.com/o/r/releases/download/apk-latest/freeai4u.apk\",\"notes\":\"Build 150\"}"
+
+    @Test
+    fun update_parsesTheReleaseManifest() {
+        val info = parseUpdateInfo(manifest)!!
+        assertEquals(150, info.versionCode)
+        assertEquals("2.0.150", info.versionName)
+        assertTrue(updateAvailable(info, 149))
+        assertFalse(updateAvailable(info, 150))
+        assertFalse(updateAvailable(null, 1))
+    }
+
+    @Test
+    fun update_refusesLinksOffGithubAndJunk() {
+        assertNull(parseUpdateInfo(manifest.replace("https://github.com", "https://evil.com")))
+        assertNull(parseUpdateInfo(manifest.replace("https://github.com", "http://github.com")))
+        assertNull(parseUpdateInfo(manifest.replace("https://github.com", "https://github.com.evil.com")))
+        assertNull(parseUpdateInfo(manifest.replace("150,", "0,")))
+        assertNull(parseUpdateInfo("not json"))
+        assertNull(parseUpdateInfo(null))
+    }
+
+    @Test
+    fun update_fetchReadsTheManifestAndSwallowsFailures() {
+        val where = "https://github.com/o/r/releases/download/apk-latest/version.json"
+        val ok = FakeConnection(URL(where))
+        ok.body = manifest
+        assertEquals(150, fetchUpdateInfo(where, opener = { ok })!!.versionCode)
+        val missing = FakeConnection(URL(where))
+        missing.code = 404
+        assertNull(fetchUpdateInfo(where, opener = { missing }))
+        assertNull(fetchUpdateInfo("https://evil.com/version.json", opener = { ok }))
+    }
 }

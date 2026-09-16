@@ -260,3 +260,79 @@ class ChatApi(
         }
     }
 }
+
+// --- Share sheet and shortcuts ------------------------------------------------
+
+/** Longest shared text passed to the page; the page caps it again. */
+const val MAX_SHARED_TEXT_CHARS = 20000
+
+/** The fragment that drafts shared text into the page's composer, or null
+ * when there is nothing to share. The text is percent-encoded whole, so it
+ * reaches the page as data in a fragment -- never sent to the server, never
+ * able to close the fragment or turn into script. */
+fun shareFragment(subject: String?, text: String?): String? {
+    val parts = listOfNotNull(subject?.trim()?.ifEmpty { null }, text?.trim()?.ifEmpty { null })
+    val joined = parts.distinct().joinToString("\n\n").take(MAX_SHARED_TEXT_CHARS)
+    if (joined.isEmpty()) return null
+    return "share=" + java.net.URLEncoder.encode(joined, "UTF-8").replace("+", "%20")
+}
+
+const val NEW_CHAT_FRAGMENT = "new"
+
+// --- App lock -----------------------------------------------------------------
+
+/** Whether the app asks for the fingerprint / screen lock before showing the
+ * page. A cold start always asks; coming back from the background asks once
+ * the app has been away longer than the grace period. */
+fun lockDue(enabled: Boolean, unlocked: Boolean, backgroundedAt: Long, now: Long, graceMs: Long): Boolean {
+    if (!enabled) return false
+    if (!unlocked) return true
+    if (backgroundedAt <= 0L) return false
+    return now - backgroundedAt >= graceMs
+}
+
+// --- Update check -------------------------------------------------------------
+
+/** What CI publishes next to the APK in the apk-latest release. */
+data class UpdateInfo(val versionCode: Int, val versionName: String, val url: String, val notes: String)
+
+/** Parses version.json. The download link must be an https GitHub URL: the
+ * app only ever opens it in the browser, but a tampered file must not be
+ * able to send the phone anywhere else. */
+fun parseUpdateInfo(body: String?): UpdateInfo? {
+    if (body.isNullOrBlank()) return null
+    return try {
+        val obj = JSONObject(body)
+        val code = obj.optInt("versionCode", -1)
+        val url = obj.optString("url", "")
+        if (code <= 0 || httpsHost(url) != "github.com") return null
+        UpdateInfo(code, obj.optString("versionName", code.toString()), url, obj.optString("notes", ""))
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun updateAvailable(info: UpdateInfo?, currentVersionCode: Int): Boolean =
+    info != null && info.versionCode > currentVersionCode
+
+/** GET the update manifest. Null on any failure: an update check never
+ * interrupts the app. */
+fun fetchUpdateInfo(
+    url: String,
+    opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+): UpdateInfo? {
+    if (httpsHost(url) != "github.com") return null
+    var conn: HttpURLConnection? = null
+    return try {
+        conn = opener(URL(url))
+        conn.connectTimeout = 10000
+        conn.readTimeout = 15000
+        conn.setRequestProperty("Accept", "application/json")
+        if (conn.responseCode !in 200..299) return null
+        parseUpdateInfo(conn.inputStream.bufferedReader().use(BufferedReader::readText).take(64000))
+    } catch (e: Exception) {
+        null
+    } finally {
+        conn?.disconnect()
+    }
+}

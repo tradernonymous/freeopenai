@@ -15,6 +15,10 @@ val defaultUsername: String = System.getenv("APK_USERNAME") ?: (project.findProp
 // Android refuses an update whose versionCode does not go up.
 val buildNumber: Int = System.getenv("APK_VERSION_CODE")?.toIntOrNull() ?: 2
 val keystorePath: String? = System.getenv("APK_KEYSTORE_FILE")
+// Where the app looks for a newer build: version.json in the rolling
+// apk-latest release. CI sets it from the repository; a local build has none
+// and simply never offers updates.
+val updateUrl: String = System.getenv("APK_UPDATE_URL") ?: ""
 
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
@@ -32,6 +36,7 @@ android {
         versionName = "2.0.$buildNumber"
         buildConfigField("String", "DEFAULT_SERVER", quoted(defaultServer))
         buildConfigField("String", "DEFAULT_USERNAME", quoted(defaultUsername))
+        buildConfigField("String", "UPDATE_URL", quoted(updateUrl))
     }
 
     signingConfigs {

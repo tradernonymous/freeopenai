@@ -28,6 +28,7 @@ jobs:
       # first launch's defaults. The password is never a build input.
       APK_SERVER_URL: ${{ vars.APK_SERVER_URL }}
       APK_USERNAME: ${{ vars.APK_USERNAME }}
+      APK_UPDATE_URL: https://github.com/${{ github.repository }}/releases/download/apk-latest/version.json
       APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
       APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
       APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
@@ -84,4 +85,11 @@ jobs:
           else
             gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "FreeAI4U Android app (latest build)" --notes "$NOTES"
           fi
+          # What the installed app reads to offer the next build (see
+          # MainActivity.checkForUpdate). The link is the stable asset URL.
+          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/freeai4u.apk","notes":"Build %s from %s"}\n' \
+            "$APK_VERSION_CODE" "$APK_VERSION_CODE" "$GITHUB_REPOSITORY" "$APK_VERSION_CODE" "${GITHUB_SHA:0:7}" > "$RUNNER_TEMP/version.json"
+          # APK first, manifest second: a phone never sees a version that is
+          # not downloadable yet.
           gh release upload apk-latest "$RUNNER_TEMP/freeai4u.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload apk-latest "$RUNNER_TEMP/version.json" --repo "$GITHUB_REPOSITORY" --clobber

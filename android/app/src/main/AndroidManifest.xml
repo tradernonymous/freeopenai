@@ -2,12 +2,17 @@
 <!--
   FreeAI4U Android app: the deployed web app in a hardened WebView, with a
   native sign-in that keeps the phone logged in. Security posture:
-  - INTERNET is the only permission. Files come in through the system picker
-    and go out through MediaStore, neither of which needs storage access.
+  - Permissions: INTERNET, ACCESS_NETWORK_STATE (retry when the connection
+    returns) and USE_BIOMETRIC (the optional app lock). All three are
+    install-time "normal" permissions with no prompt. Files come in through
+    the system picker or the share sheet and go out through MediaStore,
+    neither of which needs storage access.
   - No backup (adb or cloud) can lift the server, the sealed password, the
     session, or the chats the page keeps in its own storage.
-  - Exactly one exported component (the launcher activity); no intent filter
-    beyond MAIN/LAUNCHER, so nothing else can start it with data.
+  - Exported: the launcher activity, which also accepts shared text and
+    images (treated as untrusted: text is percent-encoded into a fragment,
+    images only reach the page's own file picker), and the Quick Settings
+    tile, which only the system can bind.
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
     content never crosses the network unencrypted.
   - The WebView itself is locked down in WebShell.kt: no file or content
@@ -17,6 +22,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:allowBackup="false"
@@ -38,6 +45,27 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
+        <service
+            android:name=".NewChatTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_app"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>
