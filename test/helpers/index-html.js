@@ -80,6 +80,7 @@ const BUILTINS = new Set([
   'Infinity', 'NaN', 'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout', 'globalThis',
   // Globals in both the browser and Node, so `with` falls through to them.
   'TextDecoder', 'TextEncoder', 'Buffer', 'URL', 'URLSearchParams', 'AbortController', 'fetch',
+  'btoa', 'atob', 'Blob', 'Uint8Array', 'ArrayBuffer',
 ]);
 
 // The names one or more extracted functions would look for outside their own

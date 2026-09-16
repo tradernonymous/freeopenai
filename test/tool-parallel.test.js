@@ -24,6 +24,9 @@ const {
   newTaskGraph,
   addTask,
   setTaskStatus,
+  modeAllowsTool,
+  modeBlocksWrite,
+  modeWriteRefusal,
 } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 const {
@@ -143,6 +146,16 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
       runs.push({ name, phase: 'end' });
       return 'workspace:' + name;
     },
+    // The shell has its own branch too, and it is the one branch whose runner
+    // can wait on a person rather than on the network. It records like the
+    // others so a test can say when it was reached at all.
+    isRunTool: (n) => n === 'run_command',
+    runCommandTool: async (name) => {
+      runs.push({ name, phase: 'start' });
+      await new Promise((r) => setTimeout(r, 1));
+      runs.push({ name, phase: 'end' });
+      return 'ran on the server:' + name;
+    },
     // Same again for the task tools, which added their own branch.
     isTaskTool: (n) => n.startsWith('task_'),
     runTaskTool: async () => 'task',
@@ -164,6 +177,13 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
     toolArgsUnusable,
     describeRoute,
     refusedModelIds,
+    // The mode's tool surface, with the shipped rules rather than stubs: these
+    // tests drive the loop as Build, which is the mode that may write, so a
+    // refusal here would mean the mode gate had stopped real work.
+    modeBlocksWrite,
+    modeWriteRefusal,
+    modeAllowsTool,
+    selectedMode: 'build',
     routingMode: routing,
     selectedProvider: 'test-provider',
     selectedModel: 'big-model',
@@ -251,6 +271,46 @@ test('independent reads are issued together instead of one after another', async
   ]);
   // And the user is told what is going on rather than seeing nothing.
   assert.ok(h.events.some((e) => /Looking up 3 things at once/.test(e)));
+});
+
+test('a write outside Build mode is refused by the loop, not run', async () => {
+  // The tool list is the mode's surface, and this is the belt to its braces: a
+  // turn resumed from another mode, or a model calling a tool from memory, must
+  // not commit in Chat or Plan mode because the request said not to.
+  const h = harness({ toolCalls: [call('github_commit_file', 'a', { repo: 'o/r', path: 'a.md', content: 'x', message: 'y' })] });
+  h.deps.selectedMode = 'plan';
+  await h.runChatWithTools(h.conversation, 'model', [], null);
+  assert.deepEqual(h.runs, [], 'nothing was run');
+  const toolMessages = h.conversation.filter((m) => m.role === 'tool');
+  assert.match(toolMessages[0].content, /Plan mode is read-only/);
+  assert.match(toolMessages[0].content, /Nothing changed/);
+});
+
+test('a command is a write: it never overlaps another tool, and Plan cannot reach it', async () => {
+  const calls = [
+    call('github_read_file', 'a', { repo: 'o/r', path: 'a.md' }),
+    call('run_command', 'b', { command: 'node make-pdf.js' }),
+    call('web_search', 'c', { query: 'x' }),
+  ];
+  // Keeping it out of the concurrent batch is the same rule a commit follows,
+  // for a stronger reason: anything overlapping a shell would run against a
+  // workspace the command is in the middle of changing.
+  assert.deepEqual(planToolCalls(calls).serial, [1]);
+  const h = harness({ toolCalls: calls });
+  await h.runChatWithTools(h.conversation, 'model', [], null);
+  // The two reads go together and the command waits for them, so it starts
+  // after both and nothing is ever running beside it.
+  const started = h.runs.filter((r) => r.phase === 'start').map((r) => r.name);
+  assert.deepEqual(started, ['github_read_file', 'web_search', 'run_command']);
+  assert.equal(started.filter((n) => n === 'run_command').length, 1);
+
+  // And it is not reachable from the two modes that change nothing: a command can
+  // do something the user cannot take back, which is exactly what Plan is not.
+  assert.equal(modeAllowsTool('plan', 'run_command'), false);
+  assert.equal(modeAllowsTool('chat', 'run_command'), false);
+  assert.equal(modeAllowsTool('build', 'run_command'), true);
+  assert.equal(modeBlocksWrite('plan', 'run_command'), true);
+  assert.match(modeWriteRefusal('plan', 'run_command'), /Plan mode is read-only/);
 });
 
 test('a write never overlaps another tool', async () => {

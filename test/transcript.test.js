@@ -11,11 +11,15 @@ const {
   transcriptAtBottom,
   shouldFollowTranscript,
   announcesUnread,
+} = require('../chatlib.js');
+// What a picture becomes in stored history is an attachment decision, so it
+// lives with the rest of them, in the module the page loads for it.
+const {
   storedImagePlan,
   capConversationImages,
   stripStoredImages,
   MAX_STORED_IMAGES_PER_CONVERSATION,
-} = require('../chatlib.js');
+} = require('../attachment-helpers.js');
 
 test('the bottom of the transcript is where the reader last was, not a rounding error', () => {
   // 1000px of content in a 400px window: scrolled to the very bottom.

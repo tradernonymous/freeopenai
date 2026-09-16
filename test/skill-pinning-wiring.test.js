@@ -84,15 +84,20 @@ test('a skill the model loads is pinned, so the next turn does not fetch it agai
   assert.doesNotMatch(pin, /console\.log/);
 });
 
-test('the composer has buttons: a chip per pinned skill, and a picker that cannot be clipped', () => {
+test('the composer has buttons: a chip per pinned skill, and a picker in the panel', () => {
   assert.match(HTML, /<div class="skill-bar" id="skillBar" hidden/, 'the bar exists and starts hidden');
-  assert.match(HTML, /id="skillTrigger"/, 'and there is a button to add one');
-  // The picker rides the model dropdown's fixed-position contract. The attach
-  // menu was invisible on every screen size because it was positioned inside the
-  // horizontally-scrolling controls row; a menu with this class cannot be.
-  assert.match(HTML, /<div class="model-dropdown" id="skillMenu"/);
-  assert.match(HTML, /function positionSkillMenu\(\)[\s\S]{0,500}placeDropdown\(/);
-  assert.match(HTML, /window\.addEventListener\('resize',[\s\S]{0,160}positionSkillMenu\(\)/);
+  assert.match(HTML, /id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/, 'and there is a button to reach the picker');
+  // The picker used to be a floating dropdown anchored under a composer chip,
+  // which is what made it need `position: fixed`, a place-the-popup function and
+  // a re-place on resize -- and what the attach menu got wrong when it was
+  // positioned inside the row that scrolls. In the session panel it is a block
+  // in a static section, so none of that is needed to keep it unclipped.
+  const section = HTML.slice(HTML.indexOf('id="sessionSectionSkills"'), HTML.indexOf('id="sessionSectionTasks"'));
+  assert.match(section, /id="skillSearch"/);
+  assert.match(section, /id="skillMenuList"/);
+  assert.equal(HTML.includes('id="skillMenu"'), false, 'the floating picker outlived the floating picker');
+  assert.equal(HTML.includes('positionSkillMenu'), false, 'and so did its positioning');
+  assert.equal(HTML.includes('skillTrigger'), false, 'and the chip it hung from');
   // Removing a pin is a control on the chip, not a trip to settings.
   const bar = HTML.slice(HTML.indexOf('function renderSkillBar'), HTML.indexOf('function removePinnedSkill'));
   assert.match(bar, /off\.textContent = '×'/);
@@ -109,18 +114,33 @@ test('the skills panel and the picker tell one story about the library', () => {
   assert.match(HTML, /skillsStatusText = skillsCatalog\.length/);
   assert.match(HTML, /empty\.textContent = skillsStatusText/);
   assert.match(HTML, /pinned ones apply in every mode/);
-  // The auto-picking toggle now says what it is, since pinning is the other half.
-  assert.match(HTML, /Auto-skills on/);
-  assert.match(HTML, /toggle\.textContent = skillsEnabled \? 'Auto-skills on' : 'Auto-skills off'/);
+  // The auto-picking switch says what it is, and sits in the panel beside the
+  // list it governs rather than in the row of things you touch every message.
+  assert.match(HTML, /<label for="autoSkillsCheck">Apply relevant skills automatically<\/label>/);
+  assert.match(HTML, /<input type="checkbox" id="autoSkillsCheck" checked onchange="setSkillsEnabled\(this\.checked\)">/);
+  // Two controls, one state: the checkbox and the stored flag cannot disagree.
+  assert.match(sourceOf('updateSkillsToggle'), /box\.checked = skillsEnabled/);
+  // Through the guard, not straight at localStorage: a browser that refuses
+  // storage must not throw out of a checkbox handler.
+  assert.match(sourceOf('setSkillsEnabled'), /rememberPreference\('freeopenaiSkills'/);
+  assert.equal(HTML.includes('skillsToggle'), false, 'the old chip outlived the switch');
 });
 
-test('the toggle and the picker stay out of each other\'s way', () => {
-  // The picker opens on click, closes on outside click, and Escape returns focus
-  // to the trigger -- the same contract the other two popups have.
-  assert.match(HTML, /function closeSkillMenu\(\)[\s\S]{0,200}aria-expanded', 'false'/);
-  assert.match(HTML, /document\.addEventListener\('click',[\s\S]{0,120}closeSkillMenu\(\)/);
-  assert.match(HTML, /function handleSkillMenuKeydown[\s\S]{0,800}closeSkillMenu\(\); skillTrigger\.focus\(\)/);
-  assert.match(HTML, /function openSkillMenu\(\)[\s\S]{0,400}closeModelDropdown\(\);[\s\S]{0,80}closeAttachMenu\(\)/);
+test('the switch and the picker sit in one section, and the panel owns both', () => {
+  // Escape closes the surface, and only when it is open: it yields to a modal,
+  // the palette, and a reply that is still generating, which Escape stops.
+  assert.match(
+    HTML,
+    /const shell = sessionShell\(\);\s*if \(!shell \|\| shell\.classList\.contains\('session-hidden'\)\) return;\s*toggleSessionPanel\(false\);/,
+  );
+  // A click elsewhere must not dismiss it. Unlike the two popups it replaced,
+  // the plan is meant to be read while the work happens.
+  const outsideClick = HTML.slice(HTML.indexOf("document.addEventListener('click', () => {"), HTML.indexOf("});", HTML.indexOf("document.addEventListener('click', () => {")));
+  assert.doesNotMatch(outsideClick, /[Ss]ession/, 'the panel is not a dropdown');
+  // Opening draws the section it opens on, and the picker is fetched then rather
+  // than being an empty list that fills in later.
+  assert.match(sourceOf('toggleSessionPanel'), /showSessionTab\(sessionTab, false\)/);
+  assert.match(sourceOf('showSessionTab'), /wanted === 'skills' && !skillsCatalog\.length[\s\S]{0,120}ensureSkillsLoaded\(\)/);
 });
 
 test('offers are scored while typing, before the message they are for is sent', () => {

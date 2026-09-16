@@ -26,26 +26,32 @@ function isValidMode(id) {
 // is its /build: carry out an agreed approach with the discipline skills
 // (TDD, verification, lean scope) watching over every step.
 const MODE_PROMPTS = {
-  chat: '',
+  chat: [
+    'MODE: CHAT. The user wants an answer, not a change to anything.',
+    'Research it: search the web and read pages whenever the answer depends on anything past your training, prefer primary sources, and cite them as [title](url).',
+    'You can read this workspace and any connected repository, but you have no tools that write, commit, delete or run a command -- in this mode they are not offered at all. So never promise to "just fix it" here: say what would change, and that Build mode is where it happens.',
+    'Answer plainly and finish. No plan document, no todo list, no commit.',
+  ].join('\n'),
   plan: [
     'MODE: PLAN. The user wants an implementation plan, not changes.',
-    'Investigate first (read files via the GitHub tools, search the web for unknowns), then answer with:',
+    'Your tools are read-only on purpose: in this mode there is no way to write a file, commit, or delete anything, so investigate freely and propose -- never report a change as done.',
+    'Investigate first (read the repo and the workspace, search the web for unknowns), then answer with:',
     'a short goal statement, what you found in the code (file paths), a numbered step-by-step plan, risks, and open decisions.',
-    'Do not write or commit code in this mode. End by asking the user to switch to Build mode to execute.',
-    'Record the plan you propose as tasks with the task tools, so Build mode can pick it up rather than re-deriving it.',
+    'Record the plan you propose as tasks with the task tools, so Build mode picks it up rather than re-deriving it.',
+    'End by asking the user to switch to Build mode to execute.',
   ].join('\n'),
   build: [
-    'MODE: BUILD. You are executing agreed work. Be disciplined about it:',
+    'MODE: BUILD. You are executing agreed work, and this is the only mode with the tools to change anything. Be disciplined about it:',
     '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
     '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
-    '- Verify before claiming done: run what the repo offers (tests, build, lint) and report actual results.',
+    '- Verify before claiming done: run what the repo offers (tests, build, lint) -- with run_command when it is offered, and never claim a result you did not read.',
     // The todo list is the plan of record. Kept in the mode prompt rather than
     // added to each request, because this text never changes between turns and a
     // request that grows on every turn cannot be cached (#89).
     '- Work from the todo list: record the plan as tasks before a multi-step job, update each status as it moves, and when the request changes revise the list -- add what is new, drop what is no longer wanted -- rather than starting a second plan beside it.',
     '- Finish every todo before you report. If one is genuinely still open, name it and say why; never report the work as complete while the list says otherwise.',
     '- Summarize what changed, what you verified, and what you deliberately did not do.',
-    '- Commits still require the user\'s explicit approval through the app\'s commit confirmation.',
+    '- Commits and shell commands still require the user\'s explicit approval through the app\'s own confirmation, so ask for the command you want rather than a way around it.',
   ].join('\n'),
 };
 
@@ -210,6 +216,86 @@ function skillsAllowedForMode(mode) {
   if (mode === 'plan') return 'process';
   if (mode === 'build') return 'all';
   return 'none';
+}
+
+// --- What a mode may do, as a tool surface rather than a sentence ---
+//
+// A mode that only asks nicely is not a mode. opencode's plan mode is read-only
+// because the write tools are not in the request at all, which is the version
+// that holds: a model with a tool in front of it will reach for it, whatever the
+// instruction above says. So each mode gets its own list here, and the executor
+// refuses a write that arrives anyway -- a resumed turn from another mode, or a
+// model calling a tool from memory.
+//
+//   chat   research: the web, this workspace, connected repos -- all read-only
+//   plan   the same, plus the task list the plan is recorded in
+//   build  everything, and it is the only mode that changes anything
+//
+// A tool in no group is offered in every mode. That is deliberate for a name
+// this table has never seen: a read-only tool added later must not be locked out
+// of two modes by omission. Every *write* is listed in a write group below, and
+// those are the groups the executor checks, so a write added without one is
+// still stopped by the approval dialog every write already goes through.
+const TOOL_GROUPS = {
+  research: ['web_search', 'web_fetch'],
+  shell: ['run_command'],
+  workspaceRead: ['workspace_list_files', 'workspace_read_file', 'workspace_search_files'],
+  workspaceWrite: ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'],
+  repoRead: ['github_list_repos', 'github_list_files', 'github_read_file', 'github_search_code', 'github_list_commits', 'github_list_branches'],
+  repoWrite: ['github_commit_file', 'github_delete_file', 'github_create_branch'],
+  plan: ['task_list', 'task_add', 'task_update'],
+  skills: ['use_skill'],
+};
+
+const MODE_TOOL_GROUPS = {
+  chat: ['research', 'workspaceRead', 'repoRead'],
+  plan: ['research', 'workspaceRead', 'repoRead', 'plan', 'skills'],
+  build: ['research', 'workspaceRead', 'workspaceWrite', 'repoRead', 'repoWrite', 'plan', 'skills', 'shell'],
+};
+
+// The groups that change something outside this conversation: a file in the
+// workspace, a file in a repository. The task list is deliberately not one of
+// them -- a plan is a note to self, and Plan mode is exactly where it is written.
+const WRITE_TOOL_GROUPS = ['workspaceWrite', 'repoWrite', 'shell'];
+
+function toolGroupsForName(name) {
+  const wanted = String(name || '');
+  return Object.keys(TOOL_GROUPS).filter((group) => TOOL_GROUPS[group].includes(wanted));
+}
+
+function modeAllowsTool(mode, name) {
+  const groups = toolGroupsForName(name);
+  if (!groups.length) return true;
+  const allowed = MODE_TOOL_GROUPS[mode] || MODE_TOOL_GROUPS[DEFAULT_MODE];
+  return groups.every((group) => allowed.includes(group));
+}
+
+// What the model is actually offered, which is what a mode really is.
+//
+// Entries that name no tool are dropped rather than passed on: this list goes
+// straight into a request, and a provider rejects the whole turn over one
+// malformed spec -- so a filter is the wrong place to keep something unusable.
+function toolsForMode(mode, tools) {
+  return (Array.isArray(tools) ? tools : []).filter((tool) => {
+    const name = tool && tool.function && tool.function.name;
+    return typeof name === 'string' && name && modeAllowsTool(mode, name);
+  });
+}
+
+// The belt to those braces: a call that got through anyway is refused here.
+function modeBlocksWrite(mode, name) {
+  if (mode === 'build') return false;
+  const groups = toolGroupsForName(name);
+  return groups.some((group) => WRITE_TOOL_GROUPS.includes(group));
+}
+
+// What the model is told when it is refused, in the words a user would use.
+function modeWriteRefusal(mode, name) {
+  const label = mode === 'plan' ? 'Plan' : 'Chat';
+  const next = mode === 'plan'
+    ? 'Finish the plan and tell the user to switch to Build mode to execute it.'
+    : 'Describe what would change and say that Build mode is where it happens.';
+  return 'Refused: ' + label + ' mode is read-only, so ' + name + ' was not run. Nothing changed. ' + next;
 }
 
 // Token overlap between the request and a skill's name + description.
@@ -777,12 +863,17 @@ const CONCURRENT_SAFE_TOOLS = new Set([
   'github_list_repos',
   'github_list_files',
   'github_read_file',
+  // Code search and history are lookups too: a round that asks "where is this
+  // called" and "who touched it last" is two reads, and reads may share a wave.
+  'github_search_code',
+  'github_list_commits',
   'use_skill',
   // Workspace reads only. A write is absent on purpose, so it keeps running on
   // its own and cannot interleave with another call. The task writers are
   // absent for the same reason.
   'workspace_list_files',
   'workspace_read_file',
+  'workspace_search_files',
   'task_list',
 ]);
 
@@ -821,73 +912,6 @@ function batchIndices(indices, size = MAX_CONCURRENT_TOOLS) {
   return batches;
 }
 
-// The browser re-encodes an attached image before it is sent, because the chat
-// endpoint refuses bodies over 1MB while the attach menu allows images up to
-// 8MB. The cap sits below the server's with room for the prompt and history
-// still to fit, and the edge is what vision models are usually fed anyway.
-const MAX_IMAGE_DATA_URL_CHARS = 700000;
-const MAX_IMAGE_EDGE = 1600;
-
-// Whether a model is *known* to read images. Absent is not the same as capable:
-// the request would only fail, and the failure would read as the model being
-// broken rather than the picture being unsupported.
-function acceptsImages(model) {
-  return !!(model && model.vision === true);
-}
-
-// The model that should answer a turn carrying an image, or null when this
-// provider has none. A model that can already see is never swapped away from.
-function modelForImage(models, preferredId) {
-  const list = Array.isArray(models) ? models.filter((m) => m && m.id) : [];
-  if (acceptsImages(list.find((m) => m.id === preferredId))) return preferredId;
-  const capable = list.find(acceptsImages);
-  return capable ? capable.id : null;
-}
-
-// Only an inline image or a plain http(s) link may ride in a request. A
-// data:text/html or javascript: URL must never reach a provider.
-function isSendableImageUrl(url) {
-  return /^data:image\//i.test(String(url || '')) || /^https?:\/\//i.test(String(url || ''));
-}
-
-// Put an image on the turn as content parts, the shape every OpenAI-compatible
-// provider understands. Pure -- neither the array nor its messages are
-// touched, because the same conversation is re-sent when a model refuses.
-//
-// Throws on a URL that could not be sent rather than quietly returning a
-// text-only turn: silently dropping the image is the bug this exists to fix.
-function withImageTurn(messages, imageUrl, promptText) {
-  const list = Array.isArray(messages) ? messages : [];
-  const last = list[list.length - 1];
-  if (!last || last.role !== 'user') return list;
-  if (!isSendableImageUrl(imageUrl)) {
-    throw new Error('Refusing to send an image URL that is not a data:image or http(s) link');
-  }
-  // Already multimodal: leave the caller's own content parts alone.
-  if (Array.isArray(last.content)) return list;
-  const text = String(promptText || last.content || '').trim();
-  return [
-    ...list.slice(0, -1),
-    {
-      ...last,
-      content: [
-        { type: 'text', text: text || 'What is in this image?' },
-        { type: 'image_url', image_url: { url: imageUrl } },
-      ],
-    },
-  ];
-}
-
-// Extensions handled by each attach menu option. "document" files are parsed
-// client-side (PDF via pdf.js, DOCX via mammoth.js) into plain text; "file"
-// covers the original plain-text attach behavior.
-const DOCUMENT_EXTENSIONS = ['.pdf', '.docx'];
-
-function isDocumentFile(filename) {
-  const lower = String(filename).toLowerCase();
-  return DOCUMENT_EXTENSIONS.some((ext) => lower.endsWith(ext));
-}
-
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -895,13 +919,6 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-const ATTACHABLE_EXTENSIONS = ['.txt', '.md', '.csv', '.json', '.js', '.ts', '.log', '.yml', '.yaml'];
-
-function isAttachableFile(filename) {
-  const lower = String(filename).toLowerCase();
-  return ATTACHABLE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
 // Catches plain-language image requests ("generate an image of a fox",
@@ -948,6 +965,190 @@ function imageAction(text, hasImage = false, forced = false) {
   if (hasImage && (detectsImageEditIntent(text) || detectsImageIntent(text) || forced)) return 'edit';
   if (forced) return 'generate';
   return detectsImageIntent(text) ? 'generate' : 'chat';
+}
+
+// ---------------------------------------------------------------------------
+// What kind of image turn is this, and what does the image model get told?
+//
+// ChatGPT does neither of those with keywords: the model reads the conversation,
+// chooses generate or edit, and writes the prompt the image model actually
+// receives -- the API hands it back as `revised_prompt`. This app's first
+// version did the opposite. A regex picked generate-vs-edit from the raw text,
+// and the raw text was sent on as the prompt. That is why "make the sky purple"
+// with a photo attached answered *about* the photo instead of editing it: no
+// verb-and-noun pair in the pattern matched, so the turn fell through to a
+// vision chat and could never reach an image model at all.
+//
+// The rules below keep the deterministic decision as a *floor* rather than
+// replacing it, because the failure it exists to prevent is worth keeping fixed:
+// an attached picture must never become a fresh text-only render (the bug that
+// drew a poster of a car where a recoloured one was asked for). A turn the
+// pattern is sure about stays that kind of turn whatever the planner says; the
+// planner can only move a turn *into* image work, never out of it.
+//
+// The planner is consulted only for turns that could plausibly be image work --
+// something attached, or a plain-language draw request -- so an ordinary chat
+// message never pays for the extra call.
+const IMAGE_PLAN_ACTIONS = ['generate', 'edit', 'chat'];
+const MAX_IMAGE_PROMPT_CHARS = 1200;
+
+// Written as a contract rather than a conversation, because the reply has to be
+// parseable. The instruction not to leave pronouns in the prompt is the one that
+// matters most: "make it warmer" reaches a text-to-image model with nothing to
+// warm, and a prompt referring to "the attached image" reaches it with a phrase
+// no image model can resolve.
+const IMAGE_PLANNER_PROMPT = [
+  'You decide how an image request is handled. Reply with one JSON object and nothing else.',
+  '',
+  '{"action": "generate" | "edit" | "chat", "prompt": "..."}',
+  '',
+  '- "generate": draw a new picture from scratch.',
+  '- "edit": change something in a picture the user supplied, or in the picture already shown in this chat, keeping the rest of it.',
+  '- "chat": a question about a picture, or code or prose that merely mentions images. Nothing is drawn.',
+  '',
+  'The prompt you return is sent to the image model verbatim, so:',
+  '- For "edit", say only what changes and what must stay: "recolour the car deep red; keep the wheels, the number plate and the background unchanged".',
+  '- For "generate", write a self-contained description with subject, style and framing. Leave no pronoun such as "it" or "this" in it.',
+  '- Write the prompt in English even when the request is not, and never mention the user, this chat, or "the attached image".',
+  '- For "chat", return an empty prompt.',
+].join('\n');
+
+// Models wrap JSON in prose or a code fence however firmly they are told not to,
+// so the first object in the reply is read rather than the whole body. Anything
+// that does not parse is no plan at all, which leaves the deterministic floor in
+// charge -- never a half-understood action guessing at what to draw.
+function parseImagePlan(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const action = String(parsed.action || '').toLowerCase().trim();
+  if (!IMAGE_PLAN_ACTIONS.includes(action)) return null;
+  const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim().slice(0, MAX_IMAGE_PROMPT_CHARS) : '';
+  return { action, prompt };
+}
+
+// --- Reading a drawing back against the request -------------------------------
+//
+// The prompt an image model receives is a rewrite of what the user said, and the
+// picture is judged -- by the person who asked -- against what they said, never
+// against the rewrite. Nothing compared the two: a drawing that met its prompt but
+// missed the request looked exactly like a good one, and the only signal was the
+// user noticing. One short question, asked of a model that can see the picture,
+// closes that loop.
+const IMAGE_CHECK_PROMPT = [
+  'You are shown a picture that was just drawn, the request that asked for it, and the prompt the image model was given.',
+  'Decide whether the picture shows what the request asked for. Judge the picture, not the prompt.',
+  'Be strict about words in the picture (wording and spelling), about counts, and about anything the request named that is missing or wrong.',
+  'Ignore style, quality and taste. Do not describe the picture.',
+  'Reply with one line and nothing else:',
+  'MATCHES',
+  'or',
+  'MISSED: <the single thing that differs, at most 12 words, in the terms the request used>',
+].join('\n');
+
+const MAX_IMAGE_CHECK_CHARS = 160;
+
+// What the checking call is shown, in that order: the words that asked, then the
+// words that drew. Both, because the two disagreeing is the whole point.
+function imageCheckQuestion(requestText, promptText) {
+  const text = (value) => String(value == null ? '' : value).trim();
+  return ['The request:', text(requestText), '', 'The prompt the image model was given:', text(promptText)].join('\n');
+}
+
+// 'MATCHES', or 'MISSED: the sign reads HLLO'. Anything else -- a description, a
+// hedge, a miss with nothing named -- is no verdict at all, which leaves no note
+// rather than a guess.
+// The prompt for a second attempt at a picture the reviewer found wanting.
+//
+// The difference is already the instruction -- the reviewer names one thing that
+// is wrong, in the words of the request -- so it is folded in verbatim rather
+// than paraphrased: a rewrite is a second chance to lose the one fact the retry
+// exists for. Either half missing is no prompt, because a fix with nothing to
+// fix would spend a render on the same picture, and an empty prompt is not what
+// an image service should be sent.
+function imageCheckFixPrompt(promptText, missed) {
+  const prompt = String(promptText == null ? '' : promptText).trim();
+  const difference = String(missed == null ? '' : missed).trim().slice(0, MAX_IMAGE_CHECK_CHARS);
+  if (!prompt || !difference) return '';
+  return prompt + '\n\nCorrect this in the next attempt: ' + difference;
+}
+
+const IMAGE_CHECK_ANSWER = /^\s*(match\w*|miss\w*|no)\b[\s:,.\u2026\u2013\u2014-]*(.*)$/i;
+
+function parseImageCheck(text) {
+  const lines = String(text == null ? '' : text).split('\n').map((line) => line.trim()).filter(Boolean);
+  // The verdict line, not the first line: models like to introduce themselves.
+  const verdict = lines.map((line) => IMAGE_CHECK_ANSWER.exec(line)).find(Boolean);
+  if (!verdict) return null;
+  if (/^match/i.test(verdict[1])) return { matches: true, missed: '' };
+  const missed = verdict[2].replace(/^["\u201c'\s]+|["\u201d'\s.]+$/g, '').trim().slice(0, MAX_IMAGE_CHECK_CHARS);
+  return missed ? { matches: false, missed } : null;
+}
+
+// The floor plus the plan, as one rule. `fallback` is what imageAction() decided
+// from the text alone, and it wins whenever the plan cannot make the turn
+// *better*: an edit stays an edit, a draw request stays a draw request, and a
+// plain chat message only becomes image work when there is something to work
+// from (an attachment, or a picture already in this chat) or the image toggle
+// says so. Without those guards a chat that merely sounded like a description
+// would start rendering pictures nobody asked for.
+//
+// The one asymmetry worth stating: a plan may ask for a *generation* only when
+// the user turned the image toggle on. With a picture attached, "generate" would
+// mean ignoring the picture -- the poster-of-a-car bug -- and the whole point of
+// the deterministic floor is that no reading of the request can get back there.
+// A follow-up that genuinely wants a new picture from an old one says so, and
+// the toggle is right there.
+function resolveImageAction(fallback, plan, options = {}) {
+  const hasImage = !!(options && options.hasImage);
+  const hasPreviousImage = !!(options && options.hasPreviousImage);
+  const forced = !!(options && options.forced);
+  const source = hasImage || hasPreviousImage;
+  if (fallback === 'edit') return 'edit';
+  if (fallback === 'generate') {
+    if (plan && plan.action === 'edit' && source) return 'edit';
+    return 'generate';
+  }
+  if (!plan) return 'chat';
+  if (plan.action === 'edit' && source) return 'edit';
+  if (plan.action === 'generate' && forced) return 'generate';
+  return 'chat';
+}
+
+// The newest picture already in the conversation, which is what "now make it
+// look realistic" is about. Chat keeps every generated picture it stores (see
+// storedImagePlan), so the previous turn's image is the source of the next
+// edit -- without it, multi-turn editing is impossible: no API hands an image
+// model a picture the client cannot name, and re-attaching your own output by
+// hand is not a thing anyone does.
+// `urlOf` says how to get a showable URL out of one stored entry. It exists
+// because an entry no longer always has one: a picture kept in the index is
+// named by an id, and the page holds the readable form (see image-store.js).
+// The default reads the entry's own url, which is what a link or an inline copy
+// has, so callers that only ever see those need not pass anything.
+function lastImageInMessages(messages, urlOf) {
+  const list = Array.isArray(messages) ? messages : [];
+  const read = typeof urlOf === 'function' ? urlOf : (im) => (typeof im.url === 'string' ? im.url : '');
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const entry = list[i];
+    const images = entry && Array.isArray(entry.images) ? entry.images : [];
+    for (let j = images.length - 1; j >= 0; j -= 1) {
+      const image = images[j];
+      if (!image) continue;
+      const url = read(image);
+      if (url) return { url, prompt: String(image.prompt || '') };
+    }
+  }
+  return null;
 }
 
 // Applies **bold**, *italic*, `inline code`, fenced code blocks, -/1. lists and
@@ -1115,6 +1316,38 @@ const GITHUB_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'github_search_code',
+      description: 'Search the code inside one repository for a word or phrase and get back the matching files and lines. Use it to find where something is defined or used before reading whole files -- much cheaper than listing directories and guessing. GitHub indexes the default branch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          query: { type: 'string', description: 'The text to find, e.g. "handleSendMessage" or "TODO(perf)".' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
+        },
+        required: ['repo', 'query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_commits',
+      description: 'List the most recent commits on a repository (or on one file). Use it to see what changed lately and who changed it, which is often the fastest way to find the code responsible for a bug.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Only commits that touched this path, e.g. "src/index.js". Omit for the whole repository.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'github_commit_file',
       description: 'Write a file to a repository and commit it. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every commit before it happens.',
       parameters: {
@@ -1122,11 +1355,63 @@ const GITHUB_TOOLS = [
         properties: {
           repo: { type: 'string', description: 'Repository as "owner/name".' },
           path: { type: 'string', description: 'Path to the file inside the repo.' },
+          branch: { type: 'string', description: 'Branch to commit to. Omit for the repository default. github_list_branches says which branches exist.' },
           content: { type: 'string', description: 'The complete new contents of the file.' },
           message: { type: 'string', description: 'Commit message.' },
           account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo; github_list_repos reports the right value.' },
         },
         required: ['repo', 'path', 'content', 'message'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_delete_file',
+      description: 'Delete one file from a repository and commit the deletion. The user is asked to approve it, the same way every commit is.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          path: { type: 'string', description: 'Path of the file to delete inside the repo.' },
+          branch: { type: 'string', description: 'Branch to delete from. Omit for the repository default.' },
+          message: { type: 'string', description: 'Commit message.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo', 'path', 'message'],
+      },
+    },
+  },
+
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_branches',
+      description: 'List the branches of a repository and say which one is the default. Read this before writing to a repository you have not written to in this conversation: a repo whose only branch is something like "claude/some-feature" answers 404 for every read that assumes "main".',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_create_branch',
+      description: 'Create a branch in a repository, from another branch or from the repository default. Use it rather than telling the user to make the branch themselves. Creating a branch that already exists is reported as such and is not an error. The user is asked to approve it, as with every repository write.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repository as "owner/name".' },
+          branch: { type: 'string', description: 'Name of the branch to create, e.g. "main".' },
+          from: { type: 'string', description: 'Branch to start it from. Omit for the repository default.' },
+          account: { type: 'string', description: 'Which connected GitHub account to act as. Only needed when the repo is not owned by one of them, e.g. an organisation repo.' },
+        },
+        required: ['repo', 'branch'],
       },
     },
   },
@@ -1156,8 +1441,17 @@ const TOOL_ROUNDS_EXHAUSTED_PROMPT =
 
 const GITHUB_TOOL_NAMES = GITHUB_TOOLS.map((t) => t.function.name);
 
+const GITHUB_WRITE_TOOL_NAMES = ['github_commit_file', 'github_delete_file', 'github_create_branch'];
+
 function isGithubTool(name) {
   return GITHUB_TOOL_NAMES.includes(name);
+}
+
+// The two that change a repository. Named here rather than at the call sites so
+// the mode surface, the commit confirmation and any secret-file guard all agree
+// about what a write is.
+function isGithubWriteTool(name) {
+  return GITHUB_WRITE_TOOL_NAMES.includes(name);
 }
 
 // Web research, available in every chat with no account needed. The model
@@ -1238,8 +1532,23 @@ const WORKSPACE_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'workspace_search_files',
+      description: 'Search every file in the workspace for a piece of text. Returns "path: line: text" for each match, so it is how you find where something is written before reading whole files. Plain text, not a regular expression, and case-insensitive.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The text to look for, e.g. "TODO" or "function handleSend".' },
+          path: { type: 'string', description: 'Folder to search inside, e.g. "notes". Empty string or omitted searches every file.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'workspace_write_file',
-      description: 'Write a text file in the workspace, creating it or replacing it whole. The content replaces the whole file, so send the complete new text, not a diff. The user is asked to approve every write before it happens.',
+      description: 'Write a text file in the workspace, creating it or replacing it whole. The content replaces the whole file, so send the complete new text, not a diff. To change part of a file that already exists, prefer workspace_edit_file. The user is asked to approve every write before it happens.',
       parameters: {
         type: 'object',
         properties: {
@@ -1250,9 +1559,79 @@ const WORKSPACE_TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_edit_file',
+      description: 'Change part of a workspace file: old_text is replaced by new_text. Read the file first and copy old_text from it exactly. old_text must appear exactly once unless all is true, so an edit can never land somewhere you did not mean. The user is asked to approve every edit before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file to change, e.g. "notes/todo.md".' },
+          old_text: { type: 'string', description: 'The exact text to replace, copied from the file.' },
+          new_text: { type: 'string', description: 'What to put in its place. An empty string deletes the old text.' },
+          all: { type: 'boolean', description: 'Replace every occurrence instead of requiring exactly one.' },
+        },
+        required: ['path', 'old_text', 'new_text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_delete_file',
+      description: 'Delete a file from the workspace. The user is asked to approve every delete before it happens.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the file to delete, e.g. "notes/todo.md".' },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
 const WORKSPACE_TOOL_NAMES = WORKSPACE_TOOLS.map((t) => t.function.name);
+
+// A command that runs on the server, which is the one tool here that can do
+// something the user cannot take back. The model's scratch space is
+// browser-local, so a script has nowhere to run -- writing and *executing* a file
+// needs a real machine, and this is it.
+//
+// Build mode only: the shell is a write in every sense that matters, and the
+// server refuses it outright unless the operator has enabled it (WORKSPACE_RUN in
+// server.js), so on a deployment where it was never turned on the model gets one
+// plain sentence back rather than a broken tool. Every command is also put to the
+// user verbatim before it runs, which is where the real decision is made.
+const RUN_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Run a shell command on the server and read its output: write and run a script, generate a file, run tests. It runs in a scratch directory on the server, not on the user\'s computer, and what comes back is stdout, stderr, the exit code, the shell it used and the files now in that directory. Write a script and run it in one command -- on bash a quoted heredoc so nothing is expanded on the way in (cat > make.js <<\'EOF\' ... EOF), then node make.js; the result names the shell, so write for the one you are given. The user is asked to approve every command before it runs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'The shell command to run, e.g. "node make.js".' },
+          cwd: { type: 'string', description: 'Folder inside the workspace to run in. Omit to run at the workspace root.' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+];
+
+const RUN_TOOL_NAMES = RUN_TOOLS.map((t) => t.function.name);
+
+function isRunTool(name) {
+  return RUN_TOOL_NAMES.includes(name);
+}
+
+// Which of them read and which of them change the store. The split is what the
+// mode surface and the parallel-safety rule both key off, so it is one list
+// rather than two spellings of the same idea.
+const WORKSPACE_WRITE_TOOL_NAMES = ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'];
 
 function isWorkspaceTool(name) {
   return WORKSPACE_TOOL_NAMES.includes(name);
@@ -1261,7 +1640,7 @@ function isWorkspaceTool(name) {
 // A write is never parallel-safe, however it is spelled: two writes to one path
 // in the same round is a race whose loser disappears without a trace.
 function isWorkspaceWriteTool(name) {
-  return name === 'workspace_write_file';
+  return WORKSPACE_WRITE_TOOL_NAMES.includes(name);
 }
 
 // Caps, so one runaway turn cannot fill the browser's storage. localStorage
@@ -1359,6 +1738,105 @@ function workspaceWrite(files, path, content) {
     return { error: 'That would put the workspace at ' + total + ' characters; the limit is ' + MAX_WORKSPACE_TOTAL_CHARS + '.' };
   }
   return { files: store, path: target, chars: text.length, created, totalFiles: names.length };
+}
+
+// A delete hands back a new store, like a write: the caller decides whether to
+// keep it, and a refused delete leaves the workspace exactly as it was.
+function workspaceDelete(files, path) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const store = files && typeof files === 'object' ? files : {};
+  if (!Object.prototype.hasOwnProperty.call(store, target)) {
+    const names = workspaceFileNames(store);
+    return {
+      error: 'No file at "' + target + '".' + (names.length ? ' Existing files: ' + names.join(', ') : ' The workspace is empty.'),
+    };
+  }
+  const next = Object.assign({}, store);
+  delete next[target];
+  return { files: next, path: target, totalFiles: workspaceFileNames(next).length };
+}
+
+// Change part of a file, with the match count checked before anything moves.
+//
+// An edit that cannot see its own target must not guess: a model that guessed
+// would write the change into the first place that looked close, which is worse
+// than a failed call because it looks like success. So a missing old_text, or
+// one that appears more than once without `all`, is refused with the count.
+function workspaceEdit(files, path, oldText, newText, all) {
+  const target = normalizeWorkspacePath(path);
+  if (target === null) return { error: 'Invalid file path.' };
+  const store = files && typeof files === 'object' ? files : {};
+  if (!Object.prototype.hasOwnProperty.call(store, target)) {
+    const names = workspaceFileNames(store);
+    return {
+      error: 'No file at "' + target + '".' + (names.length ? ' Existing files: ' + names.join(', ') : ' The workspace is empty.'),
+    };
+  }
+  const from = typeof oldText === 'string' ? oldText : '';
+  if (!from) return { error: 'old_text is required, and must be text copied from the file.' };
+  const to = typeof newText === 'string' ? newText : newText == null ? '' : String(newText);
+  const content = String(store[target]);
+  let count = 0;
+  for (let i = content.indexOf(from); i !== -1; i = content.indexOf(from, i + from.length)) count += 1;
+  if (!count) {
+    return { error: 'old_text does not appear in "' + target + '". Read the file and copy the text exactly, whitespace included.' };
+  }
+  if (count > 1 && all !== true) {
+    return {
+      error: 'old_text appears ' + count + ' times in "' + target + '". Include more surrounding text to make it unique, or pass all: true to replace every occurrence.',
+    };
+  }
+  const next = Object.assign({}, store);
+  next[target] = all === true ? content.split(from).join(to) : content.replace(from, to);
+  const written = next[target];
+  if (written.length > MAX_WORKSPACE_FILE_CHARS) {
+    return { error: 'That edit would make the file ' + written.length + ' characters; the limit is ' + MAX_WORKSPACE_FILE_CHARS + '.' };
+  }
+  const total = workspaceFileNames(next).reduce((sum, name) => sum + String(next[name]).length, 0);
+  if (total > MAX_WORKSPACE_TOTAL_CHARS) {
+    return { error: 'That would put the workspace at ' + total + ' characters; the limit is ' + MAX_WORKSPACE_TOTAL_CHARS + '.' };
+  }
+  return {
+    files: next,
+    path: target,
+    replaced: all === true ? count : 1,
+    occurrences: count,
+    totalFiles: workspaceFileNames(next).length,
+  };
+}
+
+// Find text across the workspace without reading every file into the prompt.
+// The line number is what makes a result usable: a match with no position is a
+// note that something is in there somewhere, which costs a read to act on.
+const MAX_WORKSPACE_SEARCH_MATCHES = 60;
+const MAX_WORKSPACE_SEARCH_LINE_CHARS = 200;
+
+function workspaceSearch(files, query, dir) {
+  const needle = String(query == null ? '' : query);
+  if (!needle.trim()) return { error: 'query is required.' };
+  const wanted = String(dir == null ? '' : dir).trim();
+  const base = wanted ? normalizeWorkspacePath(wanted) : '';
+  if (base === null) return { error: 'Invalid folder path.' };
+  const prefix = base ? base + '/' : '';
+  // Case-insensitive on purpose, and stated in the tool description: a search
+  // that misses on capitalisation is the one that makes an agent read more files
+  // than it needed to, while an edit stays exact.
+  const low = needle.toLowerCase();
+  const store = files && typeof files === 'object' ? files : {};
+  const matches = [];
+  let truncated = false;
+  for (const path of workspaceFileNames(store)) {
+    if (!path.startsWith(prefix)) continue;
+    const lines = String(store[path]).split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!lines[i].toLowerCase().includes(low)) continue;
+      if (matches.length >= MAX_WORKSPACE_SEARCH_MATCHES) { truncated = true; break; }
+      matches.push({ path, line: i + 1, text: lines[i].trim().slice(0, MAX_WORKSPACE_SEARCH_LINE_CHARS) });
+    }
+    if (truncated) break;
+  }
+  return { matches, truncated, root: base };
 }
 
 // A small task list the model keeps between turns, so work that spans several
@@ -1686,31 +2164,278 @@ function isTaskWriteTool(name) {
   return name === 'task_add' || name === 'task_update';
 }
 
-// Where an image can come from. Puter is the app's own account and is used
-// when it is signed in; our server route fronts a provider with an
-// image-capable model, so a setup that never signs in to Puter can still draw
-// instead of being told to sign in to something it wasn't using.
+// Where an image can come from. Our server route fronts a provider with an
+// image-capable model and is the everyday backend; Puter is the app's own
+// account and draws only when it is asked for by name.
 const IMAGE_BACKENDS = ['puter', 'server'];
+
+// Which image models each kind of work is asked of, best first.
+//
+// Puter documents Sunburst as the one to pick when editing precision matters and
+// Flare as the fast everyday *generation* model. The app pinned gpt-image-2 and
+// gpt-image-1.5 for both jobs, so every edit was made by a generation-leaning
+// model that predates both of those -- the class of mistake that shows up as an
+// edit drifting away from its source. The chains keep a second and third choice,
+// because a Puter account can be refused one model without losing the rest.
+const IMAGE_GENERATE_MODELS = ['gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5'];
+const IMAGE_EDIT_MODELS = ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2'];
+
+function imageModelsFor(kind) {
+  return kind === 'edit' ? IMAGE_EDIT_MODELS.slice() : IMAGE_GENERATE_MODELS.slice();
+}
+
+// Puter draws at 'low' when nothing asks for better, and nothing did: every
+// picture this app has produced was rendered at the bottom quality tier while
+// paying the same credits. 'high' is the tier the models are documented to look
+// like; the server route asks its upstream for the same thing.
+const IMAGE_QUALITY = 'high';
+
+// --- The size a picture was asked for ---
+//
+// The request used to carry no dimensions at all, which is the whole of "I asked
+// for a wide one and got a square": every service drew its own default and the
+// user found out in the download. Reading the size out of the prompt fixes that
+// without adding a sixth control to a composer that is already crowded, and it
+// matches how the request is actually written -- "a 16:9 banner", "1536x1024",
+// "a tall phone wallpaper".
+//
+// One choice, three readings: an OpenAI-shaped images API wants "1536x1024",
+// Puter's txt2img wants the ratio as {w, h}, and a Together model wants pixels.
+// Nothing downstream re-derives them.
+const IMAGE_SIZE_PRESETS = [
+  { id: 'square', label: '1:1', width: 1024, height: 1024, ratio: { w: 1, h: 1 } },
+  { id: 'landscape', label: '3:2', width: 1536, height: 1024, ratio: { w: 3, h: 2 } },
+  { id: 'portrait', label: '2:3', width: 1024, height: 1536, ratio: { w: 2, h: 3 } },
+  { id: 'wide', label: '16:9', width: 1536, height: 864, ratio: { w: 16, h: 9 } },
+  { id: 'tall', label: '9:16', width: 864, height: 1536, ratio: { w: 9, h: 16 } },
+];
+
+// The words that mean a shape, and the shape they mean. `square` is checked
+// before the orientation words so "square 16:9-ish crop" does not become a
+// widescreen request, and `portrait` on its own is deliberately absent: "a
+// portrait of a woman" is a subject, and turning that into a 2:3 frame would be
+// the app inventing a layout nobody asked for. "portrait orientation" is the
+// phrase that does mean the frame.
+const IMAGE_SIZE_WORDS = [
+  { id: 'square', words: ['square'] },
+  { id: 'wide', words: ['widescreen', 'wide', 'cinematic', '16:9', 'banner', 'youtube thumbnail', 'desktop wallpaper'] },
+  { id: 'tall', words: ['9:16', 'reels', 'reel', 'story', 'stories', 'tiktok', 'phone wallpaper', 'mobile wallpaper'] },
+  { id: 'landscape', words: ['landscape', 'horizontal', '3:2', 'postcard'] },
+  { id: 'portrait', words: ['portrait orientation', 'portrait mode', 'vertical', '2:3', 'poster', 'book cover'] },
+];
+
+function imageSizePreset(id) {
+  return IMAGE_SIZE_PRESETS.find((preset) => preset.id === id) || null;
+}
+
+// A pair of numbers as a label: 1536x1024 is 3:2, and saying so is how a user
+// can tell a request that was understood from one that was ignored.
+function imageRatioLabel(width, height) {
+  const w = Math.round(Number(width) || 0);
+  const h = Math.round(Number(height) || 0);
+  if (!w || !h) return '';
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const divisor = gcd(w, h) || 1;
+  return w / divisor + ':' + h / divisor;
+}
+
+// The size a prompt asks for, or null for "let the service choose". Explicit
+// pixels win over an explicit ratio, and both win over a shape word, because
+// that is the order of specificity -- "16:9 at 2048x1152" is a 2048x1152 image.
+//
+// `words: false` is for an edit. "Make the poster blue" is an instruction about a
+// picture that already exists, and reshaping it because the sentence happened to
+// contain a shape word would crop something the user only asked to recolour. An
+// edit still honours dimensions or a ratio that were spelled out: those are a
+// request for a shape rather than a passing mention of one.
+function imageSizeFromPrompt(promptText, options) {
+  const text = String(promptText || '').toLowerCase();
+  if (!text) return null;
+  const wordsCount = !(options && options.words === false);
+  const pixels = /(\d{2,5})\s*[x×]\s*(\d{2,5})/.exec(text);
+  if (pixels) {
+    const width = Number(pixels[1]);
+    const height = Number(pixels[2]);
+    // Small numbers are proportions ("3x2 sticker shapes") and enormous ones are
+    // not dimensions this app could ask anyone for.
+    if (width >= 64 && height >= 64 && width <= 4096 && height <= 4096) {
+      return { id: 'exact', label: imageRatioLabel(width, height), width, height, ratio: { w: width, h: height } };
+    }
+  }
+  const ratio = /(?<!\d)(\d{1,2})\s*:\s*(\d{1,2})(?!\d)/.exec(text);
+  if (ratio) {
+    const w = Number(ratio[1]);
+    const h = Number(ratio[2]);
+    if (w && h && w <= 32 && h <= 32) {
+      // Scaled to something a service will actually draw: a 21:9 request is
+      // 1536x658, not 21x9.
+      const long = 1536;
+      const scale = long / Math.max(w, h);
+      return {
+        id: 'ratio',
+        label: w + ':' + h,
+        width: Math.max(64, Math.round(w * scale)),
+        height: Math.max(64, Math.round(h * scale)),
+        ratio: { w, h },
+      };
+    }
+  }
+  if (!wordsCount) return null;
+  for (const entry of IMAGE_SIZE_WORDS) {
+    for (const word of entry.words) {
+      // Word boundaries on both sides, so "wide" does not fire on "widespread"
+      // and "story" does not fire on "history".
+      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp('(^|[^a-z0-9])' + escaped + '([^a-z0-9]|$)', 'i').test(text)) {
+        const preset = imageSizePreset(entry.id);
+        if (preset) return { ...preset, words: true };
+      }
+    }
+  }
+  return null;
+}
+
+// What an OpenAI-shaped images endpoint wants in its `size` field, or '' to send
+// nothing and let the service do as it likes.
+function imageSizeBody(size) {
+  if (!size || !size.width || !size.height) return '';
+  return Math.round(size.width) + 'x' + Math.round(size.height);
+}
+
+// What Puter's txt2img wants. Its `ratio` is documented as {w, h} and is the one
+// field every Puter image provider understands, which is why the pixel pair is
+// not sent to it: an unrecognised option there is a failed draw.
+function imageRatioBody(size) {
+  if (!size || !size.ratio) return null;
+  return { w: size.ratio.w, h: size.ratio.h };
+}
+
+// How far off a shape may be and still count as the shape that was asked for.
+// Two percent: providers round a ratio to the grid their model draws on, and
+// 1536x1024 against 1530x1020 is the same picture to anyone looking at it.
+const SHAPE_TOLERANCE = 0.02;
+
+// Whether the drawing is a different shape from the one that was asked for.
+// The one test behind both answers to that question -- saying so, and cutting it
+// to the shape -- so the two can never disagree about a picture.
+function imageShapeIsOff(size, drawnWidth, drawnHeight) {
+  const w = Math.round(Number(drawnWidth) || 0);
+  const h = Math.round(Number(drawnHeight) || 0);
+  if (!size || !size.width || !size.height || !w || !h) return false;
+  const asked = size.width / size.height;
+  return Math.abs(asked - w / h) / asked > SHAPE_TOLERANCE;
+}
+
+// The sentence for a picture that came back a different shape from the one that
+// was asked for. Silence would be the same silence that produced the complaint:
+// the user is looking at a square and believes they asked for a square.
+//
+// `reframed` is the cut that was made, when one was: the sentence then names the
+// shape the picture has rather than only the one it arrived as, because the
+// second is the answer and the first is the reason.
+function describeDrawnSize(size, drawnWidth, drawnHeight, reframed) {
+  const w = Math.round(Number(drawnWidth) || 0);
+  const h = Math.round(Number(drawnHeight) || 0);
+  if (!imageShapeIsOff(size, w, h)) return '';
+  const drawn = 'drawn ' + imageRatioLabel(w, h) + ' (' + w + '×' + h + ')';
+  const cut = reframed && reframed.width && reframed.height ? reframed : null;
+  if (cut) {
+    return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), ' + drawn +
+      ' — cut to ' + imageRatioLabel(cut.width, cut.height) + ' (' + cut.width + '×' + cut.height + ')';
+  }
+  return 'asked for ' + size.label + ' (' + imageSizeBody(size) + '), ' + drawn;
+}
+
+// The largest rectangle of the shape that was asked for, taken from the middle
+// of the picture that came back. Null when there is nothing worth cutting.
+//
+// This is where "ask for a size and get it" stops being a measurement and
+// becomes an answer. Every service is asked for the shape and not every service
+// honours it; the app used to measure the result, say "drawn 1:1" on the status
+// line, and hand the square over anyway. A 1024x1024 drawing for a 16:9 request
+// already contains a 1024x576 picture, and that picture is the one the request
+// described -- so it is cut out rather than reported on.
+//
+// Nothing is upscaled and nothing is padded, so a service that draws small
+// still draws small; it just draws the shape that was asked for. A cut that
+// would leave a sliver is refused, because 2000x120 is not a banner.
+const MIN_REFRAME_EDGE = 64;
+
+function reframePlan(size, drawnWidth, drawnHeight) {
+  const width = Math.round(Number(drawnWidth) || 0);
+  const height = Math.round(Number(drawnHeight) || 0);
+  if (!imageShapeIsOff(size, width, height)) return null;
+  const aspect = size.width / size.height;
+  const cut = width >= height * aspect
+    ? { width: Math.round(height * aspect), height }
+    : { width, height: Math.round(width / aspect) };
+  if (cut.width < MIN_REFRAME_EDGE || cut.height < MIN_REFRAME_EDGE) return null;
+  return {
+    x: Math.round((width - cut.width) / 2),
+    y: Math.round((height - cut.height) / 2),
+    width: cut.width,
+    height: cut.height,
+  };
+}
+
+// A refusal is the *prompt's* fault -- not the account's, and not that model's.
+// Trying the next model, and then the other backend, buys the same answer a
+// second time and reads to the user as a hang rather than a decision. Puter
+// reports it as errorCode 'moderation_flagged'; the phrasings below catch the
+// fronts that report it as plain prose.
+function isModerationRefusal(error) {
+  const message = String((error && (error.message || error.error || error.errorCode || error)) || '');
+  if (!message) return false;
+  if (/moderation_flagged/i.test(message)) return true;
+  return /content policy|safety (system|filter)|moderation|prohibited|violates? (our|the) (polic|usage)/i.test(message);
+}
+
+// What to say when every backend answered the same way: reword it. Naming the
+// backends is right for a transport failure and wrong here -- nothing was broken.
+const IMAGE_REFUSAL_ADVICE =
+  'The image service refused that request under its content policy. Reword the prompt — drop real names, logos and graphic detail — and try again.';
 
 function imageBackendOrder(options) {
   // A destructuring default only covers `undefined`, so null and junk are read
   // here too: "no options" must mean "the route", never a crash or an empty
   // list of backends to try.
   const puterSignedIn = !!(options && options.puterSignedIn);
-  // The server route is always behind Puter: Puter is already paid for by the
-  // signed-in account, while the route costs an API key that may not be set.
-  return puterSignedIn ? ['puter', 'server'] : ['server'];
+  const puterChosen = !!(options && options.puterChosen);
+  // Puter is opt-in, and it is opt-in because of what it costs. A Puter account
+  // has a fixed monthly allowance of credits that does not roll over, and one
+  // picture spends a visible slice of it, where the server route spends a free
+  // provider key. So an image nobody pointed at Puter goes to the route, and a
+  // route that fails says so rather than quietly billing the allowance -- an
+  // automatic fallback is exactly how the month's credits disappear into
+  // pictures the user never chose to pay for.
+  //
+  // Being *on* Puter for chat is not that choice either: chat is cheap there and
+  // images are not, so the picker deciding the conversation must not also decide
+  // to spend credits on every drawing.
+  if (!puterSignedIn || !puterChosen) return ['server'];
+  // With Puter asked for, one thing still puts the route first: a painted brush
+  // mask. Puter's image options have no mask field at all, so the route is the
+  // only backend that can express it -- asking Puter first would silently ignore
+  // the region the user painted and edit the whole picture instead. The caller
+  // falls back to Puter without the mask if the route refuses, and says so.
+  return options.serverFirst ? ['server', 'puter'] : ['puter', 'server'];
 }
 
 // When every backend fails, the useful thing to report is what was tried and
 // what stopped each one. Reporting only the last error meant a provider-only
 // setup was told "Puter is not signed in" -- true, and not the reason.
-function imageFailureMessage({ puterError = '', serverError = '' } = {}, verb = 'generate') {
+function imageFailureMessage({ puterError = '', serverError = '', puterAvailable = false } = {}, verb = 'generate') {
   const tried = [];
   if (puterError) tried.push('Puter (' + puterError + ')');
   if (serverError) tried.push('the server image route (' + serverError + ')');
-  if (!tried.length) return 'Could not ' + verb + ' an image: no backend was available.';
-  return 'Could not ' + verb + ' an image. Tried ' + tried.join(' and ') + '.';
+  // Puter sitting there unused is the one fact that turns this message into
+  // something the user can act on, so it is only offered when it really is a
+  // way out: signed in, and not already one of the things that just failed.
+  const offer = puterAvailable && !puterError
+    ? ' Turn on “Draw with Puter” in the session panel to spend Puter credits on this one instead.'
+    : '';
+  if (!tried.length) return 'Could not ' + verb + ' an image: no backend was available.' + offer;
+  return 'Could not ' + verb + ' an image. Tried ' + tried.join(' and ') + '.' + offer;
 }
 
 // Whether a turn needs a Puter account before it can start.
@@ -1878,12 +2603,28 @@ function describeToolCall(name, args = {}) {
       return `Listing ${args.path ? `"${args.path}" in ` : 'the root of '}${repo}`;
     case 'github_read_file':
       return `Reading "${args.path || '?'}" from ${repo}${as}`;
+    case 'github_search_code':
+      return `Searching ${repo}${as} for "${args.query || '?'}"`;
+    case 'github_list_commits':
+      return `Listing recent commits in ${repo}${args.path ? ` (${args.path})` : ''}${as}`;
+    case 'github_list_branches':
+      return `Listing the branches of ${repo}${as}`;
+    case 'github_create_branch':
+      return `Creating branch "${args.branch || '?'}" in ${repo}${args.from ? ` from ${args.from}` : ''}${as}`;
+    case 'github_delete_file': {
+      const owner = args.account || String(args.repo || '').split('/')[0];
+      const on = args.branch ? ` on ${args.branch}` : '';
+      return `Deleting "${args.path || '?'}" from ${repo}${on}${owner ? ` as ${owner}` : ''}`;
+    }
     case 'github_commit_file': {
       // A commit dialog must always name the identity it will land under, so
       // fall back to the repo owner -- which is the account the server picks
       // when the model didn't name one.
       const owner = args.account || String(args.repo || '').split('/')[0];
-      return `Committing "${args.path || '?'}" to ${repo}${owner ? ` as ${owner}` : ''}`;
+      // The branch belongs in the approval dialog: "commit to main" and
+      // "commit to someone's feature branch" are different decisions.
+      const on = args.branch ? ` on ${args.branch}` : '';
+      return `Committing "${args.path || '?'}" to ${repo}${on}${owner ? ` as ${owner}` : ''}`;
     }
     case 'web_search':
       return `Searching the web for "${args.query || '?'}"`;
@@ -1895,6 +2636,21 @@ function describeToolCall(name, args = {}) {
       return `Reading "${args.path || '?'}" from the workspace`;
     case 'workspace_write_file':
       return `Writing "${args.path || '?'}" to the workspace`;
+    case 'workspace_search_files':
+      return `Searching the workspace for "${args.query || '?'}"`;
+    case 'workspace_edit_file':
+      return `Editing "${args.path || '?'}" in the workspace`;
+    case 'workspace_delete_file':
+      return `Deleting "${args.path || '?'}" from the workspace`;
+    case 'run_command': {
+      // Summarised on one line, and not quoted. This string becomes a transcript
+      // line and the label beside the typing dots, neither of which has room for
+      // a heredoc: the unfurled command pushed the arguments -- the only part
+      // that distinguishes two commands -- past the chip's ellipsis. The dialog
+      // quotes the command in full, which is the one place it has to be read.
+      const flat = String(args.command || '?').replace(/\s+/g, ' ').trim();
+      return 'Running on the server: ' + (flat.length > 80 ? flat.slice(0, 79) + '…' : flat);
+    }
     case 'task_list':
       return 'Reading the task list';
     case 'task_add':
@@ -2263,6 +3019,26 @@ const MAX_HISTORY_MESSAGES = 12;
 function estimateTokens(value) {
   const text = typeof value === 'string' ? value : String(value == null ? '' : value);
   return text ? Math.ceil(text.length / 4) : 0;
+}
+
+// What the attachment in the composer costs the next request, in the same
+// estimate the history budget is spent in -- which is the point of showing it,
+// because the two numbers are read together and an attachment rides in the
+// prompt *whole* where the history behind it gets trimmed. The 200KB ceiling is
+// about fifty thousand tokens, and no model reads that for free. A picture is
+// bytes that no character estimate can speak for, so it has no cost here rather
+// than a made-up one. Returns null when there is nothing to show.
+function describeAttachmentCost(attachment) {
+  const tokens = attachment && attachment.kind === 'text' ? estimateTokens(attachment.content) : 0;
+  if (!tokens) return null;
+  const shown = tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : String(tokens);
+  return {
+    label: '~' + shown + ' tokens',
+    tokens,
+    // Worth noticing rather than wrong: it alone outweighs the entire history
+    // this app trims a chat to, and unlike that history it is not trimmed at all.
+    heavy: tokens > HISTORY_TOKEN_BUDGET,
+  };
 }
 
 // How much history is worth sending. The message cap above bounds the *number*
@@ -2706,6 +3482,11 @@ const SYSTEM_PROMPT = [
   '- Committing is the only step that needs approval, and the app already asks the user itself.',
   '- Read a file before rewriting it, and send the complete new contents.',
   '',
+  'When run_command is available:',
+  '- It runs on the server, in a scratch directory of its own. Create a file and run it in one command, with a quoted heredoc: cat > make.js <<\'EOF\' ... EOF. Then node make.js.',
+  '- The user approves every command before it runs, so send few, meaningful ones. Do not run a command just to look around.',
+  '- Read the output. A non-zero exit code with a stack trace is the useful part; fix the script and run it again rather than explaining the error back.',
+  '',
   'When web tools are available:',
   '- If the question needs facts outside training or the repos -- current events, releases, prices, docs -- search first, never guess.',
   '- Read the most promising results before answering, and cite every factual claim as [title](url).',
@@ -2807,8 +3588,19 @@ function isCapableModelId(id) {
 const UNUSABLE_CHAT_MODEL_PATTERN =
   /(embed|rerank|whisper|tts|moderation|guard|safety|vision-only|image|dall-e|stable-diffusion|flux|lyria)/i;
 
+// Speech synthesis, which the words above do not catch because these families
+// are named after the voice rather than the job: `fish-audio/s2.1-pro-free`
+// reads like an ordinary chat id. A gateway catalogue is where this bites --
+// a failover picked exactly that model, having been refused by the one before
+// it, and asked a text-to-speech endpoint to continue a coding task. Matching
+// on "audio" would be the obvious rule and the wrong one: gpt-4o-audio and
+// Voxtral answer chat completions perfectly well.
+const SPEECH_MODEL_PATTERN =
+  /(fish-audio|orpheus|melotts|aura-\d|elevenlabs|eleven-v|playai|kokoro|xtts|parler|speecht5|\bbark-)/i;
+
 function isUsableChatModelId(id) {
-  return typeof id === 'string' && !!id && !UNUSABLE_CHAT_MODEL_PATTERN.test(id);
+  if (typeof id !== 'string' || !id) return false;
+  return !UNUSABLE_CHAT_MODEL_PATTERN.test(id) && !SPEECH_MODEL_PATTERN.test(id);
 }
 
 // Providers return their whole catalogue -- OpenRouter's runs to hundreds --
@@ -2826,6 +3618,11 @@ function usableChatModels(models, limit = 60) {
       free: isFreeModel(m),
       capable: isCapableModelId(m.id),
       tools: supportsTools(m),
+      // Rides along because a capability is not a picker label: the picture
+      // read-back asks this list for a model that can see, and a catalogue's
+      // own answer is the only evidence there is. Dropped here once, and the
+      // check could only ever pick a model on Puter, whose list is built in.
+      vision: m.vision,
     }));
 
   const rank = (m) => (m.free ? 0 : 4) + (m.tools ? 0 : 2) + (m.capable ? 0 : 1);
@@ -2936,6 +3733,49 @@ function routeStep({ stage, mode = 'auto', model, models = [], needsTools = fals
   const best = ranked[0];
   // The chosen model may already be the cheapest thing here. Re-sending the same
   // step to the same model would report a saving that does not exist.
+  const own = ranked.find((row) => String(row.m.id) === String(model));
+  if (own && own.rank.tier <= best.rank.tier && own.rank.cost <= best.rank.cost) return null;
+  if (String(best.m.id) === String(model)) return null;
+  return { model: best.m.id, from: model, why: best.rank.why, free: best.rank.tier === 0 };
+}
+
+// The model to run a classifier on, or null to leave it on the user's own.
+//
+// The image planner reads one message and answers with a few fields: whether the
+// turn is a drawing, an edit or a chat, and the prompt to draw. That is a
+// classification, not the conversation, and a small model does it about as well
+// as a flagship -- so asking the flagship spends the conversation's per-token
+// price on a routing decision. On Puter that price is credits from a fixed
+// monthly allowance that does not roll over, which is why it earns a rule.
+//
+// Ranked exactly as a tool step is, so the app has one idea of "cheaper". Two
+// differences: a classifier is handed no tools, so a model that cannot take them
+// is still fine; and it is not a step of the conversation, so it is not limited
+// to the 'work' stage the way routeStep is.
+//
+// `preferred` breaks ties toward a named model -- the app's own default -- when
+// it ranks no worse than the winner. Puter publishes no prices, so several of its
+// models tie at "the small one in the family" and an alphabetical winner would be
+// whichever old id sorts first rather than the one the app already trusts.
+//
+// null means nothing here is clearly cheaper than what the user chose, and the
+// caller keeps that rather than guessing.
+function routeClassifier({ mode = 'auto', model, models = [], preferred = '', refused = [] } = {}) {
+  if (mode !== 'auto') return null;
+  if (!model) return null;
+  const skip = new Set((refused || []).map((id) => String(id)));
+  const ranked = (models || [])
+    .filter((m) => m && isUsableChatModelId(m.id) && !skip.has(String(m.id)) && emitsText(m))
+    .map((m) => ({ m, rank: routeRank(m) }))
+    .filter((row) => row.rank)
+    .sort((a, b) =>
+      a.rank.tier - b.rank.tier || a.rank.cost - b.rank.cost || String(a.m.id).localeCompare(String(b.m.id)));
+  if (!ranked.length) return null;
+  let best = ranked[0];
+  const wanted = ranked.find((row) => String(row.m.id) === String(preferred));
+  if (wanted && wanted.rank.tier <= best.rank.tier && wanted.rank.cost <= best.rank.cost) best = wanted;
+  // Already on something at least as cheap: moving it would report a saving that
+  // does not exist, and would swap the user's model for no reason.
   const own = ranked.find((row) => String(row.m.id) === String(model));
   if (own && own.rank.tier <= best.rank.tier && own.rank.cost <= best.rank.cost) return null;
   if (String(best.m.id) === String(model)) return null;
@@ -3265,7 +4105,15 @@ function newestInFamily(models, prefix) {
 // back to the full list matters: a provider that renames a model shouldn't
 // leave the picker empty.
 function selectAllowedModels(models, rules) {
-  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly)) return models || [];
+  if (!rules || (!rules.exact && !rules.newestOf && !rules.freeOnly && !rules.includeRest)) return models || [];
+  // Namespaces within one catalogue that publish a free marker in the id, and
+  // where the account can only spend the free ones. A gateway catalogue is
+  // mixed by nature: the models it fronts come from many accounts on many
+  // tiers, and it publishes no prices, so "is this free?" has no general
+  // answer here -- but it has an answer for the namespaces that say so.
+  const paid = (m) => (rules.freeOnlyPrefixes || []).some(
+    (prefix) => String(m.id).startsWith(prefix) && !isFreeModelId(m.id),
+  );
   const chosen = [];
   const seen = new Set();
   const take = (model) => {
@@ -3295,6 +4143,20 @@ function selectAllowedModels(models, rules) {
   // exact goes through matchListEntry so an id matches exactly the way it would
   // in a plain array allowlist -- by id, or by label-based token match.
   (rules.exact || []).forEach((wanted) => take((models || []).find((m) => m && matchListEntry(m, wanted))));
+
+  // includeRest turns the list from a gate into an ordering: what is named
+  // leads, everything else follows. A gateway is the case for it -- the
+  // operator already chose what it fronts, in its own dashboard, so a second
+  // allowlist here can only hide their choices, and does: connecting Mistral
+  // to OmniRoute added 48 models that a pinned list kept out of the picker
+  // entirely. Naming an id that has since been retired simply stops leading
+  // rather than removing a model from the list.
+  //
+  // restPrefixes narrows what follows to the namespaces it names -- the ones
+  // on a free tier, on a gateway that prices nothing. An id outside them is
+  // still reachable by naming it in `exact`; it just never follows on its own.
+  const followsOn = (m) => !rules.restPrefixes || rules.restPrefixes.some((prefix) => String(m.id).startsWith(prefix));
+  if (rules.includeRest) (models || []).filter((m) => m && !paid(m) && followsOn(m)).forEach(take);
   return chosen.length ? chosen : models || [];
 }
 
@@ -3380,49 +4242,184 @@ function nextStreamCadence(lastRenderMs, current = STREAM_RENDER_MIN_MS) {
   return now;
 }
 
-const STORED_IMAGE_MAX_EDGE = 1024;
-const STORED_IMAGE_MAX_CHARS = 300000;
-
-// 'remote' -- an http(s) link: store it as it stands
-// 'encode' -- data:/blob: bytes already in hand: re-encode before storing
-// 'skip'   -- nothing usable
-function storedImagePlan(url) {
-  const value = String(url || '');
-  if (/^https?:\/\//i.test(value)) return 'remote';
-  if (/^data:image\//i.test(value) || /^blob:/i.test(value)) return 'encode';
-  return 'skip';
+// What a picture in a response actually is.
+//
+// The base64 form used to be labelled image/png whatever the bytes were, and
+// the services do not agree: the free drawer, Workers AI and Gemini all answer
+// JPEG here. The label is not decoration -- an edit sends the picture on as a
+// data URL and the server reads the type straight out of it, so a JPEG wearing
+// image/png is a source file whose declared type is a lie. Only an image type
+// is accepted, and a response that names none stays PNG, which is what an
+// OpenAI-shaped images endpoint returns.
+function imageMediaType(item) {
+  const declared = String((item && (item.media_type || item.mime_type)) || '').trim().toLowerCase();
+  return /^image\/[a-z0-9.+-]+$/.test(declared) ? declared : 'image/png';
 }
 
-// Images are the only part of history that grows without bound, and
-// localStorage is what pays for it. Keep the newest few per conversation, and
-// when the browser refuses the write anyway, the pictures go before the text:
-// a chat with no image is still a chat, a chat with no history is a loss.
-const MAX_STORED_IMAGES_PER_CONVERSATION = 8;
+// --- Saving a generated picture ---
+//
+// The picture the model drew is saved at the size it was drawn, which is the
+// whole point of having asked for a size: re-encoding it to a fixed square (or
+// to a "reasonable" 1024px) would hand back a different picture from the one on
+// screen. So the render is a pass-through at the bitmap's own dimensions, and
+// the menu names those dimensions so the size is visible before the save.
+const IMAGE_DOWNLOAD_FORMATS = [
+  { id: 'png', label: 'PNG', ext: 'png', mime: 'image/png', hint: 'Lossless, best for edits' },
+  { id: 'jpg', label: 'JPG', ext: 'jpg', mime: 'image/jpeg', hint: 'Smaller file' },
+  { id: 'pdf', label: 'PDF', ext: 'pdf', mime: 'application/pdf', hint: 'One print-ready page' },
+];
 
-function capConversationImages(messages, max = MAX_STORED_IMAGES_PER_CONVERSATION) {
-  const limit = Math.max(0, Number(max) || 0);
-  const list = Array.isArray(messages) ? messages : [];
-  const holders = [];
-  list.forEach((m, i) => { if (m && Array.isArray(m.images) && m.images.length) holders.push(i); });
-  const overflow = holders.length - limit;
-  if (overflow <= 0) return list.slice();
-  const drop = new Set(holders.slice(0, overflow));
-  return list.map((m, i) => (drop.has(i) ? { ...m, images: [] } : m));
+// 'jpeg' is what most people type and 'jpe' is what Windows used to write; both
+// are JPG here, and anything the table does not know is PNG rather than a
+// silent failure to save.
+function imageDownloadFormat(id) {
+  const wanted = String(id || '').toLowerCase();
+  const alias = wanted === 'jpeg' || wanted === 'jpe' ? 'jpg' : wanted;
+  return IMAGE_DOWNLOAD_FORMATS.find((format) => format.id === alias) || IMAGE_DOWNLOAD_FORMATS[0];
 }
 
-// Every conversation's images except the protected one -- the active chat is the
-// last thing to give up its pictures, since that is where the reader is looking.
-function stripStoredImages(conversations, protectId = '') {
-  return (Array.isArray(conversations) ? conversations : []).map((c) => {
-    if (!c) return c;
-    if (protectId && c.id === protectId) return c;
-    if (!Array.isArray(c.messages)) return c;
-    if (!c.messages.some((m) => m && Array.isArray(m.images) && m.images.length)) return c;
-    return {
-      ...c,
-      messages: c.messages.map((m) => (m && Array.isArray(m.images) && m.images.length ? { ...m, images: [] } : m)),
-    };
-  });
+// The prompt, reduced to something a file system will accept. Long prompts are
+// cut at a word boundary and never trim to nothing: an empty stem would leave a
+// file called "-.png".
+function imageDownloadStem(promptText) {
+  const slug = String(promptText || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]+/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 48)
+    .replace(/-+$/, '');
+  return slug || 'image';
+}
+
+// The dimensions are in the name on purpose: whether the picture came back at
+// the size that was asked for is the first thing a folder listing should answer.
+function imageDownloadFilename(promptText, format, width, height) {
+  const spec = imageDownloadFormat(format);
+  const w = Math.round(Number(width) || 0);
+  const h = Math.round(Number(height) || 0);
+  const size = w > 0 && h > 0 ? `-${w}x${h}` : '';
+  return `freeai4u-${imageDownloadStem(promptText)}${size}.${spec.ext}`;
+}
+
+// The page is the picture.
+//
+// It used to be A4, whichever way up suited the drawing, with a 24pt margin --
+// which is what "the PDF has a white blank page around my image" was: the
+// picture the user asked for, printed as a stamp in the middle of a sheet they
+// did not ask for. One point per pixel makes the page exactly the picture, so a
+// reader shows it edge to edge and a printer scales the whole frame onto paper.
+// Only the page's size changes: the JPEG still goes in untouched.
+const PDF_MAX_PAGE_PT = 2400;
+
+function pdfPageFor(imageWidth, imageHeight) {
+  const pixels = {
+    width: Math.max(1, Math.round(Number(imageWidth) || 0)),
+    height: Math.max(1, Math.round(Number(imageHeight) || 0)),
+  };
+  // A very large drawing gets a proportionally smaller page rather than a
+  // 4000pt sheet: the page still holds nothing but the picture, which is the
+  // promise; only its scale changes.
+  const scale = Math.min(1, PDF_MAX_PAGE_PT / Math.max(pixels.width, pixels.height));
+  const width = pixels.width * scale;
+  const height = pixels.height * scale;
+  return {
+    pixels,
+    width,
+    height,
+    imageWidth: width,
+    imageHeight: height,
+    x: 0,
+    y: 0,
+  };
+}
+
+// A one-page PDF holding the picture.
+//
+// Written by hand rather than pulled in as a dependency: the whole document is
+// five objects, and the JPEG goes in untouched as a /DCTDecode stream, so the
+// bytes that were drawn are the bytes that print. The caller supplies a JPEG
+// because that is what the canvas gives back, and re-encoding it here would be
+// a second lossy pass over an image that has already had one.
+//
+// The xref offsets are the part that has to be right rather than approximately
+// right: a reader repairs a bad table or refuses the file, so every object
+// records the byte length it was written at and the table is built from those.
+// A PDF's text sections are bytes, not characters, and everything written here
+// is Latin-1 -- so one character is one byte, which is the assumption /Length
+// and every xref offset is computed from. TextEncoder would encode UTF-8 and
+// quietly make a non-ASCII character three bytes long, moving every offset in
+// the file without changing the table that describes them.
+function pdfBytes(text) {
+  const source = String(text);
+  const out = new Uint8Array(source.length);
+  for (let i = 0; i < source.length; i++) out[i] = source.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function buildImagePdf(jpegBytes, imageWidth, imageHeight) {
+  const jpeg = jpegBytes instanceof Uint8Array ? jpegBytes : new Uint8Array(jpegBytes || []);
+  const page = pdfPageFor(imageWidth, imageHeight);
+  const num = (value) => {
+    const rounded = Math.round(Number(value) * 100) / 100;
+    return Number.isFinite(rounded) ? String(rounded) : '0';
+  };
+  const chunks = [];
+  let length = 0;
+  const push = (value) => {
+    const bytes = typeof value === 'string' ? pdfBytes(value) : value;
+    chunks.push(bytes);
+    length += bytes.length;
+  };
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const offsets = [];
+  const begin = (n) => {
+    offsets[n] = length;
+    push(`${n} 0 obj\n`);
+  };
+
+  begin(1);
+  push('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  begin(2);
+  push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+  begin(3);
+  push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>\nendobj\n`);
+  const content = `q\n${num(page.imageWidth)} 0 0 ${num(page.imageHeight)} ${num(page.x)} ${num(page.y)} cm\n/Im0 Do\nQ\n`;
+  begin(4);
+  push(`<< /Length ${content.length} >>\nstream\n${content}endstream\nendobj\n`);
+  begin(5);
+  push(`<< /Type /XObject /Subtype /Image /Width ${page.pixels.width} /Height ${page.pixels.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`);
+  push(jpeg);
+  push('\nendstream\nendobj\n');
+
+  const startxref = length;
+  let xref = `xref\n0 ${offsets.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i++) xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  push(xref);
+  push(`trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`);
+
+  const out = new Uint8Array(length);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
+}
+
+// Renders a conversation as markdown for the clipboard. Tool-activity lines
+// and error notices are the app talking to itself, so they stay out -- what
+// gets pasted into an issue or a doc should be the exchange, nothing else.
+function conversationToMarkdown(messages, title) {
+  const lines = title ? ['# ' + title, ''] : [];
+  for (const message of messages || []) {
+    if (!message || message.type === 'system') continue;
+    const text = String(message.content == null ? '' : message.content).trim();
+    if (!text) continue;
+    lines.push(message.type === 'user' ? '## You' : '## Assistant', '', text, '');
+  }
+  return lines.join('\n').trim();
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -3436,16 +4433,26 @@ if (typeof module !== 'undefined' && module.exports) {
     STREAM_RENDER_MIN_MS,
     STREAM_RENDER_MAX_MS,
     nextStreamCadence,
-    STORED_IMAGE_MAX_EDGE,
-    STORED_IMAGE_MAX_CHARS,
-    storedImagePlan,
-    MAX_STORED_IMAGES_PER_CONVERSATION,
-    capConversationImages,
-    stripStoredImages,
+    IMAGE_DOWNLOAD_FORMATS,
+    imageDownloadFormat,
+    imageDownloadStem,
+    imageDownloadFilename,
+    PDF_MAX_PAGE_PT,
+    pdfPageFor,
+    pdfBytes,
+    buildImagePdf,
     MODES,
     DEFAULT_MODE,
     isValidMode,
     modePrompt,
+    TOOL_GROUPS,
+    MODE_TOOL_GROUPS,
+    WRITE_TOOL_GROUPS,
+    toolGroupsForName,
+    modeAllowsTool,
+    toolsForMode,
+    modeBlocksWrite,
+    modeWriteRefusal,
     SKILL_SOURCES,
     BUILD_CORE_SKILLS,
     skillEntriesFromTree,
@@ -3487,8 +4494,6 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_MODEL,
     isValidModel,
     escapeHtml,
-    ATTACHABLE_EXTENSIONS,
-    isAttachableFile,
     renderMarkdownLite,
     detectsImageIntent,
     detectsImageEditIntent,
@@ -3496,15 +4501,9 @@ if (typeof module !== 'undefined' && module.exports) {
     VISION_MODEL_IDS,
     DEFAULT_VISION_MODEL,
     isVisionCapable,
-    MAX_IMAGE_DATA_URL_CHARS,
-    MAX_IMAGE_EDGE,
-    acceptsImages,
-    modelForImage,
-    isSendableImageUrl,
-    withImageTurn,
-    DOCUMENT_EXTENSIONS,
-    isDocumentFile,
     GITHUB_TOOLS,
+    GITHUB_WRITE_TOOL_NAMES,
+    isGithubWriteTool,
     GITHUB_TOOL_NAMES,
     WEB_TOOLS,
     WEB_TOOL_NAMES,
@@ -3518,10 +4517,44 @@ if (typeof module !== 'undefined' && module.exports) {
     IMAGE_BACKENDS,
     imageBackendOrder,
     imageFailureMessage,
+    IMAGE_PLANNER_PROMPT,
+    IMAGE_PLAN_ACTIONS,
+    IMAGE_CHECK_PROMPT,
+    MAX_IMAGE_CHECK_CHARS,
+    imageCheckFixPrompt,
+    imageCheckQuestion,
+    parseImageCheck,
+    MAX_IMAGE_PROMPT_CHARS,
+    parseImagePlan,
+    resolveImageAction,
+    lastImageInMessages,
+    IMAGE_GENERATE_MODELS,
+    IMAGE_EDIT_MODELS,
+    imageModelsFor,
+    IMAGE_QUALITY,
+    IMAGE_SIZE_PRESETS,
+    imageSizePreset,
+    imageSizeFromPrompt,
+    imageSizeBody,
+    imageRatioBody,
+    imageRatioLabel,
+    describeDrawnSize,
+    reframePlan,
+    MIN_REFRAME_EDGE,
+    isModerationRefusal,
+    IMAGE_REFUSAL_ADVICE,
     WORKSPACE_TOOLS,
+    WORKSPACE_WRITE_TOOL_NAMES,
+    workspaceDelete,
+    workspaceEdit,
+    workspaceSearch,
+    MAX_WORKSPACE_SEARCH_MATCHES,
     WORKSPACE_TOOL_NAMES,
     isWorkspaceTool,
     isWorkspaceWriteTool,
+    RUN_TOOLS,
+    RUN_TOOL_NAMES,
+    isRunTool,
     normalizeWorkspacePath,
     workspaceList,
     workspaceRead,
@@ -3588,6 +4621,7 @@ if (typeof module !== 'undefined' && module.exports) {
     MAX_MESSAGES_PER_CONVERSATION,
     deriveChatTitle,
     conversationToMarkdown,
+    conversationToMarkdown,
     MAX_HISTORY_MESSAGES,
     buildChatHistory,
     COMPACT_HISTORY_MESSAGES,
@@ -3620,6 +4654,7 @@ if (typeof module !== 'undefined' && module.exports) {
     routeCost,
     routeRank,
     routeStep,
+    routeClassifier,
     routedStepFailure,
     describeRoute,
     describeProviderModel,
@@ -3638,6 +4673,7 @@ if (typeof module !== 'undefined' && module.exports) {
     compareVersions,
     estimateTokens,
     HISTORY_TOKEN_BUDGET,
+    describeAttachmentCost,
     budgetChatHistory,
     MAX_TOOL_RESULT_CHARS,
     clipToolResult,
@@ -3661,6 +4697,7 @@ if (typeof module !== 'undefined' && module.exports) {
     serializePendingTurn,
     parsePendingTurn,
     retryTargetFor,
+    imageMediaType,
     MAX_PROVIDER_FAILOVERS,
     failoverProviderOrder,
     nextFailoverProvider,

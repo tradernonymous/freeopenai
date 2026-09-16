@@ -5,17 +5,18 @@ const {
   DEFAULT_MODEL,
   isValidModel,
   escapeHtml,
-  isAttachableFile,
   renderMarkdownLite,
   detectsImageIntent,
   isVisionCapable,
   DEFAULT_VISION_MODEL,
-  isDocumentFile,
   isRateLimitError,
   isRetryableStatus,
   safeJson,
   isToolsRejection,
   parseSseChunk,
+  describeAttachmentCost,
+  HISTORY_TOKEN_BUDGET,
+  imageMediaType,
 } = require('../chatlib.js');
 
 test('DEFAULT_MODEL is one of the known models', () => {
@@ -51,13 +52,6 @@ test('escapeHtml neutralizes an XSS payload', () => {
 
 test('escapeHtml escapes all five reserved characters', () => {
   assert.equal(escapeHtml(`& < > " '`), '&amp; &lt; &gt; &quot; &#39;');
-});
-
-test('isAttachableFile allows text-like extensions and rejects binaries', () => {
-  assert.equal(isAttachableFile('notes.txt'), true);
-  assert.equal(isAttachableFile('data.CSV'), true);
-  assert.equal(isAttachableFile('photo.png'), false);
-  assert.equal(isAttachableFile('app.exe'), false);
 });
 
 test('renderMarkdownLite renders bold, italic, and inline code', () => {
@@ -194,13 +188,6 @@ test('DEFAULT_VISION_MODEL is itself vision-capable and a known model', () => {
   assert.equal(isValidModel(DEFAULT_VISION_MODEL), true);
 });
 
-test('isDocumentFile recognizes pdf and docx only', () => {
-  assert.equal(isDocumentFile('report.pdf'), true);
-  assert.equal(isDocumentFile('resume.DOCX'), true);
-  assert.equal(isDocumentFile('notes.txt'), false);
-  assert.equal(isDocumentFile('photo.png'), false);
-});
-
 test('isRateLimitError recognizes the shapes a 429 actually arrives in', () => {
   assert.equal(isRateLimitError('429: {"status":429,"title":"Too Many Requests"} — rate limited, wait a moment'), true);
   assert.equal(isRateLimitError('too many requests'), true);
@@ -269,6 +256,39 @@ test('safeJson degrades an unreadable body into a retryable error, not a crash',
   assert.equal(out.parseFailed, true);
   assert.match(out.error, /retry/i);
   assert.match(out.error, /unreadable/);
+});
+
+test('an attachment says what it costs before it is sent', () => {
+  // A pasted file is the one thing in a prompt that nothing trims: the history
+  // behind it is budgeted, and the attachment arrives whole. So the number is
+  // shown, in the same estimate the history budget is spent in, and one that
+  // outweighs the entire trim is flagged rather than silently sent.
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(400) }).label, '~100 tokens');
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(4000) }).label, '~1.0k tokens');
+  assert.equal(describeAttachmentCost({ kind: 'text', content: 'x'.repeat(HISTORY_TOKEN_BUDGET * 4) }).heavy, false);
+  const heavy = describeAttachmentCost({ kind: 'text', content: 'x'.repeat(HISTORY_TOKEN_BUDGET * 4 + 4) });
+  assert.equal(heavy.heavy, true);
+  assert.equal(heavy.tokens, HISTORY_TOKEN_BUDGET + 1);
+  // Nothing to show, rather than a made-up number: an empty file costs nothing,
+  // and a picture is bytes no character estimate can speak for.
+  assert.equal(describeAttachmentCost({ kind: 'text', content: '' }), null);
+  assert.equal(describeAttachmentCost({ kind: 'image', name: 'shot.png' }), null);
+  assert.equal(describeAttachmentCost(null), null);
+});
+
+test('a picture is labelled with the type its service named', () => {
+  // The label is not decoration: an edit sends the picture back as a data URL
+  // and the server reads the type out of it. Labelling a JPEG as PNG made every
+  // edit of a drawn picture carry a type its bytes contradict.
+  assert.equal(imageMediaType({ media_type: 'image/jpeg' }), 'image/jpeg');
+  assert.equal(imageMediaType({ mime_type: 'image/webp' }), 'image/webp');
+  assert.equal(imageMediaType({ media_type: 'IMAGE/JPEG' }), 'image/jpeg');
+  // A response that names none is what an OpenAI-shaped endpoint returns.
+  assert.equal(imageMediaType({ b64_json: 'x' }), 'image/png');
+  // Anything that is not an image type is not allowed to become the label.
+  assert.equal(imageMediaType({ media_type: 'text/html' }), 'image/png');
+  assert.equal(imageMediaType({ media_type: 'image/png; charset=x' }), 'image/png');
+  assert.equal(imageMediaType(null), 'image/png');
 });
 
 test('isToolsRejection flags shape failures only', () => {

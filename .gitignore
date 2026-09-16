@@ -222,3 +222,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# The scratch directory shell commands run in (see README: Running a command).
+# Created on the server and inside the container; never committed.
+workspace/

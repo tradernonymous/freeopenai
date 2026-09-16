@@ -11,17 +11,21 @@ const {
   isAccountLevelFailure,
   isModelScopedRefusal,
   isQuotaExhausted,
-  modelForImage,
   nextUsableModel,
   refusedModelIds,
-  isSendableImageUrl,
-  withImageTurn,
   isRetryableStatus,
-  MAX_IMAGE_DATA_URL_CHARS,
-  MAX_IMAGE_EDGE,
   MAX_MODEL_REFUSAL_RETRIES,
   cachedTokensFromUsage,
 } = require('../chatlib.js');
+// The attachment module, which is what the page loads for these -- the same code
+// the browser runs rather than a copy of it.
+const {
+  modelForImage,
+  isSendableImageUrl,
+  withImageTurn,
+  MAX_IMAGE_DATA_URL_CHARS,
+  MAX_IMAGE_EDGE,
+} = require('../attachment-helpers.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
@@ -114,6 +118,7 @@ function baseDeps(overrides = {}) {
     forgetRefusedModel: () => null,
     finalizePartial: () => {},
     localStorage: { setItem: (k, v) => writes.push([k, v]) },
+    rememberPreference: (k, v) => { writes.push([k, v]); return true; },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),
     renderModelOptions() {},
     updateModelLabel() {},
@@ -293,4 +298,22 @@ test('the request that actually goes out carries the image and the model that ca
     { type: 'text', text: 'what is this?' },
     { type: 'image_url', image_url: { url: PNG } },
   ]);
+});
+
+// ---- the two things the send path has to get right -------------------------
+
+test('a drawn picture is labelled with the type its service gave it', () => {
+  // The base64 was labelled image/png whatever it was, and the services this
+  // page draws on answer JPEG. The label travels: an edit sends the picture
+  // back as a data URL and the server takes the type straight out of it, so a
+  // JPEG wearing image/png is a source file whose declared type is a lie.
+  assert.match(sourceOf('imageUrlsFrom'), /imageMediaType\(item\)/);
+});
+
+test('a picture already in the chat is enough to ask what the turn is', () => {
+  // "now make the sky pink" matches no image keyword, so the planner is the
+  // only thing that can read it as an edit -- and the gate that decides whether
+  // to ask listed everything except the picture already on screen, which is
+  // exactly what a follow-up like that is about.
+  assert.match(sourceOf('sendMessage'), /if \(fallbackAction !== 'chat' \|\| attachedImageFile \|\| previousImage\)/);
 });

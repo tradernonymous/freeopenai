@@ -43,7 +43,17 @@ test('modes exist with chat default', () => {
 test('plan mode prompt forbids edits and demands a plan shape', () => {
   const prompt = modePrompt('plan');
   assert.match(prompt, /MODE: PLAN/);
-  assert.match(prompt, /Do not write or commit code/);
+  // Said as the fact it is: the write tools are not in the request at all, so
+  // the prompt states the surface rather than asking the model to abstain.
+  assert.match(prompt, /no way to write a file, commit, or delete anything/);
+  assert.match(prompt, /Build mode/);
+});
+
+test('chat mode is research, and says it cannot change anything either', () => {
+  const prompt = modePrompt('chat');
+  assert.match(prompt, /MODE: CHAT/);
+  assert.match(prompt, /search the web/);
+  assert.match(prompt, /no tools that write, commit, delete or run a command/);
   assert.match(prompt, /Build mode/);
 });
 

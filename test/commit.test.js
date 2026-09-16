@@ -1,9 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const fs = require('node:fs');
 const path = require('node:path');
-const { encryptJson } = require('../github.js');
+const { githubSessionCookie, loadServerPointedAt } = require('./helpers/github-stand-in.js');
 
 process.env.SESSION_SECRET = 'test-secret';
 
@@ -46,33 +45,14 @@ function startFakeGithub(existing) {
   return server;
 }
 
-// The server hardcodes api.github.com, so point a copy at the stand-in.
-function loadServerPointedAt(origin) {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8')
-    .replace(/https:\/\/api\.github\.com/g, origin);
-  const copy = path.join(__dirname, '..', '.server-under-test.js');
-  fs.writeFileSync(copy, source);
-  try {
-    delete require.cache[require.resolve(copy)];
-    return { mod: require(copy), cleanup: () => fs.unlinkSync(copy) };
-  } catch (err) {
-    fs.unlinkSync(copy);
-    throw err;
-  }
-}
-
 async function commitThrough(files, payload) {
   const gh = startFakeGithub(files);
   await new Promise((r) => gh.listen(0, r));
-  const { mod, cleanup } = loadServerPointedAt(`http://127.0.0.1:${gh.address().port}`);
+  const { mod, cleanup } = loadServerPointedAt(`http://127.0.0.1:${gh.address().port}`, '-commit');
   const app = http.createServer(mod.createRequestHandler(path.join(__dirname, '..')));
   await new Promise((r) => app.listen(0, r));
 
-  const cookie = 'fo_gh=' + encryptJson('test-secret', {
-    appUser: null,
-    exp: Date.now() + 60000,
-    accounts: [{ token: 'tok', login: 'octocat' }],
-  });
+  const cookie = githubSessionCookie('test-secret');
 
   try {
     const res = await fetch(`http://127.0.0.1:${app.address().port}/api/github/file`, {

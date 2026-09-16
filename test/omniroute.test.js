@@ -40,6 +40,13 @@ const CATALOGUE = [
   // Non-chat entries that must never survive the picker's chat filter.
   { id: 'jina-ai/jina-embeddings-v5-omni-small' },
   { id: 'openai/gpt-image-2' },
+  // A model no allowlist here names: it reaches the picker only because the
+  // list became an ordering rather than a gate.
+  { id: 'mistral/codestral-latest' },
+  // OpenRouter arrives through this gateway as over a thousand ids on a key
+  // that is free-only, and is the one namespace that marks which is which.
+  { id: 'openrouter/nex-agi/nex-n2.5-pro:free' },
+  { id: 'openrouter/anthropic/claude-opus-4.5' },
 ];
 
 async function withGateway({ baseUrl, key, models, respond } = {}, run) {
@@ -96,8 +103,13 @@ const chat = (base, body) => fetch(base + '/api/llm/chat?provider=omniroute', {
   body: JSON.stringify(body),
 });
 
-test('the pinned list is one the picker would actually show, auto included', () => {
-  const ids = LLM_PROVIDERS.omniroute.models;
+test('the lead list is one the picker would actually show, auto included', () => {
+  const rules = LLM_PROVIDERS.omniroute.models;
+  const ids = rules.exact;
+  // Ordering, not gating: the gateway's operator curates it in its own
+  // dashboard, so a second allowlist here could only overrule that choice.
+  assert.equal(rules.includeRest, true, 'the rest of the catalogue must follow the named ids');
+  assert.deepEqual(rules.freeOnlyPrefixes, ['openrouter/']);
   assert.ok(Array.isArray(ids) && ids.length > 0);
   assert.equal(new Set(ids).size, ids.length, 'no duplicate ids in the list');
   assert.ok(ids.some((id) => id === AUTO), 'the auto router is the point of this provider');
@@ -148,10 +160,25 @@ test('a base URL alone puts the gateway in the picker, and the catalogue is fetc
     const ids = models.map((m) => m.id);
     assert.ok(ids.includes(AUTO), 'the auto router is listed');
     assert.ok(ids.includes('auto/coding'));
-    // The allowlist is intersected with the live catalogue, so non-chat rows in
-    // the catalogue never reach the picker even though the gateway lists them.
-    assert.ok(!ids.includes('jina-ai/jina-embeddings-v5-omni-small'));
-    assert.ok(!ids.includes('openai/gpt-image-2'));
+    // The named ids lead, and the rest of the catalogue follows them -- a
+    // model nothing here names is now reachable by name.
+    assert.ok(ids.indexOf('auto/coding') < ids.indexOf('mistral/codestral-latest'));
+    assert.ok(ids.includes('mistral/codestral-latest'), 'an unnamed model must still reach the picker');
+
+    // Except where the catalogue says a model costs money on a free-only key:
+    // OpenRouter's paid ids would fill the picker with guaranteed 402s.
+    assert.ok(ids.includes('openrouter/nex-agi/nex-n2.5-pro:free'));
+    assert.ok(!ids.includes('openrouter/anthropic/claude-opus-4.5'), 'a paid OpenRouter id must not be offered');
+    // And a namespace with no free tier at all -- a connected OpenAI key --
+    // never follows the named list on its own, however the gateway lists it.
+    assert.ok(!ids.includes('openai/gpt-5.4'), 'a paid namespace must not follow the list');
+
+    // Non-chat rows now come through this route and are dropped a layer up,
+    // by the same filter the picker renders with -- so the thing to assert is
+    // that they still never reach a user, not that the route hid them.
+    const shown = new Set(usableChatModels(models).map((m) => m.id));
+    assert.equal(shown.has('jina-ai/jina-embeddings-v5-omni-small'), false);
+    assert.equal(shown.has('openai/gpt-image-2'), false);
 
     // The bare base URL was completed to /v1 and the raw /models route (now
     // against the deduplicated alias catalogue) is what was actually asked for.
@@ -234,5 +261,25 @@ test('health lists the provider as one this build knows', async () => {
   await withGateway({ baseUrl: undefined }, async ({ base }) => {
     const health = await (await fetch(base + '/api/health')).json();
     assert.ok(health.providers.includes('omniroute'));
+  });
+});
+test('a declared list that matches nothing falls back to the build list, not the raw catalogue', async () => {
+  // What this prevents, seen in production: OMNIROUTE_MODELS held ids from an
+  // older gateway, none of which existed any more. The empty intersection fell
+  // straight through to "serve the whole catalogue", so the picker showed
+  // every id the gateway knows, in the gateway's own order -- with this
+  // build's ordering and its paid-model filter both skipped in silence. The
+  // symptom reads as "my settings are being ignored", which is exactly right.
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    models: 'gone/one,gone/two',
+  }, async ({ base }) => {
+    const ids = (await (await fetch(modelsUrl(base))).json()).map((m) => m.id);
+    assert.ok(ids.includes('auto/coding'), 'the build list should answer when the declared one cannot');
+    assert.ok(
+      !ids.includes('openrouter/anthropic/claude-opus-4.5'),
+      'falling back must not skip the paid-model filter',
+    );
+    assert.ok(ids.indexOf('auto/coding') < ids.indexOf('mistral/codestral-latest'), 'and not skip the ordering');
   });
 });

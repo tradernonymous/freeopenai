@@ -1,3 +1,10 @@
+# Compose project name is pinned so this repo ADOPTS the stack that was first
+# started from a now-deleted folder, instead of shadowing it. Without it the
+# project would be named after this directory, and `docker compose up` would
+# create an empty second `freeopenai_omniroute-data` volume and collide on port
+# 20128 -- which looks exactly like OmniRoute having been reset.
+name: app
+
 services:
   omniroute:
     image: diegosouzapw/omniroute:latest

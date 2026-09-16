@@ -59,6 +59,28 @@ test('describeToolCall narrates web calls for the transcript', () => {
   assert.match(describeToolCall('web_search', {}), /\?/);
 });
 
+test('a shell command is summarised on one line, because two surfaces have one line', () => {
+  // This string is a transcript line and the label beside the typing dots. A
+  // multi-line command put a heredoc's worth of text into a nowrap chip that
+  // ellipsised the part that mattered, and into a centred status line where a
+  // wall of script reads as a glitch. The dialog is where the command is quoted.
+  const heredoc = 'cat > make.js <<EOF\nconst fs = require(\'fs\');\nfs.writeFileSync(\'a.txt\', \'hi\');\nEOF\nnode make.js';
+  const said = describeToolCall('run_command', { command: heredoc });
+  assert.equal(said.includes('\n'), false, 'one line, always');
+  assert.match(said, /^Running on the server: cat > make\.js/);
+  assert.match(said, /…$/, 'and it ends the line rather than running past it');
+  assert.ok(said.length <= 110, 'a chip-length label: ' + said.length);
+
+  // A short command is quoted in full, so the transcript says what ran.
+  assert.equal(
+    describeToolCall('run_command', { command: 'node -e "console.log(6 * 7)"' }),
+    'Running on the server: node -e "console.log(6 * 7)"',
+  );
+  // A command with no text at all, and one written on one line with stray space.
+  assert.equal(describeToolCall('run_command', {}), 'Running on the server: ?');
+  assert.equal(describeToolCall('run_command', { command: '  npm   test  ' }), 'Running on the server: npm test');
+});
+
 test('the tool loop is bounded, with room for real multi-file work', () => {
   // Find a repo, list a folder, read two files, commit one: five rounds before
   // anything unusual happens. Six used to cut ordinary requests short.
