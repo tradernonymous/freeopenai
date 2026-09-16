@@ -3295,7 +3295,32 @@
             }
             if (parsed.name === 'skill') return applySkillCommand(parsed.args);
             if (parsed.name === 'compact') return applyCompactCommand(parsed.args);
+            if (parsed.name === 'doctor') return runDoctorCommand();
             return null;
+        }
+
+        // Health check in the claw-doctor / ecc-doctor spirit: providers that
+        // can answer, skills installed and pinned, and the current mode -- the
+        // three things that decide whether the next message can work at all.
+        // Reads page state through an optional env so the sandbox tests can
+        // drive it without a browser; the composer calls it bare.
+        async function runDoctorCommand(env) {
+            const f = env && typeof env.fetch === 'function' ? env.fetch : fetch;
+            const lines = ['Doctor'];
+            try {
+                const res = await f('/api/llm/providers');
+                const providers = await res.json();
+                const configured = providers.filter((p) => p && p.configured).map((p) => p.id);
+                lines.push('Providers: ' + configured.length + '/' + providers.length + ' configured' + (configured.length ? ' (' + configured.join(', ') + ')' : '') + '.');
+            } catch (error) {
+                lines.push('Providers: unreachable (' + (error && error.message ? error.message : error) + ').');
+            }
+            const skills = (env && Array.isArray(env.skills)) ? env.skills : ((typeof skillsCatalog !== 'undefined' && Array.isArray(skillsCatalog)) ? skillsCatalog : []);
+            const pinned = (env && Array.isArray(env.pinned)) ? env.pinned : ((typeof activeSkillNames !== 'undefined' && Array.isArray(activeSkillNames)) ? activeSkillNames : []);
+            lines.push('Skills: ' + skills.length + ' installed, ' + pinned.length + ' pinned to this chat.');
+            const mode = (env && typeof env.mode === 'string') ? env.mode : ((typeof selectedMode !== 'undefined' && typeof selectedMode === 'string') ? selectedMode : 'chat');
+            lines.push('Mode: ' + mode.toUpperCase() + '.');
+            return lines.join('\n');
         }
 
         function applySkillCommand(args) {

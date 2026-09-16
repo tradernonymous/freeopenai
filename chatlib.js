@@ -782,6 +782,7 @@ const CHAT_COMMANDS = [
   { name: 'mode', usage: '/mode chat | plan | build', desc: 'Switch mode' },
   { name: 'clear', usage: '/clear', desc: 'Start a new chat — this one stays in the sidebar' },
   { name: 'compact', usage: '/compact on | off | status', desc: 'Reduce sent history for this session without changing the visible chat' },
+  { name: 'doctor', usage: '/doctor', desc: 'Check providers, skills and mode health' },
 ];
 
 // What a line typed into the composer means:
@@ -3981,6 +3982,12 @@ const SYSTEM_PROMPT = [
   '- Fetching and searching are safe and cheap. Just do them.',
   '',
   'If a request is genuinely ambiguous, make the most reasonable assumption, say which assumption you made in one line, and continue.',
+  '',
+  'When writing code or files:',
+  '- Say what you assume before you build on it. If two readings are plausible, ask which one is wanted rather than picking silently, and push back when a simpler approach exists.',
+  '- Solve only what was asked: no speculative features, no new abstractions for single-use code, no drive-by improvements to adjacent lines.',
+  '- Change only the lines the request needs, in the style around them. Imports, variables or functions your own edit orphaned are yours to remove; pre-existing dead code is mentioned, not deleted.',
+  '- Verify before handing over: re-read the diff, run the checks the project has, and report what you ran.',
 ].join('\n');
 
 // Puter is the default because it needs no key. The others are direct,
