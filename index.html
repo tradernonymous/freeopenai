@@ -28,7 +28,10 @@
             --border-strong: #4d4d4d;
             --text: #ececec;
             --text-dim: #b4b4b4;
-            --text-muted: #8e8e8e;
+            /* #8e8e8e sat at 4.1:1 on the composer's surface-2 step, below
+               the 4.5:1 small-text bar -- which is why muted labels inside
+               the composer read as smudges. #9e9e9e clears it at ~5:1. */
+            --text-muted: #9e9e9e;
             --accent: #ffffff;
             --accent-bg: rgba(255,255,255,0.1);
             --danger: #ff6b6b;
@@ -117,7 +120,9 @@
             --border-strong: #565f89;
             --text: #c0caf5;
             --text-dim: #a9b1d6;
-            --text-muted: #737aa2;
+            /* #737aa2 measured 3.5:1 on the pack's own surface -- small muted
+               labels failed AA outright. #8b9bb8 restores the ladder at ~5.2:1. */
+            --text-muted: #8b9bb8;
             --accent: #7aa2f7;
             --accent-bg: rgba(122,162,247,.14);
             --danger: #f7768e;
@@ -132,11 +137,36 @@
             --border-strong: #7c6f64;
             --text: #ebdbb2;
             --text-dim: #d5c4a1;
-            --text-muted: #928374;
+            /* #928374 fell to 3.2:1 on surface and 2.4:1 on surface-2 rows --
+               the pack's own light2 step (#bdae93) keeps the hue and clears
+               5.2:1 on surface. */
+            --text-muted: #bdae93;
             --accent: #fabd2f;
             --accent-bg: rgba(250,189,47,.12);
             --danger: #fb4934;
             --glass: rgba(40,40,40,.78);
+        }
+        /* Verdant pack: GitHub-dark-green neutrals under an emerald accent.
+           ChatGPT's send button and GitHub's primary buttons are both a
+           saturated green on near-black, so the accent is GitHub's #3fb950
+           and the ladder is green-tinted rather than grey. Muted text was
+           picked against surface-2 from the start (#8fae9a clears 6:1). */
+        html[data-theme="green"] {
+            --bg: #0d1512;
+            --bg-elevated: #0a100d;
+            --surface: #12201a;
+            --surface-2: #16281e;
+            --border: #21382b;
+            --border-strong: #3d5c46;
+            --text: #e8f3ec;
+            --text-dim: #b9cec1;
+            --text-muted: #8fae9a;
+            --accent: #3fb950;
+            --accent-bg: rgba(63,185,80,.14);
+            --danger: #f47067;
+            --glass: rgba(13,21,18,.8);
+            --bubble-user: #16281e;
+            --bubble-edge: rgba(63,185,80,.22);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -173,6 +203,9 @@
             overscroll-behavior-y: contain;
         }
         a { color: inherit; text-decoration: none; }
+        /* Selected text takes the accent, VS Code-style, instead of the
+           browser's default grey wash that ignores whichever theme is on. */
+        ::selection { background: var(--accent); color: var(--bg); }
 
         /* Scrollbars. The browser default is a grey slab that ignores the
            theme; this keeps the same monochrome palette and uses the same
@@ -1015,6 +1048,9 @@
         }
         .theme-menu button:hover, .theme-menu button:focus-visible { background: var(--ctl-bg-hover); }
         .theme-menu button[aria-checked="true"] { color: var(--accent); font-weight: 600; }
+        /* The current theme gets a leading check, macOS-menu-style, so the
+           eye lands on it without reading every row. */
+        .theme-menu .check { font-style: normal; color: var(--accent); font-weight: 700; width: 14px; flex-shrink: 0; }
         .theme-menu button .hint { margin-left: auto; color: var(--text-muted); font-size: 11px; font-weight: 400; }
         .theme-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-strong); flex-shrink: 0; }
         @media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {
@@ -1140,7 +1176,9 @@
            on phones. */
         .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; width: 100%; max-width: 560px; }
         .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
-        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift); }
+        /* Suggestion tiles lift toward the reader on hover, ChatGPT-style,
+           instead of only changing shade. */
+        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift-lg); transform: translateY(-1px); border-color: var(--accent); }
         .hero-card strong { font-size: 13px; color: var(--text); }
         .hero-card span { font-size: 12px; color: var(--text-muted); }
         /* The three things a first-time reader cannot see from here: that this
@@ -1171,12 +1209,13 @@
         .hero-card:focus-visible, .hero-start:focus-visible, .drawer-nav-btn:focus-visible,
         .dl-menu button:focus-visible, .theme-menu button:focus-visible, .history-item:focus-visible,
         .gallery-tile:focus-visible, .caption-copy:focus-visible, .msg-action-btn:focus-visible,
-        .message-image:focus-visible {
+        .message-image:focus-visible, .model-trigger:focus-visible, .effort-select:focus-visible {
             outline: none; box-shadow: var(--glow);
         }
         .hero-card:active, .hero-start:active, .icon-btn:active, .icon-btn-text:active,
         .modal-close:active, .menu-trigger-btn:active, .drawer-nav-btn:active,
-        .caption-copy:active, .composer-send:active:not(:disabled) {
+        .caption-copy:active, .composer-send:active:not(:disabled),
+        .model-trigger:active, .effort-select:active {
             transform: translateY(1px);
         }
         /* A gallery tile is a figure with a click handler, so it needs to be a
@@ -1390,7 +1429,9 @@
             font-size: 14px; font-family: inherit;
             outline: none; resize: none;
         }
-        .composer-input::placeholder { color: var(--text-muted); }
+        /* Firefox fades placeholders to ~54% on top of the colour, which
+           pushed an already-muted hint below legibility there. */
+        .composer-input::placeholder { color: var(--text-muted); opacity: 1; }
         .composer-send {
             background: var(--accent);
             color: #000;
@@ -1400,6 +1441,10 @@
         .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
         /* Red stop square while a reply is in flight. */
         .composer-send.stop { background: var(--danger); font-size: 20px; }
+        /* The send button fills with the accent, which is near-black in the
+           light theme -- a black glyph on it vanishes. The glyph goes white
+           there, the way GitHub keeps white text on its dark button fills. */
+        html[data-theme="light"] .composer-send { color: #ffffff; }
 
         /* Status bar - minimal */
         .status-bar {
@@ -1408,7 +1453,9 @@
             padding: 0 16px;
             border-top: 1px solid var(--border);
             background: var(--bg-elevated);
-            font-size: 11px; color: var(--text-muted);
+            /* 11px muted sat under 4.5:1 on this bar; the status line is read,
+               not decoration, so it takes the dim step. */
+            font-size: 11px; color: var(--text-dim);
         }
         .status-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
         #statusMessage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3297,11 +3344,11 @@
         // that use them: applyTheme() runs during initializeApp(), so these
         // must be initialized before that call or the whole init throws and
         // setupEventListeners() never runs (dead picker, dead composer keys).
-        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'auto'];
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'green', 'auto'];
         // The colour the browser paints its own chrome with, so the tab bar and
         // the status bar match the app instead of framing it in black. These
         // follow the palettes below rather than the old pure-white-on-black.
-        const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828' };
+        const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828', green: '#0d1512' };
         const loadedScripts = {};
         // Every attachment decision is in attachment-helpers.js, the script tag
         // above: what a picked file becomes, whether its bytes are text, and what a
@@ -9174,7 +9221,7 @@
             }
         }
 
-        // Themes cycle dark -> light -> tokyonight -> gruvbox. Guarded
+        // Themes cycle dark -> light -> tokyonight -> gruvbox -> green. Guarded
         // throughout: the boot-test stub DOM has no theme machinery, so every
         // DOM touch checks first. (THEMES/THEME_META live up with the state.)
         // 'auto' follows the OS; anything unknown falls back to dark.
@@ -9227,6 +9274,7 @@
             { id: 'dark', label: 'Dark', swatch: '#212121' },
             { id: 'tokyonight', label: 'Tokyo Night', hint: 'Pack', swatch: '#1a1b26' },
             { id: 'gruvbox', label: 'Gruvbox', hint: 'Pack', swatch: '#282828' },
+            { id: 'green', label: 'Green', hint: 'Pack', swatch: '#0d1512' },
         ];
 
         function storedTheme() {
@@ -9246,6 +9294,13 @@
                 row.type = 'button';
                 row.setAttribute('role', 'menuitemradio');
                 row.setAttribute('aria-checked', String(option.id === current));
+                if (option.id === current) {
+                    const check = document.createElement('i');
+                    check.className = 'check';
+                    check.setAttribute('aria-hidden', 'true');
+                    check.textContent = '✓';
+                    row.appendChild(check);
+                }
                 const swatch = document.createElement('i');
                 swatch.className = 'theme-swatch';
                 swatch.style.background = option.swatch;
