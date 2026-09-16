@@ -412,6 +412,21 @@
             color: var(--danger); white-space: nowrap; opacity: .85;
         }
         .session-hint { margin: 0; padding: 0 12px 10px; font-size: 11px; line-height: 1.7; color: var(--text-muted); }
+        .image-provider-report { margin: 0 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--surface); }
+        .image-provider-report-head { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-dim); }
+        .image-provider-report-head strong { font-size: 11px; color: var(--text); }
+        .image-provider-report-head button { margin-left: auto; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: 10px; padding: 2px 4px; }
+        .image-provider-report-head button:hover { color: var(--accent); }
+        .image-provider-list { display: flex; flex-direction: column; }
+        .image-provider-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 7px; align-items: start; padding: 7px 9px; border-bottom: 1px solid var(--border); font-size: 10px; }
+        .image-provider-row:last-child { border-bottom: 0; }
+        .image-provider-dot { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: var(--danger); }
+        .image-provider-row.ready .image-provider-dot { background: #22c55e; box-shadow: 0 0 7px rgba(34,197,94,.45); }
+        .image-provider-name { min-width: 0; color: var(--text); font-weight: 600; }
+        .image-provider-detail { display: block; margin-top: 2px; color: var(--text-muted); overflow-wrap: anywhere; line-height: 1.45; }
+        .image-provider-state { color: var(--text-muted); white-space: nowrap; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+        .image-provider-report.is-loading .image-provider-list { opacity: .55; }
+        .image-provider-report-error { padding: 8px 9px; color: var(--danger); font-size: 10px; line-height: 1.5; }
         .session-subhead {
             display: flex; align-items: center; gap: 6px;
             margin: 0; padding: 10px 12px 4px;
@@ -2446,6 +2461,10 @@
                             <h4 class="session-subhead">Shape</h4>
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
+                            <div class="image-provider-report" id="imageProviderReport" aria-live="polite">
+                                <div class="image-provider-report-head"><strong>Image services</strong><span id="imageProviderReportStatus">Checking…</span><button type="button" onclick="loadImageProviderReport()">Refresh</button></div>
+                                <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-error">Open this tab to see which configured services can draw and what each one needs.</div></div>
+                            </div>
                         </section>
                     </aside>
                 </div>
@@ -5137,12 +5156,48 @@
                     filterSkillOptions(skillSearch.value);
                 });
             }
+            if (wanted === 'image' && typeof loadImageProviderReport === 'function') loadImageProviderReport();
             if (!persist) return;
             try {
                 localStorage.setItem(SESSION_TAB_KEY, wanted);
             } catch {
                 // Private mode: the tab still changes, it just does not stick.
             }
+        }
+
+        function loadImageProviderReport() {
+            const report = document.getElementById('imageProviderReport');
+            const list = document.getElementById('imageProviderList');
+            const status = document.getElementById('imageProviderReportStatus');
+            if (!report || !list || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+            report.classList.add('is-loading');
+            if (status) status.textContent = 'Checking…';
+            window.fetch('/api/llm/images/providers', { cache: 'no-store' }).then((response) => {
+                if (!response.ok) throw new Error('status ' + response.status);
+                return response.json();
+            }).then((body) => {
+                const rows = [body.browser].concat(Array.isArray(body.providers) ? body.providers : []).filter(Boolean);
+                list.innerHTML = '';
+                rows.forEach((provider) => {
+                    const row = document.createElement('div');
+                    row.className = 'image-provider-row' + (provider.ready ? ' ready' : '');
+                    const detail = provider.ready
+                        ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
+                        : (provider.reason || provider.note || 'Not configured');
+                    row.innerHTML = '<span class="image-provider-dot" aria-hidden="true"></span>'
+                        + '<span><span class="image-provider-name"></span><span class="image-provider-detail"></span></span>'
+                        + '<span class="image-provider-state"></span>';
+                    row.querySelector('.image-provider-name').textContent = provider.label || provider.id || 'Service';
+                    row.querySelector('.image-provider-detail').textContent = detail;
+                    row.querySelector('.image-provider-state').textContent = provider.ready ? 'ready' : 'setup';
+                    list.appendChild(row);
+                });
+                if (!rows.length) list.innerHTML = '<div class="image-provider-report-error">No image services were reported.</div>';
+                if (status) status.textContent = rows.filter((provider) => provider.ready).length + ' ready';
+            }).catch(() => {
+                list.innerHTML = '<div class="image-provider-report-error">Could not check image services. Try Refresh, or send a draw to see the provider’s exact error.</div>';
+                if (status) status.textContent = 'Unavailable';
+            }).finally(() => report.classList.remove('is-loading'));
         }
 
         function restoreSessionPanel() {

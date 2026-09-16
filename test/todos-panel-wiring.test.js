@@ -36,6 +36,7 @@ const NAMES = [
   'toggleSessionPanel',
   'restoreSessionPanel',
   'showSessionTab',
+  'loadImageProviderReport',
   'openSessionPanel',
   'updateSessionSummary',
   'sessionSkillCount',
@@ -195,6 +196,7 @@ function harness({
     skillsCatalog: catalogue,
     skillSearch: { value: '' },
     ensureSkillsLoaded: () => Promise.resolve(catalogue),
+    loadImageProviderReport: () => {},
     // The picker's own renderers are covered by the skills tests; here they are
     // a seam, so the panel's job -- showing one section at a time -- is what is
     // measured.
