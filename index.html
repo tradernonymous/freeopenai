@@ -142,6 +142,17 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
         html, body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; overflow: hidden; height: 100%; }
+        body::before {
+            content: "";
+            position: fixed; inset: 0; pointer-events: none; z-index: 0;
+            opacity: .22;
+            background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px), radial-gradient(circle at 50% -20%, var(--accent-bg), transparent 55%);
+            background-size: 42px 42px, 42px 42px, 100% 100%;
+            mask-image: linear-gradient(to bottom, black, transparent 78%);
+            animation: ambient-grid 24s linear infinite;
+        }
+        main { position: relative; z-index: 1; }
+        @keyframes ambient-grid { from { background-position: 0 0, 0 0, 0 0; } to { background-position: 0 42px, 42px 0, 0 0; } }
         /* iOS inflates text when you switch to landscape; this pins the size. */
         html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         body {
@@ -521,6 +532,8 @@
                past the viewport, clipped by .chat-shell. 0 lets it shrink so
                the toolbar scrolls inside the composer instead. */
             min-width: 0;
+            position: relative;
+            isolation: isolate;
             background: var(--surface);
             border: 1px solid var(--border);
             overflow: visible;
@@ -534,6 +547,17 @@
            model picker and attach menu hang below the composer. */
         #viewChat { padding: 10px; }
         #viewChat .chat-card { border-radius: var(--r-lg); box-shadow: var(--lift); }
+        #viewChat .chat-card::before {
+            content: "";
+            position: absolute; inset: -1px; pointer-events: none; z-index: 2;
+            border: 1px solid transparent; border-radius: inherit;
+            background: linear-gradient(115deg, transparent 18%, var(--accent) 42%, transparent 62%) border-box;
+            mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+            opacity: .18; background-size: 240% 100%;
+            animation: edge-scan 9s linear infinite;
+        }
+        @keyframes edge-scan { from { background-position: 140% 0; } to { background-position: -140% 0; } }
 
         /* Chat header bar */
         .chat-bar {
@@ -553,6 +577,18 @@
             gap: 12px;
         }
         .chat-bar-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+        .command-state {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 3px 7px; border: 1px solid var(--ctl-edge); border-radius: 999px;
+            color: var(--text-muted); font-size: 9px; font-weight: 700; letter-spacing: .12em;
+            line-height: 1; transition: color var(--transition), border-color var(--transition), background var(--transition);
+        }
+        .command-state::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .8; }
+        .command-state[data-state="draw"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+        .command-state[data-state="plan"], .command-state[data-state="build"] { color: var(--text-dim); border-color: var(--border-strong); }
+        .command-state[data-state="running"] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+        .command-state[data-state="running"]::before { animation: state-ping 1s ease-in-out infinite; }
+        @keyframes state-ping { 0%, 100% { transform: scale(.75); opacity: .45; } 50% { transform: scale(1.35); opacity: 1; } }
         .chat-bar-title .dot {
             width: 8px; height: 8px; border-radius: 50%;
             background: var(--accent);
@@ -579,7 +615,8 @@
             display: grid; place-items: center;
             transition: var(--transition);
         }
-        .icon-btn:hover, .menu-trigger-btn:hover, .modal-close:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+        .icon-btn:hover, .menu-trigger-btn:hover, .modal-close:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); transform: translateY(-1px); box-shadow: var(--lift); }
+        .icon-btn:active, .menu-trigger-btn:active, .modal-close:active { transform: translateY(0) scale(.96); }
         .icon-btn svg, .modal-close svg { width: 16px; height: 16px; }
         .menu-trigger-btn svg { width: 16px; height: 16px; }
 
@@ -1140,8 +1177,9 @@
            on phones. */
         .hero-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; width: 100%; max-width: 560px; }
         .hero-card { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); cursor: pointer; transition: var(--transition); font: inherit; color: inherit; }
-        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift); }
-        .hero-card strong { font-size: 13px; color: var(--text); }
+        .hero-card:hover { background: var(--surface-2); box-shadow: var(--lift-lg); transform: translateY(-2px); }
+        .hero-card:active { transform: translateY(0); }
+        .hero-card strong { font-size: 13px; color: var(--text); letter-spacing: .01em; }
         .hero-card span { font-size: 12px; color: var(--text-muted); }
         /* The three things a first-time reader cannot see from here: that this
            draws pictures, that a mode can plan before it builds, and that there
@@ -1157,7 +1195,8 @@
             color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; transition: var(--transition);
         }
         .hero-start svg { width: 14px; height: 14px; flex-shrink: 0; }
-        .hero-start:hover { color: var(--text); border-color: var(--accent); background: var(--ctl-bg); }
+        .hero-start:hover { color: var(--text); border-color: var(--accent); background: var(--accent-bg); box-shadow: 0 0 18px var(--accent-bg); transform: translateY(-1px); }
+        .hero-start:active { transform: translateY(0); }
         .empty-state .hero-hint { max-width: 380px; margin-top: 20px; font-size: 11.5px; }
         .hero-hint kbd {
             font-family: inherit; font-size: 11px; color: var(--text-dim);
@@ -1283,8 +1322,13 @@
             border-radius: 22px;
             padding: 8px;
             transition: var(--transition);
+            position: relative;
+            background-image: linear-gradient(120deg, transparent 20%, var(--accent-bg), transparent 80%);
+            background-size: 220% 100%;
         }
-        .composer-input-row { display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+        .composer:focus-within { animation: composer-flow 5s ease-in-out infinite; }
+        @keyframes composer-flow { 0%, 100% { background-position: 160% 0; } 50% { background-position: -40% 0; } }
+        .composer-input-row { display: flex; align-items: flex-end; gap: 4px; min-width: 0; position: relative; z-index: 1; }
         /* The size the prompt asks for, shown while it can still be changed.
            Until now the only place it appeared was the status line after the
            picture arrived -- one turn too late to do anything about. */
@@ -1396,7 +1440,8 @@
             color: #000;
             font-size: 16px; font-weight: 700;
         }
-        .composer-send:hover:not(:disabled) { transform: scale(1.05); }
+        .composer-send:hover:not(:disabled) { transform: scale(1.06) rotate(-2deg); box-shadow: 0 0 20px var(--accent-bg), var(--lift-lg); }
+        .composer-send:focus-visible { outline: none; box-shadow: var(--glow), 0 0 20px var(--accent-bg); }
         .composer-send:disabled { opacity: 0.35; cursor: not-allowed; }
         /* Red stop square while a reply is in flight. */
         .composer-send.stop { background: var(--danger); font-size: 20px; }
@@ -2048,6 +2093,7 @@
                             </button>
                             <span class="dot"></span>
                             <span>FreeAi4U</span>
+                            <span class="command-state" id="commandState" data-state="ready" aria-live="polite">READY</span>
                         </div>
                         <div class="chat-bar-actions">
                             <!-- One button for what used to be two: the plan the
@@ -2800,6 +2846,16 @@
             if (skillsEnabled && selectedMode !== 'chat') ensureSkillsLoaded();
         }
 
+        function updateCommandState() {
+            const state = document.getElementById('commandState');
+            if (!state) return;
+            const mode = String(selectedMode || 'chat').toLowerCase();
+            const value = isTyping ? 'running' : imageMode ? 'draw' : mode === 'plan' ? 'plan' : mode === 'build' ? 'build' : 'ready';
+            state.dataset.state = value;
+            state.textContent = value.toUpperCase();
+            state.title = value === 'draw' ? 'Next message will be read as image work' : value === 'running' ? 'A response is being generated' : value === 'ready' ? 'Chat ready' : mode.toUpperCase() + ' mode';
+        }
+
         function updateModeChip() {
             const chip = document.getElementById('modeChip');
             const label = document.getElementById('modeChipLabel');
@@ -2808,6 +2864,7 @@
             chip.dataset.mode = meta.id;
             label.textContent = meta.label;
             chip.title = meta.desc;
+            updateCommandState();
         }
 
         function cycleMode() {
@@ -6461,6 +6518,7 @@
             // whether the size in these words is going to be used at all.
             updateImageSizeHint();
             updateSessionSummary();
+            updateCommandState();
         }
 
         function toggleImageMode() { setImageMode(!imageMode); }
@@ -6521,6 +6579,7 @@
 
         function setComposerBusy(busy) {
             isTyping = busy;
+            updateCommandState();
             sendButton.disabled = false;
             if (busy) {
                 sendButton.textContent = '■';

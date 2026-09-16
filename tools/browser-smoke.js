@@ -324,7 +324,9 @@ async function main() {
         const session = await (async () => {
           const shell = el('#viewChat .chat-shell');
           if (!shell || typeof toggleSessionPanel !== 'function' || typeof showSessionTab !== 'function') return null;
-          const settle = () => new Promise((done) => setTimeout(done, 300));
+          // The session drawer and its scrim animate independently; allow one full
+          // transition plus a frame before measuring geometry on slower runners.
+          const settle = () => new Promise((done) => setTimeout(done, 500));
           const card = el('#viewChat .chat-card');
           const width = () => (card ? Math.round(card.getBoundingClientRect().width) : null);
           const isOpen = () => !shell.classList.contains('session-hidden');
