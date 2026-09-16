@@ -23,9 +23,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # No setup-android action: its default package list names the `tools`
-      # package, which no longer exists, and that fails the whole job before
-      # Gradle ever runs. The runner image already carries an SDK; top it up.
+      # The action is kept for PATH + ANDROID_HOME, but its default package
+      # list names the `tools` package, which no longer exists -- that failed
+      # the whole job before Gradle ever ran. Only platform-tools comes from
+      # the action; the API-35 pieces install below.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: yes | sdkmanager --licenses
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
