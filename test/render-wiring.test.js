@@ -41,9 +41,10 @@ function runSetMessageContent(content, langs) {
   const deps = {
     renderMarkdownLite,
     copyText: () => {},
-    // The Preview button delegates to the staging function, which has its
-    // own tests below -- here it is only a collaborator that must exist.
+    // The Preview and Diagram buttons delegate to staging functions with
+    // their own tests -- here they are only collaborators that must exist.
     openHtmlPreview: () => {},
+    renderDiagram: () => {},
     document: { createElement: (tag) => makeNode(tag) },
   };
   assertScannerCanRead(['setMessageContent']);
@@ -79,6 +80,13 @@ test('an HTML block gets a Preview button; other languages do not', () => {
   assert.ok(labels.includes('Copy'));
   const js = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
   assert.ok(!js.appended.map((node) => node.textContent).includes('Preview'), 'a JS block cannot run here, so it must not offer to');
+});
+
+test('a mermaid block gets a Diagram button; other languages do not', () => {
+  const mm = runSetMessageContent('```mermaid\ngraph TD\n```', ['mermaid']);
+  assert.ok(mm.appended.map((node) => node.textContent).includes('Diagram'), 'the diagram has no way to draw itself');
+  const js = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
+  assert.ok(!js.appended.map((node) => node.textContent).includes('Diagram'));
 });
 
 function runHtmlPreview(code) {

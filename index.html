@@ -918,6 +918,25 @@
         .code-preview-btn:hover { color: var(--text); border-color: var(--accent); }
         /* Sandboxed HTML stage: a white canvas like Claude's artifacts. */
         .html-preview-frame { width: 100%; height: 60vh; border: none; border-radius: var(--r-sm); background: #ffffff; }
+        /* Diagram chip for mermaid blocks, and the drawing surface. */
+        .code-diagram-btn {
+            position: absolute;
+            top: 6px;
+            right: 66px;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: var(--ctl-r);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .code-diagram-btn:hover { color: var(--text); border-color: var(--accent); }
+        .diagram-wrap { margin: 8px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); overflow-x: auto; }
+        .diagram-wrap[hidden] { display: none; }
+        .diagram-loading { font-size: 12px; color: var(--text-muted); }
+        .diagram-svg svg { max-width: 100%; height: auto; display: block; margin-inline: auto; }
 
         /* Generated images */
         .message-image-wrap { width: min(340px, 100%); margin-top: 6px; }
@@ -8693,6 +8712,32 @@
                     });
                     pre.appendChild(view);
                 }
+                // A mermaid block can draw itself on tap. Rendering stays
+                // click-to-run (never on arrival), behind the diagram-type
+                // gate, with the code left in place whatever the outcome.
+                if (pre.dataset && pre.dataset.lang === 'mermaid') {
+                    const draw = document.createElement('button');
+                    draw.type = 'button';
+                    draw.className = 'code-diagram-btn';
+                    draw.textContent = 'Diagram';
+                    draw.setAttribute('aria-label', 'Render this diagram');
+                    draw.addEventListener('click', () => {
+                        if (pre._diagramHolder) {
+                            pre._diagramHolder.hidden = true;
+                            pre._diagramHolder.innerHTML = '';
+                            pre._diagramHolder = null;
+                            return;
+                        }
+                        const code = pre.querySelector('code');
+                        const holder = document.createElement('div');
+                        holder.className = 'diagram-wrap';
+                        holder.hidden = true;
+                        pre.parentNode.insertBefore(holder, pre.nextSibling);
+                        pre._diagramHolder = holder;
+                        renderDiagram(holder, code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(draw);
+                }
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'code-copy-btn';
@@ -8749,6 +8794,79 @@
         function closeHtmlPreview() {
             const overlay = document.getElementById('htmlPreviewOverlay');
             if (overlay && typeof overlay.remove === 'function') overlay.remove();
+        }
+
+        // Diagrams, still behind a tap. Mermaid is vendored (vendor/mermaid,
+        // mermaid 12.0.0, MIT -- provenance and byte hashes in
+        // vendor/mermaid/SOURCES.json, closure assembled by
+        // tools/assemble-mermaid.js) rather than a CDN script: same-origin
+        // bytes with no supply-chain lookup at view time, and no offline
+        // breakage. The engine only ever loads on an explicit Diagram tap,
+        // only for a recognised diagram type, in strict mode -- and whatever
+        // the outcome, the code block it came from stays exactly where it was.
+        // NOTE: rendered SVG output has not yet been eyeballed in a browser;
+        // this branch stays unmerged until that happens.
+        const MERMAID_SRC = './vendor/mermaid/mermaid-12.0.0.mjs';
+        const MERMAID_TYPES = ['graph', 'flowchart', 'sequenceDiagram', 'pie', 'mindmap', 'timeline', 'journey', 'gitGraph', 'stateDiagram', 'stateDiagram-v2', 'classDiagram', 'classDiagram-v2', 'erDiagram', 'gantt', 'quadrantChart', 'requirementDiagram', 'c4Context', 'c4Container', 'c4Component', 'c4Dynamic', 'c4Deployment', 'kanban', 'sankey', 'block-beta'];
+
+        // The first content line names the diagram; config comments and blank
+        // lines do not. Anything else is prose, and prose must never spend a
+        // megabyte of engine download to be told it is not a diagram.
+        function mermaidDiagramType(code) {
+            const lines = String(code || '').split('\n');
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (!line || line.startsWith('%%')) continue;
+                const word = (line.match(/^[A-Za-z][\w-]*/) || [])[0] || '';
+                return MERMAID_TYPES.indexOf(word) !== -1 ? word : null;
+            }
+            return null;
+        }
+
+        let mermaidPromise = null;
+        function ensureMermaid() {
+            if (mermaidPromise) return mermaidPromise;
+            mermaidPromise = import(MERMAID_SRC).then((mod) => {
+                const api = mod.default || mod;
+                api.initialize({ startOnLoad: false, securityLevel: 'strict' });
+                return api;
+            });
+            mermaidPromise.catch(() => { mermaidPromise = null; });
+            return mermaidPromise;
+        }
+
+        async function renderDiagram(holder, code) {
+            const type = mermaidDiagramType(code);
+            if (!type) {
+                showStatus('error', 'That block is not a diagram this app draws -- the code stays as it is.');
+                return;
+            }
+            holder.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'diagram-loading';
+            note.textContent = 'Drawing the ' + type + ' diagram…';
+            holder.appendChild(note);
+            holder.hidden = false;
+            let api;
+            try {
+                api = await ensureMermaid();
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'The diagram engine failed to load; the code is untouched.');
+                return;
+            }
+            try {
+                const id = 'freeai-diagram-' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
+                const result = await api.render(id, code);
+                holder.innerHTML = '';
+                const wrap = document.createElement('div');
+                wrap.className = 'diagram-svg';
+                wrap.innerHTML = result.svg;
+                holder.appendChild(wrap);
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'Mermaid could not draw that block; the code is untouched.');
+            }
         }
 
         // Reasoning models (Claude extended thinking, the GPT "pro reasoning" tiers)

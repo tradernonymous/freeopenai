@@ -3257,6 +3257,10 @@ function llmChat(req, res) {
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
+  // Vendored ES modules (mermaid) load through dynamic import(), which the
+  // browser refuses unless the MIME type is a JavaScript one -- octet-stream
+  // answers fail the module load with no further explanation.
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.json': 'application/json',
   '.png': 'image/png',
