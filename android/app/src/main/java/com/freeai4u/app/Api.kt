@@ -121,29 +121,120 @@ fun parseSseLine(line: String): SseEvent {
     return SseEvent.Skip
 }
 
-class ApiException(message: String) : Exception(message)
+class ApiException(message: String, val authRequired: Boolean = false) : Exception(message)
 
 interface ChatListener {
     fun onDelta(text: String)
     fun onDone(fullText: String)
-    fun onError(message: String)
+    fun onError(message: String, authRequired: Boolean = false)
 }
 
-/** Thin client for this repo's own server routes only. No cookies are stored,
- * no credentials exist to keep: if the deployment enforces login, calls fail
- * with a message that says so instead of pretending to work. */
-class ChatApi(private val baseUrl: String) {
+/** The fo_auth session value out of a Set-Cookie header, or null. The value
+ * travels to the first semicolon untouched: it is opaque to us by design. */
+fun parseSessionCookie(setCookie: String?, name: String = "fo_auth"): String? {
+    if (setCookie == null) return null
+    for (part in setCookie.split(',')) {
+        val segments = part.split(';')
+        if (segments.isEmpty()) continue
+        val pair = segments[0].trim()
+        val cut = pair.indexOf('=')
+        if (cut <= 0) continue
+        if (pair.substring(0, cut).trim() == name) {
+            val value = pair.substring(cut + 1).trim()
+            if (value.isNotEmpty()) return value
+        }
+    }
+    return null
+}
+
+/** Thin client for this repo's own server routes only. The only credential it
+ * ever holds is the fo_auth session cookie this deployment issued after a
+ * username/password login; it travels as a Cookie header, lives in
+ * app-private storage, and is wiped on sign-out. If the deployment enforces
+ * login, calls fail with authRequired so the UI can offer the login card
+ * instead of pretending to work. */
+class ChatApi(
+    private val baseUrl: String,
+    private val opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+) {
+    var sessionCookie: String? = null
+
+    private fun authed(conn: HttpURLConnection) {
+        val cookie = sessionCookie
+        if (!cookie.isNullOrEmpty()) conn.setRequestProperty("Cookie", "fo_auth=" + cookie)
+    }
+
+    /** Username/password login against /api/login. Returns the session value
+     * to store; throws ApiException carrying the server's own refusal. */
+    fun login(username: String, password: String): String {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = opener(URL(baseUrl + "/api/login"))
+            conn.connectTimeout = 15000
+            conn.readTimeout = 30000
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val payload = JSONObject()
+            payload.put("username", username)
+            payload.put("password", password)
+            conn.outputStream.bufferedWriter().use { it.write(payload.toString()) }
+            val code = conn.responseCode
+            if (code == 429) {
+                throw ApiException("Too many attempts -- try again later.", true)
+            }
+            if (code != 200) {
+                val message = try {
+                    val body = conn.errorStream?.bufferedReader()?.use(BufferedReader::readText) ?: ""
+                    val obj = JSONObject(body)
+                    obj.optString("error", "Invalid username or password.")
+                } catch (e: Exception) {
+                    "Invalid username or password."
+                }
+                throw ApiException(if (message.isNotEmpty()) message else "Invalid username or password.", code == 401)
+            }
+            val setCookie = conn.getHeaderField("Set-Cookie")
+            return parseSessionCookie(setCookie)
+                ?: throw ApiException("Signed in, but no session came back. Try again.")
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: Exception) {
+            throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** Best-effort server-side logout; the caller clears the stored cookie
+     * regardless of the outcome. */
+    fun logout() {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = opener(URL(baseUrl + "/api/logout"))
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
+            conn.requestMethod = "POST"
+            authed(conn)
+            conn.responseCode
+        } catch (e: Exception) {
+            // Clearing the local cookie is what signs out; the server call is
+            // a courtesy that must never fail the action.
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     private fun get(path: String): String {
         var conn: HttpURLConnection? = null
         try {
-            conn = URL(baseUrl + path).openConnection() as HttpURLConnection
+            conn = opener(URL(baseUrl + path))
             conn.connectTimeout = 15000
             conn.readTimeout = 60000
             conn.setRequestProperty("Accept", "application/json")
+            authed(conn)
             val code = conn.responseCode
             if (code == 401 || code == 302) {
-                throw ApiException("This server needs a login first -- open it in a browser, sign in, then retry.")
+                throw ApiException("This server needs a login first -- sign in below and retry.", true)
             }
             if (code !in 200..299) {
                 throw ApiException("Server answered HTTP " + code + ".")
@@ -191,13 +282,14 @@ class ChatApi(private val baseUrl: String) {
     fun streamChat(providerId: String, model: String, history: List<ChatMessage>, listener: ChatListener) {
         var conn: HttpURLConnection? = null
         try {
-            conn = URL(baseUrl + "/api/llm/chat?provider=" + URLEncoder.encode(providerId, "UTF-8")).openConnection() as HttpURLConnection
+            conn = opener(URL(baseUrl + "/api/llm/chat?provider=" + URLEncoder.encode(providerId, "UTF-8")))
             conn.connectTimeout = 15000
             conn.readTimeout = 180000
             conn.requestMethod = "POST"
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
             conn.setRequestProperty("Accept", "text/event-stream")
+            authed(conn)
             val payload = JSONObject()
             payload.put("model", model)
             val messages = JSONArray()
@@ -212,7 +304,7 @@ class ChatApi(private val baseUrl: String) {
             conn.outputStream.bufferedWriter().use { it.write(payload.toString()) }
             val code = conn.responseCode
             if (code == 401 || code == 302) {
-                listener.onError("This server needs a login first -- open it in a browser, sign in, then retry.")
+                listener.onError("This server needs a login first -- sign in below and retry.", true)
                 return
             }
             if (code !in 200..299) {

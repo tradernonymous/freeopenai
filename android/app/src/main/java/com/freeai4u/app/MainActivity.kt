@@ -18,7 +18,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
@@ -63,6 +66,7 @@ import kotlinx.coroutines.withContext
 
 private const val PREFS = "freeai4u"
 private const val KEY_BASE_URL = "base_url"
+private const val KEY_SESSION = "session_cookie"
 
 // Testing build for the owner's own phone: the window is flagged secure so
 // screenshots, screen recordings and the recents thumbnail all come out
@@ -110,15 +114,63 @@ fun ChatScreen() {
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var input by rememberSaveable { mutableStateOf("") }
+    // The fo_auth session this deployment issued after a username/password
+    // login. App-private, never backed up, wiped on sign-out; a 401 anywhere
+    // reopens the login card instead of failing silently.
+    var sessionCookie by rememberSaveable { mutableStateOf(prefs.getString(KEY_SESSION, null)) }
+    var showLogin by remember { mutableStateOf(false) }
+    var loginUser by rememberSaveable { mutableStateOf("") }
+    var loginPass by rememberSaveable { mutableStateOf("") }
+    var loginError by remember { mutableStateOf<String?>(null) }
+    var signingIn by remember { mutableStateOf(false) }
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
 
     fun apiOrNull(): ChatApi? {
         return when (val checked = normalizeBaseUrl(baseUrl)) {
-            is BaseUrlResult.Ok -> ChatApi(checked.url)
+            is BaseUrlResult.Ok -> ChatApi(checked.url).also { it.sessionCookie = sessionCookie }
             is BaseUrlResult.Problem -> {
                 activity.runOnUiThread { urlError = checked.message }
                 null
+            }
+        }
+    }
+
+    fun signIn() {
+        val user = loginUser.trim()
+        if (user.isEmpty() || loginPass.isEmpty() || signingIn) return
+        val api = apiOrNull() ?: return
+        signingIn = true
+        loginError = null
+        scope.launch {
+            try {
+                val cookie = withContext(Dispatchers.IO) { api.login(user, loginPass) }
+                activity.runOnUiThread {
+                    sessionCookie = cookie
+                    prefs.edit().putString(KEY_SESSION, cookie).apply()
+                    loginPass = ""
+                    loginError = null
+                    showLogin = false
+                    refreshAll()
+                }
+            } catch (e: ApiException) {
+                activity.runOnUiThread { loginError = e.message }
+            } catch (e: Exception) {
+                activity.runOnUiThread { loginError = e.message ?: "Sign-in failed." }
+            } finally {
+                activity.runOnUiThread { signingIn = false }
+            }
+        }
+    }
+
+    fun signOut() {
+        val api = apiOrNull()
+        sessionCookie = null
+        prefs.edit().remove(KEY_SESSION).apply()
+        showLogin = false
+        if (api != null) {
+            scope.launch {
+                withContext(Dispatchers.IO) { api.logout() }
             }
         }
     }
@@ -151,7 +203,10 @@ fun ChatScreen() {
                     }
                 }
             } catch (e: ApiException) {
-                activity.runOnUiThread { error = e.message }
+                activity.runOnUiThread {
+                    error = e.message
+                    if (e.authRequired) showLogin = true
+                }
             } finally {
                 activity.runOnUiThread { loading = false }
             }
@@ -170,7 +225,10 @@ fun ChatScreen() {
                     if (listed.none { it.id == modelId }) modelId = listed.firstOrNull()?.id
                 }
             } catch (e: ApiException) {
-                activity.runOnUiThread { error = e.message }
+                activity.runOnUiThread {
+                    error = e.message
+                    if (e.authRequired) showLogin = true
+                }
             } finally {
                 activity.runOnUiThread { loading = false }
             }
@@ -215,9 +273,10 @@ fun ChatScreen() {
                             }
                         }
 
-                        override fun onError(message: String) {
+                        override fun onError(message: String, authRequired: Boolean) {
                             activity.runOnUiThread {
                                 error = message
+                                if (authRequired) showLogin = true
                                 val last = messages.lastIndex
                                 if (last >= 0 && messages[last].content.isEmpty()) {
                                     messages.removeAt(last)
@@ -230,6 +289,7 @@ fun ChatScreen() {
             } catch (e: Exception) {
                 activity.runOnUiThread {
                     error = e.message ?: "Send failed."
+                    if (e is ApiException && e.authRequired) showLogin = true
                     sending = false
                 }
             }
@@ -315,6 +375,59 @@ fun ChatScreen() {
                                 Button(onClick = { editingServer = false }) {
                                     Text("Cancel")
                                 }
+                            }
+                            if (sessionCookie != null) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(onClick = { signOut() }) {
+                                    Text("Sign out")
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            if (showLogin) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text("Sign in", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "This server needs one of its app accounts -- the same username and password its login page takes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = loginUser,
+                            onValueChange = { loginUser = it; loginError = null },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = loginPass,
+                            onValueChange = { loginPass = it; loginError = null },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (loginError != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(loginError ?: "", color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row {
+                            Button(onClick = { signIn() }, enabled = !signingIn) {
+                                Text(if (signingIn) "Signing in…" else "Sign in")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(onClick = { showLogin = false; loginError = null }) {
+                                Text("Cancel")
                             }
                         }
                     }
