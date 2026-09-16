@@ -48,18 +48,26 @@ fun normalizeBaseUrl(raw: String): BaseUrlResult {
     return BaseUrlResult.Ok("https://" + text)
 }
 
-/** Mirrors the server's own convention: unpriced models ride a free-tier
- * allowance, so missing pricing reads as free rather than unknown. */
+/** Which models may wear the free badge. Unpriced models ride a free-tier
+ * allowance (the server's own convention), so a missing pricing object reads
+ * as free -- but a half-published one does not: with only one side priced,
+ * the badge must not claim what the missing half might bill. */
 fun isFreePricing(pricing: JSONObject?): Boolean {
     if (pricing == null) return true
+    fun present(key: String): Boolean {
+        return pricing.has(key) && !pricing.isNull(key)
+    }
     fun zero(key: String): Boolean {
-        if (!pricing.has(key) || pricing.isNull(key)) return true
         return when (val v = pricing.get(key)) {
             is Number -> v.toDouble() == 0.0
             is String -> v.toDoubleOrNull() == 0.0
             else -> false
         }
     }
+    val hasPrompt = present("prompt")
+    val hasCompletion = present("completion")
+    if (!hasPrompt && !hasCompletion) return true
+    if (hasPrompt != hasCompletion) return false
     return zero("prompt") && zero("completion")
 }
 
