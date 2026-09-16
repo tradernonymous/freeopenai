@@ -217,7 +217,10 @@ class ChatApi(private val baseUrl: String) {
                 return
             }
             val full = StringBuilder()
-            conn.inputStream.bufferedReader().forEachLine { line ->
+            var terminal = false
+            val reader = conn.inputStream.bufferedReader()
+            while (!terminal) {
+                val line = reader.readLine() ?: break
                 when (val event = parseSseLine(line)) {
                     is SseEvent.Delta -> {
                         full.append(event.text)
@@ -225,17 +228,17 @@ class ChatApi(private val baseUrl: String) {
                     }
                     is SseEvent.Failure -> {
                         listener.onError(event.message)
-                        return
+                        terminal = true
                     }
                     is SseEvent.Done -> {
                         listener.onDone(full.toString())
-                        return
+                        terminal = true
                     }
                     is SseEvent.Skip -> {}
                 }
             }
             // A stream that ends without DONE still delivered what it delivered.
-            listener.onDone(full.toString())
+            if (!terminal) listener.onDone(full.toString())
         } catch (e: Exception) {
             listener.onError("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
         } finally {
