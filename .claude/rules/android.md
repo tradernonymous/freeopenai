@@ -14,3 +14,6 @@ paths:
 - Material icons: import each `androidx.compose.material.icons.filled.X` explicitly (a missing import is the most common CI failure).
 - Every `when` over `ChatEvent` must handle every branch.
 - Verify by pushing and reading the Android run (`gh-fix-ci` skill); the build number is the run number + 100.
+- Guard any API above minSdk 29 with an SDK check in the same function.
+- Never swallow `CancellationException` in a general `catch`; rethrow it.
+- Tests assert observable behaviour and must fail if the fix is reverted.

@@ -30,6 +30,17 @@ FreeAI4U: a zero-dependency Node server (`server.js`, login gate, provider proxy
 - The user is a beginner: finish with short numbered steps for anything they must do themselves.
 - Update the README (concise) after 2–3 successful builds; details belong in `docs/`.
 
+## Change discipline
+
+- Keep the diff inside the task; report unrelated problems instead of fixing them. Prefer a new function plus a thin hook over restructuring shared files (`server.js`, `index.html`).
+- Say "verified" only for checks that ran on HEAD; list anything not run, with the command. A green build is not runtime proof.
+- While iterating run the affected test file; run the full suite once before pushing.
+- Never `git add -A`/`.`; check `git diff --cached` for secrets. Never stash, reset or restore files another session may be using.
+- Log IDs and counts, never tokens, keys or full credentialed URLs.
+- Do not install global tools or pipe remote scripts into a shell; ask the user.
+- User-supplied URLs: parse with `new URL()`, check scheme and host on every redirect hop.
+- Docs: update the page that owns the subject; one fact in one place.
+
 ## Which skill to use (use them proactively, without being asked)
 
 | When | Skill |
