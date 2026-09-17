@@ -36,6 +36,10 @@ function harness({ files = {}, approve = true, capture = null } = {}) {
     workspaceSearch,
     MAX_WORKSPACE_SEARCH_MATCHES,
     normalizeWorkspacePath,
+    // The browser workspace is under test here; the server-backed path has its
+    // own route tests (workspace-files.test.js).
+    useServerWorkspace: () => false,
+    runServerWorkspaceTool: async () => 'unexpected: server workspace',
     // Mirrors the page's contract: setActiveWorkspace persists the store.
     activeWorkspace: () => store,
     setActiveWorkspace: (next) => { store = next; deps.saveWorkspaceFiles(); },

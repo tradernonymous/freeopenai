@@ -415,6 +415,36 @@ function walkFiles(root, visit) {
   walk(root);
 }
 
+// Every line under `target` (a folder inside `dir`) that contains the query,
+// as { path, line, text } with paths relative to `dir`. Case-insensitive
+// text, or the caller's own RegExp; binaries and very large files skipped.
+function searchFolder(dir, target, { query, matcher, glob } = {}) {
+  const needle = String(query == null ? '' : query).toLowerCase();
+  const only = glob ? globToRegExp(String(glob)) : null;
+  const matches = [];
+  let files = 0;
+  walkFiles(target, (file) => {
+    const rel = relativeTo(dir, file);
+    if (only && !only.test(rel)) return true;
+    files++;
+    let content;
+    try {
+      if (fs.statSync(file).size > MAX_SEARCH_FILE_BYTES) return true;
+      content = fs.readFileSync(file, 'utf8');
+    } catch { return true; }
+    if (content.includes('\0')) return true;
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length && matches.length < MAX_SEARCH_RESULTS; i++) {
+      const line = lines[i];
+      if (matcher ? matcher.test(line) : line.toLowerCase().includes(needle)) {
+        matches.push({ path: rel, line: i + 1, text: line.trim().slice(0, 300) });
+      }
+    }
+    return matches.length < MAX_SEARCH_RESULTS;
+  });
+  return { matches, files, truncated: matches.length >= MAX_SEARCH_RESULTS };
+}
+
 // "src/**/*.kt" as a regular expression over a forward-slash relative path.
 // ** crosses folders, * stays inside one, ? is one character.
 function globToRegExp(glob) {
@@ -910,31 +940,10 @@ function createBuildSessions(deps) {
         } catch (err) {
           return 'That regular expression is not valid: ' + err.message;
         }
-        const needle = query.toLowerCase();
-        const only = args.glob ? globToRegExp(String(args.glob)) : null;
-        const hits = [];
-        let files = 0;
-        walkFiles(target, (file) => {
-          const rel = relativeTo(dir, file);
-          if (only && !only.test(rel)) return true;
-          files++;
-          let content;
-          try {
-            if (fs.statSync(file).size > MAX_SEARCH_FILE_BYTES) return true;
-            content = fs.readFileSync(file, 'utf8');
-          } catch { return true; }
-          if (content.includes('\0')) return true;
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length && hits.length < MAX_SEARCH_RESULTS; i++) {
-            const line = lines[i];
-            if (matcher ? matcher.test(line) : line.toLowerCase().includes(needle)) {
-              hits.push(rel + ':' + (i + 1) + ': ' + line.trim().slice(0, 300));
-            }
-          }
-          return hits.length < MAX_SEARCH_RESULTS;
-        });
-        if (!hits.length) return 'No matches for "' + query + '" in ' + files + ' file(s).';
-        const more = hits.length >= MAX_SEARCH_RESULTS ? '\n…[stopped at ' + MAX_SEARCH_RESULTS + ' matches; narrow the query or path]' : '';
+        const found = searchFolder(dir, target, { query, matcher, glob: args.glob });
+        if (!found.matches.length) return 'No matches for "' + query + '" in ' + found.files + ' file(s).';
+        const hits = found.matches.map((m) => m.path + ':' + m.line + ': ' + m.text);
+        const more = found.truncated ? '\n…[stopped at ' + MAX_SEARCH_RESULTS + ' matches; narrow the query or path]' : '';
         return cap(hits.join('\n') + more, MAX_TOOL_RESULT_CHARS * 2);
       }
       case 'find_files': {
@@ -1354,6 +1363,8 @@ module.exports = {
   globToRegExp,
   refusedGit,
   projectNotes,
+  protectedPath,
+  searchFolder,
   hashCall,
   createBuildSessions,
   handleBuildRoute,

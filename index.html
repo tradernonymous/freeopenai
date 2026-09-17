@@ -8,6 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>FreeAi4U | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
+    <script src="tool-call-text.js"></script>
     <script src="chatlib.js"></script>
     <script src="image-store.js"></script>
     <script src="provider-routing.js"></script>
@@ -4893,7 +4894,73 @@
 
         // The model's view of the workspace. Reads answer directly; a write is
         // put to the user first, and only a write that was approved is kept.
+        // In Build mode on a server that allows commands, the workspace tools act
+        // on the server folder the shell runs in: the file the model writes is
+        // the file its command runs, and git can commit it. Anywhere else the
+        // workspace is this browser's own.
+        function useServerWorkspace() {
+            return selectedMode === 'build' && serverRunReady;
+        }
+
+        async function serverWorkspaceCall(method, route, body) {
+            const res = await fetch(route, {
+                method,
+                headers: body ? { 'Content-Type': 'application/json' } : {},
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            const data = await safeJson(res);
+            if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+            return data || {};
+        }
+
+        async function runServerWorkspaceTool(name, args) {
+            const p = (value) => encodeURIComponent(String(value == null ? '' : value));
+            try {
+                if (name === 'workspace_list_files') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/files');
+                    serverWorkspaceFiles = Array.isArray(data.files) ? data.files : [];
+                    const under = String(args.path || '').replace(/^\.?\/+|\/+$/g, '');
+                    const rows = serverWorkspaceFiles.filter((file) => !under || file.path === under || file.path.startsWith(under + '/'));
+                    if (!rows.length) return under ? 'No files under "' + under + '" on the server.' : 'The server workspace is empty.';
+                    return rows.map((file) => file.path + ' (' + formatBytes(file.bytes) + ')').join('\n');
+                }
+                if (name === 'workspace_read_file') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/read?path=' + p(args.path));
+                    return data.content;
+                }
+                if (name === 'workspace_search_files') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/search?query=' + p(args.query) + '&path=' + p(args.path || ''));
+                    if (!data.matches || !data.matches.length) return 'No match in the server workspace.';
+                    return data.matches.map((m) => m.path + ':' + m.line + ': ' + m.text).join('\n') +
+                        (data.truncated ? '\n(stopped at ' + data.matches.length + ' matches)' : '');
+                }
+                if (name === 'workspace_write_file') {
+                    const content = String(args.content == null ? '' : args.content);
+                    const approved = await askWorkspaceConfirm('Write "' + String(args.path || '') + '" on the server (' + formatChars(content.length) + ')? run_command and git will see it there.');
+                    if (!approved) return 'The user declined this write. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('PUT', '/api/workspace/file', { path: args.path, content });
+                    return (data.created ? 'Created "' : 'Replaced "') + data.path + '" on the server (' + formatBytes(data.bytes) + ').';
+                }
+                if (name === 'workspace_edit_file') {
+                    const approved = await askWorkspaceConfirm('Change "' + String(args.path || '') + '" on the server (replace ' + formatChars(String(args.old_text || '').length) + ' with ' + formatChars(String(args.new_text || '').length) + ')?');
+                    if (!approved) return 'The user declined this edit. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('PATCH', '/api/workspace/file', { path: args.path, old_text: args.old_text, new_text: args.new_text, all: args.all === true });
+                    return 'Edited "' + data.path + '" on the server (' + data.replaced + ' replacement' + (data.replaced === 1 ? '' : 's') + ').';
+                }
+                if (name === 'workspace_delete_file') {
+                    const approved = await askWorkspaceConfirm('Delete "' + String(args.path || '') + '" from the server workspace? This cannot be undone.');
+                    if (!approved) return 'The user declined this delete. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('DELETE', '/api/workspace/file?path=' + p(args.path));
+                    return 'Deleted "' + data.path + '" from the server.';
+                }
+                return 'Error: unknown tool ' + name;
+            } catch (e) {
+                return 'Error: ' + e.message;
+            }
+        }
+
         async function runWorkspaceTool(name, args) {
+            if (useServerWorkspace()) return runServerWorkspaceTool(name, args);
             if (name === 'workspace_list_files') {
                 const listed = workspaceList(activeWorkspace(), args.path);
                 if (listed.error) return 'Error: ' + listed.error;
@@ -6338,7 +6405,7 @@
         function buildConversation(outgoing, activeSkills = null) {
             const skills = activeSkills && activeSkills.length ? renderSkillsPrompt(activeSkills) : '';
             const turnContext = [renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
-            const system = [SYSTEM_PROMPT, modePrompt(selectedMode)].filter(Boolean).join('\n\n');
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode), workspacePrompt(useServerWorkspace())].filter(Boolean).join('\n\n');
             return [
                 { role: 'system', content: system },
                 // Compact session swaps the budget, not the conversation: same
@@ -6563,7 +6630,8 @@
             // one call round after round only ever shows one repeat per round, so
             // a per-round count could never reach the threshold.
             const memoHits = new Map();
-            for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            const maxRounds = toolRoundsForMode(selectedMode);
+            for (let round = 0; round < maxRounds; round++) {
                 if (signal?.aborted) throw abortError();
                 // Which part of the turn this call is, and whether a cheaper model
                 // should take it. escalateNextStep is read here and cleared, so a
@@ -6595,9 +6663,18 @@
                         response = await callModel(convo, { tools }, signal, null);
                     } else throw err;
                 }
-                const message = (response && response.message) || null;
+                let message = (response && response.message) || null;
                 if (signal?.aborted) throw abortError();
-                const calls = extractToolCalls(message);
+                let calls = extractToolCalls(message);
+                if (!calls.length && tools.length) {
+                    // A tool call written as text is a tool call: run it, and
+                    // keep the markup out of the transcript.
+                    const written = textToolCalls(message, tools);
+                    if (written.length) {
+                        calls = written;
+                        message = withTextToolCalls(message, written);
+                    }
+                }
                 if (!calls.length) {
                     const blank = !extractMessageText(message) && !extractMessageReasoning(message);
                     const routedFailure = askModel ? routedStepFailure({ empty: blank }) : '';
@@ -7405,7 +7482,7 @@
                     }
                     removeTypingIndicator();
                     if (exhausted) {
-                        addMessage('system', `Reached ${MAX_TOOL_ROUNDS} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
+                        addMessage('system', `Reached ${toolRoundsForMode(selectedMode)} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
                     }
                     const reasoning = extractMessageReasoning(message);
                     let text = extractMessageText(message);

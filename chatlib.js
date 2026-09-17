@@ -41,10 +41,15 @@ const MODE_PROMPTS = {
     'End by asking the user to switch to Build mode to execute.',
   ].join('\n'),
   build: [
-    'MODE: BUILD. You are executing agreed work, and this is the only mode with the tools to change anything. Be disciplined about it:',
-    '- Prefer the smallest change that fully solves the request; reuse what the repo already has.',
+    'MODE: BUILD. You are executing agreed work, and this is the only mode with the tools to change anything. Keep going until the request is resolved or you are truly blocked; do not stop to ask for permission the app already asks for. Be disciplined about it:',
+    '- Understand before changing: search (workspace_search_files, github_search_code) and read the files that matter before editing; never guess a path or a file\'s contents.',
+    '- Make independent reads and searches in one turn. Never put two edits to the same file in one turn, and re-read a file after a failed edit.',
+    '- Prefer workspace_edit_file with an exact, unique old_text over rewriting a file; use workspace_write_file only for new files or full rewrites. Do not create documentation or README files unless asked.',
+    '- Prefer the smallest change that fully solves the request; reuse what the repo already has, match its style and libraries, and never assume a library is installed.',
     '- For behavior changes, write or adjust a test first when the repo has tests to attach to.',
-    '- Verify before claiming done: run what the repo offers (tests, build, lint) -- with run_command when it is offered, and never claim a result you did not read.',
+    '- Verify before claiming done: run what the repo offers (tests, build, lint) -- with run_command when it is offered, and never claim a result you did not read. Commands must not wait for input: pass non-interactive flags and never use -i.',
+    '- Git through run_command: commit only when asked, with a short message in the repository\'s style; never force push, amend or rebase; never commit .env or key files. Say plainly when a push is not possible instead of pretending.',
+    '- Fix the cause, not the symptom. Leave unrelated problems alone and mention them at the end.',
     // The todo list is the plan of record. Kept in the mode prompt rather than
     // added to each request, because this text never changes between turns and a
     // request that grows on every turn cannot be cached (#89).
@@ -57,6 +62,16 @@ const MODE_PROMPTS = {
 
 function modePrompt(mode) {
   return MODE_PROMPTS[mode] || MODE_PROMPTS.chat;
+}
+
+// Where the workspace tools point this turn. In Build mode on a server that
+// allows commands, the files and the shell share one folder, so a script the
+// model writes is one run_command can run and git can commit; everywhere else
+// the workspace is this browser's, and the shell cannot see it.
+function workspacePrompt(serverBacked) {
+  return serverBacked
+    ? 'WORKSPACE: the workspace tools (list, read, search, write, edit, delete) act on the server folder that run_command runs in, so files you write are the files a command sees, and git works there. Clone a repository with run_command (git clone …) and then use the workspace tools on it.'
+    : 'WORKSPACE: the workspace tools act on files kept in the user\'s browser. run_command runs on the server in a different folder and cannot see them; to run a script, write it with a heredoc in the command itself.';
 }
 
 // --- Agent skills (SKILL.md catalogues) ---
@@ -3203,6 +3218,42 @@ function extractToolCalls(message) {
   return [];
 }
 
+// A model that was offered tools and wrote the call into its text instead
+// (see tool-call-text.js). Only names that were actually offered count, so
+// prose about a tool the model does not have stays prose.
+const TOOL_CALL_TEXT = (typeof module !== 'undefined' && module.exports)
+  ? require('./tool-call-text')
+  : (typeof globalThis !== 'undefined' && globalThis.FreeOpenAIToolCallText) || null;
+
+function textToolCalls(message, tools) {
+  if (!TOOL_CALL_TEXT) return [];
+  const offered = new Set((Array.isArray(tools) ? tools : []).map((t) => t && t.function && t.function.name).filter(Boolean));
+  if (!offered.size) return [];
+  const text = extractMessageText(message);
+  if (!text || !/[<\[`]/.test(text)) return [];
+  return TOOL_CALL_TEXT.parseToolCallText(text)
+    .filter((call) => offered.has(call.name))
+    .map((call, i) => ({ id: 'text_' + Date.now().toString(36) + '_' + i, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) } }));
+}
+
+// The same reply with the tool-call markup cut out and the calls attached as
+// native ones, so the rest of the loop (and the transcript) never sees the
+// text form.
+function withTextToolCalls(message, calls) {
+  if (!TOOL_CALL_TEXT || !message || typeof message !== 'object') return message;
+  const shown = TOOL_CALL_TEXT.stripToolCallText(extractMessageText(message));
+  return { ...message, content: shown, tool_calls: calls };
+}
+
+// How many tool steps a turn may take, by mode. Chat answers a question and
+// twelve is plenty; a build is a run of edits and test runs, and the number
+// to keep down is how many it needs, not how many it may have.
+const TOOL_ROUNDS_BY_MODE = { chat: 12, plan: 20, build: 60 };
+
+function toolRoundsForMode(mode) {
+  return TOOL_ROUNDS_BY_MODE[mode] || MAX_TOOL_ROUNDS;
+}
+
 // How hard a reasoning model should think before answering. Puter passes this
 // through as reasoning_effort; see
 // https://docs.puter.com/AI/chat/ for the accepted values.
@@ -5037,6 +5088,11 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_MODE,
     isValidMode,
     modePrompt,
+    workspacePrompt,
+    toolRoundsForMode,
+    TOOL_ROUNDS_BY_MODE,
+    textToolCalls,
+    withTextToolCalls,
     TOOL_GROUPS,
     MODE_TOOL_GROUPS,
     WRITE_TOOL_GROUPS,

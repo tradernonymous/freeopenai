@@ -38,6 +38,8 @@ function harness({ graph = newTaskGraph() } = {}) {
     // What buildConversation needs to assemble a request.
     SYSTEM_PROMPT: 'You are a helpful assistant.',
     modePrompt: () => 'Mode: build',
+    workspacePrompt: () => '',
+    useServerWorkspace: () => false,
     renderSkillsPrompt: () => 'skills',
     buildChatHistory: () => [],
     // Compact session reads a state flag the harness keeps off; buildConversation

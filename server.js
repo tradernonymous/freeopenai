@@ -27,7 +27,7 @@ const {
   accountsOf,
   pickAccount,
 } = require('./github.js');
-const { createBuildSessions, handleBuildRoute } = require('./agent-sessions.js');
+const { createBuildSessions, handleBuildRoute, resolveInside, protectedPath, searchFolder, refusedGit } = require('./agent-sessions.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -4551,6 +4551,11 @@ function handleWorkspaceRun(req, res, root) {
     if (command.length > WORKSPACE_RUN_MAX_COMMAND_CHARS) {
       return sendJson(res, 400, { error: 'That command is too long (' + command.length + ' characters).' });
     }
+    const gitRefusal = refusedGit(command);
+    if (gitRefusal) return sendJson(res, 400, { error: 'Refused: ' + gitRefusal });
+    // git acts as the GitHub account the user connected, the same way a build's
+    // does; the token never appears in the command or its output.
+    const git = /\bgit\b/.test(command) ? buildRequestContext(req).git : null;
     const runRoot = workspaceRunRoot(root);
     try {
       fs.mkdirSync(runRoot, { recursive: true });
@@ -4569,9 +4574,11 @@ function handleWorkspaceRun(req, res, root) {
         cwd,
         env: process.env,
         timeoutMs: workspaceRunTimeoutMs(process.env),
+        extraEnv: gitRunEnv(git),
       });
-      const stdout = capRunOutput(result.stdout);
-      const stderr = capRunOutput(result.stderr);
+      const token = git && git.token;
+      const stdout = capRunOutput(scrubToken(result.stdout, token));
+      const stderr = capRunOutput(scrubToken(result.stderr, token));
       sendJson(res, 200, {
         enabled: true,
         ok: result.exitCode === 0 && !result.timedOut,
@@ -4602,6 +4609,112 @@ function handleWorkspaceFiles(req, res, root) {
   const runRoot = workspaceRunRoot(root);
   const files = refusal ? [] : listWorkspaceFiles(runRoot);
   sendJson(res, 200, { enabled: !refusal, reason: refusal, dir: WORKSPACE_RUN_DIR, files });
+}
+
+// --- The server workspace as files the page's tools can act on ---
+//
+// In Build mode the page's workspace tools point here instead of at the
+// browser, so the file the model writes is the file its command runs and git
+// commits. Same gate as the shell (WORKSPACE_RUN plus a login), same folder,
+// same rules as a build: nothing outside it, nothing in .git, no .env.
+const WORKSPACE_FILE_MAX_BYTES = 512 * 1024;
+const WORKSPACE_READ_MAX_CHARS = 120000;
+
+function workspaceFileTarget(root, wanted) {
+  const runRoot = workspaceRunRoot(root);
+  try { fs.mkdirSync(runRoot, { recursive: true }); } catch { /* reported by the caller's read or write */ }
+  const target = resolveInside(runRoot, wanted);
+  if (!target || target === runRoot) return { error: 'path has to name a file inside the workspace.' };
+  const rel = path.relative(runRoot, target).split(path.sep).join('/');
+  const blocked = protectedPath(rel);
+  if (blocked) return { error: blocked };
+  return { runRoot, target, rel };
+}
+
+function handleWorkspaceRead(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  if (refusal) return sendJson(res, 403, { error: refusal });
+  const wanted = new URL(req.url, 'http://x').searchParams.get('path') || '';
+  const where = workspaceFileTarget(root, wanted);
+  if (where.error) return sendJson(res, 400, { error: where.error });
+  let stat;
+  try { stat = fs.statSync(where.target); } catch { return sendJson(res, 404, { error: 'No such file in the workspace: ' + where.rel }); }
+  if (!stat.isFile()) return sendJson(res, 400, { error: where.rel + ' is a folder, not a file.' });
+  const text = fs.readFileSync(where.target, 'utf8');
+  if (text.includes('\0')) return sendJson(res, 415, { error: where.rel + ' is not a text file.' });
+  const content = text.length > WORKSPACE_READ_MAX_CHARS ? text.slice(0, WORKSPACE_READ_MAX_CHARS) + '\n…[' + (text.length - WORKSPACE_READ_MAX_CHARS) + ' more characters]' : text;
+  sendJson(res, 200, { path: where.rel, content, chars: text.length, bytes: stat.size });
+}
+
+function handleWorkspaceSearch(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  if (refusal) return sendJson(res, 403, { error: refusal });
+  const params = new URL(req.url, 'http://x').searchParams;
+  const query = String(params.get('query') || '');
+  if (!query.trim()) return sendJson(res, 400, { error: 'query is required' });
+  const runRoot = workspaceRunRoot(root);
+  const target = resolveInside(runRoot, params.get('path') || '.');
+  if (!target) return sendJson(res, 400, { error: 'path has to stay inside the workspace.' });
+  let matcher = null;
+  if (params.get('regex') === '1') {
+    try { matcher = new RegExp(query, 'i'); } catch (err) { return sendJson(res, 400, { error: 'That regular expression is not valid: ' + err.message }); }
+  }
+  const found = fs.existsSync(target) ? searchFolder(runRoot, target, { query, matcher, glob: params.get('glob') || '' }) : { matches: [], files: 0, truncated: false };
+  sendJson(res, 200, found);
+}
+
+function handleWorkspaceFileChange(req, res, root) {
+  const refusal = workspaceRunRefusal(process.env);
+  if (refusal) return sendJson(res, 403, { error: refusal });
+  // A JSON body on every change, so a cross-site form cannot make one: an HTML
+  // form cannot send application/json, and DELETE cannot be a form at all.
+  if (req.method === 'DELETE') {
+    const wanted = new URL(req.url, 'http://x').searchParams.get('path') || '';
+    const where = workspaceFileTarget(root, wanted);
+    if (where.error) return sendJson(res, 400, { error: where.error });
+    let stat;
+    try { stat = fs.statSync(where.target); } catch { return sendJson(res, 404, { error: 'No such file in the workspace: ' + where.rel }); }
+    if (!stat.isFile()) return sendJson(res, 400, { error: where.rel + ' is a folder; delete files one at a time.' });
+    fs.unlinkSync(where.target);
+    return sendJson(res, 200, { path: where.rel, deleted: true });
+  }
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') return sendJson(res, 415, { error: 'Send JSON (Content-Type: application/json).' });
+  readJsonBody(req, WORKSPACE_FILE_MAX_BYTES + 64 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const where = workspaceFileTarget(root, body && body.path);
+    if (where.error) return sendJson(res, 400, { error: where.error });
+    const exists = fs.existsSync(where.target);
+    let before = '';
+    if (exists) {
+      try {
+        if (!fs.statSync(where.target).isFile()) return sendJson(res, 400, { error: where.rel + ' is a folder.' });
+        before = fs.readFileSync(where.target, 'utf8');
+      } catch (error) { return sendJson(res, 500, { error: 'Could not read ' + where.rel + ': ' + error.message }); }
+    }
+    let after;
+    let replaced = 0;
+    if (req.method === 'PUT') {
+      if (typeof (body && body.content) !== 'string') return sendJson(res, 400, { error: 'content must be the whole file as a string.' });
+      after = body.content;
+    } else {
+      if (!exists) return sendJson(res, 404, { error: 'No such file in the workspace: ' + where.rel + '. Write it first.' });
+      const oldText = String((body && body.old_text) == null ? '' : body.old_text);
+      const newText = String((body && body.new_text) == null ? '' : body.new_text);
+      if (!oldText) return sendJson(res, 400, { error: 'old_text is required: the exact text to replace.' });
+      const count = before.split(oldText).length - 1;
+      if (count === 0) return sendJson(res, 409, { error: 'old_text was not found in ' + where.rel + '. Read the file and copy the text exactly.' });
+      if (count > 1 && !(body && body.all)) return sendJson(res, 409, { error: 'old_text appears ' + count + ' times in ' + where.rel + '. Include more surrounding lines so it is unique, or set all to true.' });
+      replaced = body && body.all ? count : 1;
+      after = body && body.all ? before.split(oldText).join(newText) : before.replace(oldText, () => newText);
+    }
+    if (Buffer.byteLength(after, 'utf8') > WORKSPACE_FILE_MAX_BYTES) return sendJson(res, 413, { error: 'Files over ' + (WORKSPACE_FILE_MAX_BYTES / 1024) + ' KB are not written this way; use run_command.' });
+    try {
+      fs.mkdirSync(path.dirname(where.target), { recursive: true });
+      fs.writeFileSync(where.target, after);
+    } catch (error) { return sendJson(res, 500, { error: 'Could not write ' + where.rel + ': ' + error.message }); }
+    sendJson(res, 200, { path: where.rel, bytes: Buffer.byteLength(after, 'utf8'), created: !exists, replaced });
+  });
 }
 
 function handleWorkspaceFile(req, res, root) {
@@ -4900,6 +5013,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/branch' && req.method === 'POST') return githubCreateBranch(req, res);
     if (urlPath === '/api/workspace/run' && req.method === 'POST') return handleWorkspaceRun(req, res, root);
     if (urlPath === '/api/workspace/files' && req.method === 'GET') return handleWorkspaceFiles(req, res, root);
+    if (urlPath === '/api/workspace/read' && req.method === 'GET') return handleWorkspaceRead(req, res, root);
+    if (urlPath === '/api/workspace/search' && req.method === 'GET') return handleWorkspaceSearch(req, res, root);
+    if (urlPath === '/api/workspace/file' && (req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE')) return handleWorkspaceFileChange(req, res, root);
     if (urlPath === '/api/workspace/file' && req.method === 'GET') return handleWorkspaceFile(req, res, root);
     if (urlPath === '/api/build/sessions' || urlPath.startsWith('/api/build/sessions/')) {
       return handleBuildRoute(req, res, urlPath, buildStore, buildHelpers);
