@@ -155,6 +155,30 @@ const BUILD_TOOLS = [
     },
   },
   {
+    name: 'plan_actions',
+    description: 'Carry out several steps in one go, without being asked again between them. Give every action an id, the tool it runs, its arguments, and (when it must wait for another) the ids it comes after. Independent actions keep the order you wrote them in. Use it once you know the sequence -- reading three files and running the tests is one call, not four turns. Each action still asks the user for approval where that tool would, and an action whose dependency failed is skipped, with the report saying which. Not for ask_user or another plan_actions.',
+    parameters: {
+      type: 'object',
+      properties: {
+        actions: {
+          type: 'array',
+          description: 'The steps, in the order you want independent ones to run.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Your name for this step, e.g. "read-readme".' },
+              tool: { type: 'string', description: 'The tool to run, e.g. read_file.' },
+              args: { type: 'object', description: "That tool's arguments." },
+              after: { type: 'array', items: { type: 'string' }, description: 'Ids this step waits for.' },
+            },
+            required: ['id', 'tool', 'args'],
+          },
+        },
+      },
+      required: ['actions'],
+    },
+  },
+  {
     name: 'web_search',
     description: 'Search the web.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
@@ -395,6 +419,69 @@ function protectedPath(rel) {
   return '';
 }
 
+// --- Action graphs ---
+//
+// A model asked again between every step spends the build re-reading its own
+// context, and a small one loses the thread. `plan_actions` lets it write the
+// sequence down once: each action names what it waits for, and the engine runs
+// them in that order without another model call. Twelve steps become one call.
+// Every check here runs before any of it does.
+const MAX_GRAPH_ACTIONS = 24;
+// How much of each action's result rides back in the plan's report: enough to
+// read a failure by, without a dozen whole files in one message.
+const MAX_ACTION_RESULT_CHARS = 2000;
+// What counts as an action that did not do its job. The tools answer a failure
+// in words rather than throwing, so this is the list of first words they use,
+// plus a command that ended on a non-zero status.
+const ACTION_FAILED = /^(Refused:|Could not|No such file|Unknown tool|old_text was not found|edit_file needs|write_file needs|run_command needs|The user rejected|Rejected)|\nexit [1-9]/;
+const GRAPH_FORBIDDEN = new Set(['plan_actions', 'ask_user']);
+
+/** The actions in the order they may run, or an error saying why they cannot.
+ * Independent actions keep the order they were written in. */
+function orderActions(actions) {
+  const list = Array.isArray(actions) ? actions : [];
+  if (!list.length) return { order: [], error: 'plan_actions needs at least one action.' };
+  if (list.length > MAX_GRAPH_ACTIONS) {
+    return { order: [], error: 'A plan may hold at most ' + MAX_GRAPH_ACTIONS + ' actions; this one has ' + list.length + '. Do the first part, then plan the rest.' };
+  }
+  const byId = new Map();
+  const clean = [];
+  for (const raw of list) {
+    const item = raw && typeof raw === 'object' ? raw : {};
+    const id = String(item.id == null ? '' : item.id).trim();
+    if (!id) return { order: [], error: 'Every action needs an id.' };
+    if (byId.has(id)) return { order: [], error: 'Two actions are called "' + id + '" (duplicate); every id has to be different.' };
+    const name = matchToolName(item.tool);
+    if (!name) return { order: [], error: 'Unknown tool "' + String(item.tool || '') + '" in action "' + id + '". Available: ' + BUILD_TOOL_NAMES.filter((n) => !GRAPH_FORBIDDEN.has(n)).join(', ') + '.' };
+    if (GRAPH_FORBIDDEN.has(name)) return { order: [], error: name + ' cannot be part of a plan; call it on its own.' };
+    const action = { id, tool: name, args: parseArgs(item.args), after: (Array.isArray(item.after) ? item.after : []).map((a) => String(a == null ? '' : a).trim()).filter(Boolean) };
+    byId.set(id, action);
+    clean.push(action);
+  }
+  for (const action of clean) {
+    for (const need of action.after) {
+      if (need === action.id) return { order: [], error: 'Action "' + action.id + '" waits for itself, which is a circle.' };
+      if (!byId.has(need)) return { order: [], error: 'Action "' + action.id + '" waits for "' + need + '", which is not in this plan.' };
+    }
+  }
+  // Written order, filtered by what is ready: independent actions run where
+  // the model put them rather than wherever a queue happens to pop them.
+  const done = new Set();
+  const order = [];
+  while (order.length < clean.length) {
+    const ready = clean.filter((a) => !done.has(a.id) && a.after.every((need) => done.has(need)));
+    if (!ready.length) {
+      const stuck = clean.filter((a) => !done.has(a.id)).map((a) => a.id);
+      return { order: [], error: 'These actions wait on each other in a circle: ' + stuck.join(', ') + '.' };
+    }
+    for (const action of ready) {
+      done.add(action.id);
+      order.push(action);
+    }
+  }
+  return { order, error: '' };
+}
+
 // Every file under root, depth first and sorted, skipping what no search
 // wants (.git, node_modules). `visit` returns false to stop the walk.
 function walkFiles(root, visit) {
@@ -530,6 +617,7 @@ function systemPrompt(session, { runReason, textProtocol }) {
     '- Work through the steps in order. Call step_update with in_progress when a step starts, and done, failed or skipped (with a short note) when it ends. Exactly one step is in progress at a time.',
     '- Understand before changing: use find_files and search_files to locate what matters, then read_file. Read a file before editing it, and read it again after a failed edit.',
     '- Make several independent lookups in one turn (reads, searches, listings). Never put two edits to the same file in one turn.',
+    '- Once you know the sequence, call plan_actions with the whole of it rather than one tool per turn: name each action, say what it waits for, and the steps run in that order without asking you again. Approvals still happen per action, and an action whose dependency failed is skipped and reported.',
     '- Use edit_file for changes to an existing file, with old_text copied exactly and unique. Use write_file only for a new file or a full rewrite. Never create documentation or README files unless the plan asks.',
     '- Follow the code around you: match its style, imports and libraries; never assume a library is present, check how the project already does it.',
     '- Verify: find the project\'s own test, lint or build commands (README, package.json, build files) and run them after substantive changes. Do not mark a step done while tests fail or the work is partial. If you cannot find the command, ask once.',
@@ -1080,6 +1168,38 @@ function createBuildSessions(deps) {
           return 'Could not read that page: ' + (err && err.message);
         }
       }
+      case 'plan_actions': {
+        const { order, error } = orderActions(args.actions);
+        if (error) return 'The plan was not run: ' + error;
+        emit(session, 'step', {
+          id: currentStepId(session),
+          phase: 'output',
+          title: 'Plan: ' + order.length + ' action(s)',
+          text: order.map((a) => a.id + ': ' + a.tool + (a.after.length ? ' (after ' + a.after.join(', ') + ')' : '')).join('\n'),
+        });
+        const outcome = new Map();
+        const lines = [];
+        for (const action of order) {
+          const blocked = action.after.filter((need) => outcome.get(need) !== 'ok');
+          if (blocked.length) {
+            outcome.set(action.id, 'skipped');
+            lines.push(action.id + ' (' + action.tool + '): skipped, it waited for ' + blocked.join(', '));
+            continue;
+          }
+          const result = await executeTool(session, action.tool, action.args);
+          // null means the build itself is ending (cancelled, or an approval
+          // that stopped it); the rest of the plan goes with it.
+          if (result === null || session.cancelled || TERMINAL.has(session.status)) return null;
+          const failed = ACTION_FAILED.test(result);
+          outcome.set(action.id, failed ? 'failed' : 'ok');
+          lines.push(action.id + ' (' + action.tool + '): ' + (failed ? 'FAILED\n' : '') + cap(result, MAX_ACTION_RESULT_CHARS));
+        }
+        const failures = [...outcome.values()].filter((v) => v !== 'ok').length;
+        const head = failures
+          ? failures + ' of ' + order.length + ' actions did not run or failed. Read their results and decide what to do next.' + '\n\n'
+          : 'All ' + order.length + ' actions ran.' + '\n\n';
+        return cap(head + lines.join('\n\n'), MAX_TOOL_RESULT_CHARS * 3);
+      }
       case 'ask_user': {
         const question = String(args.question || '').trim().slice(0, 1000);
         if (!question) return 'ask_user needs a question.';
@@ -1361,6 +1481,8 @@ module.exports = {
   lineDiff,
   resolveInside,
   globToRegExp,
+  orderActions,
+  MAX_GRAPH_ACTIONS,
   refusedGit,
   projectNotes,
   protectedPath,

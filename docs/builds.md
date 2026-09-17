@@ -26,6 +26,7 @@ A plan written anywhere (Plan mode on the phone, the web app or the desktop app)
 
 | Tool | Asks first | What it does |
 | :-- | :-- | :-- |
+| `plan_actions` | per action | **Several steps in one call.** Each action names its tool, its arguments and what it waits for; the engine runs them in order without asking the model again. |
 | `step_update` | | Marks a plan step in progress, done, failed or skipped. |
 | `list_files`, `find_files` | | Lists a folder with sizes; finds files by glob (`src/**/*.kt`). |
 | `read_file` | | Reads a file, or a line window of it (`offset`, `limit`). |
@@ -35,6 +36,8 @@ A plan written anywhere (Plan mode on the phone, the web app or the desktop app)
 | `run_command` | ✔ | Shell in the build folder: install, test, build, git. |
 | `web_search`, `web_fetch` | | The web, public pages only. |
 | `ask_user` | | One short question, waits for the answer. |
+
+**Why `plan_actions` matters on a free model.** A model asked again between every step spends most of a build re-reading its own context, and a small one loses the thread; twelve steps meant twelve calls. A plan is one call: read three files, edit two, run the tests, in an order the model wrote down once. Independent actions keep the order they were written in, an action that names `after` waits for it, and a cycle, an unknown tool, a duplicate id or a dependency that is not in the plan is refused before anything runs. Approvals are unchanged — every write, delete, move and command inside a plan still asks you — and an action whose dependency failed is skipped rather than run on a broken assumption, with the report naming which. At most 24 actions per plan; `ask_user` and a nested plan are not allowed in one.
 
 The agent also reads the repository's `AGENTS.md` or `CLAUDE.md` into its prompt each turn, so project rules apply without being pasted into the plan.
 

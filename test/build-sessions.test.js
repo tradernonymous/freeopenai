@@ -218,6 +218,62 @@ test('a build with a connected account runs git as that account and reads the pr
   }
 });
 
+test('a plan runs its actions in order, in one model turn, and skips what a failure left behind', async () => {
+  const root = tempRoot();
+  try {
+    const model = scriptedModel([
+      reply('', [call('plan_actions', {
+        actions: [
+          { id: 'write', tool: 'write_file', args: { path: 'a.txt', content: 'hello' } },
+          { id: 'read', tool: 'read_file', args: { path: 'a.txt' }, after: ['write'] },
+          { id: 'missing', tool: 'read_file', args: { path: 'nope.txt' } },
+          { id: 'after-missing', tool: 'read_file', args: { path: 'a.txt' }, after: ['missing'] },
+        ],
+      }, 'c1')]),
+      reply('Done.'),
+    ]);
+    const store = engine(root, model);
+    const session = store.create({ owner: 'op', plan: 'write and read' });
+    const approval = await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.equal(approval.tool, 'write_file', 'a write inside a plan still asks');
+    store.input(session, { requestId: approval.requestId, decision: 'approve' });
+    await waitForEvent(store, session, terminal);
+
+    // The point of the graph: four steps, one call to the model.
+    const results = model.seen[1].messages.filter((m) => m.role === 'tool');
+    assert.equal(results.length, 1, 'four actions came back as one tool result');
+    const report = results.map((m) => m.content).join('\n');
+    assert.match(report, /write \(write_file\): Created a\.txt/);
+    assert.match(report, /read \(read_file\): hello/);
+    assert.match(report, /missing \(read_file\): FAILED/);
+    assert.match(report, /after-missing \(read_file\): skipped, it waited for missing/);
+    assert.equal(fs.readFileSync(path.join(session.dir, 'a.txt'), 'utf8'), 'hello');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a plan the engine cannot run is refused with its reason, and nothing happens', async () => {
+  const root = tempRoot();
+  try {
+    const model = scriptedModel([
+      reply('', [call('plan_actions', { actions: [{ id: 'a', tool: 'write_file', args: { path: 'x', content: 'y' }, after: ['ghost'] }] }, 'c1')]),
+      (request) => {
+        const last = request.messages[request.messages.length - 1];
+        assert.match(last.content, /was not run/);
+        assert.match(last.content, /ghost/);
+        return reply('Understood.');
+      },
+    ]);
+    const store = engine(root, model);
+    const session = store.create({ owner: 'op', plan: 'bad plan' });
+    await waitForEvent(store, session, terminal);
+    assert.equal(fs.existsSync(path.join(session.dir, 'x')), false, 'nothing ran');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('tool names are matched loosely but never guessed', () => {
   assert.equal(matchToolName('write_file'), 'write_file');
   assert.equal(matchToolName('WriteFile'), 'write_file');
