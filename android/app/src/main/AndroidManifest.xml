@@ -21,7 +21,7 @@
     content never crosses the network unencrypted.
   - The only WebView left is the hidden Puter drawing page, locked down in
     WebShell.kt: no file or content URLs, no JavaScript bridge, no
-    geolocation, mixed content refused -- the page is never given a handle
+    geolocation, mixed content refused; the page is never given a handle
     into the app.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
