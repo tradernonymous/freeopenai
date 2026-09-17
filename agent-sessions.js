@@ -901,7 +901,7 @@ function createBuildSessions(deps) {
   function notify(session, title, body) {
     if (!session.owner) return;
     try {
-      Promise.resolve(opts.notifyOwner(session.owner, { title, body: String(body).slice(0, 400) })).catch(() => {});
+      Promise.resolve(opts.notifyOwner(session.owner, { title, body: String(body).slice(0, 400), buildId: session.id })).catch(() => {});
     } catch {
       // notifyOwner threw synchronously rather than rejecting; either way the
       // build must not care.

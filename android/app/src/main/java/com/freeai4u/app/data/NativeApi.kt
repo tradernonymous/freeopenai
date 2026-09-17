@@ -165,6 +165,14 @@ class NativeApi(
     fun cancelBuild(id: String): BuildSession =
         parseBuildSession(postJson(buildPath(id, "cancel"), "{}")) ?: throw ApiException("The server sent an unreadable build.")
 
+    /** Hands this device's FCM token to the server so a build waiting on this
+     * account can be pushed to even after Android kills the app's process.
+     * Never throws past the caller that does not care whether it worked --
+     * see AppViewModel.registerPushToken, which swallows the failure. */
+    fun registerPush(token: String) {
+        postJson("/api/push/register", org.json.JSONObject().put("token", token).toString())
+    }
+
     /** Follows a build's events from after [after] until it ends or [cancel] is
      * closed. Throws [ApiException] when the connection drops, so the caller
      * can reconnect from the last sequence number it saw. */

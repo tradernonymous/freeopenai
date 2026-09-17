@@ -1007,6 +1007,21 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
     }
 
+    /** Hands a device's FCM token to the server, once per app launch after a
+     * session is confirmed -- see NativeActivity.registerForPush and
+     * FcmService.onNewToken, the two callers. Silent either way: a push is a
+     * convenience on top of the SSE stream that already reaches an open app,
+     * never something worth interrupting the user to report on. */
+    fun registerPushToken(token: String) {
+        runOnIo {
+            try {
+                api.registerPush(token)
+            } catch (e: Exception) {
+                // Retried on the next launch or token refresh.
+            }
+        }
+    }
+
     /** Draws on the worker thread: Puter first when switched on, then the
      * server's free image services. [editSource] is a data URL to edit rather
      * than draw fresh. Saves the picture and returns its record. */

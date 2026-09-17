@@ -179,6 +179,7 @@ class NativeActivity : ComponentActivity(), Platform {
         vm.puterDraw = { prompt, model, ratio, source, done -> puter.draw(prompt, model, ratio, source, done) }
         vm.puterChat = { body, onDelta, done -> puter.chat(body, onDelta, done) }
         vm.puterSignIn = { done -> puter.signIn(done) }
+        registerForPush()
         setContent {
             FreeAITheme {
                 LaunchedEffect(vm.finishedReply) {
@@ -678,6 +679,22 @@ class NativeActivity : ComponentActivity(), Platform {
         return seen in 1 until BuildConfig.VERSION_CODE
     }
 
+    /** One attempt per launch to hand the current FCM token to the server, so
+     * a token minted before this account ever signed in (or before a session
+     * existed to register it against) still reaches the server eventually
+     * rather than only on the next token rotation. Safe to call unconditionally:
+     * a device with no session yet just fails registerPush quietly, the same
+     * way FcmService.onNewToken already does. */
+    private fun registerForPush() {
+        if (!BuildConfig.FCM_CONFIGURED) return
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                .addOnSuccessListener { token -> vm.registerPushToken(token) }
+        } catch (e: Exception) {
+            // No Play services, or Firebase not ready -- push just stays off.
+        }
+    }
+
     /** A build is waiting for an approval or an answer while the app is in the
      * background. One notification per build, replaced by the next question, so
      * a long build does not stack a pile of them (deepseek-harness-mobile keys
@@ -723,7 +740,9 @@ class NativeActivity : ComponentActivity(), Platform {
         const val ACTION_OPEN_BUILD = "com.freeai4u.app.OPEN_BUILD"
         const val EXTRA_BUILD_ID = "build_id"
         private const val CHANNEL_REPLIES = "replies"
-        private const val CHANNEL_BUILDS = "builds"
+        // Not private: FcmService posts to the same channel for a build that
+        // needs approval after Android has already killed this process.
+        const val CHANNEL_BUILDS = "builds"
         private val WHATS_NEW = listOf(
             "• Build remotely: ask for a plan in Plan mode, then tap \"Build remotely\" under the reply. Your server carries it out.",
             "• You approve every file change and command from the phone, with a preview of exactly what changes.",

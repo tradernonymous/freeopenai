@@ -78,17 +78,32 @@ async function getAccessToken(account, fetchImpl, now) {
   return value;
 }
 
-/** Sends one data-less notification to one device token. Firebase rejects an
- * unregistered or expired token with its own error rather than a generic
- * failure, which the caller uses to drop that token from the registry. */
-async function sendPush(account, deviceToken, notification, fetchImpl = fetch, now = Date.now) {
+/** Sends a data-only message to one device token: no top-level "notification"
+ * field, on purpose. FCM auto-displays a message that has one whenever the
+ * receiving app is backgrounded, using its own generic notification and
+ * skipping the app's code entirely -- which would make it impossible to
+ * build a notification that deep-links to a specific build, or to reuse the
+ * exact channel/style the app's own foreground pushes already use. Sending
+ * everything as data instead guarantees onMessageReceived runs in every app
+ * state, so the Android side is always the one deciding what the user sees.
+ * FCM requires every data value to be a string, so anything passed here is
+ * coerced -- a caller does not have to remember that rule at every call
+ * site. Firebase rejects an unregistered or expired token with its own error
+ * rather than a generic failure, which the caller uses to drop that token
+ * from the registry. */
+async function sendPush(account, deviceToken, payload, fetchImpl = fetch, now = Date.now) {
   const accessToken = await getAccessToken(account, fetchImpl, now);
+  const data = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (value != null) data[key] = String(value);
+  }
+  const message = { token: deviceToken, data };
   const res = await fetchImpl(
     'https://fcm.googleapis.com/v1/projects/' + account.projectId + '/messages:send',
     {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: { token: deviceToken, notification } }),
+      body: JSON.stringify({ message }),
     },
   );
   if (res.ok) return;

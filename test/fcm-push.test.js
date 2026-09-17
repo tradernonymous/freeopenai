@@ -102,7 +102,7 @@ test('getAccessToken throws when the token endpoint refuses', async () => {
   await assert.rejects(() => getAccessToken(ACCOUNT, fetchImpl, () => Date.now()), /FCM auth failed: HTTP 401/);
 });
 
-test('sendPush posts the message to the right project with a bearer token', async () => {
+test('sendPush posts a data-only message -- no top-level notification field', async () => {
   const calls = [];
   const fetchImpl = async (url, opts) => {
     calls.push({ url, opts });
@@ -115,9 +115,25 @@ test('sendPush posts the message to the right project with a bearer token', asyn
   const send = calls[1];
   assert.equal(send.url, 'https://fcm.googleapis.com/v1/projects/example-project/messages:send');
   assert.equal(send.opts.headers.Authorization, 'Bearer tok-1');
-  assert.deepEqual(JSON.parse(send.opts.body), {
-    message: { token: 'device-token-abc', notification: { title: 'Build needs you', body: 'Approve a change' } },
+  const parsed = JSON.parse(send.opts.body);
+  assert.deepEqual(parsed.message, {
+    token: 'device-token-abc',
+    data: { title: 'Build needs you', body: 'Approve a change' },
   });
+  assert.equal('notification' in parsed.message, false, 'a notification field would make Android auto-display it and skip this app\'s own handler while backgrounded');
+});
+
+test('sendPush stringifies every payload value and drops a null one', async () => {
+  const calls = [];
+  const fetchImpl = async (url, opts) => {
+    calls.push({ url, opts });
+    if (String(url).includes('oauth2.googleapis.com')) {
+      return { ok: true, json: async () => ({ access_token: 'tok-1', expires_in: 3600 }) };
+    }
+    return { ok: true };
+  };
+  await sendPush(ACCOUNT, 'device-token-abc', { title: 'x', buildId: 12345, ignored: null }, fetchImpl, () => Date.now());
+  assert.deepEqual(JSON.parse(calls[1].opts.body).message.data, { title: 'x', buildId: '12345' }, 'every value is a string, and a null value is dropped rather than sent as "null"');
 });
 
 test('sendPush marks an unregistered device token as stale, and a plain server error as not', async () => {

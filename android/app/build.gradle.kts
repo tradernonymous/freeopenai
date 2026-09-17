@@ -4,6 +4,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Push notifications need a Firebase project, which is the user's own (free)
+// account, not something this repo can ship a config for -- so the plugin
+// that reads google-services.json only runs when that file has actually been
+// dropped next to this one. Its absence (every CI build, and any developer
+// who has not set one up) must build a perfectly normal app that simply never
+// registers for push; BuildConfig.FCM_CONFIGURED below is how the Kotlin side
+// knows which case it is in without ever touching a Firebase class when it is
+// not configured.
+val fcmConfigured = file("google-services.json").exists()
+if (fcmConfigured) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 // Build-time defaults, so the first launch has the server (and, if set, the
 // username) already filled in. Neither is a secret: the server address is
 // public and a username on its own opens nothing. The password is never a
@@ -38,6 +51,7 @@ android {
         buildConfigField("String", "DEFAULT_SERVER", quoted(defaultServer))
         buildConfigField("String", "DEFAULT_USERNAME", quoted(defaultUsername))
         buildConfigField("String", "UPDATE_URL", quoted(updateUrl))
+        buildConfigField("boolean", "FCM_CONFIGURED", fcmConfigured.toString())
     }
 
     signingConfigs {
@@ -107,6 +121,13 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    // Self-installs via a ContentProvider, 0 methods in a release build (the
+    // dependency itself is debug-only) -- catches a leaked Activity, Fragment,
+    // View or ViewModel with a heap dump, rather than a slow memory creep
+    // nobody notices until the app is why the phone needs a restart.
+    debugImplementation(libs.leakcanary.android)
     // Real org.json for local JVM tests only: on device the framework copy is
     // used and this never ships. (android.jar methods throw "not mocked"
     // under plain unit tests, so the parser tests need the real thing.)

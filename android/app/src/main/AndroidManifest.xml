@@ -23,6 +23,9 @@
     WebShell.kt: no file or content URLs, no JavaScript bridge, no
     geolocation, mixed content refused; the page is never given a handle
     into the app.
+  - FcmService (push for a build waiting on your approval) is declared
+    unconditionally but does nothing unless the build was compiled with a
+    real Firebase project's google-services.json -- see app/build.gradle.kts.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -115,5 +118,16 @@
             android:name=".ReplyService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Instant build-approval push (see FcmService.kt). Only Firebase
+             itself can bind this, and Firebase never delivers anything here
+             unless the build was compiled with a real google-services.json --
+             declaring it costs nothing on a build that has none. -->
+        <service
+            android:name=".FcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>
