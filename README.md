@@ -15,7 +15,7 @@
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml/badge.svg?branch=main" alt="Android build"></a>
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml/badge.svg?branch=main" alt="Desktop build"></a>
   <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="https://img.shields.io/github/release-date/tradernonymous/freeopenai?label=APK&logo=android&color=3fb950" alt="APK"></a>
-  <img src="https://img.shields.io/badge/tests-1024%20passing-3fb950" alt="1024 tests passing">
+  <img src="https://img.shields.io/badge/tests-1084%20passing-3fb950" alt="1084 tests passing">
   <img src="https://img.shields.io/badge/node-22%2B-3fb950?logo=node.js&logoColor=white" alt="Node 22+">
   <img src="https://img.shields.io/badge/license-MIT-3fb950" alt="MIT">
 </p>
@@ -24,13 +24,27 @@
 
 | 💬 **Chat** | 🧩 **Plan · Build** | 🛠️ **Remote builds** |
 | :-- | :-- | :-- |
-| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, which need no key at all**. Web search built in. | One switch: Chat · Plan · Build. **Build edits files on the server, runs tests and git**, with your approval on every change. Skills, tasks, GitHub tools. | A plan runs on your server: search, read, edit, run, commit. You approve every change, from any device. |
+| Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, no key at all**. Web search built in. | One switch. **Build edits files on the server, runs tests and git** — you approve every change. Skills, tasks, GitHub tools. | Search, read, edit, run, commit on your server. Approve from any device. |
 | 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
-| ChatGPT-style. Plan mode. **Build remotely** with approvals. Reopens where you left off. | One `.exe`. Builds panel docked beside the chat. | Free FLUX first. Puter only when you switch it on. |
+| **Chat · Plan toggle**, skill chips, Puter models, remote builds with approvals. Reopens where you left off. | One `.exe`. Builds panel beside the chat, and it says when a newer one is out. | Free FLUX first. Puter only when you switch it on. |
 
-**Free models only, with the limits on the row.** The picker shows what a free tier actually allows — `free · 2/min · per IP · shared` — and Settings → Chat hides the metered rows entirely. A provider that rate-limits a turn is asked to wait no longer than the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the refusal is handed back and the work moves to another provider, which is the difference between a task that pauses and a task that stops. Everything reported about it is in [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
+**Free models only, limits on the row.** The picker shows what a free tier allows — `free · 2/min · per IP · shared` — and Settings → Chat hides metered rows. A rate-limited provider is waited on only as long as the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the work moves to another provider, so a task pauses instead of stopping. See [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
 
-**Coding tasks that finish.** A model that writes its tool call as text still gets it run. Build mode's workspace is the server folder the shell runs in, so a file the model writes is the file `npm test` runs and `git commit` records — as the GitHub account you connected, with force pushes refused. Build gets 60 tool steps a turn; a remote build gets 120 turns. Details in [Modes & tools](docs/modes-and-tools.md) and [Remote builds](docs/builds.md).
+**Coding tasks that finish.** A tool call written as text still runs. Build's workspace *is* the server folder the shell runs in, so a written file is the file `npm test` runs and `git commit` records — as your connected GitHub account, force pushes refused. `plan_actions` runs a whole plan in one model call, approvals unchanged. `/makeskill` turns a finished job into a reusable skill. Build gets 60 tool steps a turn; a remote build gets 120 turns. See [Modes & tools](docs/modes-and-tools.md) and [Remote builds](docs/builds.md).
+
+<details>
+<summary><b>🆕 What shipped lately</b></summary>
+
+| | |
+| :-- | :-- |
+| **Text tool calls run** | A tool call a model writes as text gets executed, not printed. |
+| **`plan_actions`** | One model call plans the whole sequence; execution is deterministic. |
+| **`/makeskill`** | Turn the job you just finished into a skill you can call again. |
+| **Puter on Android** | Puter models in the phone's picker, streamed through the app's own bridge. |
+| **Chat · Plan toggle** | Always visible on the phone, with a chip for each skill in use. |
+| **Launcher update notice** | The desktop `.exe` says when a newer one is published. |
+
+</details>
 
 ## 🚀 Quick start
 
