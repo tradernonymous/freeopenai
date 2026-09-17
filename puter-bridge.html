@@ -6,12 +6,15 @@
     <meta name="robots" content="noindex">
     <title>FreeAI4U Puter bridge</title>
     <!--
-      Loaded invisibly by the Android app (PuterImages.kt) so it can draw with
-      the user's own Puter account. It shares this origin's storage with the
-      full web app, which is where the Puter sign-in happens; this page never
-      opens a sign-in of its own. The app starts a job with fa4uDraw(id,
-      prompt, options), polls fa4uStatus(id), then reads the picture with
-      fa4uChunk. options is optional: { model, ratio: {w,h}, source }.
+      Loaded invisibly by the Android app (PuterBridge.kt) so it can draw and
+      chat on the user's own Puter account. fa4uSignIn(id) is the one job that
+      opens a window of its own -- puter.auth.signIn()'s popup, which Android's
+      WebChromeClient hosts in a visible dialog -- and it only runs when the
+      app asks for it directly, never as a side effect of a background job.
+      fa4uDraw(id, prompt, options) and fa4uChat(id, payload) fail fast instead
+      if nobody has signed in yet. Every job is read the same way: poll
+      fa4uStatus(id), then fa4uChunk for the picture. options is optional:
+      { model, ratio: {w,h}, source }.
     -->
     <script src="https://js.puter.com/v2/"></script>
 </head>
@@ -97,6 +100,24 @@
             if (jobs[id]) jobs[id].state = 'done';
         } catch (error) {
             jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300), data: (jobs[id] && jobs[id].data) || '', length: (jobs[id] && jobs[id].length) || 0 };
+        }
+    };
+
+    // A deliberate, user-requested sign-in -- not one fa4uChat/fa4uDraw trigger
+    // on their own, so a background picture or reply never pops a login window
+    // out of nowhere. puter.auth.signIn() opens the same window.open() popup
+    // Android's WebChromeClient now knows how to host; this job just waits for
+    // it to resolve (or for the user to close it without finishing).
+    window.fa4uSignIn = async function (id) {
+        var jobs = window.fa4uJobs;
+        jobs[id] = { state: 'pending' };
+        try {
+            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
+            if (!signedIn) await puter.auth.signIn();
+            jobs[id] = { state: 'done', length: 0, data: '' };
+        } catch (error) {
+            jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300) };
         }
     };
 

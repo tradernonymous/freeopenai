@@ -178,6 +178,7 @@ class NativeActivity : ComponentActivity(), Platform {
         puter = PuterBridge(this) { vm.serverUrl }
         vm.puterDraw = { prompt, model, ratio, source, done -> puter.draw(prompt, model, ratio, source, done) }
         vm.puterChat = { body, onDelta, done -> puter.chat(body, onDelta, done) }
+        vm.puterSignIn = { done -> puter.signIn(done) }
         setContent {
             FreeAITheme {
                 LaunchedEffect(vm.finishedReply) {
@@ -280,6 +281,7 @@ class NativeActivity : ComponentActivity(), Platform {
         if (::puter.isInitialized) puter.close()
         vm.puterDraw = null
         vm.puterChat = null
+        vm.puterSignIn = null
         tts?.shutdown()
         tts = null
         super.onDestroy()

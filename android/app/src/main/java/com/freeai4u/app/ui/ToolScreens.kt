@@ -201,6 +201,9 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
             vm.imageError?.let { Text(it, color = Palette.red, modifier = Modifier.padding(top = 6.dp)) }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(if (vm.puterImages) "Puter draws first" else "Free server images", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton({ vm.signInToPuter() }, enabled = !vm.puterSigningIn, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                    Text(if (vm.puterSigningIn) "Signing in…" else "Sign in", fontSize = 12.sp)
+                }
                 Text("Puter", color = Palette.muted, fontSize = 12.sp)
                 Switch(vm.puterImages, { vm.puterImages = it }, Modifier.padding(start = 6.dp).scale(0.8f))
             }

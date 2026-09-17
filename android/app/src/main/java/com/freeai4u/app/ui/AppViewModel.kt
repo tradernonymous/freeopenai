@@ -988,6 +988,25 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * Set by the activity, so the view model stays free of Android views. */
     var puterChat: ((body: String, onDelta: (String) -> Unit, done: (String?) -> Unit) -> Unit)? = null
 
+    /** Opens Puter's own sign-in window. Set by the activity, same as above. */
+    var puterSignIn: ((done: (Result<Unit>) -> Unit) -> Unit)? = null
+    /** True while that window is open, so the row can say so instead of
+     * looking like the tap did nothing. */
+    var puterSigningIn by mutableStateOf(false)
+
+    /** The Puter switch's row calls this directly: chat and drawing never open
+     * a sign-in window on their own (see puterDraw/puterChat), so this is the
+     * only path to one, and it answers through the same [notice] a failed
+     * draw already uses. */
+    fun signInToPuter() {
+        val start = puterSignIn ?: return
+        puterSigningIn = true
+        start { result ->
+            puterSigningIn = false
+            notice = if (result.isSuccess) "Signed in to Puter." else "Puter sign-in: " + (result.exceptionOrNull()?.message ?: "failed")
+        }
+    }
+
     /** Draws on the worker thread: Puter first when switched on, then the
      * server's free image services. [editSource] is a data URL to edit rather
      * than draw fresh. Saves the picture and returns its record. */

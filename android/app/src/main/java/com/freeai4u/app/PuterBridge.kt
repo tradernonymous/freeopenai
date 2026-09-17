@@ -1,22 +1,32 @@
 package com.freeai4u.app
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.Dialog
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** The user's own Puter account, reached from the app. A hidden WebView loads
- * /puter-bridge.html from the app's own server -- the same origin, and so the
- * same Puter sign-in, as the web app screen -- and runs puter.ai.txt2img
- * there. Kotlin reads the result by polling with evaluateJavascript, in
- * slices: no JavaScript bridge is added, so the page gets no handle into the
- * app. The page is reloaded for every picture because Puter reads its sign-in
- * only when it loads, and the sign-in happens in the web app screen. */
+ * /puter-bridge.html from the app's own server and runs puter.ai.txt2img and
+ * puter.ai.chat there. Kotlin reads the result by polling with
+ * evaluateJavascript, in slices: no JavaScript bridge is added, so the page
+ * gets no handle into the app. The page is reloaded for every job because
+ * Puter reads its sign-in only when it loads. Signing in itself is the one
+ * exception to "hidden": signIn() opens Puter's own popup in a visible dialog
+ * (see openSignInPopup below), which is the only way this WebView's storage
+ * ever gets a signed-in session in the first place. */
 class PuterBridge(private val context: Context, private val baseUrl: () -> String) {
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
@@ -25,7 +35,11 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     @SuppressLint("SetJavaScriptEnabled")
     private fun load(then: () -> Unit) {
         val view = web ?: WebView(context).also { created ->
-            WebShell.harden(created, "FreeAI4U/" + BuildConfig.VERSION_NAME, popup = true)
+            // false: this page itself is not a popup, so it may open the one
+            // popup fa4uSignIn asks for -- the reverse of the flag a popup
+            // window gets in openSignInPopup below, which must not open one of
+            // its own.
+            WebShell.harden(created, "FreeAI4U/" + BuildConfig.VERSION_NAME, popup = false)
             created.webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean =
                     !sameOrigin(originOf(baseUrl()), request.url.toString())
@@ -37,10 +51,63 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     main.postDelayed(callback, 600)
                 }
             }
+            created.webChromeClient = object : WebChromeClient() {
+                override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean =
+                    openSignInPopup(resultMsg)
+            }
             web = created
         }
         onLoaded = then
         view.loadUrl(baseUrl() + "/puter-bridge.html")
+    }
+
+    /** Puter's sign-in window, made visible: window.open() from the hidden
+     * page normally has nowhere to go, so this hosts it in a real dialog the
+     * user can type into, and closes it the same way Puter itself does --
+     * window.close() after a successful sign-in reaches onCloseWindow below.
+     * Navigation is gated the way the app's own browser tabs are: only the
+     * app's origin and puter.com may load here, a social sign-in page that
+     * WebView cannot complete is explained instead of shown, and anything
+     * else is handed to the phone's real browser. */
+    private fun openSignInPopup(resultMsg: Message): Boolean {
+        val activity = context as? Activity ?: return false
+        val popup = WebView(context)
+        popup.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        WebShell.harden(popup, "FreeAI4U/" + BuildConfig.VERSION_NAME, popup = true)
+        val dialog = Dialog(activity)
+        dialog.setContentView(popup)
+        // A WebView has no size of its own; without this the dialog wraps it
+        // to nothing and the sign-in form the user needs to type into never
+        // appears -- the same failure this whole fix exists to end.
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        dialog.setOnDismissListener { popup.destroy() }
+        popup.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView) {
+                dialog.dismiss()
+            }
+        }
+        popup.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                val url = request.url.toString()
+                if (blockedInWebView(url)) {
+                    Toast.makeText(context, context.getString(R.string.puter_social_message), Toast.LENGTH_LONG).show()
+                    return true
+                }
+                if (!popupAllowed(originOf(baseUrl()), url)) {
+                    try {
+                        activity.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                    } catch (e: ActivityNotFoundException) {
+                        // No app on the phone can open it; the popup just stays put.
+                    }
+                    return true
+                }
+                return false
+            }
+        }
+        (resultMsg.obj as WebView.WebViewTransport).webView = popup
+        resultMsg.sendToTarget()
+        dialog.show()
+        return true
     }
 
     /** Chats on the user's Puter allowance. [body] is the same JSON the server
@@ -136,6 +203,53 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
             poll(view, job, 0, done)
         }
+    }
+
+    /** Opens Puter's own sign-in window and waits for it to close. A
+     * deliberate, user-tapped action -- draw() and chat() never call this on
+     * their own, so a background picture or reply never pops a login window
+     * out of nowhere; they just fail with a message asking to sign in first,
+     * and this is what answers that ask. [done] gets a minute past the usual
+     * job budget, since a person typing a password takes longer than a draw. */
+    fun signIn(done: (Result<Unit>) -> Unit) {
+        if (baseUrl().isEmpty()) {
+            done(Result.failure(IllegalStateException("not signed in to the app yet")))
+            return
+        }
+        load {
+            val view = web
+            if (view == null) {
+                done(Result.failure(IllegalStateException("no WebView")))
+                return@load
+            }
+            val job = "s" + System.nanoTime()
+            view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
+            pollSignIn(view, job, 0, done)
+        }
+    }
+
+    private fun pollSignIn(view: WebView, job: String, tries: Int, done: (Result<Unit>) -> Unit) {
+        main.postDelayed({
+            view.evaluateJavascript("window.fa4uStatus ? window.fa4uStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
+                val status = try {
+                    JSONObject(unquote(raw))
+                } catch (e: Exception) {
+                    JSONObject().put("state", "missing")
+                }
+                when (status.optString("state")) {
+                    "pending" -> if (tries < 1200) pollSignIn(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
+                    "missing" -> done(Result.failure(IllegalStateException("Puter did not load")))
+                    "done" -> {
+                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        done(Result.success(Unit))
+                    }
+                    else -> {
+                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        done(Result.failure(IllegalStateException(status.optString("error", "Puter failed"))))
+                    }
+                }
+            }
+        }, 300)
     }
 
     private fun unquote(raw: String?): String = try {
