@@ -242,4 +242,8 @@ android/*.iml
 *.p12
 *.jks
 *.keystore
+# Firebase project config: GitHub secret GOOGLE_SERVICES_JSON_BASE64 writes
+# this in CI. It names a project, not a private key, but it belongs to the
+# user's own Firebase account either way.
+android/app/google-services.json
 
