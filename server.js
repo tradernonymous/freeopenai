@@ -17,7 +17,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter, skillEntriesFromTree } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter, skillEntriesFromTree, MODELS, DEFAULT_MODEL } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -3703,6 +3703,22 @@ async function loadSkills(force = false) {
 }
 
 // GET /api/skills — the id catalogue for the picker.
+// Puter's catalogue, for a client that talks to Puter itself.
+//
+// Puter answers in the browser on the visitor's own allowance, so this server
+// never proxies it and has no provider row for it. The Android app reaches it
+// through a hidden WebView (puter-bridge.html), and this is where it reads the
+// list of models to offer -- the same curated list the web page uses, so the
+// two cannot drift apart.
+function llmPuterModels(req, res) {
+  sendJson(res, 200, {
+    provider: 'puter',
+    label: 'Puter (your account)',
+    defaultModel: DEFAULT_MODEL,
+    models: MODELS.map((m) => ({ id: m.id, name: m.name, description: m.desc || '' })),
+  });
+}
+
 function llmSkills(req, res) {
   loadSkills().then((skills) => {
     sendJson(res, 200, skills.map((s) => ({ source: s.source, name: s.name, description: s.description, allowedTools: s.allowedTools || null, userOnly: !!s.userOnly })));
@@ -5007,6 +5023,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);
     if (urlPath === '/api/health' && (req.method === 'GET' || req.method === 'HEAD')) return llmHealth(req, res);
     if (urlPath === '/api/llm/providers' && req.method === 'GET') return llmProviders(req, res);
+    if (urlPath === '/api/llm/puter/models' && req.method === 'GET') return llmPuterModels(req, res);
     if (urlPath === '/api/skills' && req.method === 'GET') return llmSkills(req, res);
     if (urlPath === '/api/skills/content' && req.method === 'GET') return llmSkillContent(req, res);
     if (urlPath === '/api/llm/models' && req.method === 'GET') return llmModels(req, res);

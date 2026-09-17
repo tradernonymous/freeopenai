@@ -67,6 +67,39 @@
         delete window.fa4uJobs[id];
     };
 
+    // Chat, for the Android app's Puter provider. Puter answers in the
+    // browser on the user's own account, so the server has no route for it and
+    // the app reaches it the same way it reaches drawing: a job here, polled
+    // from Kotlin. The reply is appended to the job as it streams, so the app
+    // can read it in slices while it is still being written -- state stays
+    // "pending" until the last chunk, and `length` only ever grows.
+    window.fa4uChat = async function (id, payload) {
+        var jobs = window.fa4uJobs;
+        jobs[id] = { state: 'pending', data: '', length: 0 };
+        try {
+            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
+            if (!signedIn) throw new Error('sign in to Puter in Web app first');
+            var request = typeof payload === 'string' ? JSON.parse(payload) : (payload || {});
+            var messages = Array.isArray(request.messages) ? request.messages : [];
+            var options = { stream: true };
+            if (request.model) options.model = String(request.model);
+            var response = await puter.ai.chat(messages, options);
+            for await (var part of response) {
+                if (!jobs[id]) return;
+                var text = part && (part.text || (part.message && part.message.content) || '');
+                if (typeof text !== 'string') text = '';
+                if (text) {
+                    jobs[id].data += text;
+                    jobs[id].length = jobs[id].data.length;
+                }
+            }
+            if (jobs[id]) jobs[id].state = 'done';
+        } catch (error) {
+            jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300), data: (jobs[id] && jobs[id].data) || '', length: (jobs[id] && jobs[id].length) || 0 };
+        }
+    };
+
     window.fa4uDraw = async function (id, prompt, options) {
         var jobs = window.fa4uJobs;
         options = options || {};

@@ -86,7 +86,7 @@ class NativeActivity : ComponentActivity(), Platform {
     private var lockError by mutableStateOf<String?>(null)
     private var prompting = false
     private lateinit var voice: VoiceSession
-    private lateinit var puter: PuterImages
+    private lateinit var puter: PuterBridge
     private var viewer by mutableStateOf<Triple<String, ByteArray, String>?>(null)
     private var selecting by mutableStateOf<String?>(null)
     /** Highlights of this build, shown once after an update (not on a fresh install). */
@@ -173,8 +173,9 @@ class NativeActivity : ComponentActivity(), Platform {
                 vm.send(chat.id, heard)
             }
         }
-        puter = PuterImages(this) { vm.serverUrl }
+        puter = PuterBridge(this) { vm.serverUrl }
         vm.puterDraw = { prompt, model, ratio, source, done -> puter.draw(prompt, model, ratio, source, done) }
+        vm.puterChat = { body, onDelta, done -> puter.chat(body, onDelta, done) }
         setContent {
             FreeAITheme {
                 LaunchedEffect(vm.finishedReply) {
@@ -276,6 +277,7 @@ class NativeActivity : ComponentActivity(), Platform {
         if (::voice.isInitialized) voice.release()
         if (::puter.isInitialized) puter.close()
         vm.puterDraw = null
+        vm.puterChat = null
         tts?.shutdown()
         tts = null
         super.onDestroy()

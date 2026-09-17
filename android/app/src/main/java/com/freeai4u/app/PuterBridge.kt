@@ -10,14 +10,14 @@ import android.webkit.WebViewClient
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Draws with the user's own Puter account. A hidden WebView loads
+/** The user's own Puter account, reached from the app. A hidden WebView loads
  * /puter-bridge.html from the app's own server -- the same origin, and so the
  * same Puter sign-in, as the web app screen -- and runs puter.ai.txt2img
  * there. Kotlin reads the result by polling with evaluateJavascript, in
  * slices: no JavaScript bridge is added, so the page gets no handle into the
  * app. The page is reloaded for every picture because Puter reads its sign-in
  * only when it loads, and the sign-in happens in the web app screen. */
-class PuterImages(private val context: Context, private val baseUrl: () -> String) {
+class PuterBridge(private val context: Context, private val baseUrl: () -> String) {
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
     private var onLoaded: (() -> Unit)? = null
@@ -41,6 +41,71 @@ class PuterImages(private val context: Context, private val baseUrl: () -> Strin
         }
         onLoaded = then
         view.loadUrl(baseUrl() + "/puter-bridge.html")
+    }
+
+    /** Chats on the user's Puter allowance. [body] is the same JSON the server
+     * routes take ({model, messages}); the reply arrives in pieces through
+     * [onDelta] and ends with [done] -- null on success, a reason on failure.
+     * Puter answers in the browser, so this is the only way the app can offer
+     * it, and the page forces streaming so a long answer is readable as it
+     * arrives rather than after it. */
+    fun chat(body: String, onDelta: (String) -> Unit, done: (String?) -> Unit) {
+        if (baseUrl().isEmpty()) {
+            done("not signed in")
+            return
+        }
+        load {
+            val view = web
+            if (view == null) {
+                done("no WebView")
+                return@load
+            }
+            val job = "c" + System.nanoTime()
+            view.evaluateJavascript("window.fa4uChat && window.fa4uChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
+            followChat(view, job, 0, 0, onDelta, done)
+        }
+    }
+
+    /** Reads whatever the job has written since [read] and asks again until it
+     * ends. A job that never grows is given 5 minutes, the same ceiling the
+     * drawing path uses. */
+    private fun followChat(view: WebView, job: String, read: Int, tries: Int, onDelta: (String) -> Unit, done: (String?) -> Unit) {
+        main.postDelayed({
+            view.evaluateJavascript("window.fa4uStatus ? window.fa4uStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
+                val status = try {
+                    JSONObject(unquote(raw))
+                } catch (e: Exception) {
+                    JSONObject().put("state", "missing")
+                }
+                val state = status.optString("state")
+                val length = status.optInt("length")
+                if (state == "missing") {
+                    done("Puter did not load")
+                    return@evaluateJavascript
+                }
+                if (length > read) {
+                    view.evaluateJavascript("window.fa4uChunk(" + JSONObject.quote(job) + "," + read + "," + (length - read) + ")") { piece ->
+                        val text = unquote(piece)
+                        if (text.isNotEmpty()) onDelta(text)
+                        val now = read + text.length
+                        if (state == "pending") followChat(view, job, now, 0, onDelta, done)
+                        else {
+                            view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                            done(if (state == "done") null else status.optString("error", "Puter failed"))
+                        }
+                    }
+                    return@evaluateJavascript
+                }
+                when {
+                    state == "pending" && tries < 600 -> followChat(view, job, read, tries + 1, onDelta, done)
+                    state == "pending" -> done("Puter timed out")
+                    else -> {
+                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        done(if (state == "done") null else status.optString("error", "Puter failed"))
+                    }
+                }
+            }
+        }, 300)
     }
 
     /** Calls [done] on the main thread with the media type and bytes. [model]

@@ -36,6 +36,7 @@ import com.freeai4u.app.data.ModelInfo
 import com.freeai4u.app.data.NativeApi
 import com.freeai4u.app.data.Persona
 import com.freeai4u.app.data.PromptTemplate
+import com.freeai4u.app.data.PUTER_PROVIDER
 import com.freeai4u.app.data.ProviderInfo
 import com.freeai4u.app.data.Repository
 import com.freeai4u.app.data.SessionManager
@@ -369,7 +370,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         catalogueError = null
         io.execute {
             try {
-                val list = reauthing { api.providers() }
+                val served = reauthing { api.providers() }
+                // Puter answers in the browser on the user's own allowance, so
+                // the server has no row for it; the app adds one because the
+                // app is what can reach it.
+                val list = if (puterChat != null) served + ProviderInfo(PUTER_PROVIDER, "Puter (your account)", true, "chat") else served
                 main.post {
                     providers = list
                     catalogueBusy = false
@@ -390,7 +395,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     private fun loadModelsBlocking(provider: String) {
         try {
-            val list = reauthing { api.models(provider) }
+            val list = reauthing { if (provider == PUTER_PROVIDER) api.puterModels() else api.models(provider) }
             main.post { models[provider] = list }
         } catch (e: ApiException) {
             main.post { notice = e.message }
@@ -738,7 +743,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     systemPrompt(persona.systemPrompt, lib.instructions, chat.mode, skills = skillTexts),
                     chat.messages,
                     maxHistory = if (chat.compact) COMPACT_HISTORY_MESSAGES else MAX_HISTORY_MESSAGES,
-                    tools = if (useTools) toolsForMode(chat.mode) else null,
+                    tools = if (useTools && chat.provider != PUTER_PROVIDER) toolsForMode(chat.mode) else null,
                 )
                 val started = System.currentTimeMillis()
                 val content = StringBuilder()
@@ -754,7 +759,26 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 }
                 publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
                 try {
-                    api.streamChat(chat.provider, body, activeStream) { event ->
+                    if (chat.provider == PUTER_PROVIDER) {
+                        val bridge = puterChat ?: throw ApiException("Puter is only available in the app's own window.")
+                        val finished = java.util.concurrent.CountDownLatch(1)
+                        val reason = java.util.concurrent.atomic.AtomicReference<String?>(null)
+                        main.post {
+                            bridge(body, { piece ->
+                                content.append(piece)
+                                val now = System.currentTimeMillis()
+                                if (now - lastPost > 60) {
+                                    lastPost = now
+                                    publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                }
+                            }, { error ->
+                                reason.set(error)
+                                finished.countDown()
+                            })
+                        }
+                        finished.await()
+                        reason.get()?.let { failure = it }
+                    } else api.streamChat(chat.provider, body, activeStream) { event ->
                         when (event) {
                             is ChatEvent.Delta -> {
                                 content.append(event.content)
@@ -940,6 +964,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** The composer's "Image" tool is armed: the next send draws. */
     var imageArmed by mutableStateOf(false)
     var puterDraw: ((prompt: String, model: String, ratio: Pair<Int, Int>?, source: String?, done: (Result<Pair<String, ByteArray>>) -> Unit) -> Unit)? = null
+
+    /** Chats on the user's own Puter account through the same hidden WebView.
+     * Set by the activity, so the view model stays free of Android views. */
+    var puterChat: ((body: String, onDelta: (String) -> Unit, done: (String?) -> Unit) -> Unit)? = null
 
     /** Draws on the worker thread: Puter first when switched on, then the
      * server's free image services. [editSource] is a data URL to edit rather

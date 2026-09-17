@@ -23,6 +23,19 @@ class ChatLogicMoreTest {
     }
 
     @Test
+    fun puterModelsAreReadFromTheListTheServerPublishes() {
+        val body = "{\"provider\":\"puter\",\"defaultModel\":\"gpt-5.4-nano\",\"models\":[" +
+            "{\"id\":\"gpt-6-astra\",\"name\":\"GPT-6 Astra\",\"description\":\"Newest\"}," +
+            "{\"id\":\"\",\"name\":\"broken\"}," +
+            "{\"id\":\"claude-opus-5\",\"name\":\"Claude Opus 5\"}]}"
+        val models = parsePuterModels(body)
+        assertEquals(listOf("gpt-6-astra", "claude-opus-5"), models.map { it.id })
+        assertEquals("GPT-6 Astra", models[0].name)
+        assertTrue(parsePuterModels("{broken").isEmpty())
+        assertTrue(parsePuterModels("{}").isEmpty())
+    }
+
+    @Test
     fun onlyTheMostRecentPhotosRideAlongAsPictures() {
         val photo = "data:image/jpeg;base64,AAAA"
         val history = (1..4).flatMap { i ->

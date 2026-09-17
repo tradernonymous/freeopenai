@@ -101,6 +101,11 @@ class NativeApi(
 
     fun providers(): List<ProviderInfo> = chatProviders(parseProviders(getJson("/api/llm/providers")))
 
+    /** Puter's catalogue. Puter answers in the browser on the user's own
+     * allowance, so the server only publishes the list; the app calls Puter
+     * itself through PuterBridge. */
+    fun puterModels(): List<ModelInfo> = parsePuterModels(getJson("/api/llm/puter/models"))
+
     fun models(provider: String): List<ModelInfo> =
         parseModels(getJson("/api/llm/models?provider=" + java.net.URLEncoder.encode(provider, "UTF-8")))
 

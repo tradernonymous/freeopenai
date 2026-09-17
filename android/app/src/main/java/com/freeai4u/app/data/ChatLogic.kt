@@ -41,6 +41,22 @@ fun parseProviders(body: String): List<ProviderInfo> = try {
 
 fun chatProviders(all: List<ProviderInfo>): List<ProviderInfo> = all.filter { it.configured && it.kind == "chat" }
 
+/** The provider id for Puter, which the app reaches itself rather than through
+ * the server. Kept here so the id is written once. */
+const val PUTER_PROVIDER = "puter"
+
+/** GET /api/llm/puter/models -> {models:[{id,name,description}]}. */
+fun parsePuterModels(body: String): List<ModelInfo> = try {
+    val array = JSONObject(body).optJSONArray("models") ?: JSONArray()
+    (0 until array.length()).mapNotNull { index ->
+        val obj = array.optJSONObject(index) ?: return@mapNotNull null
+        val id = obj.optString("id", "")
+        if (id.isEmpty()) null else ModelInfo(id, obj.optString("name", id), 0)
+    }
+} catch (e: Exception) {
+    emptyList()
+}
+
 fun parseModels(body: String): List<ModelInfo> = try {
     val array = JSONArray(body)
     (0 until array.length()).mapNotNull { index ->
