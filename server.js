@@ -27,6 +27,7 @@ const {
   accountsOf,
   pickAccount,
 } = require('./github.js');
+const { createBuildSessions, handleBuildRoute } = require('./agent-sessions.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -1569,6 +1570,13 @@ async function llmWebsearch(req, res) {
   const q = new URL(req.url, 'http://x').searchParams.get('q');
   if (!q || !q.trim()) return sendJson(res, 400, { error: 'q is required' });
   const query = q.trim().slice(0, 300);
+  const results = await searchWebResults(query);
+  if (!results.length) return sendJson(res, 502, { error: 'Search is unreachable right now — try again, or paste a link to read directly.' });
+  sendJson(res, 200, { query, results });
+}
+
+// The search itself, shared by the route above and the build agent.
+async function searchWebResults(query) {
   const [ddg, wiki, full] = await Promise.all([
     fetchText(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, false)
       .then((t) => { try { return normalizeDdG(JSON.parse(t)); } catch { return []; } })
@@ -1581,13 +1589,11 @@ async function llmWebsearch(req, res) {
       .catch(() => []),
   ]);
   const seen = new Set();
-  const results = [...ddg, ...wiki, ...full].filter((r) => {
+  return [...ddg, ...wiki, ...full].filter((r) => {
     if (!r.url || seen.has(r.url)) return false;
     seen.add(r.url);
     return true;
   }).slice(0, 10);
-  if (!results.length) return sendJson(res, 502, { error: 'Search is unreachable right now — try again, or paste a link to read directly.' });
-  sendJson(res, 200, { query, results });
 }
 
 async function llmFetch(req, res) {
@@ -3847,7 +3853,184 @@ function handleWorkspaceFile(req, res, root) {
   }).catch(() => sendJson(res, 404, { error: 'No such file in the workspace.' }));
 }
 
+// --- Remote build sessions ---
+//
+// The engine lives in agent-sessions.js; what is here is only what it needs from
+// this server: which configured provider and model to drive, how to call it, and
+// the web search, page reader and command runner the rest of the app already
+// trusts. Builds happen in workspace/builds/<id>, beside the workspace the run
+// route uses, so a build's output can be downloaded the same way.
+
+// Tried in order when neither the request nor BUILD_AGENT_PROVIDER names one.
+// Coding-capable models with native tool calls first; an empty model means the
+// provider's first listed model.
+const BUILD_MODEL_PREFERENCE = [
+  ['nvidia', 'qwen/qwen3-coder-480b-a35b-instruct'],
+  ['cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast'],
+  ['openrouter', ''],
+  ['omniroute', 'auto/coding:free'],
+  ['nara', ''],
+  ['custom', ''],
+];
+
+function providerModelIds(models) {
+  if (Array.isArray(models)) return models.filter((m) => typeof m === 'string' && m);
+  if (models && Array.isArray(models.exact)) return models.exact.filter((m) => typeof m === 'string' && m);
+  return [];
+}
+
+function buildCapableProvider(id) {
+  const provider = providerConfig(id);
+  if (!provider || provider.keyError) return null;
+  if (provider.chatShape === 'text-query' || (provider.kind && provider.kind !== 'chat')) return null;
+  return provider;
+}
+
+function pickBuildModel(requested = {}) {
+  const wantProvider = String(requested.provider || process.env.BUILD_AGENT_PROVIDER || '').trim();
+  const wantModel = String(requested.model || process.env.BUILD_AGENT_MODEL || '').trim();
+  if (wantProvider) {
+    const provider = buildCapableProvider(wantProvider);
+    if (!provider) return null;
+    const model = wantModel || providerModelIds(provider.models)[0];
+    return model ? { provider: wantProvider, model } : null;
+  }
+  for (const [id, preferred] of BUILD_MODEL_PREFERENCE) {
+    const provider = buildCapableProvider(id);
+    if (!provider) continue;
+    const ids = providerModelIds(provider.models);
+    const model = preferred && (!ids.length || ids.includes(preferred)) ? preferred : ids[0];
+    if (model) return { provider: id, model };
+  }
+  return null;
+}
+
+// One non-streaming turn. A 400/422 while tools were offered is reported as a
+// possible tools refusal, which the engine answers by switching to tool calls
+// written as JSON -- the free models this app runs on often reject `tools`.
+async function callBuildModel({ provider: id, model, messages, tools, ctx }) {
+  const provider = buildCapableProvider(id);
+  if (!provider) return { ok: false, error: 'The ' + id + ' provider is not configured on this server any more.' };
+  const body = JSON.stringify({ model, messages, ...(tools ? { tools } : {}), temperature: 0.2 });
+  const pseudoReq = { headers: (ctx && ctx.headers) || {} };
+  const result = await fetchProviderWithRetry(id, () =>
+    providerFetch(pseudoReq, provider, '/chat/completions', { method: 'POST', body })
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      error: describeProviderError(result.status, result.data, provider),
+      toolsRejected: !!tools && (result.status === 400 || result.status === 422),
+    };
+  }
+  const choice = result.data && Array.isArray(result.data.choices) ? result.data.choices[0] : null;
+  if (!choice || !choice.message) return { ok: false, error: provider.label + ' answered without a message.' };
+  return { ok: true, message: choice.message };
+}
+
+// What a model call needs from the request that started the build: the origin
+// headers some providers attribute traffic with. Never the cookie.
+function buildRequestContext(req) {
+  const pick = ['host', 'x-forwarded-proto', 'x-forwarded-host'];
+  const headers = {};
+  for (const key of pick) if (req.headers[key]) headers[key] = String(req.headers[key]);
+  return { headers };
+}
+
+// Addresses a build must never read: everything isPrivateIp covers, plus the
+// IPv6 local ranges, IPv4-mapped private addresses and carrier-grade NAT.
+function isNonPublicAddress(addr) {
+  const value = String(addr || '').toLowerCase();
+  if (!value || isPrivateIp(value)) return true;
+  if (value === '::' || value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value)) return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(value);
+  if (mapped && isPrivateIp(mapped[1])) return true;
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(value);
+  if (v4 && Number(v4[1]) === 100 && Number(v4[2]) >= 64 && Number(v4[2]) <= 127) return true;
+  return false;
+}
+
+function lookupAllAddresses(hostname) {
+  return new Promise((resolve, reject) => {
+    dns.lookup(hostname, { all: true }, (err, list) => (err ? reject(err) : resolve((list || []).map((a) => a.address))));
+  });
+}
+
+// Read a public page for the build agent. Redirects are followed by hand so each
+// hop's host is checked again -- a public URL that redirects to 169.254.169.254
+// is the classic way past a check made only on the first address.
+async function readPublicPage(raw) {
+  let current;
+  try {
+    current = new URL(String(raw || '').trim());
+  } catch {
+    throw new Error('A valid http(s) url is required');
+  }
+  for (let hop = 0; hop < 5; hop++) {
+    if (current.protocol !== 'http:' && current.protocol !== 'https:') throw new Error('Only http(s) pages can be read');
+    let addresses;
+    try {
+      addresses = await lookupAllAddresses(current.hostname);
+    } catch {
+      throw new Error('Could not resolve that host');
+    }
+    if (!addresses.length || addresses.some(isNonPublicAddress)) throw new Error('That address is not readable from here');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(current.href, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'FreeAi4U/1.0 (+https://github.com/tradernonymous/freeopenai)', Accept: 'text/html,*/*' },
+      });
+      const location = res.headers.get('location');
+      if (res.status >= 300 && res.status < 400 && location) {
+        current = new URL(location, current);
+        continue;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const html = await res.text();
+      if (html.length > WEB_FETCH_MAX_BYTES) throw new Error('That page is too large to read here');
+      const { title, text } = extractPageText(html);
+      return { url: current.href, title, text: text.slice(0, 8000) };
+    } catch (err) {
+      if (err.name === 'AbortError') throw new Error('The page took too long to answer');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error('Too many redirects');
+}
+
+function createBuildStore(root) {
+  return createBuildSessions({
+    rootDir: workspaceRunRoot(root),
+    pickModel: pickBuildModel,
+    callModel: callBuildModel,
+    runRefusal: () => workspaceRunRefusal(process.env),
+    runCommand: ({ command, cwd }) => runWorkspaceCommand({
+      command,
+      cwd,
+      env: process.env,
+      timeoutMs: workspaceRunTimeoutMs(process.env),
+    }),
+    webSearch: async (query) => ({ results: await searchWebResults(String(query).slice(0, 300)) }),
+    webFetch: readPublicPage,
+  });
+}
+
 function createRequestHandler(root) {
+  const buildStore = createBuildStore(root);
+  const buildHelpers = {
+    currentUser: currentAppUser,
+    gateOn: () => getConfiguredAccounts(process.env).length > 0,
+    runRefusal: () => workspaceRunRefusal(process.env),
+    readJsonBody,
+    sendJson,
+    contextFor: buildRequestContext,
+  };
   return (req, res) => {
     const urlPath = req.url.split('?')[0];
 
@@ -3908,6 +4091,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/workspace/run' && req.method === 'POST') return handleWorkspaceRun(req, res, root);
     if (urlPath === '/api/workspace/files' && req.method === 'GET') return handleWorkspaceFiles(req, res, root);
     if (urlPath === '/api/workspace/file' && req.method === 'GET') return handleWorkspaceFile(req, res, root);
+    if (urlPath === '/api/build/sessions' || urlPath.startsWith('/api/build/sessions/')) {
+      return handleBuildRoute(req, res, urlPath, buildStore, buildHelpers);
+    }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });
