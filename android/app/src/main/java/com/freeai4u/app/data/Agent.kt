@@ -38,7 +38,7 @@ fun modeInstructions(mode: String): String = when (mode) {
         "Investigate first: search the web and read pages for anything you are not sure of.",
         "Then answer with: a one-line goal, what you found, a numbered step-by-step plan, risks, and open questions.",
         "Record every step with task_add. Keep task titles short.",
-        "This phone cannot carry the plan out: say plainly that execution happens on the FreeAI4U web/desktop app, where the user can start a remote build.",
+        "This phone does not change anything itself: end by telling the user to tap \"Build remotely\" under your reply, which runs the plan on their server and asks them to approve every change.",
     ).joinToString("\n")
     else -> listOf(
         "MODE: CHAT. Answer directly and concisely.",

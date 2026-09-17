@@ -55,6 +55,8 @@ import androidx.lifecycle.Lifecycle
 import com.freeai4u.app.data.PhoneAction
 import com.freeai4u.app.data.parseLocalDateTime
 import com.freeai4u.app.ui.AppViewModel
+import com.freeai4u.app.ui.BuildScreen
+import com.freeai4u.app.ui.BuildsScreen
 import com.freeai4u.app.ui.CommandInfoDialog
 import com.freeai4u.app.ui.FreeAITheme
 import com.freeai4u.app.ui.KnowledgesScreen
@@ -86,6 +88,8 @@ class NativeActivity : ComponentActivity(), Platform {
     private lateinit var puter: PuterImages
     private var viewer by mutableStateOf<Triple<String, ByteArray, String>?>(null)
     private var selecting by mutableStateOf<String?>(null)
+    /** Highlights of this build, shown once after an update (not on a fresh install). */
+    private var whatsNew by mutableStateOf(false)
     private var resumed = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -171,6 +175,10 @@ class NativeActivity : ComponentActivity(), Platform {
                     if (voice.state != VoiceSession.State.IDLE) voice.speak(text)
                     else if (!resumed && text.isNotBlank()) notifyReply(chatId, text)
                 }
+                LaunchedEffect(vm.builds.attention) {
+                    val attention = vm.builds.attention ?: return@LaunchedEffect
+                    if (!resumed) notifyBuild(attention.buildId, attention.requestId, attention.text)
+                }
                 @OptIn(ExperimentalComposeUiApi::class)
                 Box(Modifier.fillMaxSize().background(Palette.background).safeDrawingPadding().semantics { testTagsAsResourceId = true }) {
                     when {
@@ -195,6 +203,8 @@ class NativeActivity : ComponentActivity(), Platform {
                                     Screen.Prompts -> PromptsScreen(vm)
                                     Screen.Skills -> SkillsScreen(vm)
                                     Screen.Knowledges -> Page("Knowledges", vm) { KnowledgesScreen(vm) }
+                                    Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
+                                    Screen.Build -> BuildScreen(vm)
                                 }
                             }
                         }
@@ -204,9 +214,18 @@ class NativeActivity : ComponentActivity(), Platform {
                     }
                     selecting?.let { text -> SelectTextDialog(text) { selecting = null } }
                     vm.commandInfo?.let { text -> CommandInfoDialog(text) { vm.commandInfo = null } }
+                    if (whatsNew && vm.signedIn && !locked) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { whatsNew = false },
+                            title = { androidx.compose.material3.Text("What's new") },
+                            text = { androidx.compose.material3.Text(WHATS_NEW) },
+                            confirmButton = { androidx.compose.material3.TextButton({ whatsNew = false }) { androidx.compose.material3.Text("Got it") } },
+                        )
+                    }
                 }
             }
         }
+        whatsNew = markVersionSeen()
         checkForUpdate(manual = false)
         if (android.os.Build.VERSION.SDK_INT >= 33 && savedInstanceState == null &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
@@ -241,6 +260,9 @@ class NativeActivity : ComponentActivity(), Platform {
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) AppLock.backgroundedAt = System.currentTimeMillis()
+        // A prompt interrupted by leaving the app may never call back; without
+        // this the Unlock button stayed dead until the process restarted.
+        prompting = false
     }
 
     override fun onDestroy() {
@@ -262,6 +284,9 @@ class NativeActivity : ComponentActivity(), Platform {
                 vm.push(Screen.Settings)
             }
             ACTION_OPEN_CHAT -> intent.getStringExtra(EXTRA_CHAT_ID)?.let { id -> if (vm.conversation(id) != null) vm.openChat(id) }
+            ACTION_OPEN_BUILD -> intent.getStringExtra(EXTRA_BUILD_ID)
+                ?.takeIf { it.matches(Regex("^[a-f0-9]{16,64}$")) }
+                ?.let { id -> vm.openBuild(id) }
             Intent.ACTION_PROCESS_TEXT -> {
                 val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.take(MAX_SHARED_TEXT_CHARS)
                 if (!text.isNullOrBlank()) vm.newChat(draft = "\"$text\"\n\nExplain this: ")
@@ -629,6 +654,45 @@ class NativeActivity : ComponentActivity(), Platform {
         manager.notify(chatId.hashCode(), notification)
     }
 
+    /** Records this version as seen; true when the app was just updated from an
+     * older one (a fresh install has nothing new to announce). */
+    private fun markVersionSeen(): Boolean {
+        val prefs = getSharedPreferences("app_state", MODE_PRIVATE)
+        val seen = prefs.getInt("seen_version_code", 0)
+        if (seen == BuildConfig.VERSION_CODE) return false
+        prefs.edit().putInt("seen_version_code", BuildConfig.VERSION_CODE).apply()
+        return seen in 1 until BuildConfig.VERSION_CODE
+    }
+
+    /** A build is waiting for an approval or an answer while the app is in the
+     * background. One notification per build, replaced by the next question, so
+     * a long build does not stack a pile of them (deepseek-harness-mobile keys
+     * its notifications the same way). */
+    private fun notifyBuild(buildId: String, requestId: String, text: String) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_BUILDS, "Builds waiting for you", NotificationManager.IMPORTANCE_HIGH))
+        val open = PendingIntent.getActivity(
+            this, buildId.hashCode(),
+            Intent(this, NativeActivity::class.java).setAction(ACTION_OPEN_BUILD).putExtra(EXTRA_BUILD_ID, buildId),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_BUILDS)
+            .setSmallIcon(R.drawable.ic_app)
+            .setContentTitle("Build needs your approval")
+            .setContentText(text.take(160))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text.take(400)))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
+            .setSortKey(requestId)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .build()
+        manager.notify(("build:" + buildId).hashCode(), notification)
+    }
+
     override fun copyCrashLog(): Boolean {
         val log = CrashLog.read(this) ?: return false
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("FreeAI4U crash log", log))
@@ -642,7 +706,16 @@ class NativeActivity : ComponentActivity(), Platform {
         const val ACTION_SETTINGS = "com.freeai4u.app.SETTINGS"
         const val ACTION_OPEN_CHAT = "com.freeai4u.app.OPEN_CHAT"
         const val EXTRA_CHAT_ID = "chat_id"
+        const val ACTION_OPEN_BUILD = "com.freeai4u.app.OPEN_BUILD"
+        const val EXTRA_BUILD_ID = "build_id"
         private const val CHANNEL_REPLIES = "replies"
+        private const val CHANNEL_BUILDS = "builds"
+        private val WHATS_NEW = listOf(
+            "• Build remotely: ask for a plan in Plan mode, then tap \"Build remotely\" under the reply. Your server carries it out.",
+            "• You approve every file change and command from the phone, with a preview of exactly what changes.",
+            "• Builds screen (drawer or Tools) with live steps, and a notification when a build needs you.",
+            "• Smoother scrolling past pictures, bigger touch targets, and a clear message when your session expires.",
+        ).joinToString("\n\n")
         private const val MAX_PHOTO_EDGE = 1280
         private const val MAX_TEXT_FILE_BYTES = 1024 * 1024
     }

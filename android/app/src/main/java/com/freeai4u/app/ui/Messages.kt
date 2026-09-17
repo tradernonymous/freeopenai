@@ -76,6 +76,7 @@ import com.freeai4u.app.data.ChatMessage
 import com.freeai4u.app.data.Conversation
 import com.freeai4u.app.data.TaskItem
 import com.freeai4u.app.data.actionTicketFromJson
+import com.freeai4u.app.data.looksLikePlan
 import com.freeai4u.app.data.openAction
 import com.freeai4u.app.data.safeFileName
 import com.freeai4u.app.data.splitCodeBlocks
@@ -187,6 +188,7 @@ fun AssistantTurn(
     platform: Platform,
     onRegenerate: () -> Unit,
     onBranch: () -> Unit,
+    onBuild: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
@@ -209,6 +211,12 @@ fun AssistantTurn(
         }
         AnimatedVisibility(!streaming && !turn.error && turn.text.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
             ActionRow(turn, isLast, platform, onRegenerate, onBranch)
+        }
+        // A reply that reads like a plan can be handed to the server to build.
+        val planLike = remember(turn.text) { looksLikePlan(turn.text) }
+        val canBuild = onBuild != null && !streaming && !turn.error && planLike
+        AnimatedVisibility(canBuild, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            BuildRemotelyChip { onBuild?.invoke() }
         }
     }
 }
@@ -402,9 +410,9 @@ fun ChatImage(vm: AppViewModel, platform: Platform, id: String) {
     var bitmap by remember(id) { mutableStateOf<ImageBitmap?>(null) }
     var bytes by remember(id) { mutableStateOf<ByteArray?>(null) }
     LaunchedEffect(id) {
-        vm.loadImage(id) { data ->
+        vm.loadBitmap(id) { data, image ->
             bytes = data
-            bitmap = data?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+            bitmap = image
         }
     }
     val record = vm.library.images.firstOrNull { it.id == id }
@@ -461,16 +469,23 @@ fun TaskPanel(tasks: List<TaskItem>) {
 
 @Composable
 fun DataUrlThumb(url: String, sizeDp: Int) {
-    val bitmap = remember(url) {
-        try {
-            val bytes = java.util.Base64.getDecoder().decode(url.substringAfter(","))
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-        } catch (e: Exception) {
-            null
+    // Decoded on a background dispatcher: decoding inside composition blocked
+    // the UI thread for every photo in a bubble or the composer.
+    val bitmap by androidx.compose.runtime.produceState<ImageBitmap?>(null, url) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            try {
+                val bytes = java.util.Base64.getDecoder().decode(url.substringAfter(","))
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            } catch (e: Exception) {
+                null
+            }
         }
     }
-    if (bitmap != null) {
-        Image(bitmap, null, contentScale = ContentScale.Crop, modifier = Modifier.size(sizeDp.dp).clip(RoundedCornerShape(12.dp)))
+    val shown = bitmap
+    if (shown != null) {
+        Image(shown, null, contentScale = ContentScale.Crop, modifier = Modifier.size(sizeDp.dp).clip(RoundedCornerShape(12.dp)))
+    } else {
+        Box(Modifier.size(sizeDp.dp).clip(RoundedCornerShape(12.dp)).shimmer())
     }
 }
 

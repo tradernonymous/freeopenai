@@ -263,9 +263,7 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
 private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modifier) {
     var bitmap by remember(image.id) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(image.id) {
-        vm.loadImage(image.id) { bytes ->
-            bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
-        }
+        vm.loadBitmap(image.id) { _, decoded -> bitmap = decoded }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val current = bitmap
@@ -299,6 +297,10 @@ fun ToolsScreen(vm: AppViewModel) {
         item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
         item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
         item { SectionTitle("Server") }
+        item {
+            val waiting = vm.builds.waitingCount
+            ToolCard("🛠️", "Builds", if (waiting > 0) "$waiting waiting for your approval" else "Plans carried out on the server") { vm.openBuilds() }
+        }
         item { StatusCard(vm) }
         item { SectionTitle("More") }
     }
@@ -378,7 +380,9 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         AnimatedVisibility(instructions != vm.library.instructions) {
             TextButton({ vm.saveInstructions(instructions); vm.notice = "Saved" }) { Text("Save") }
         }
-        SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }) {}
+        // Read-only: the default is set with "Default" in a chat's model picker.
+        SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }, onClick = null)
+        Text("Change it from the model picker in any chat.", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp))
         SectionTitle("Images")
         SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
         SectionTitle("Server")
@@ -392,7 +396,7 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SectionTitle("App")
         SettingRow("Check for updates", null) { platform.checkUpdates() }
         SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.notice = "No crash recorded" }
-        SettingRow("Version", platform.version) {}
+        SettingRow("Version", platform.version, onClick = null)
         SettingRow("Sign out", null, danger = true) { confirmSignOut = true }
         Spacer(Modifier.height(32.dp))
     }
@@ -422,9 +426,11 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
 }
 
 @Composable
-private fun SettingRow(title: String, value: String?, danger: Boolean = false, onClick: () -> Unit) {
+private fun SettingRow(title: String, value: String?, danger: Boolean = false, onClick: (() -> Unit)?) {
+    // A row with nothing to do shows no ripple, so it does not look tappable.
+    val tap = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 14.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).then(tap).padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, color = if (danger) Palette.red else Palette.text, modifier = Modifier.weight(1f))
@@ -618,7 +624,7 @@ fun SkillsScreen(vm: AppViewModel) {
         if (vm.skills.isEmpty()) {
             Column(Modifier.padding(padding).fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("No skills installed.", color = Palette.text)
-                Text("The server loads skills from its configured GitHub sources. Pull to refresh, or check the server in Tools → Status.", color = Palette.muted, fontSize = 13.sp)
+                Text("The server loads skills from its configured GitHub sources. Tap Refresh above, or check the server in Tools → Status.", color = Palette.muted, fontSize = 13.sp)
             }
         } else {
             LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -115,6 +115,91 @@ class NativeApi(
         parseSkill(getJson("/api/skills/content?name=" + java.net.URLEncoder.encode(name, "UTF-8")))
             ?: throw ApiException("No installed skill named \"$name\".")
 
+    private fun postJson(path: String, body: String): String = withSession { cookie ->
+        val conn = open(path, cookie, "POST", 30000)
+        try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code == 401 || code == 302) throw ApiException("Session expired.", true)
+            val text = readBody(conn, code in 200..299)
+            if (code !in 200..299) throw ApiException(errorMessage(text, code))
+            text
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: Exception) {
+            throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // --- Remote builds (/api/build/sessions) --------------------------------------
+
+    private fun buildPath(id: String, action: String = ""): String =
+        "/api/build/sessions/" + java.net.URLEncoder.encode(id, "UTF-8") + (if (action.isEmpty()) "" else "/$action")
+
+    /** Whether builds are on, and this account's builds, newest first. */
+    fun builds(): BuildList = parseBuildList(getJson("/api/build/sessions"))
+
+    fun build(id: String): BuildSession =
+        parseBuildSession(getJson(buildPath(id))) ?: throw ApiException("The server sent an unreadable build.")
+
+    /** Hands a plan to the server; the build starts at once and waits for approvals. */
+    fun startBuild(chatId: String, plan: String): BuildSession {
+        val body = org.json.JSONObject().put("chatId", chatId).put("plan", plan).toString()
+        return parseBuildSession(postJson("/api/build/sessions", body)) ?: throw ApiException("The server sent an unreadable build.")
+    }
+
+    /** Approves or rejects the pending change, or answers the pending question. */
+    fun answerBuild(id: String, requestId: String, decision: String?, text: String) {
+        postJson(buildPath(id, "input"), buildInputBody(requestId, decision, text))
+    }
+
+    fun cancelBuild(id: String): BuildSession =
+        parseBuildSession(postJson(buildPath(id, "cancel"), "{}")) ?: throw ApiException("The server sent an unreadable build.")
+
+    /** Follows a build's events from after [after] until it ends or [cancel] is
+     * closed. Throws [ApiException] when the connection drops, so the caller
+     * can reconnect from the last sequence number it saw. */
+    fun streamBuild(
+        id: String,
+        after: Long,
+        cancel: AtomicReference<HttpURLConnection?>,
+        onEvent: (BuildEvent) -> Unit,
+    ) = withSession { cookie ->
+        // Longer than the server's 15s heartbeat, so a quiet wait for an
+        // approval is not mistaken for a dead connection.
+        val conn = open(buildPath(id, "events"), cookie, "GET", 45000)
+        cancel.set(conn)
+        try {
+            conn.setRequestProperty("Accept", "text/event-stream")
+            if (after > 0) conn.setRequestProperty("Last-Event-ID", after.toString())
+            val code = conn.responseCode
+            if (code == 401 || code == 302) throw ApiException("Session expired.", true)
+            if (code !in 200..299) throw ApiException(errorMessage(readBody(conn, false), code))
+            val frames = SseFrames()
+            conn.inputStream.bufferedReader().use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    val (type, data) = frames.feed(line) ?: continue
+                    val event = buildEventFrom(type, data) ?: continue
+                    onEvent(event)
+                    if (event is BuildEvent.Done || event is BuildEvent.Failed) return@withSession
+                }
+            }
+            if (cancel.get() != null) throw ApiException("The build stream closed early.")
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: Exception) {
+            if (cancel.get() != null) throw ApiException("Connection lost: " + (e.message ?: e.javaClass.simpleName))
+        } finally {
+            cancel.set(null)
+            conn.disconnect()
+        }
+    }
+
     /** Streams one reply. [onEvent] runs on the calling thread for every
      * event; [cancel] receives the connection so a Stop button can close it. */
     fun streamChat(

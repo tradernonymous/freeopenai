@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import com.freeai4u.app.ApiException
 import com.freeai4u.app.BaseUrlResult
@@ -70,6 +71,8 @@ sealed interface Screen {
     data object Prompts : Screen
     data object Skills : Screen
     data object Knowledges : Screen
+    data object Builds : Screen
+    data object Build : Screen
 }
 
 /** All app state for the native screens. Network and disk work runs on a
@@ -158,7 +161,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         activeStream.getAndSet(null)?.disconnect()
         io.shutdownNow()
+        builds.shutdown()
         super.onCleared()
+    }
+
+    // --- Remote builds -------------------------------------------------------
+    // The phone plans; the server builds. State and streaming live in
+    // RemoteBuilds; these are the entry points the screens use.
+
+    val builds = RemoteBuilds(api) { block -> main.post(block) }
+
+    fun openBuilds() = push(Screen.Builds)
+
+    fun openBuild(id: String) {
+        builds.open(id)
+        push(Screen.Build)
+    }
+
+    /** Hands [plan] (a Plan-mode reply) to the server and opens the build. */
+    fun startRemoteBuild(plan: String) {
+        if (builds.actionBusy) return
+        notice = "Starting the build on the server…"
+        builds.start(
+            currentChatId ?: "",
+            plan,
+            onStarted = { push(Screen.Build) },
+            onFailed = { message -> notice = "Build not started: $message" },
+        )
     }
 
     // --- Navigation --------------------------------------------------------
@@ -561,7 +590,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             "mode" -> when (args.lowercase()) {
                 "chat" -> { setMode(chat.id, "chat"); notice = "Chat mode." }
                 "plan" -> { setMode(chat.id, "plan"); notice = "Plan mode." }
-                "build" -> notice = "Build runs on the FreeAI4U web/desktop app, not on this phone."
+                "build" -> notice = "Build runs on the server: ask for a plan in Plan mode, then tap \"Build remotely\" under the reply."
                 else -> notice = "Usage: /mode chat | plan"
             }
             "clear" -> {
@@ -675,7 +704,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         authRetried = true
                         continue
                     }
-                    if (e.authRequired) main.post { signedIn = false }
+                    if (e.authRequired) {
+                        main.post {
+                            // Say why the sign-in screen appeared instead of leaving
+                            // the user to guess (the chat's error is only visible later).
+                            signInError = "Your session expired. Sign in again to continue."
+                            signedIn = false
+                        }
+                    }
                 } catch (e: Exception) {
                     failure = e.message ?: "The reply failed."
                 }
@@ -934,6 +970,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         io.execute {
             val bytes = repo.loadImage(id)
             main.post { onLoaded(bytes) }
+        }
+    }
+
+    /** Reads and decodes a stored picture off the main thread: decoding a full
+     * JPEG in the main-thread callback stuttered every scroll past an image. */
+    fun loadBitmap(id: String, onLoaded: (ByteArray?, androidx.compose.ui.graphics.ImageBitmap?) -> Unit) {
+        io.execute {
+            val bytes = repo.loadImage(id)
+            val bitmap = try {
+                bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+            } catch (e: OutOfMemoryError) {
+                null
+            }
+            val image = bitmap?.asImageBitmap()
+            main.post { onLoaded(bytes, image) }
         }
     }
 

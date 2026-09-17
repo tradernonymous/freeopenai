@@ -210,6 +210,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
         DrawerRow(Icons.Filled.AutoAwesome, "Knowledges") { vm.push(Screen.Knowledges); close() }
+        DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
             if (visible.isEmpty()) {
@@ -476,6 +477,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
                         vm = vm, platform = platform,
                         onRegenerate = { vm.regenerate(chat.id) },
                         onBranch = { vm.forkAt(chat.id, turn.lastIndex) },
+                        onBuild = if (chat.mode == "plan") ({ vm.startRemoteBuild(turn.text) }) else null,
                     )
                 }
             }
@@ -552,10 +554,14 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                         photos.forEachIndexed { index, url ->
                             Box {
                                 DataUrlThumb(url, 56)
-                                Icon(
-                                    Icons.Filled.Close, "Remove photo", tint = Palette.text,
-                                    modifier = Modifier.align(Alignment.TopEnd).size(18.dp).background(Palette.background, CircleShape).clickable { photos.removeAt(index) },
-                                )
+                                // A 36dp target around the 18dp mark: the bare icon
+                                // was too small to hit next to other thumbnails.
+                                IconButton({ photos.removeAt(index) }, Modifier.align(Alignment.TopEnd).size(36.dp)) {
+                                    Icon(
+                                        Icons.Filled.Close, "Remove photo", tint = Palette.text,
+                                        modifier = Modifier.size(18.dp).background(Palette.background, CircleShape),
+                                    )
+                                }
                             }
                         }
                     }
