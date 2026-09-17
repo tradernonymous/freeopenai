@@ -33,13 +33,14 @@ jobs:
       APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
       APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
       HAS_KEYSTORE: ${{ secrets.APK_KEYSTORE_BASE64 != '' }}
+      HAS_FIREBASE: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       # Firebase push is entirely optional (see app/build.gradle.kts): unset
       # this secret and the build just never gets a google-services.json,
       # same as a developer's own machine with no Firebase project set up.
       - name: Restore the Firebase config, if one is set
-        if: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 != '' }}
+        if: env.HAS_FIREBASE == 'true'
         run: printf '%s' "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" | base64 -d > app/google-services.json
       - uses: actions/setup-java@v4
         with:
