@@ -13,6 +13,7 @@ const TOUCHED = [
   'KILO_API_KEY', 'KILO_BASE_URL', 'KILO_MODELS', 'KILO_DISABLED', 'KILO_IMAGE_MODEL',
   'OVHCLOUD_API_KEY', 'OVHCLOUD_BASE_URL', 'OVHCLOUD_MODELS', 'OVHCLOUD_DISABLED', 'OVHCLOUD_IMAGE_MODEL',
   'G4F_API_KEY', 'G4F_BASE_URL', 'G4F_IMAGE_MODEL',
+  'FREEGPT4_API_KEY', 'FREEGPT4_BASE_URL', 'FREEGPT4_MODELS',
 ];
 
 function withCleanEnv(run) {
@@ -140,6 +141,72 @@ test('gpt4free sits last in the draw order, behind every named service', async (
         assert.ok(ids.indexOf(id) < ids.indexOf('g4f'), `${id} must be tried before g4f`);
       }
       assert.equal(ids.includes('kilocode'), false, 'a keyless chat provider is not in this list at all');
+    });
+  });
+});
+
+// The paste that started this: a Railway domain copied without its scheme and
+// with the /models endpoint still attached -- exactly what a browser's address
+// bar offers. The app used to hand that string to fetch and die as
+// ERR_INVALID_URL, naming neither the variable nor the mistake. The service
+// behind it was healthy the whole time.
+test('a pasted gateway address without a scheme, or with a /models tail, works as-is', async () => {
+  await withCleanEnv(async () => {
+    // A stand-in Free-GPT4-WEB-API: bare string array on /models, plain text on /?text=.
+    const stub = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://x');
+      if (url.pathname === '/models') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(['gpt-4', 'gpt-4o-mini']));
+        return;
+      }
+      if (url.pathname === '/' && url.searchParams.has('text')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Hello from the stub.');
+        return;
+      }
+      res.writeHead(404); res.end('{"error":"Not found"}');
+    });
+    await new Promise((r) => stub.listen(0, r));
+    const stubPort = stub.address().port;
+    try {
+      // Schemeless host with a /models tail: both repairs at once, over real HTTP.
+      process.env.FREEGPT4_BASE_URL = `127.0.0.1:${stubPort}/models`;
+      clearModelCache();
+      await routes(async ({ base }) => {
+        const providers = await get(base, '/api/llm/providers');
+        assert.ok(providers.some((p) => p.id === 'freegpt4' && p.configured), 'the pasted address must activate the provider');
+        const models = await get(base, '/api/llm/models?provider=freegpt4');
+        assert.deepEqual(models.map((m) => m.id), ['gpt-4', 'gpt-4o-mini']);
+        const chat = await (await fetch(base + '/api/llm/chat?provider=freegpt4', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] }),
+        })).json();
+        assert.equal(chat.choices[0].message.content, 'Hello from the stub.');
+      });
+    } finally {
+      stub.close();
+    }
+  });
+});
+
+// A scheme that can never carry the request is not rewritten into something
+// else -- it is named, with the variable that carries it, before any fetch.
+test('an unusable base URL is reported with its variable, not as a fetch failure', async () => {
+  await withCleanEnv(async () => {
+    process.env.FREEGPT4_BASE_URL = 'ftp://files.example.com';
+    clearModelCache();
+    await routes(async ({ base }) => {
+      const models = await fetch(base + '/api/llm/models?provider=freegpt4');
+      assert.equal(models.status, 400);
+      const body = await models.json();
+      assert.match(body.error, /FREEGPT4_BASE_URL/);
+      assert.match(body.error, /https:/);
+      // The chat path refuses the same way, before a body is even read.
+      const chat = await fetch(base + '/api/llm/chat?provider=freegpt4', { method: 'POST', body: 'not json' });
+      assert.equal(chat.status, 400);
+      assert.match((await chat.json()).error, /FREEGPT4_BASE_URL/);
     });
   });
 });

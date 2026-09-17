@@ -1614,7 +1614,23 @@ function providerIsConfigured(provider) {
 const V1_APPENDED_PROVIDERS = new Set(['g4f']);
 
 function normalizeProviderBaseUrl(id, raw) {
-  const base = String(raw || '').replace(/\/+$/, '');
+  let base = String(raw || '').trim().replace(/\/+$/, '');
+  if (!base) return '';
+  if (/^https?:/i.test(base)) {
+    // The scheme came along, but a paste can drop a slash ("http:/host") or
+    // shout ("HTTPS://host"). Repair those. Any other scheme passes through
+    // untouched and is reported as unusable rather than silently rewritten.
+    base = base.replace(/^(https?):\/{1,3}/i, (m, s) => s.toLowerCase() + '://');
+  } else if (/^[a-z][a-z0-9+.-]*:\//i.test(base)) {
+    // A deliberate non-web scheme; leave it for the provider's own error.
+  } else {
+    // "host:port" already says where to dial; a bare host means https.
+    base = (/^[^/:]+:\d+/.test(base) ? 'http://' : 'https://') + base;
+  }
+  // A "/models" tail was copied along with the address. It is the endpoint
+  // this app appends itself, so it must not become part of the host -- that
+  // paste used to die as ERR_INVALID_URL before a byte was ever sent.
+  base = base.replace(/\/models\/?$/i, '');
   if (!V1_APPENDED_PROVIDERS.has(id) || /\/v1$/i.test(base)) return base;
   return base + '/v1';
 }
@@ -1667,6 +1683,14 @@ function providerConfig(id) {
       `${provider.envVar} contains a non-ASCII character '${bad.char}' (U+${bad.code.toString(16).toUpperCase()}) at position ${bad.index}. ` +
       `Keys must be plain ASCII — this usually means placeholder text or a word processor's dash got pasted in. ` +
       `Re-copy the key from its source.`;
+  }
+  // The same honesty for the address: a base URL that never became a URL
+  // would otherwise surface as ERR_INVALID_URL from inside fetch, naming
+  // neither the variable nor the shape of the mistake.
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    configured.baseUrlError =
+      `${providerEnvName(provider.envVar, '_BASE_URL')} is "${rawBaseUrl}", which is not a usable web address. ` +
+      `Set the full URL, starting with https://.`;
   }
   return configured;
 }
@@ -2075,7 +2099,7 @@ async function discoverImageModel(req, id) {
     }
   }
   const config = providerConfig(id);
-  if (!config || config.keyError) return '';
+  if (!config || config.keyError || config.baseUrlError) return '';
   let model = '';
   try {
     // Through the *configured* provider, not the declared one: an operator's
@@ -2178,6 +2202,7 @@ function imageCandidateFor(id, options) {
   const provider = providerConfig(id);
   if (!provider) return { error: declared.label + ' is not configured — set ' + declared.envVar + '.' };
   if (provider.keyError) return { error: provider.keyError };
+  if (provider.baseUrlError) return { error: provider.baseUrlError };
   // The request's own model name is honoured only next to the provider it was
   // meant for. On its own it is whatever the browser last used somewhere else,
   // and an id from another catalogue is a 404 dressed up as a bad request.
@@ -3287,6 +3312,7 @@ async function llmModels(req, res) {
   // A corrupt key would let the picker list models that can only fail on
   // send. Say why instead: the error names the variable and the character.
   if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
+  if (provider.baseUrlError) return sendJson(res, 400, { error: provider.baseUrlError });
   // A provider that publishes no catalogue serves its declared list as-is. It
   // is not a fallback for a failed fetch: nothing is fetched at all, so a
   // working proxy cannot be reported as broken by an endpoint it never had.
@@ -3960,6 +3986,7 @@ function llmChat(req, res) {
   const provider = providerConfig(id);
   if (!provider) return sendJson(res, 400, { error: 'Unknown or unconfigured provider' });
   if (provider.keyError) return sendJson(res, 400, { error: provider.keyError });
+  if (provider.baseUrlError) return sendJson(res, 400, { error: provider.baseUrlError });
   readJsonBody(req, 1024 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     if (!body || !body.model || !Array.isArray(body.messages)) {
@@ -4657,7 +4684,7 @@ function providerModelIds(models) {
 
 function buildCapableProvider(id) {
   const provider = providerConfig(id);
-  if (!provider || provider.keyError) return null;
+  if (!provider || provider.keyError || provider.baseUrlError) return null;
   if (provider.chatShape === 'text-query' || (provider.kind && provider.kind !== 'chat')) return null;
   return provider;
 }
