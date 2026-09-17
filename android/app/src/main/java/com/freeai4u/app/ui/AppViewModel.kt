@@ -754,6 +754,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         is ChatEvent.Delta -> if (event.content.isNotEmpty()) got = true
                         is ChatEvent.Failure -> failure = event.message
                         is ChatEvent.Partial -> failure = event.notice
+                        is ChatEvent.ToolDelta -> Unit
                         ChatEvent.Done -> Unit
                     }
                 }
