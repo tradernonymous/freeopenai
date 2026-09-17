@@ -26,7 +26,7 @@
 | :-- | :-- | :-- |
 | Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute. Web search built in. | One switch: Chat · Plan · Build. Skills, tasks, workspace, GitHub tools. | A plan runs on your server. You approve every change, from any device. |
 | 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
-| ChatGPT-style. Plan mode. **Build remotely** with approvals. | One `.exe`. Builds panel docked beside the chat. | Free FLUX first. Puter only when you switch it on. |
+| ChatGPT-style. Plan mode. **Build remotely** with approvals. Reopens where you left off. | One `.exe`. Builds panel docked beside the chat. | Free FLUX first. Puter only when you switch it on. |
 
 ## 🚀 Quick start
 

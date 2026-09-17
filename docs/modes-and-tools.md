@@ -20,6 +20,8 @@ The composer has a mode chip that cycles **Chat → Plan → Build**, the same t
 | **Plan** | the same | the same | the same | `task_*` | `use_skill` |
 | **Build** | the same | **+ write, edit, delete** | **+ commit, delete, create branch** | `task_*` | `use_skill` |
 
+`web_fetch` reads public pages only. Every redirect is checked again, so a public link that forwards to a private or internal address is refused.
+
 The split follows opencode, which is where the three modes come from: **Chat researches** (search, read pages, cite primary sources, answer — no plan document, no commits), **Plan investigates and proposes** but cannot change anything, and **Build executes** the agreed plan with the write tools in hand. The task list is deliberately a Plan-mode tool: writing down a plan is the point of the mode, so the task tools are not in the write group and are not refused. A tool in no group is offered in every mode — the table is a lock on writes, never on a read tool added later. The rule is enforced by a test rather than by care: every name in a write group has to read as a write, and `github_create_branch` is why that check asks about the verb (`create`, `commit`, `delete`, `write`, `edit`) instead of requiring the suffix `_file` — a tool that changes a repository without touching a file would otherwise have been argued out of the group that keeps it out of Plan mode.
 
 Skills are pulled from open libraries — no setup, cached 6h, degrading to the last-good copy if GitHub is down. **136 skills** across eleven libraries, loaded in about half a second cold and 3 ms warm:

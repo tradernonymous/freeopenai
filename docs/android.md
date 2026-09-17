@@ -18,7 +18,7 @@
 
 **What is in it**
 
-- **Chat:** streamed replies with a folding *Thought* section and copyable code blocks. Under each reply are **copy, read aloud, regenerate, share** and **⋯** (save as Markdown, export PDF, branch, select text). Long-press your own message to copy or edit it; an edit can continue in a new branch. Each draft is kept per chat, and a **Latest** button jumps down while the screen stays awake during a reply.
+- **Chat:** streamed replies with a folding *Thought* section and copyable code blocks. Under each reply are **copy, read aloud, regenerate, share** and **⋯** (save as Markdown, export PDF, branch, select text). Long-press your own message to copy it, select part of it, or edit it; an edit can continue in a new branch. Each draft is kept per chat, and a **Latest** button jumps down while the screen stays awake during a reply.
 - **Bottom tabs:** **Chat**, **Images**, **Tools** and **Settings** sit under the chat; each page opens over it and its back arrow (or the system back gesture) returns. Every row and icon is at least 48dp, and the bars respect the system bars.
 - **Side drawer:** search, **New chat** and **Knowledges**, then pinned chats and history grouped by day. Swipe in from the left edge to open it. Long-press a chat to pin, rename, share or delete it. Your account row opens **Settings**.
 - **Composer:** the **+** sheet adds photos (for vision models), text and code files, **Image**, and the mode; there is also a **Puter images** switch. Type `/` for saved prompts, or a **slash command** — the list shows commands and installed skills as you type, and a recognised command runs on the phone instead of being sent to the model. The mic dictates, the waveform button starts **voice mode** (hands-free: listen, reply, read aloud, listen again; say "stop" to end), and while a reply streams the same button stops it.
@@ -31,7 +31,7 @@
 - **Commands:** `/help`, `/skill <name>` (or just `/skillname`), `/skills`, `/mode chat | plan`, `/clear`, `/compact on | off`, `/doctor`. They act on the phone — a pinned skill's text is added to that chat's system prompt, `/compact` shortens what is sent without touching what is on screen, and `/doctor` reports providers, models, skills, mode, pinned skills and the server's own budget. `/mode build` explains how to start a remote build from a plan. A line that merely starts with a slash but names nothing installed is still sent as a normal message.
 - **Settings:** account, custom instructions, the default model, the **Puter images** switch, app lock, delete-all, update check, crash log, version and sign out — plus the server's own **timeouts and retry budget** from `/api/llm/limits`, read on demand rather than assumed.
 - **Also:** custom instructions sent with every chat, share text or photos from any app into a new chat, **Ask FreeAI4U** in any app's text-selection menu, launcher shortcuts, a Quick Settings tile, export as text, Markdown or PDF, an optional fingerprint/screen lock, and a copyable crash log.
-- **Reliability:** a foreground **Replying…** notification holds the process open so a long answer or a run of tool steps finishes while the phone is in your pocket, and a "reply ready" notification is posted when it does. If the server's seven-day session lapses mid-turn, the app signs in again with the password it already holds and finishes the turn instead of dropping you at the sign-in screen.
+- **Reliability:** a foreground **Replying…** notification holds the process open so a long answer or a run of tool steps finishes while the phone is in your pocket, and a "reply ready" notification is posted when it does. If the server's seven-day session lapses mid-turn, the app signs in again with the password it already holds and finishes the turn instead of dropping you at the sign-in screen. If Android closes the app in the background, it reopens on the same chat and screen, with unsent text kept.
 
 **Privacy and security.**
 - Chats, pictures, personas and prompts are stored only on the phone, sealed with an AES-256-GCM key held in the Android Keystore. Backup and device transfer are off.
@@ -57,5 +57,7 @@
 - `ApiTest`: URL policy, session contract, update manifest.
 - `DataTest`: storage round trips, SSE parsing, chat bodies.
 - `AgentTest`: modes, tasks, approvals and action tickets, phone-action validation, streamed tool calls, history grouping.
+- `RemoteBuildTest`: build sessions, events and the approval reducer.
+- `TurnsTest`: grouping messages into turns and matching tool results, including a 2,000-message chat.
 
 With a signing key in the repository secrets, CI builds the release APK and publishes it together with `version.json` to the rolling `apk-latest` release. The key is a PKCS12 keystore held in four secrets: `APK_KEYSTORE_BASE64`, `APK_KEYSTORE_PASSWORD`, `APK_KEY_ALIAS` and `APK_KEY_PASSWORD`. **Back it up off GitHub**, because Android only installs an update signed with the same key. Without the secrets the workflow builds the debug variant as an artifact instead. Each build's `versionCode` is the run number plus 100.
