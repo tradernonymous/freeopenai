@@ -20,6 +20,8 @@ sealed interface ChatEvent {
     data class Failure(val message: String) : ChatEvent
     /** Some text arrived, then the stream failed; the text is kept. */
     data class Partial(val notice: String) : ChatEvent
+    /** A fragment of a tool call; fragments with the same index join up. */
+    data class ToolDelta(val index: Int, val id: String, val name: String, val arguments: String) : ChatEvent
     data object Done : ChatEvent
 }
 
@@ -72,6 +74,17 @@ fun parseSseData(data: String): ChatEvent? {
         val choices = obj.optJSONArray("choices") ?: return null
         val first = choices.optJSONObject(0) ?: return null
         val delta = first.optJSONObject("delta") ?: first.optJSONObject("message") ?: return null
+        val calls = delta.optJSONArray("tool_calls")
+        if (calls != null && calls.length() > 0) {
+            val call = calls.optJSONObject(0) ?: return null
+            val function = call.optJSONObject("function")
+            return ChatEvent.ToolDelta(
+                call.optInt("index", 0),
+                if (call.isNull("id")) "" else call.optString("id", ""),
+                if (function == null || function.isNull("name")) "" else function.optString("name", ""),
+                if (function == null || function.isNull("arguments")) "" else function.optString("arguments", ""),
+            )
+        }
         val content = delta.optString("content", "").let { if (delta.isNull("content")) "" else it }
         val reasoning = listOf("reasoning_content", "reasoning")
             .map { key -> if (delta.isNull(key)) "" else delta.optString(key, "") }
@@ -86,26 +99,82 @@ fun parseSseData(data: String): ChatEvent? {
  * context windows, and a long chat would otherwise fail on its own weight. */
 const val MAX_HISTORY_MESSAGES = 30
 
-/** The body for POST /api/llm/chat?provider=... : the persona's instructions
- * first, then the recent history minus failed replies, streamed. */
-fun buildChatBody(model: String, systemPrompt: String, history: List<ChatMessage>, maxHistory: Int = MAX_HISTORY_MESSAGES): String {
+/** Joins streamed tool-call fragments into whole calls, in index order. */
+class ToolCallCollector {
+    private val ids = sortedMapOf<Int, String>()
+    private val names = sortedMapOf<Int, StringBuilder>()
+    private val args = sortedMapOf<Int, StringBuilder>()
+
+    fun add(delta: ChatEvent.ToolDelta) {
+        if (delta.id.isNotEmpty()) ids[delta.index] = delta.id
+        names.getOrPut(delta.index) { StringBuilder() }.append(delta.name)
+        args.getOrPut(delta.index) { StringBuilder() }.append(delta.arguments)
+    }
+
+    fun calls(): List<ToolCall> = names.keys.mapNotNull { index ->
+        val name = names[index].toString()
+        if (name.isEmpty()) null
+        else ToolCall(ids[index] ?: "call_$index", name, args[index]?.toString()?.ifBlank { "{}" } ?: "{}")
+    }
+}
+
+/** The body for POST /api/llm/chat?provider=... : the system prompt first,
+ * then the recent history minus failed replies, streamed. Tool calls and their
+ * results travel in the OpenAI shape; history is cut so a tool result never
+ * arrives without the call it answers. */
+fun buildChatBody(
+    model: String,
+    systemPrompt: String,
+    history: List<ChatMessage>,
+    maxHistory: Int = MAX_HISTORY_MESSAGES,
+    tools: JSONArray? = null,
+): String {
     val messages = JSONArray()
     if (systemPrompt.isNotBlank()) messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
-    history.filter { !it.error && (it.content.isNotBlank() || it.images.isNotEmpty()) && (it.role == "user" || it.role == "assistant") }
-        .takeLast(maxHistory)
-        .forEach { message ->
-            if (message.role == "user" && message.images.isNotEmpty()) {
+    var kept = history.filter { message ->
+        !message.error && when (message.role) {
+            "user" -> message.content.isNotBlank() || message.images.isNotEmpty()
+            "assistant" -> message.content.isNotBlank() || message.toolCalls.isNotEmpty()
+            "tool" -> message.toolCallId.isNotEmpty()
+            else -> false
+        }
+    }.takeLast(maxHistory)
+    while (kept.isNotEmpty() && kept.first().role == "tool") kept = kept.drop(1)
+    kept.forEach { message ->
+        when {
+            message.role == "user" && message.images.isNotEmpty() -> {
                 // OpenAI vision shape: text part first, then one part per photo.
                 val parts = JSONArray().put(JSONObject().put("type", "text").put("text", message.content))
                 message.images.forEach { url ->
                     parts.put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", url)))
                 }
                 messages.put(JSONObject().put("role", "user").put("content", parts))
-            } else {
-                messages.put(JSONObject().put("role", message.role).put("content", message.content))
             }
+            message.role == "assistant" && message.toolCalls.isNotEmpty() -> {
+                val calls = JSONArray()
+                message.toolCalls.forEach { call ->
+                    calls.put(JSONObject().put("id", call.id).put("type", "function")
+                        .put("function", JSONObject().put("name", call.name).put("arguments", call.arguments)))
+                }
+                messages.put(JSONObject().put("role", "assistant").put("content", message.content).put("tool_calls", calls))
+            }
+            message.role == "tool" -> messages.put(
+                JSONObject().put("role", "tool").put("tool_call_id", message.toolCallId).put("name", message.toolName).put("content", message.content)
+            )
+            else -> messages.put(JSONObject().put("role", message.role).put("content", message.content))
         }
-    return JSONObject().put("model", model).put("messages", messages).put("stream", true).toString()
+    }
+    val body = JSONObject().put("model", model).put("messages", messages).put("stream", true)
+    if (tools != null && tools.length() > 0) body.put("tools", tools)
+    return body.toString()
+}
+
+/** A refusal that means "this model cannot take tools", so the turn is worth
+ * one retry without them rather than a failure. */
+fun looksLikeToolsUnsupported(message: String): Boolean {
+    val text = message.lowercase()
+    return (text.contains("tool") || text.contains("function")) &&
+        listOf("not support", "unsupported", "does not support", "not available", "invalid", "not enabled", "unknown field", "extra").any { text.contains(it) }
 }
 
 data class ImagePayload(val base64: String?, val url: String?, val mime: String)

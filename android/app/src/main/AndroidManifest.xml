@@ -2,9 +2,10 @@
 <!--
   FreeAI4U Android app: the deployed web app in a hardened WebView, with a
   native sign-in that keeps the phone logged in. Security posture:
-  - Permissions: INTERNET, ACCESS_NETWORK_STATE (retry when the connection
-    returns) and USE_BIOMETRIC (the optional app lock). All three are
-    install-time "normal" permissions with no prompt. Files come in through
+  - Permissions: INTERNET, ACCESS_NETWORK_STATE, USE_BIOMETRIC and SET_ALARM
+    are install-time "normal" permissions. RECORD_AUDIO (voice mode) and
+    POST_NOTIFICATIONS (reply ready) are runtime permissions asked for in
+    context; no location, contacts, SMS, call or storage permission. Files come in through
     the system picker or the share sheet and go out through MediaStore,
     neither of which needs storage access.
   - No backup (adb or cloud) can lift the server, the sealed password, the
@@ -27,6 +28,22 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Voice mode only; asked for the first time voice mode opens. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Normal permission: lets a tapped "Set alarm" button hand off to the Clock app. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- "Reply ready" when a reply finishes in the background (Android 13+ asks once). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Package visibility for the phone's own speech services (targetSdk 30+). -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="false"

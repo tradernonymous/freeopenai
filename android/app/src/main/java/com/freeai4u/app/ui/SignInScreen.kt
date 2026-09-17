@@ -28,6 +28,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -40,38 +41,54 @@ fun SignInScreen(vm: AppViewModel) {
     var user by rememberSaveable { mutableStateOf(vm.username.ifEmpty { BuildConfig.DEFAULT_USERNAME }) }
     // Never saved into instance state: a password does not belong in a Bundle.
     var pass by androidx.compose.runtime.remember { mutableStateOf("") }
+    var showPass by androidx.compose.runtime.remember { mutableStateOf(false) }
+    // Taps are ignored while another app draws over this screen (tapjacking),
+    // as FirebaseUI does for its sign-in dialogs.
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        view.filterTouchesWhenObscured = true
+        onDispose { view.filterTouchesWhenObscured = false }
+    }
     Column(
         Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(28.dp),
         verticalArrangement = Arrangement.Center,
     ) {
         Spacer(Modifier.height(48.dp))
-        Text("FreeAI4U", style = MaterialTheme.typography.headlineLarge, color = Palette.green)
+        Text("FreeAI4U", style = MaterialTheme.typography.headlineLarge, color = Palette.green, modifier = Modifier.enterUp())
         Spacer(Modifier.height(6.dp))
-        Text("Free AI models, one app. Sign in with one of your server's accounts; the phone stays signed in.", color = Palette.muted)
+        Text("Free AI, one app. Sign in once.", color = Palette.muted, modifier = Modifier.enterUp(80))
         Spacer(Modifier.height(24.dp))
-        OutlinedTextField(server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        OutlinedTextField(server, { server = it }, label = { Text("Server") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("login_server"),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(user, { user = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        OutlinedTextField(user, { user = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("login_username"),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next))
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(pass, { pass = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done))
-        vm.signInError?.let {
-            Spacer(Modifier.height(10.dp))
-            Text(it, color = Palette.red)
+        OutlinedTextField(pass, { pass = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("login_password"),
+            visualTransformation = if (showPass) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                androidx.compose.material3.IconButton({ showPass = !showPass }) {
+                    Icon(
+                        if (showPass) androidx.compose.material.icons.Icons.Filled.VisibilityOff else androidx.compose.material.icons.Icons.Filled.Visibility,
+                        if (showPass) "Hide password" else "Show password",
+                    )
+                }
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { vm.signIn(server, user, pass) }))
+        androidx.compose.animation.AnimatedVisibility(vm.signInError != null) {
+            Text(vm.signInError ?: "", color = Palette.red, modifier = Modifier.padding(top = 10.dp))
         }
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { vm.signIn(server, user, pass) }, enabled = !vm.signInBusy) { Text("Sign in") }
+            Button(onClick = { vm.signIn(server, user, pass) }, enabled = !vm.signInBusy && user.isNotBlank() && pass.isNotEmpty(), modifier = Modifier.testTag("login_submit").pressScale()) { Text("Sign in") }
             if (vm.signInBusy) {
                 Spacer(Modifier.padding(8.dp))
                 CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
             }
         }
         Spacer(Modifier.height(24.dp))
-        Text("The password is sealed by the Android Keystore on this phone only.", color = Palette.muted, style = MaterialTheme.typography.bodySmall)
+        Text("Password sealed on this phone only.", color = Palette.muted, style = MaterialTheme.typography.bodySmall)
     }
 }
 

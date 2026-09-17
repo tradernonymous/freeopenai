@@ -58,6 +58,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -72,6 +76,22 @@ import com.freeai4u.app.data.PromptTemplate
 import com.freeai4u.app.data.allPersonas
 import com.freeai4u.app.data.allPrompts
 import java.util.UUID
+
+/** A full page over the chat, with a back arrow. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun Page(title: String, vm: AppViewModel, content: @Composable () -> Unit) {
+    Scaffold(
+        containerColor = Palette.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = { IconButton({ vm.back() }, Modifier.pressScale()) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
+            )
+        },
+    ) { padding -> Box(Modifier.padding(padding).fillMaxSize()) { content() } }
+}
 
 // --- Image studio -----------------------------------------------------------------
 
@@ -103,7 +123,7 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(
                 prompt, { prompt = it },
-                placeholder = { Text("Describe the picture…") },
+                placeholder = { Text("Describe an image") },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                 maxLines = 4,
             )
@@ -129,14 +149,18 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 }
             }
             vm.imageError?.let { Text(it, color = Palette.red, modifier = Modifier.padding(top = 6.dp)) }
-            Text("Free images come from the server's image services (Cloudflare FLUX first).", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(if (vm.puterImages) "Puter draws first" else "Free server images", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text("Puter", color = Palette.muted, fontSize = 12.sp)
+                Switch(vm.puterImages, { vm.puterImages = it }, Modifier.padding(start = 6.dp).scale(0.8f))
+            }
         }
         if (vm.library.images.isEmpty()) {
-            EmptyState("No pictures yet", "Generated pictures are kept encrypted on this phone.")
+            EmptyState("No images yet", "Saved encrypted on this phone.")
         } else {
             LazyVerticalGrid(GridCells.Fixed(2), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(vm.library.images, key = { it.id }) { image ->
-                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clickable { viewing = image })
+                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).clickable { viewing = image }.enterUp())
                 }
             }
         }
@@ -150,7 +174,7 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
             title = { Text(image.prompt, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 14.sp) },
             text = {
                 Column {
-                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f))
+                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).clickable { bytes?.let { platform.viewImage(image.id, it, image.mime) } })
                     Text("by " + image.provider.ifEmpty { "server" }, color = Palette.muted, fontSize = 12.sp)
                     Row {
                         IconButton({ bytes?.let { platform.saveImage(name, image.mime, it) } }) { Icon(Icons.Filled.Download, "Save") }
@@ -175,7 +199,7 @@ private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modif
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val current = bitmap
-        if (current == null) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        if (current == null) Box(Modifier.fillMaxSize().shimmer())
         else Image(current, image.prompt, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
     }
 }
@@ -186,11 +210,11 @@ private data class QuickTool(val emoji: String, val title: String, val personaId
 
 private val QUICK_TOOLS = listOf(
     QuickTool("🌐", "Translate", "translator", ""),
-    QuickTool("🔗", "Summarize a link", "summarizer", "Read and summarize this page: "),
+    QuickTool("🔗", "Summarize link", "summarizer", "Read and summarize this page: "),
     QuickTool("✅", "Fix grammar", "writer", "Fix the grammar and spelling, keep my tone:\n\n"),
     QuickTool("💻", "Explain code", "coder", "Explain this code step by step:\n\n"),
     QuickTool("✍️", "Rewrite", "writer", "Rewrite this to be clearer and more engaging:\n\n"),
-    QuickTool("📧", "Reply to a message", "writer", "Write a polite, short reply to this message:\n\n"),
+    QuickTool("📧", "Reply", "writer", "Write a polite, short reply to this message:\n\n"),
 )
 
 @Composable
@@ -198,15 +222,15 @@ fun ToolsScreen(vm: AppViewModel, platform: Platform) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Quick tools") }
         items(QUICK_TOOLS) { tool ->
-            ToolCard(tool.emoji, tool.title, "Opens a chat with the right persona and prompt") { vm.newChat(tool.personaId, tool.prompt) }
+            ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt) }
         }
-        item { SectionTitle("Your library") }
-        item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size} personas · create your own") { vm.push(Screen.Personas) } }
-        item { ToolCard("📚", "Prompt library", "${allPrompts(vm.library).size} prompts · type / in a chat") { vm.push(Screen.Prompts) } }
+        item { SectionTitle("Library") }
+        item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
+        item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
         item { SectionTitle("Server") }
         item { StatusCard(vm) }
         item { SectionTitle("More") }
-        item { ToolCard("🧰", "Full web app", "Puter models, GitHub, workspace, skills and every web tool") { platform.openWebTools() } }
+        item { ToolCard("🧰", "Web app", "Puter, GitHub, skills, workspace") { platform.openWebTools() } }
     }
 }
 
@@ -216,16 +240,16 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun ToolCard(emoji: String, title: String, subtitle: String, onClick: () -> Unit) {
+private fun ToolCard(emoji: String, title: String, subtitle: String?, onClick: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().pressScale(0.97f).clickable(onClick = onClick),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(emoji, fontSize = 24.sp)
-            Column(Modifier.padding(start = 14.dp)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(emoji, fontSize = 22.sp)
+            Column(Modifier.padding(start = 12.dp)) {
                 Text(title, style = MaterialTheme.typography.titleSmall)
-                Text(subtitle, color = Palette.muted, fontSize = 12.sp)
+                if (subtitle != null) Text(subtitle, color = Palette.muted, fontSize = 12.sp)
             }
         }
     }
@@ -243,14 +267,14 @@ private fun StatusCard(vm: AppViewModel) {
             Text(vm.healthText ?: "", color = if (vm.healthText?.startsWith("Online") == true) Palette.green else Palette.muted, fontSize = 13.sp)
             vm.catalogueError?.let { Text(it, color = Palette.red, fontSize = 13.sp) }
             HorizontalDivider(color = Palette.outline)
-            Text("Providers — tap Test to time a model", color = Palette.muted, fontSize = 12.sp)
+            Text("Tap Test to time a model", color = Palette.muted, fontSize = 12.sp)
             vm.providers.forEach { provider ->
                 val model = vm.models[provider.id]?.firstOrNull()?.id
                 LaunchedEffect(provider.id) { vm.loadModels(provider.id) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(provider.label)
-                        Text(model ?: "loading models…", color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(model ?: "Loading…", color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         vm.probes["${provider.id}/$model"]?.let {
                             Text(it, fontSize = 12.sp, color = if (it.startsWith("✓")) Palette.green else if (it.startsWith("✗")) Palette.red else Palette.muted)
                         }
@@ -269,38 +293,41 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
     var lockOn by remember { mutableStateOf(platform.appLockOn()) }
     var confirmSignOut by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    var instructions by remember { mutableStateOf(vm.library.instructions) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("Account")
-        Text(vm.username.ifEmpty { "Not signed in" }, style = MaterialTheme.typography.titleSmall)
+        Text(vm.username.ifEmpty { "Signed out" }, style = MaterialTheme.typography.titleSmall)
         Text(vm.serverUrl, color = Palette.muted, fontSize = 12.sp)
-        SectionTitle("Security")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Fingerprint / screen lock")
-                Text("Ask on open and after 2 minutes away", color = Palette.muted, fontSize = 12.sp)
-            }
-            Switch(lockOn, { wanted -> platform.setAppLock(wanted) { lockOn = it } })
+        SectionTitle("Personalize")
+        OutlinedTextField(
+            instructions, { instructions = it.take(4000) },
+            label = { Text("Custom instructions") },
+            placeholder = { Text("About you, how to reply") },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
+        )
+        AnimatedVisibility(instructions != vm.library.instructions) {
+            TextButton({ vm.saveInstructions(instructions); vm.notice = "Saved" }) { Text("Save") }
         }
-        SectionTitle("Chats")
-        val defaultLabel = if (vm.library.defaultModel.isEmpty()) "Not set — first model of the first provider" else vm.library.defaultModel
-        Text("Default model: $defaultLabel", color = Palette.muted, fontSize = 13.sp)
-        Text("Set it from a chat's model picker with \"Use for new chats\".", color = Palette.muted, fontSize = 12.sp)
-        OutlinedButton({ confirmClear = true }) { Text("Delete all chats", color = Palette.red) }
+        SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }) {}
+        SectionTitle("Images")
+        SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
+        SectionTitle("Security")
+        SettingSwitch("App lock", "Fingerprint or screen lock", lockOn) { wanted -> platform.setAppLock(wanted) { lockOn = it } }
+        SectionTitle("Data")
+        SettingRow("Delete all chats", null, danger = true) { confirmClear = true }
         SectionTitle("App")
-        OutlinedButton({ platform.checkUpdates() }) { Text("Check for updates") }
-        OutlinedButton({ if (!platform.copyCrashLog()) vm.notice = "No crash has been recorded." }) { Text("Copy last crash log") }
-        OutlinedButton({ platform.stopSpeaking() }) { Text("Stop reading aloud") }
-        Text("Version " + platform.version, color = Palette.muted, fontSize = 12.sp)
-        SectionTitle("Sign out")
-        OutlinedButton({ confirmSignOut = true }) { Text("Sign out…", color = Palette.red) }
+        SettingRow("Check for updates", null) { platform.checkUpdates() }
+        SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.notice = "No crash recorded" }
+        SettingRow("Version", platform.version) {}
+        SettingRow("Sign out", null, danger = true) { confirmSignOut = true }
         Spacer(Modifier.height(32.dp))
     }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Delete all chats?") },
-            text = { Text("Every chat on this phone is deleted. This cannot be undone.") },
-            confirmButton = { TextButton({ vm.deleteAllChats(); confirmClear = false }) { Text("Delete all", color = Palette.red) } },
+            text = { Text("This cannot be undone.") },
+            confirmButton = { TextButton({ vm.deleteAllChats(); confirmClear = false }) { Text("Delete", color = Palette.red) } },
             dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } },
         )
     }
@@ -308,15 +335,40 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         AlertDialog(
             onDismissRequest = { confirmSignOut = false },
             title = { Text("Sign out") },
-            text = { Text("Signing out forgets the saved password. You can keep your chats and pictures on the phone, or erase them too.") },
+            text = { Text("Forgets the saved password. Keep or erase chats?") },
             confirmButton = {
                 Column(horizontalAlignment = Alignment.End) {
-                    TextButton({ vm.signOut(erase = false); confirmSignOut = false }) { Text("Sign out, keep chats") }
-                    TextButton({ vm.signOut(erase = true); confirmSignOut = false }) { Text("Sign out and erase everything", color = Palette.red) }
+                    TextButton({ vm.signOut(erase = false); confirmSignOut = false }) { Text("Keep chats") }
+                    TextButton({ vm.signOut(erase = true); confirmSignOut = false }) { Text("Erase all", color = Palette.red) }
                 }
             },
             dismissButton = { TextButton({ confirmSignOut = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun SettingRow(title: String, value: String?, danger: Boolean = false, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, color = if (danger) Palette.red else Palette.text, modifier = Modifier.weight(1f))
+        if (value != null) Text(value, color = Palette.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Palette.text)
+            Text(subtitle, color = Palette.muted, fontSize = 12.sp)
+        }
+        Switch(checked, onChange)
     }
 }
 

@@ -8,6 +8,12 @@ import org.json.JSONObject
 // sealed on disk by SecureBox; nothing in it ever leaves the phone except
 // through an export the user asks for.
 
+/** One function call a model asked for. [arguments] is the raw JSON text. */
+data class ToolCall(val id: String, val name: String, val arguments: String)
+
+/** A plan item recorded with the task tools. */
+data class TaskItem(val id: String, val title: String, val status: String = "todo", val detail: String = "")
+
 data class ChatMessage(
     val role: String,
     val content: String,
@@ -20,6 +26,15 @@ data class ChatMessage(
     val model: String = "",
     /** Photos attached to a user message, as downscaled JPEG data URLs. */
     val images: List<String> = emptyList(),
+    /** Tools an assistant turn called (role "assistant"). */
+    val toolCalls: List<ToolCall> = emptyList(),
+    /** For role "tool": which call this answers, and the tool's name. */
+    val toolCallId: String = "",
+    val toolName: String = "",
+    /** Pictures generated in this chat, by id in the encrypted image store. */
+    val imageIds: List<String> = emptyList(),
+    /** A phone action the assistant proposed; runs only when the user taps. */
+    val action: String = "",
 )
 
 data class Conversation(
@@ -32,6 +47,11 @@ data class Conversation(
     val createdAt: Long,
     val updatedAt: Long,
     val pinned: Boolean = false,
+    /** chat | plan | build */
+    val mode: String = "chat",
+    val tasks: List<TaskItem> = emptyList(),
+    /** The chat's own scratch files (Build mode), path to text. */
+    val files: Map<String, String> = emptyMap(),
 )
 
 data class Persona(
@@ -65,6 +85,11 @@ fun ChatMessage.toJson(): JSONObject = JSONObject()
     .put("error", error)
     .put("model", model)
     .put("images", JSONArray(images))
+    .put("toolCalls", JSONArray().also { array -> toolCalls.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name).put("arguments", it.arguments)) } })
+    .put("toolCallId", toolCallId)
+    .put("toolName", toolName)
+    .put("imageIds", JSONArray(imageIds))
+    .put("action", action)
 
 fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     role = obj.optString("role", "user"),
@@ -74,6 +99,15 @@ fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     error = obj.optBoolean("error", false),
     model = obj.optString("model", ""),
     images = obj.optJSONArray("images")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.startsWith("data:image/") } } ?: emptyList(),
+    toolCalls = obj.optJSONArray("toolCalls")?.let { list ->
+        (0 until list.length()).mapNotNull { index ->
+            list.optJSONObject(index)?.let { ToolCall(it.optString("id", ""), it.optString("name", ""), it.optString("arguments", "{}")) }
+        }.filter { it.name.isNotEmpty() }
+    } ?: emptyList(),
+    toolCallId = obj.optString("toolCallId", ""),
+    toolName = obj.optString("toolName", ""),
+    imageIds = obj.optJSONArray("imageIds")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
+    action = obj.optString("action", ""),
 )
 
 fun Conversation.toJson(): JSONObject {
@@ -90,6 +124,9 @@ fun Conversation.toJson(): JSONObject {
         .put("createdAt", createdAt)
         .put("updatedAt", updatedAt)
         .put("pinned", pinned)
+        .put("mode", mode)
+        .put("tasks", JSONArray().also { array -> tasks.forEach { array.put(JSONObject().put("id", it.id).put("title", it.title).put("status", it.status).put("detail", it.detail)) } })
+        .put("files", JSONObject(files))
 }
 
 fun conversationFromJson(text: String): Conversation? = try {
@@ -107,6 +144,13 @@ fun conversationFromJson(text: String): Conversation? = try {
         createdAt = obj.optLong("createdAt", 0L),
         updatedAt = obj.optLong("updatedAt", 0L),
         pinned = obj.optBoolean("pinned", false),
+        mode = obj.optString("mode", "chat").takeIf { it in MODES } ?: "chat",
+        tasks = obj.optJSONArray("tasks")?.let { list ->
+            (0 until list.length()).mapNotNull { index ->
+                list.optJSONObject(index)?.let { TaskItem(it.optString("id", ""), it.optString("title", ""), it.optString("status", "todo"), it.optString("detail", "")) }
+            }.filter { it.id.isNotEmpty() }
+        } ?: emptyList(),
+        files = obj.optJSONObject("files")?.let { map -> map.keys().asSequence().associateWith { key -> map.optString(key, "") } } ?: emptyMap(),
     )
 } catch (e: Exception) {
     null
@@ -128,7 +172,11 @@ data class Library(
     val images: List<GeneratedImage> = emptyList(),
     val defaultProvider: String = "",
     val defaultModel: String = "",
+    /** Custom instructions sent with every chat ("About me / how to answer"). */
+    val instructions: String = "",
 )
+
+val MODES = listOf("chat", "plan", "build")
 
 fun Library.toJson(): JSONObject {
     val personaList = JSONArray().also { array -> personas.forEach { array.put(it.toJson()) } }
@@ -141,6 +189,7 @@ fun Library.toJson(): JSONObject {
         .put("images", imageList)
         .put("defaultProvider", defaultProvider)
         .put("defaultModel", defaultModel)
+        .put("instructions", instructions)
 }
 
 fun libraryFromJson(text: String?): Library {
@@ -171,6 +220,7 @@ fun libraryFromJson(text: String?): Library {
             },
             defaultProvider = obj.optString("defaultProvider", ""),
             defaultModel = obj.optString("defaultModel", ""),
+            instructions = obj.optString("instructions", ""),
         )
     } catch (e: Exception) {
         Library()

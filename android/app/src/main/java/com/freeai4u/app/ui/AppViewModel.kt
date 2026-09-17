@@ -29,6 +29,17 @@ import com.freeai4u.app.data.ProviderInfo
 import com.freeai4u.app.data.Repository
 import com.freeai4u.app.data.SessionManager
 import com.freeai4u.app.data.buildChatBody
+import com.freeai4u.app.data.MAX_TOOL_ROUNDS
+import com.freeai4u.app.data.ToolCall
+import com.freeai4u.app.data.ToolCallCollector
+import com.freeai4u.app.data.looksLikeToolsUnsupported
+import com.freeai4u.app.data.modeLabel
+import com.freeai4u.app.data.parseArguments
+import com.freeai4u.app.data.parsePhoneAction
+import com.freeai4u.app.data.runLocalTool
+import com.freeai4u.app.data.systemPrompt
+import com.freeai4u.app.data.toolAllowed
+import com.freeai4u.app.data.toolsForMode
 import com.freeai4u.app.data.deriveTitle
 import com.freeai4u.app.data.personaFor
 import com.freeai4u.app.normalizeBaseUrl
@@ -37,11 +48,11 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 
-enum class Tab { CHATS, IMAGES, TOOLS, SETTINGS }
-
+/** Pages that open over the chat, ChatGPT-style: the chat is always the base. */
 sealed interface Screen {
-    data object Home : Screen
-    data class Chat(val id: String) : Screen
+    data object Images : Screen
+    data object Tools : Screen
+    data object Settings : Screen
     data object Personas : Screen
     data object Prompts : Screen
 }
@@ -65,9 +76,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var signInError by mutableStateOf<String?>(null)
         private set
 
-    var tab by mutableStateOf(Tab.CHATS)
     val backStack = mutableStateListOf<Screen>()
-    val screen: Screen get() = backStack.lastOrNull() ?: Screen.Home
+    val screen: Screen? get() = backStack.lastOrNull()
+    /** The chat on screen. A fresh one exists from the moment it is opened but
+     * is only saved and listed once it has a message. */
+    var currentChatId by mutableStateOf<String?>(null)
+        private set
 
     val conversations = mutableStateListOf<Conversation>()
     var library by mutableStateOf(Library())
@@ -121,7 +135,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // --- Navigation --------------------------------------------------------
 
     fun push(screen: Screen) {
-        backStack.add(screen)
+        if (backStack.lastOrNull() != screen) backStack.add(screen)
     }
 
     /** Returns false when there was nothing to go back to. */
@@ -250,15 +264,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun conversation(id: String): Conversation? = conversations.firstOrNull { it.id == id }
 
-    fun newChat(personaId: String = DEFAULT_PERSONA_ID, draft: String = ""): String {
+    fun openChat(id: String) {
+        conversations.removeAll { it.messages.isEmpty() && it.id != id && it.id != streamingId }
+        currentChatId = id
+        backStack.clear()
+    }
+
+    /** The chat on screen, creating a fresh one when there is none. */
+    fun currentOrNew(): Conversation {
+        currentChatId?.let { id -> conversation(id)?.let { return it } }
+        return conversation(newChat())!!
+    }
+
+    fun newChat(personaId: String = DEFAULT_PERSONA_ID, draft: String = "", mode: String = "chat"): String {
         val now = System.currentTimeMillis()
         val (provider, model) = startingModel()
-        val chat = Conversation(UUID.randomUUID().toString(), "New chat", personaId, provider, model, emptyList(), now, now)
+        // An untouched empty chat is replaced rather than stacked up.
+        conversations.removeAll { it.messages.isEmpty() && it.id != streamingId }
+        val chat = Conversation(UUID.randomUUID().toString(), "New chat", personaId, provider, model, emptyList(), now, now, mode = mode)
         conversations.add(chat)
         if (draft.isNotEmpty()) drafts[chat.id] = draft
         backStack.clear()
-        tab = Tab.CHATS
-        push(Screen.Chat(chat.id))
+        currentChatId = chat.id
         return chat.id
     }
 
@@ -293,7 +320,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (streamingId == id) stop()
         conversations.removeAll { it.id == id }
         drafts.remove(id)
-        backStack.removeAll { it is Screen.Chat && it.id == id }
+        if (currentChatId == id) currentChatId = null
         io.execute { repo.deleteConversation(id) }
     }
 
@@ -301,7 +328,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         stop()
         conversations.clear()
         drafts.clear()
-        backStack.removeAll { it is Screen.Chat }
+        currentChatId = null
         io.execute { repo.deleteAllConversations() }
     }
 
@@ -351,8 +378,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         replace(target)
         if (branch) {
-            backStack.removeAll { it is Screen.Chat && it.id == id }
-            push(Screen.Chat(target.id))
+            currentChatId = target.id
         }
         runReply(target)
     }
@@ -368,69 +394,181 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             createdAt = now, updatedAt = now, pinned = false,
         )
         replace(copy)
-        push(Screen.Chat(copy.id))
+        currentChatId = copy.id
     }
 
+    @Volatile private var stopRequested = false
+
     fun stop() {
+        stopRequested = true
         activeStream.getAndSet(null)?.let { connection -> io.execute { connection.disconnect() } }
     }
 
-    private fun runReply(chat: Conversation) {
-        val persona = personaFor(library, chat.personaId)
-        val body = buildChatBody(chat.model, persona.systemPrompt, chat.messages)
-        val started = System.currentTimeMillis()
-        val placeholder = ChatMessage("assistant", "", createdAt = started, model = chat.model)
-        replace(chat.copy(messages = chat.messages + placeholder), persist = false)
-        streamingId = chat.id
-        io.execute {
-            val content = StringBuilder()
-            val reasoning = StringBuilder()
-            var failure: String? = null
-            var lastPost = 0L
-            fun publish(final: Boolean) {
-                val text = content.toString()
-                val thought = reasoning.toString()
-                val error = failure
-                main.post {
-                    val current = conversation(chat.id) ?: return@post
-                    val messages = current.messages.toMutableList()
-                    if (messages.isEmpty() || messages.last().role != "assistant" || messages.last().createdAt != started) return@post
-                    messages[messages.lastIndex] = when {
-                        error != null && text.isEmpty() -> placeholder.copy(content = error, error = true)
-                        error != null -> placeholder.copy(content = "$text\n\n⚠️ $error", reasoning = thought)
-                        else -> placeholder.copy(content = text, reasoning = thought)
-                    }
-                    val updated = current.copy(messages = messages, updatedAt = System.currentTimeMillis())
-                    replace(updated, persist = final)
-                    if (final) streamingId = null
-                }
-            }
-            try {
-                api.streamChat(chat.provider, body, activeStream) { event ->
-                    when (event) {
-                        is ChatEvent.Delta -> {
-                            content.append(event.content)
-                            reasoning.append(event.reasoning)
-                            val now = System.currentTimeMillis()
-                            if (now - lastPost > 60) {
-                                lastPost = now
-                                publish(false)
-                            }
-                        }
-                        is ChatEvent.Failure -> failure = event.message
-                        is ChatEvent.Partial -> failure = event.notice
-                        ChatEvent.Done -> Unit
-                    }
-                }
-            } catch (e: ApiException) {
-                failure = e.message
-                if (e.authRequired) main.post { signedIn = false }
-            } catch (e: Exception) {
-                failure = e.message ?: "The reply failed."
-            }
-            if (content.isEmpty() && failure == null) failure = "The model sent an empty reply. Try again or pick another model."
-            publish(true)
+    fun setMode(id: String, mode: String) {
+        val chat = conversation(id) ?: return
+        if (mode !in com.freeai4u.app.data.MODES) return
+        replace(chat.copy(mode = mode))
+    }
+
+    /** Set when a reply finishes, so voice mode can read it aloud and listen again. */
+    var finishedReply by mutableStateOf<Triple<String, String, Long>?>(null)
+        private set
+
+    /** Puts the worker's copy of a chat on screen without losing what the user
+     * changed meanwhile (pin, title, mode). */
+    private fun publishChat(worker: Conversation, persist: Boolean) {
+        main.post {
+            val current = conversation(worker.id) ?: return@post
+            replace(
+                current.copy(messages = worker.messages, tasks = worker.tasks, files = worker.files, updatedAt = System.currentTimeMillis()),
+                persist = persist,
+            )
         }
+    }
+
+    /** The agent loop: stream a reply, run the tools it asks for, send the
+     * results back, and repeat until the model answers in plain text. A model
+     * that refuses tools is asked once more without them. */
+    private fun runReply(start: Conversation) {
+        streamingId = start.id
+        stopRequested = false
+        val lib = library
+        io.execute {
+            var chat = start
+            var useTools = true
+            var round = 0
+            var finalText = ""
+            val seenCalls = HashMap<String, Int>()
+            while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
+                val persona = personaFor(lib, chat.personaId)
+                val body = buildChatBody(
+                    chat.model,
+                    systemPrompt(persona.systemPrompt, lib.instructions, chat.mode),
+                    chat.messages,
+                    tools = if (useTools) toolsForMode(chat.mode) else null,
+                )
+                val started = System.currentTimeMillis()
+                val content = StringBuilder()
+                val reasoning = StringBuilder()
+                val collector = ToolCallCollector()
+                var failure: String? = null
+                var lastPost = 0L
+                val base = chat
+                fun draft(error: String?): ChatMessage = when {
+                    error != null && content.isEmpty() -> ChatMessage("assistant", error, createdAt = started, error = true, model = chat.model)
+                    error != null -> ChatMessage("assistant", "$content\n\n⚠️ $error", reasoning.toString(), started, model = chat.model)
+                    else -> ChatMessage("assistant", content.toString(), reasoning.toString(), started, model = chat.model)
+                }
+                publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                try {
+                    api.streamChat(chat.provider, body, activeStream) { event ->
+                        when (event) {
+                            is ChatEvent.Delta -> {
+                                content.append(event.content)
+                                reasoning.append(event.reasoning)
+                                val now = System.currentTimeMillis()
+                                if (now - lastPost > 60) {
+                                    lastPost = now
+                                    publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                }
+                            }
+                            is ChatEvent.ToolDelta -> collector.add(event)
+                            is ChatEvent.Failure -> failure = event.message
+                            is ChatEvent.Partial -> failure = event.notice
+                            ChatEvent.Done -> Unit
+                        }
+                    }
+                } catch (e: ApiException) {
+                    failure = e.message
+                    if (e.authRequired) main.post { signedIn = false }
+                } catch (e: Exception) {
+                    failure = e.message ?: "The reply failed."
+                }
+                val calls = collector.calls()
+                val error = failure
+                if (error != null && useTools && content.isEmpty() && calls.isEmpty() && looksLikeToolsUnsupported(error)) {
+                    useTools = false
+                    continue
+                }
+                if (stopRequested && content.isEmpty() && calls.isEmpty()) {
+                    chat = base
+                    break
+                }
+                if (error == null && content.isEmpty() && calls.isEmpty()) {
+                    chat = base.copy(messages = base.messages + draft("The model sent an empty reply. Try again or pick another model."))
+                    break
+                }
+                val assistant = draft(error).copy(toolCalls = if (error == null) calls else emptyList())
+                chat = base.copy(messages = base.messages + assistant)
+                finalText = assistant.content
+                if (error != null || calls.isEmpty()) break
+                publishChat(chat, persist = false)
+                for (call in calls) {
+                    if (stopRequested) break
+                    // Loop guard (from Artemis): the same call twice gets a hint
+                    // instead of a third identical result.
+                    val key = call.name + "|" + call.arguments.filterNot { it.isWhitespace() }
+                    val repeats = (seenCalls[key] ?: 0) + 1
+                    seenCalls[key] = repeats
+                    chat = if (repeats > 2) {
+                        chat.copy(messages = chat.messages + ChatMessage("tool", "Error: this exact call already ran twice. Hint: use the earlier result, change the arguments, or answer now.", createdAt = System.currentTimeMillis(), toolCallId = call.id, toolName = call.name))
+                    } else {
+                        runTool(chat, call)
+                    }
+                    publishChat(chat, persist = false)
+                }
+                round++
+                if (round > MAX_TOOL_ROUNDS) {
+                    chat = chat.copy(messages = chat.messages + ChatMessage("assistant", "Stopped after $MAX_TOOL_ROUNDS tool rounds. Say \"continue\" to go on.", createdAt = System.currentTimeMillis(), error = true))
+                }
+            }
+            val done = chat
+            val text = finalText
+            publishChat(done, persist = true)
+            main.post {
+                streamingId = null
+                finishedReply = Triple(done.id, text, System.currentTimeMillis())
+            }
+        }
+    }
+
+    /** Runs one tool call on the worker thread and appends its result. */
+    private fun runTool(chat: Conversation, call: ToolCall): Conversation {
+        val now = System.currentTimeMillis()
+        fun result(output: String, imageIds: List<String> = emptyList(), action: String = "") =
+            ChatMessage("tool", output.take(12_000), createdAt = now, toolCallId = call.id, toolName = call.name, imageIds = imageIds, action = action)
+        runLocalTool(chat, call)?.let { local ->
+            return local.conversation.copy(messages = local.conversation.messages + result(local.output))
+        }
+        if (!toolAllowed(chat.mode, call.name)) {
+            return chat.copy(messages = chat.messages + result("Error: ${call.name} is not available in ${modeLabel(chat.mode)} mode."))
+        }
+        val args = parseArguments(call.arguments)
+        return when (call.name) {
+            "web_search" -> chat.copy(messages = chat.messages + result(safely { api.webSearch(args.optString("query", "")) }))
+            "web_fetch" -> chat.copy(messages = chat.messages + result(safely { api.webFetch(args.optString("url", "")) }))
+            "generate_image" -> {
+                val prompt = args.optString("prompt", "").trim()
+                if (prompt.isEmpty()) return chat.copy(messages = chat.messages + result("Error: prompt is required."))
+                try {
+                    val record = drawBlocking(prompt)
+                    chat.copy(messages = chat.messages + result("The image is shown to the user (by ${record.provider}). Describe it briefly; do not paste a link.", listOf(record.id)))
+                } catch (e: Exception) {
+                    chat.copy(messages = chat.messages + result("Error: " + (e.message ?: "image failed")))
+                }
+            }
+            "phone_action" -> {
+                val (action, message) = parsePhoneAction(call.arguments)
+                chat.copy(messages = chat.messages + result(message, action = action?.toJson() ?: ""))
+            }
+            else -> chat.copy(messages = chat.messages + result("Error: unknown tool ${call.name}."))
+        }
+    }
+
+    private fun safely(block: () -> String): String = try {
+        block()
+    } catch (e: Exception) {
+        "Error: " + (e.message ?: "failed")
     }
 
     // --- Library -------------------------------------------------------------
@@ -438,6 +576,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateLibrary(updated: Library) {
         library = updated
         io.execute { repo.saveLibrary(updated) }
+    }
+
+    fun saveInstructions(text: String) {
+        updateLibrary(library.copy(instructions = text.take(4000)))
     }
 
     fun savePersona(persona: Persona) {
@@ -461,6 +603,88 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Images ----------------------------------------------------------------
 
+    /** Puter draws with the user's own Puter account through a hidden WebView
+     * the activity owns. Off by default, never saved, and it switches itself
+     * off after the first failure, so a spent allowance never blocks drawing. */
+    var puterImages by mutableStateOf(false)
+    /** The composer's "Image" tool is armed: the next send draws. */
+    var imageArmed by mutableStateOf(false)
+    var puterDraw: ((prompt: String, done: (Result<Pair<String, ByteArray>>) -> Unit) -> Unit)? = null
+
+    /** Draws on the worker thread: Puter first when switched on, then the
+     * server's free image services. Saves the picture and returns its record. */
+    private fun drawBlocking(prompt: String): GeneratedImage {
+        var provider = ""
+        var mime = ""
+        var bytes: ByteArray? = null
+        val bridge = puterDraw
+        if (puterImages && bridge != null) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var outcome: Result<Pair<String, ByteArray>>? = null
+            main.post { bridge(prompt) { result -> outcome = result; latch.countDown() } }
+            val finished = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
+            val result = outcome
+            if (finished && result != null && result.isSuccess) {
+                val (type, data) = result.getOrThrow()
+                provider = "puter"
+                mime = type
+                bytes = data
+            } else {
+                val reason = result?.exceptionOrNull()?.message ?: "timed out"
+                main.post {
+                    puterImages = false
+                    notice = "Puter off: $reason. Using free server images."
+                }
+            }
+        }
+        if (bytes == null) {
+            val drawn = api.generateImage(prompt)
+            provider = drawn.first
+            mime = drawn.second
+            bytes = drawn.third
+        }
+        val record = GeneratedImage(UUID.randomUUID().toString(), prompt, provider, mime, System.currentTimeMillis())
+        repo.saveImage(record.id, bytes!!)
+        main.post { updateLibrary(library.copy(images = listOf(record) + library.images)) }
+        return record
+    }
+
+    /** "Create image" from the composer: the prompt and the picture land in
+     * the chat as a generate_image call and its result, so the chat history
+     * stays valid for the next model turn. */
+    fun drawInChat(id: String, prompt: String) {
+        val chat = conversation(id) ?: return
+        val text = prompt.trim()
+        if (text.isEmpty() || streamingId != null) return
+        val now = System.currentTimeMillis()
+        val call = ToolCall("img_$now", "generate_image", org.json.JSONObject().put("prompt", text).toString())
+        val start = chat.copy(
+            title = if (chat.messages.none { it.role == "user" }) deriveTitle(text) else chat.title,
+            messages = chat.messages + ChatMessage("user", text, createdAt = now) +
+                ChatMessage("assistant", "", createdAt = now + 1, toolCalls = listOf(call)),
+            updatedAt = now,
+        )
+        drafts.remove(id)
+        replace(start)
+        streamingId = id
+        io.execute {
+            val result = try {
+                val record = drawBlocking(text)
+                ChatMessage("tool", "The image is shown to the user (by ${record.provider}).", createdAt = now + 2, toolCallId = call.id, toolName = call.name, imageIds = listOf(record.id))
+            } catch (e: Exception) {
+                ChatMessage("tool", "Error: " + (e.message ?: "image failed"), createdAt = now + 2, toolCallId = call.id, toolName = call.name)
+            }
+            val failed = result.content.startsWith("Error")
+            val finished = start.copy(
+                messages = start.messages + result + ChatMessage(
+                    "assistant", if (failed) result.content.removePrefix("Error: ") else "", createdAt = now + 3, error = failed,
+                ),
+            )
+            publishChat(finished, persist = true)
+            main.post { streamingId = null }
+        }
+    }
+
     fun generateImage(prompt: String) {
         val text = prompt.trim()
         if (text.isEmpty() || imageBusy) return
@@ -468,18 +692,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         imageError = null
         io.execute {
             try {
-                val (provider, mime, bytes) = api.generateImage(text)
-                val record = GeneratedImage(UUID.randomUUID().toString(), text, provider, mime, System.currentTimeMillis())
-                repo.saveImage(record.id, bytes)
+                drawBlocking(text)
+                main.post { imageBusy = false }
+            } catch (e: Exception) {
                 main.post {
                     imageBusy = false
-                    updateLibrary(library.copy(images = listOf(record) + library.images))
-                }
-            } catch (e: ApiException) {
-                main.post {
-                    imageBusy = false
-                    imageError = e.message
-                    if (e.authRequired) signedIn = false
+                    imageError = e.message ?: "Image failed."
+                    if (e is ApiException && e.authRequired) signedIn = false
                 }
             }
         }

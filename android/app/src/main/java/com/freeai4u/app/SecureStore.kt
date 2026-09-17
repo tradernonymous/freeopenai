@@ -43,6 +43,10 @@ class SecureStore(context: Context) {
         get() = prefs.getBoolean(KEY_APP_LOCK, false)
         set(value) = prefs.edit().putBoolean(KEY_APP_LOCK, value).apply()
 
+    var askedNotifications: Boolean
+        get() = prefs.getBoolean(KEY_ASKED_NOTIFY, false)
+        set(value) = prefs.edit().putBoolean(KEY_ASKED_NOTIFY, value).apply()
+
     var lastUpdateCheck: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK, value).apply()
@@ -112,6 +116,7 @@ class SecureStore(context: Context) {
         const val KEY_SESSION = "session_sealed"
         const val KEY_APP_LOCK = "app_lock"
         const val KEY_UPDATE_CHECK = "last_update_check"
+        const val KEY_ASKED_NOTIFY = "asked_notifications"
         const val KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "freeai4u-secrets"
         const val TRANSFORM = "AES/GCM/NoPadding"

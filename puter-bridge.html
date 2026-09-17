@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex">
+    <title>FreeAI4U Puter bridge</title>
+    <!--
+      Loaded invisibly by the Android app (PuterImages.kt) so it can draw with
+      the user's own Puter account. It shares this origin's storage with the
+      full web app, which is where the Puter sign-in happens; this page never
+      opens a sign-in of its own. The app starts a job with fa4uDraw(id,
+      prompt), polls fa4uStatus(id), then reads the picture with fa4uChunk.
+    -->
+    <script src="https://js.puter.com/v2/"></script>
+</head>
+<body>
+<script>
+    window.fa4uJobs = {};
+
+    function toDataUrl(blob) {
+        return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function () { resolve(reader.result); };
+            reader.onerror = function () { reject(new Error('could not read the picture')); };
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    // txt2img answers with an <img> whose src may be a data: URL, a blob: URL
+    // or a plain link; each becomes a data URL the app can decode.
+    async function imageToDataUrl(result) {
+        var src = result && (result.src || (typeof result === 'string' ? result : ''));
+        if (!src) throw new Error('Puter returned no picture');
+        if (src.indexOf('data:image/') === 0) return src;
+        var response = await fetch(src);
+        if (!response.ok) throw new Error('could not fetch the picture');
+        return toDataUrl(await response.blob());
+    }
+
+    // Puter rejects with {message, code, errorCode}; a spent allowance is
+    // errorCode insufficient_funds (HTTP 402), which the SDK would otherwise
+    // answer with an upgrade dialog nobody can see in a hidden WebView.
+    function describe(error) {
+        if (!error) return 'Puter failed';
+        if (typeof error === 'string') return error;
+        var code = error.errorCode || error.code || (error.error && error.error.code) || '';
+        if (code === 'insufficient_funds' || code === 'subscription_required') return 'Puter credits used up';
+        if (code === 'too_many_requests') return 'Puter rate limit';
+        if (code === 'moderation_flagged') return 'Puter refused this prompt';
+        return error.message || (error.error && (error.error.message || error.error)) || code || 'Puter failed';
+    }
+
+    window.fa4uStatus = function (id) {
+        var job = window.fa4uJobs[id];
+        if (!job) return JSON.stringify({ state: 'missing' });
+        return JSON.stringify({ state: job.state, length: job.length || 0, error: job.error || '' });
+    };
+
+    window.fa4uChunk = function (id, offset, size) {
+        var job = window.fa4uJobs[id];
+        return job && job.data ? job.data.substr(offset, size) : '';
+    };
+
+    window.fa4uForget = function (id) {
+        delete window.fa4uJobs[id];
+    };
+
+    window.fa4uDraw = async function (id, prompt) {
+        var jobs = window.fa4uJobs;
+        jobs[id] = { state: 'pending' };
+        try {
+            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
+            if (!signedIn) throw new Error('sign in to Puter in Web app first');
+            var image = await puter.ai.txt2img(String(prompt || '').slice(0, 2000));
+            var dataUrl = await imageToDataUrl(image);
+            // The app reads the picture back in slices (fa4uChunk), so no
+            // single evaluateJavascript result has to carry megabytes.
+            jobs[id] = { state: 'done', length: dataUrl.length, data: dataUrl };
+        } catch (error) {
+            jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300) };
+        }
+    };
+</script>
+</body>
+</html>

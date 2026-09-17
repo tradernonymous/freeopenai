@@ -32,18 +32,44 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.PackageManager
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import com.freeai4u.app.data.PhoneAction
+import com.freeai4u.app.data.parseLocalDateTime
 import com.freeai4u.app.ui.AppViewModel
-import com.freeai4u.app.ui.ChatScreen
 import com.freeai4u.app.ui.FreeAITheme
-import com.freeai4u.app.ui.HomeScreen
+import com.freeai4u.app.ui.ImageViewer
+import com.freeai4u.app.ui.ImageStudioScreen
 import com.freeai4u.app.ui.LockScreen
+import com.freeai4u.app.ui.MainScreen
+import com.freeai4u.app.ui.Page
 import com.freeai4u.app.ui.Palette
 import com.freeai4u.app.ui.PersonasScreen
 import com.freeai4u.app.ui.Platform
 import com.freeai4u.app.ui.PromptsScreen
 import com.freeai4u.app.ui.Screen
+import com.freeai4u.app.ui.SelectTextDialog
+import com.freeai4u.app.ui.SettingsScreen
 import com.freeai4u.app.ui.SignInScreen
-import com.freeai4u.app.ui.Tab
+import com.freeai4u.app.ui.ToolsScreen
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
@@ -54,6 +80,11 @@ class NativeActivity : ComponentActivity(), Platform {
     private var locked by mutableStateOf(false)
     private var lockError by mutableStateOf<String?>(null)
     private var prompting = false
+    private lateinit var voice: VoiceSession
+    private lateinit var puter: PuterImages
+    private var viewer by mutableStateOf<Triple<String, ByteArray, String>?>(null)
+    private var selecting by mutableStateOf<String?>(null)
+    private var resumed = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var pendingSpeech: String? = null
@@ -100,6 +131,12 @@ class NativeActivity : ComponentActivity(), Platform {
         }
     }
 
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startVoice() else toast("Mic permission needed for voice mode.")
+    }
+
+    private val notifyPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val speech = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = onSpeech ?: return@registerForActivityResult
         onSpeech = null
@@ -115,28 +152,64 @@ class NativeActivity : ComponentActivity(), Platform {
         publishShortcuts()
         if (savedInstanceState == null) takeIntent(intent)
         lockIfDue()
+        voice = VoiceSession(this) { heard ->
+            val chat = vm.currentOrNew()
+            if (Regex("^(stop|cancel|that's all|bye|goodbye)[.!]*$", RegexOption.IGNORE_CASE).matches(heard.trim())) {
+                voice.release()
+            } else {
+                vm.send(chat.id, heard)
+            }
+        }
+        puter = PuterImages(this) { vm.serverUrl }
+        vm.puterDraw = { prompt, done -> puter.draw(prompt, done) }
         setContent {
             FreeAITheme {
-                Box(Modifier.fillMaxSize().background(Palette.background).safeDrawingPadding()) {
+                LaunchedEffect(vm.finishedReply) {
+                    val (chatId, text, _) = vm.finishedReply ?: return@LaunchedEffect
+                    if (voice.state != VoiceSession.State.IDLE) voice.speak(text)
+                    else if (!resumed && text.isNotBlank()) notifyReply(chatId, text)
+                }
+                @OptIn(ExperimentalComposeUiApi::class)
+                Box(Modifier.fillMaxSize().background(Palette.background).safeDrawingPadding().semantics { testTagsAsResourceId = true }) {
                     when {
                         locked -> LockScreen(lockError) { unlock() }
                         !vm.signedIn -> SignInScreen(vm)
                         else -> {
-                            BackHandler(enabled = vm.backStack.isNotEmpty() || vm.tab != Tab.CHATS) {
-                                if (!vm.back()) vm.tab = Tab.CHATS
-                            }
-                            when (val screen = vm.screen) {
-                                Screen.Home -> HomeScreen(vm, this@NativeActivity)
-                                is Screen.Chat -> ChatScreen(vm, this@NativeActivity, screen.id)
-                                Screen.Personas -> PersonasScreen(vm)
-                                Screen.Prompts -> PromptsScreen(vm)
+                            BackHandler(enabled = vm.backStack.isNotEmpty()) { vm.back() }
+                            MainScreen(vm, this@NativeActivity, voice)
+                            AnimatedContent(
+                                vm.screen,
+                                transitionSpec = {
+                                    (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
+                                },
+                                label = "page",
+                            ) { screen ->
+                                when (screen) {
+                                    null -> Unit
+                                    Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
+                                    Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm, this@NativeActivity) }
+                                    Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
+                                    Screen.Personas -> PersonasScreen(vm)
+                                    Screen.Prompts -> PromptsScreen(vm)
+                                }
                             }
                         }
                     }
+                    viewer?.let { (id, bytes, mime) ->
+                        ImageViewer(bytes, onClose = { viewer = null }, onSave = { saveImage("freeai4u-" + id.take(8) + ext(mime), mime, bytes) }, onShare = { shareImage("freeai4u-" + id.take(8) + ext(mime), mime, bytes) })
+                    }
+                    selecting?.let { text -> SelectTextDialog(text) { selecting = null } }
                 }
             }
         }
         checkForUpdate(manual = false)
+        if (android.os.Build.VERSION.SDK_INT >= 33 && savedInstanceState == null &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !vm.store.askedNotifications
+        ) {
+            vm.store.askedNotifications = true
+            notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -150,12 +223,25 @@ class NativeActivity : ComponentActivity(), Platform {
         lockIfDue()
     }
 
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+    }
+
+    override fun onPause() {
+        resumed = false
+        super.onPause()
+    }
+
     override fun onStop() {
         super.onStop()
         if (!isChangingConfigurations) AppLock.backgroundedAt = System.currentTimeMillis()
     }
 
     override fun onDestroy() {
+        if (::voice.isInitialized) voice.release()
+        if (::puter.isInitialized) puter.close()
+        vm.puterDraw = null
         tts?.shutdown()
         tts = null
         super.onDestroy()
@@ -168,8 +254,9 @@ class NativeActivity : ComponentActivity(), Platform {
             ACTION_NEW_CHAT -> vm.newChat()
             ACTION_SETTINGS -> {
                 vm.backStack.clear()
-                vm.tab = Tab.SETTINGS
+                vm.push(Screen.Settings)
             }
+            ACTION_OPEN_CHAT -> intent.getStringExtra(EXTRA_CHAT_ID)?.let { id -> if (vm.conversation(id) != null) vm.openChat(id) }
             Intent.ACTION_PROCESS_TEXT -> {
                 val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.take(MAX_SHARED_TEXT_CHARS)
                 if (!text.isNullOrBlank()) vm.newChat(draft = "\"$text\"\n\nExplain this: ")
@@ -445,6 +532,102 @@ class NativeActivity : ComponentActivity(), Platform {
         })
     }
 
+    override fun viewImage(id: String, bytes: ByteArray, mime: String) {
+        viewer = Triple(id, bytes, mime)
+    }
+
+    override fun selectText(text: String) {
+        selecting = text
+    }
+
+    private fun ext(mime: String) = if (mime.contains("png")) ".png" else if (mime.contains("webp")) ".webp" else ".jpg"
+
+    override fun startVoice() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        if (!voice.available()) {
+            toast("No speech recognition on this phone.")
+            return
+        }
+        voice.start()
+    }
+
+    /** Runs a phone action the assistant proposed, after the user tapped it.
+     * Every one opens another app's own screen; nothing is sent or saved
+     * without the user finishing it there. */
+    override fun runAction(action: PhoneAction) {
+        val intent: Intent? = when (action.kind) {
+            "alarm" -> Intent(AlarmClock.ACTION_SET_ALARM)
+                .putExtra(AlarmClock.EXTRA_HOUR, action.hour)
+                .putExtra(AlarmClock.EXTRA_MINUTES, action.minute.coerceAtLeast(0))
+                .putExtra(AlarmClock.EXTRA_MESSAGE, action.title)
+            "timer" -> Intent(AlarmClock.ACTION_SET_TIMER)
+                .putExtra(AlarmClock.EXTRA_LENGTH, action.seconds)
+                .putExtra(AlarmClock.EXTRA_MESSAGE, action.title)
+                .putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+            "event" -> {
+                val begin = parseLocalDateTime(action.start)
+                val end = parseLocalDateTime(action.end) ?: begin?.plus(60 * 60 * 1000L)
+                Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
+                    .putExtra(CalendarContract.Events.TITLE, action.title)
+                    .putExtra(CalendarContract.Events.EVENT_LOCATION, action.location)
+                    .putExtra(CalendarContract.Events.DESCRIPTION, action.text)
+                    .apply {
+                        if (begin != null) putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, begin)
+                        if (end != null) putExtra(CalendarContract.EXTRA_EVENT_END_TIME, end)
+                    }
+            }
+            "map" -> Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(action.query)))
+            "dial" -> Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(action.number)))
+            "email" -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + Uri.encode(action.email)))
+                .putExtra(Intent.EXTRA_SUBJECT, action.title)
+                .putExtra(Intent.EXTRA_TEXT, action.text)
+            "open_url" -> if (action.url.startsWith("https://")) Intent(Intent.ACTION_VIEW, Uri.parse(action.url)) else null
+            "share" -> Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, action.text), action.title.ifEmpty { "Share" })
+            "copy" -> {
+                copy(action.text)
+                null
+            }
+            else -> null
+        }
+        if (intent == null) return
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            toast("No app on this phone can do that.")
+        } catch (e: SecurityException) {
+            toast("Android blocked that action.")
+        }
+    }
+
+    /** A reply that finished while the app was in the background. */
+    private fun notifyReply(chatId: String, text: String) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_REPLIES, "Replies", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(
+            this, chatId.hashCode(),
+            Intent(this, NativeActivity::class.java).setAction(ACTION_OPEN_CHAT).putExtra(EXTRA_CHAT_ID, chatId),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val preview = text.replace(Regex("[*#`_>]"), "").replace(Regex("\\s+"), " ").take(220)
+        val notification = NotificationCompat.Builder(this, CHANNEL_REPLIES)
+            .setSmallIcon(R.drawable.ic_app)
+            .setContentTitle(vm.conversation(chatId)?.title ?: "Reply ready")
+            .setContentText(preview)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            // Chat text stays hidden on the lock screen.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .build()
+        manager.notify(chatId.hashCode(), notification)
+    }
+
     override fun copyCrashLog(): Boolean {
         val log = CrashLog.read(this) ?: return false
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("FreeAI4U crash log", log))
@@ -456,6 +639,9 @@ class NativeActivity : ComponentActivity(), Platform {
     companion object {
         const val ACTION_NEW_CHAT = "com.freeai4u.app.NEW_CHAT"
         const val ACTION_SETTINGS = "com.freeai4u.app.SETTINGS"
+        const val ACTION_OPEN_CHAT = "com.freeai4u.app.OPEN_CHAT"
+        const val EXTRA_CHAT_ID = "chat_id"
+        private const val CHANNEL_REPLIES = "replies"
         private const val MAX_PHOTO_EDGE = 1280
         private const val MAX_TEXT_FILE_BYTES = 1024 * 1024
     }

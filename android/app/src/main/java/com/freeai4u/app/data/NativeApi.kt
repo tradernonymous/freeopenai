@@ -90,6 +90,15 @@ class NativeApi(
     /** The public health route: version, commit, uptime. */
     fun health(): String = getJson("/api/health")
 
+    /** Web research through the server (no key needed): formatted for a model. */
+    fun webSearch(query: String): String =
+        formatSearchResults(getJson("/api/llm/websearch?q=" + java.net.URLEncoder.encode(query.take(300), "UTF-8")))
+
+    fun webFetch(url: String): String {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) throw ApiException("Only http(s) pages can be read.")
+        return formatFetchedPage(getJson("/api/llm/fetch?url=" + java.net.URLEncoder.encode(url, "UTF-8")))
+    }
+
     fun providers(): List<ProviderInfo> = chatProviders(parseProviders(getJson("/api/llm/providers")))
 
     fun models(provider: String): List<ModelInfo> =

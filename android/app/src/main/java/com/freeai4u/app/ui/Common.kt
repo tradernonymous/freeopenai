@@ -86,38 +86,6 @@ private fun AnnotatedString.Builder.appendInline(line: String) {
     append(line.substring(cursor))
 }
 
-@Composable
-fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (segment in splitCodeBlocks(text)) {
-            if (segment.code) {
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(Palette.code, RoundedCornerShape(10.dp))
-                ) {
-                    Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(segment.language.ifEmpty { "code" }, color = Palette.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { onCopyCode(segment.text) }) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = "Copy code", tint = Palette.muted)
-                        }
-                    }
-                    SelectionContainer {
-                        Text(
-                            segment.text,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            color = Palette.text,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                        )
-                    }
-                }
-            } else {
-                Text(inlineMarkdown(segment.text), color = Palette.text, style = MaterialTheme.typography.bodyLarge)
-            }
-        }
-    }
-}
-
 fun relativeTime(then: Long, now: Long = System.currentTimeMillis()): String {
     val minutes = (now - then) / 60000
     return when {
