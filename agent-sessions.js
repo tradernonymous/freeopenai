@@ -34,9 +34,18 @@ const MAX_SESSIONS = 30;
 const MAX_ACTIVE_PER_OWNER = 2;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const APPROVAL_TTL_MS = 30 * 60 * 1000;
-const MAX_ROUNDS = 30;
-const MAX_TOOL_CALLS = 60;
-const MAX_CALLS_PER_ROUND = 4;
+// A real change to a real repository is a long run: clone, read the files that
+// matter, edit, run the tests, read the failure, edit again, commit. The old
+// ceilings (30 turns, 60 calls) ended ordinary work part-way, so these are set
+// where a runaway is the only thing they stop. The last few turns before the
+// ceiling are announced so a run ends with a summary instead of a cut.
+const MAX_ROUNDS = 120;
+const MAX_TOOL_CALLS = 300;
+const MAX_CALLS_PER_ROUND = 8;
+const WRAP_UP_ROUNDS = 3;
+const MAX_SEARCH_RESULTS = 200;
+const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PROJECT_NOTES_CHARS = 6000;
 const REPEAT_WARN = 3;
 const REPEAT_STOP = 5;
 const MAX_FILE_WRITE_BYTES = 256 * 1024;
@@ -68,13 +77,40 @@ const BUILD_TOOLS = [
   },
   {
     name: 'list_files',
-    description: 'List files in the build folder (or a subfolder of it).',
-    parameters: { type: 'object', properties: { path: { type: 'string' } } },
+    description: 'List files in the build folder (or a subfolder of it), with sizes. .git and node_modules are skipped. Use find_files for a pattern and search_files for text.',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'Folder to list; omit for the whole build folder.' } } },
   },
   {
     name: 'read_file',
-    description: 'Read a text file from the build folder.',
-    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    description: 'Read a text file from the build folder. Read a file before editing it. For a long file pass offset and limit (line numbers, 1-based) instead of reading it whole again.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        offset: { type: 'integer', description: 'First line to return (1-based). Omit to start at the top.' },
+        limit: { type: 'integer', description: 'How many lines to return. Omit for the whole file (capped).' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'search_files',
+    description: 'Search the text of every file in the build folder (or a subfolder) and return "path:line: text" for each match, so you find where something lives before reading whole files. Case-insensitive. Plain text by default; set regex to true for a regular expression. Use glob to limit which files are searched, e.g. "*.kt" or "src/**/*.js".',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The text or pattern to look for.' },
+        path: { type: 'string', description: 'Folder to search inside; omit for the whole build folder.' },
+        regex: { type: 'boolean', description: 'Treat query as a regular expression.' },
+        glob: { type: 'string', description: 'Only files whose path matches this glob, e.g. "*.ts" or "app/**/*.kt".' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'find_files',
+    description: 'Find files by name pattern, e.g. "**/*.test.js", "src/**/Main*.kt" or "README.md". Returns matching paths. Use it instead of listing folder by folder.',
+    parameters: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] },
   },
   {
     name: 'write_file',
@@ -87,16 +123,31 @@ const BUILD_TOOLS = [
   },
   {
     name: 'edit_file',
-    description: 'Replace one exact, unique piece of text in an existing file. Read the file first. Waits for the user to approve.',
+    description: 'Replace one exact piece of text in an existing file. Read the file first and copy old_text from it exactly, including indentation. old_text must appear exactly once unless all is true, so an edit can never land somewhere you did not mean; if it is not unique, include more surrounding lines. Prefer this over write_file for an existing file. Waits for the user to approve.',
     parameters: {
       type: 'object',
-      properties: { path: { type: 'string' }, old_text: { type: 'string' }, new_text: { type: 'string' } },
+      properties: {
+        path: { type: 'string' },
+        old_text: { type: 'string', description: 'The exact text to replace, copied from the file.' },
+        new_text: { type: 'string', description: 'What to put in its place. An empty string deletes old_text.' },
+        all: { type: 'boolean', description: 'Replace every occurrence instead of requiring exactly one.' },
+      },
       required: ['path', 'old_text', 'new_text'],
     },
   },
   {
+    name: 'delete_file',
+    description: 'Delete one file from the build folder. Waits for the user to approve.',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  },
+  {
+    name: 'move_file',
+    description: 'Move or rename a file inside the build folder. Waits for the user to approve.',
+    parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
+  },
+  {
     name: 'run_command',
-    description: 'Run a shell command in the build folder (tests, builds, git). Waits for the user to approve.',
+    description: 'Run a shell command in the build folder and read stdout, stderr and the exit code: install, build, run the tests, git. Use the file tools for reading, searching and editing files rather than cat, grep, sed or heredocs. Commands must not need input: pass non-interactive flags (npm init -y, --yes) and never use -i. git push works when the user has connected GitHub; force pushes and history rewrites are refused. Waits for the user to approve.',
     parameters: {
       type: 'object',
       properties: { command: { type: 'string' }, cwd: { type: 'string', description: 'Subfolder to run in.' } },
@@ -121,7 +172,7 @@ const BUILD_TOOLS = [
 ];
 
 const BUILD_TOOL_NAMES = BUILD_TOOLS.map((t) => t.name);
-const APPROVAL_TOOLS = new Set(['write_file', 'edit_file', 'run_command']);
+const APPROVAL_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'move_file', 'run_command']);
 
 const OPENAI_TOOLS = BUILD_TOOLS.map((t) => ({
   type: 'function',
@@ -138,6 +189,10 @@ const TOOL_ALIASES = {
   write: 'write_file', create_file: 'write_file', save_file: 'write_file',
   edit: 'edit_file', replace: 'edit_file', str_replace: 'edit_file', patch_file: 'edit_file',
   ls: 'list_files', list: 'list_files', list_dir: 'list_files', list_directory: 'list_files',
+  grep: 'search_files', rg: 'search_files', grep_search: 'search_files', search_code: 'search_files', search_text: 'search_files',
+  glob: 'find_files', find: 'find_files', file_search: 'find_files', find_file: 'find_files',
+  rm: 'delete_file', remove: 'delete_file', remove_file: 'delete_file', unlink: 'delete_file',
+  mv: 'move_file', rename: 'move_file', rename_file: 'move_file',
   search: 'web_search', websearch: 'web_search', google: 'web_search',
   fetch: 'web_fetch', browse: 'web_fetch', open_url: 'web_fetch',
   ask: 'ask_user', question: 'ask_user',
@@ -340,6 +395,47 @@ function protectedPath(rel) {
   return '';
 }
 
+// Every file under root, depth first and sorted, skipping what no search
+// wants (.git, node_modules). `visit` returns false to stop the walk.
+function walkFiles(root, visit) {
+  let going = true;
+  const walk = (dir) => {
+    if (!going) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((x, y) => x.name.localeCompare(y.name));
+    for (const entry of entries) {
+      if (!going) return;
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && visit(full) === false) going = false;
+    }
+  };
+  walk(root);
+}
+
+// "src/**/*.kt" as a regular expression over a forward-slash relative path.
+// ** crosses folders, * stays inside one, ? is one character.
+function globToRegExp(glob) {
+  const clean = String(glob || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  let out = '';
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    if (ch === '*') {
+      if (clean[i + 1] === '*') {
+        out += '(?:.*/)?';
+        i++;
+        if (clean[i + 1] === '/') i++;
+        // "**" alone at the end matches everything below.
+        if (i + 1 >= clean.length) out += '.*';
+      } else out += '[^/]*';
+    } else if (ch === '?') out += '[^/]';
+    else out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp('^' + out + '$', 'i');
+}
+
 function listFiles(root, limit = MAX_LIST_FILES) {
   const out = [];
   const walk = (dir, prefix) => {
@@ -370,27 +466,66 @@ function describeToolsAsText() {
   }).join('\n');
 }
 
+// Notes the project keeps for agents, read fresh each turn so a clone that
+// lands mid-build is picked up. AGENTS.md is the cross-tool convention;
+// CLAUDE.md is what most repositories actually have.
+function projectNotes(dir) {
+  for (const name of ['AGENTS.md', 'CLAUDE.md', '.github/copilot-instructions.md']) {
+    try {
+      const text = fs.readFileSync(path.join(dir, name), 'utf8').trim();
+      if (text) return { name, text: cap(text, MAX_PROJECT_NOTES_CHARS) };
+    } catch { /* not there */ }
+  }
+  return null;
+}
+
+// Git that would hang waiting for an editor, or rewrite history nobody can get
+// back. Every command is shown to the user first, but a hung command wastes
+// their approval and a force push cannot be un-approved.
+function refusedGit(command) {
+  const text = String(command || '');
+  if (!/\bgit\b/.test(text)) return '';
+  if (/\bgit\b[^|;&\n]*\b(?:-i|--interactive)\b/.test(text)) return 'interactive git (-i) cannot be answered here.';
+  if (/\bgit\s+push\b[^|;&\n]*(?:\s-f\b|--force(?!-with-lease)|--force-with-lease|\s\+\w)/.test(text)) return 'force pushes are refused; push a new commit instead.';
+  if (/\bgit\s+(?:rebase|filter-branch|filter-repo)\b/.test(text) || /\bgit\s+commit\b[^|;&\n]*--amend/.test(text)) return 'history rewrites (rebase, amend, filter-branch) are refused; add a new commit instead.';
+  if (/\bgit\s+(?:config\s+--global|config\s+--system)\b/.test(text)) return 'git config outside the repository is refused.';
+  return '';
+}
+
 function systemPrompt(session, { runReason, textProtocol }) {
   const lines = [
-    'You are the FreeAI4U build agent. You carry out an approved plan inside a private build folder on the server.',
+    'You are the FreeAI4U build agent. You carry out an approved plan inside a private build folder on the server, working until the plan is done or you are truly blocked.',
     'All paths are relative to that folder. It starts empty unless you clone a repository into it.',
-    'Rules:',
-    '- Work through the steps in order. Call step_update with in_progress when a step starts, and done, failed or skipped (with a short note) when it ends.',
-    '- write_file, edit_file and run_command each wait for the user to approve that exact call. Make each one a complete, reviewable change.',
-    '- If the user rejects a call, read their reason and change your approach. Never repeat a rejected call unchanged.',
-    '- Read a file before editing it. Keep changes small. Verify with the project\'s own tests or build when you can run commands.',
-    '- If something is unclear, call ask_user with one short question.',
-    '- You have no access to the server\'s keys or secrets. Never write secrets into files.',
-    '- When every step is finished, reply with a short summary (what changed, what you verified, what is left) and no tool call.',
+    'How to work:',
+    '- Work through the steps in order. Call step_update with in_progress when a step starts, and done, failed or skipped (with a short note) when it ends. Exactly one step is in progress at a time.',
+    '- Understand before changing: use find_files and search_files to locate what matters, then read_file. Read a file before editing it, and read it again after a failed edit.',
+    '- Make several independent lookups in one turn (reads, searches, listings). Never put two edits to the same file in one turn.',
+    '- Use edit_file for changes to an existing file, with old_text copied exactly and unique. Use write_file only for a new file or a full rewrite. Never create documentation or README files unless the plan asks.',
+    '- Follow the code around you: match its style, imports and libraries; never assume a library is present, check how the project already does it.',
+    '- Verify: find the project\'s own test, lint or build commands (README, package.json, build files) and run them after substantive changes. Do not mark a step done while tests fail or the work is partial. If you cannot find the command, ask once.',
+    '- Fix the cause, not the symptom. Do not fix unrelated problems; mention them in the summary instead.',
+    '- write_file, edit_file, delete_file, move_file and run_command each wait for the user to approve that exact call. Make each one a complete, reviewable change.',
+    '- If the user rejects a call, read their reason and change your approach. Never repeat a rejected call unchanged. If the same fix fails three times, stop and ask_user.',
+    '- If something is unclear and you cannot find out with the tools, call ask_user with one short question. Otherwise decide and continue.',
+    '- Git: commit only when the plan asks for it, with a short message in the repository\'s style; never force push, amend, rebase or use -i; never commit .env or key files; do not push unless the plan says so.',
+    '- You have no access to the server\'s keys or secrets. Never write secrets into files or print environment variables.',
+    '- Keep replies short. Do not restate the plan or narrate each tool. When every step is finished, reply with a short summary (what changed, what you verified, what is left) and no tool call.',
   ];
   lines.push(runReason
     ? '- run_command is NOT available on this server (' + runReason + '). Do not plan around running commands.'
-    : '- run_command is available (with approval). Commands run with a clean environment and a time limit.');
+    : '- run_command is available (with approval). Commands run with a clean environment and a time limit, and must not wait for input.');
   if (session.repo) {
     const branch = session.branch ? ' --branch ' + session.branch : '';
     lines.push('- The user named the repository ' + session.repo + (session.branch ? ' (branch ' + session.branch + ')' : '') +
       '. To work on it, first run: git clone --depth 1' + branch + ' https://github.com/' + session.repo + '.git .');
   }
+  if (session.ctx && session.ctx.git && session.ctx.git.login) {
+    lines.push('- git push and private clones work as the connected GitHub account (' + session.ctx.git.login + '); the credential is supplied for you, never write a token into a URL.');
+  } else {
+    lines.push('- GitHub is not connected for this session, so git push and private clones will fail; public clones work. Say so in the summary if the plan needs a push.');
+  }
+  const notes = projectNotes(session.dir);
+  if (notes) lines.push('', 'Project notes from ' + notes.name + ' (follow them):', notes.text);
   if (textProtocol) {
     lines.push('',
       'TOOLS: this model is called without native tool support. To use a tool, reply with ONLY one JSON object in a ```json fence, like:',
@@ -748,11 +883,105 @@ function createBuildSessions(deps) {
       case 'read_file': {
         const target = resolveInside(dir, args.path);
         if (!target || target === dir) return 'Refused: that path is outside the build folder.';
+        let text;
         try {
-          return cap(fs.readFileSync(target, 'utf8'), MAX_FILE_READ_CHARS);
+          text = fs.readFileSync(target, 'utf8');
         } catch (err) {
           return 'Could not read ' + args.path + ': ' + (err.code === 'ENOENT' ? 'no such file' : err.message);
         }
+        const offset = Math.max(1, Math.floor(Number(args.offset) || 1));
+        const limit = Math.floor(Number(args.limit) || 0);
+        if (offset > 1 || limit > 0) {
+          const all = text.split('\n');
+          const slice = all.slice(offset - 1, limit > 0 ? offset - 1 + limit : undefined);
+          const head = 'Lines ' + offset + '-' + (offset + slice.length - 1) + ' of ' + all.length + ':\n';
+          return cap(head + slice.join('\n'), MAX_FILE_READ_CHARS);
+        }
+        return cap(text, MAX_FILE_READ_CHARS);
+      }
+      case 'search_files': {
+        const query = String(args.query == null ? '' : args.query);
+        if (!query.trim()) return 'search_files needs a query.';
+        const target = resolveInside(dir, args.path || '.');
+        if (!target) return 'Refused: that path is outside the build folder.';
+        let matcher;
+        try {
+          matcher = args.regex ? new RegExp(query, 'i') : null;
+        } catch (err) {
+          return 'That regular expression is not valid: ' + err.message;
+        }
+        const needle = query.toLowerCase();
+        const only = args.glob ? globToRegExp(String(args.glob)) : null;
+        const hits = [];
+        let files = 0;
+        walkFiles(target, (file) => {
+          const rel = relativeTo(dir, file);
+          if (only && !only.test(rel)) return true;
+          files++;
+          let content;
+          try {
+            if (fs.statSync(file).size > MAX_SEARCH_FILE_BYTES) return true;
+            content = fs.readFileSync(file, 'utf8');
+          } catch { return true; }
+          if (content.includes('\0')) return true;
+          const lines = content.split('\n');
+          for (let i = 0; i < lines.length && hits.length < MAX_SEARCH_RESULTS; i++) {
+            const line = lines[i];
+            if (matcher ? matcher.test(line) : line.toLowerCase().includes(needle)) {
+              hits.push(rel + ':' + (i + 1) + ': ' + line.trim().slice(0, 300));
+            }
+          }
+          return hits.length < MAX_SEARCH_RESULTS;
+        });
+        if (!hits.length) return 'No matches for "' + query + '" in ' + files + ' file(s).';
+        const more = hits.length >= MAX_SEARCH_RESULTS ? '\n…[stopped at ' + MAX_SEARCH_RESULTS + ' matches; narrow the query or path]' : '';
+        return cap(hits.join('\n') + more, MAX_TOOL_RESULT_CHARS * 2);
+      }
+      case 'find_files': {
+        const pattern = String(args.pattern || '').trim();
+        if (!pattern) return 'find_files needs a pattern.';
+        const re = globToRegExp(pattern);
+        const found = [];
+        walkFiles(dir, (file) => {
+          const rel = relativeTo(dir, file);
+          if (re.test(rel) || re.test(rel.split('/').pop())) found.push(rel);
+          return found.length < MAX_LIST_FILES;
+        });
+        return found.length ? found.join('\n') : 'No files match "' + pattern + '".';
+      }
+      case 'delete_file': {
+        const target = resolveInside(dir, args.path);
+        if (!target || target === dir) return 'Refused: that path is outside the build folder.';
+        const rel = relativeTo(dir, target);
+        const blocked = protectedPath(rel);
+        if (blocked) return 'Refused: ' + blocked;
+        let stat;
+        try { stat = fs.statSync(target); } catch { return 'No such file: ' + rel; }
+        if (!stat.isFile()) return 'Refused: ' + rel + ' is not a file. Delete files one at a time.';
+        const verdict = await approvalFor(session, name, 'Delete ' + rel, 'Delete ' + rel + ' (' + stat.size + ' bytes)');
+        if (verdict.stop) return null;
+        if (!verdict.approved) return verdict.result;
+        fs.unlinkSync(target);
+        emit(session, 'diff', { path: rel, patch: '', bytes: 0, created: false, deleted: true });
+        return 'Deleted ' + rel + '.';
+      }
+      case 'move_file': {
+        const from = resolveInside(dir, args.from);
+        const to = resolveInside(dir, args.to);
+        if (!from || from === dir || !to || to === dir) return 'Refused: both paths must stay inside the build folder.';
+        const relFrom = relativeTo(dir, from);
+        const relTo = relativeTo(dir, to);
+        const blocked = protectedPath(relFrom) || protectedPath(relTo);
+        if (blocked) return 'Refused: ' + blocked;
+        if (!fs.existsSync(from)) return 'No such file: ' + relFrom;
+        if (fs.existsSync(to)) return 'Refused: ' + relTo + ' already exists. Delete it first if you mean to replace it.';
+        const verdict = await approvalFor(session, name, 'Move ' + relFrom + ' → ' + relTo, 'Move ' + relFrom + '\n  to ' + relTo);
+        if (verdict.stop) return null;
+        if (!verdict.approved) return verdict.result;
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.renameSync(from, to);
+        emit(session, 'diff', { path: relTo, patch: '', bytes: 0, created: false, movedFrom: relFrom });
+        return 'Moved ' + relFrom + ' to ' + relTo + '.';
       }
       case 'write_file':
       case 'edit_file': {
@@ -775,9 +1004,10 @@ function createBuildSessions(deps) {
           const oldText = String(args.old_text == null ? '' : args.old_text);
           if (!oldText) return 'edit_file needs old_text: the exact text to replace.';
           const count = before.split(oldText).length - 1;
+          const newText = String(args.new_text == null ? '' : args.new_text);
           if (count === 0) return 'old_text was not found in ' + rel + '. Read the file and copy the text exactly.';
-          if (count > 1) return 'old_text appears ' + count + ' times in ' + rel + '. Include more surrounding lines so it is unique.';
-          after = before.replace(oldText, () => String(args.new_text == null ? '' : args.new_text));
+          if (count > 1 && !args.all) return 'old_text appears ' + count + ' times in ' + rel + '. Include more surrounding lines so it is unique, or set all to true.';
+          after = args.all ? before.split(oldText).join(newText) : before.replace(oldText, () => newText);
         }
         if (Buffer.byteLength(after, 'utf8') > MAX_FILE_WRITE_BYTES) return 'Refused: files over ' + (MAX_FILE_WRITE_BYTES / 1024) + ' KB are not written by a build.';
         if (exists && after === before) return 'No change: ' + rel + ' already has that content.';
@@ -796,16 +1026,20 @@ function createBuildSessions(deps) {
         const command = String(args.command || '').trim();
         if (!command) return 'run_command needs a command.';
         if (command.length > 4000) return 'Refused: that command is too long.';
+        const gitRefusal = refusedGit(command);
+        if (gitRefusal) return 'Refused: ' + gitRefusal;
         const cwd = resolveInside(dir, args.cwd || '.');
         if (!cwd) return 'Refused: cwd is outside the build folder.';
         const where = relativeTo(dir, cwd);
-        const verdict = await approvalFor(session, name, 'Run: ' + command.slice(0, 200), '$ ' + command + (where !== '.' ? '\n(in ' + where + ')' : ''));
+        const git = /\bgit\b/.test(command) && session.ctx && session.ctx.git ? session.ctx.git : null;
+        const preview = '$ ' + command + (where !== '.' ? '\n(in ' + where + ')' : '') + (git && git.login ? '\n(git runs as your GitHub account ' + git.login + ')' : '');
+        const verdict = await approvalFor(session, name, 'Run: ' + command.slice(0, 200), preview);
         if (verdict.stop) return null;
         if (!verdict.approved) return verdict.result;
         const stepId = currentStepId(session);
         let result;
         try {
-          result = await opts.runCommand({ command, cwd });
+          result = await opts.runCommand({ command, cwd, git });
         } catch (err) {
           result = { stdout: '', stderr: String(err && err.message), exitCode: -1 };
         }
@@ -868,9 +1102,21 @@ function createBuildSessions(deps) {
       { role: 'user', content: userPrompt(session) },
     ];
 
+    let warned = false;
     for (let round = 1; round <= opts.maxRounds; round++) {
       if (session.cancelled || TERMINAL.has(session.status)) return;
       messages[0].content = promptFor();
+      // The ceiling is announced before it lands, so the run ends with the
+      // summary it owes rather than a cut mid-step.
+      const roundsLeft = opts.maxRounds - round;
+      const callsLeft = opts.maxToolCalls - calls;
+      if (!warned && (roundsLeft < WRAP_UP_ROUNDS || callsLeft < MAX_CALLS_PER_ROUND * WRAP_UP_ROUNDS)) {
+        warned = true;
+        messages.push({
+          role: 'user',
+          content: 'You are almost out of turns (' + roundsLeft + ' left, ' + Math.max(0, callsLeft) + ' tool calls). Finish the current step if one call does it, mark the rest with step_update, then reply with the summary: what changed, what was verified, what is left and how to continue.',
+        });
+      }
       let reply;
       try {
         reply = await opts.callModel({
@@ -1017,7 +1263,7 @@ function handleBuildRoute(req, res, urlPath, store, helpers) {
           provider: clean.provider,
           model: clean.model,
           owner,
-          ctx: helpers.contextFor(req),
+          ctx: helpers.contextFor(req, clean.repo),
         });
         if (result.error) return send(res, result.status, { error: result.error });
         return send(res, 201, store.view(result));
@@ -1105,6 +1351,9 @@ module.exports = {
   matchToolName,
   lineDiff,
   resolveInside,
+  globToRegExp,
+  refusedGit,
+  projectNotes,
   hashCall,
   createBuildSessions,
   handleBuildRoute,

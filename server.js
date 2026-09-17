@@ -4506,13 +4506,13 @@ function killProcessTree(child) {
   try { child.kill('SIGKILL'); } catch { /* already gone */ }
 }
 
-function runWorkspaceCommand({ command, cwd, env, timeoutMs }) {
+function runWorkspaceCommand({ command, cwd, env, timeoutMs, extraEnv }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(command, {
       cwd,
       shell: true,
-      env: runEnvironment(env, cwd),
+      env: { ...runEnvironment(env, cwd), ...(extraEnv || {}) },
       windowsHide: true,
       // Its own process group, so the kill below reaches the whole tree.
       detached: process.platform !== 'win32',
@@ -4699,11 +4699,48 @@ async function callBuildModel({ provider: id, model, messages, tools, ctx }) {
 
 // What a model call needs from the request that started the build: the origin
 // headers some providers attribute traffic with. Never the cookie.
-function buildRequestContext(req) {
+function buildRequestContext(req, repo) {
   const pick = ['host', 'x-forwarded-proto', 'x-forwarded-host'];
   const headers = {};
   for (const key of pick) if (req.headers[key]) headers[key] = String(req.headers[key]);
-  return { headers };
+  // The GitHub account a build's git commands run as, decided once, here,
+  // while the request that started the build is still in hand. The token
+  // stays in the session's memory: it is never in an event, a view or a file.
+  let git = null;
+  const gh = getGithubSession(req);
+  if (gh) {
+    const picked = pickAccount(gh, repo || '', null);
+    const account = picked.account || (accountsOf(gh)[0] || null);
+    if (account && account.token) git = { token: account.token, login: account.login || '' };
+  }
+  return { headers, git };
+}
+
+// What a build's git needs to act as the connected account: a credential for
+// github.com and an identity for commits, both as git configuration passed in
+// the environment, so the token is never in the command line or a file. Only
+// commands that mention git get it; every other command sees nothing.
+function gitRunEnv(git) {
+  if (!git || !git.token) return {};
+  const login = String(git.login || 'freeai4u').replace(/[^A-Za-z0-9-]/g, '') || 'freeai4u';
+  const pairs = [
+    ['url.https://x-access-token:' + git.token + '@github.com/.insteadOf', 'https://github.com/'],
+    ['user.name', login],
+    ['user.email', login + '@users.noreply.github.com'],
+    ['credential.helper', ''],
+  ];
+  const env = { GIT_CONFIG_COUNT: String(pairs.length), GIT_TERMINAL_PROMPT: '0' };
+  pairs.forEach(([key, value], i) => {
+    env['GIT_CONFIG_KEY_' + i] = key;
+    env['GIT_CONFIG_VALUE_' + i] = value;
+  });
+  return env;
+}
+
+// `git config -l` and a failed clone both print the remote URL, token and all.
+function scrubToken(text, token) {
+  if (!token || !text) return text;
+  return String(text).split(token).join('***');
 }
 
 // Addresses a build must never read: everything isPrivateIp covers, plus the
@@ -4778,12 +4815,17 @@ function createBuildStore(root) {
     pickModel: pickBuildModel,
     callModel: callBuildModel,
     runRefusal: () => workspaceRunRefusal(process.env),
-    runCommand: ({ command, cwd }) => runWorkspaceCommand({
-      command,
-      cwd,
-      env: process.env,
-      timeoutMs: workspaceRunTimeoutMs(process.env),
-    }),
+    runCommand: async ({ command, cwd, git }) => {
+      const result = await runWorkspaceCommand({
+        command,
+        cwd,
+        env: process.env,
+        timeoutMs: workspaceRunTimeoutMs(process.env),
+        extraEnv: gitRunEnv(git),
+      });
+      const token = git && git.token;
+      return { ...result, stdout: scrubToken(result.stdout, token), stderr: scrubToken(result.stderr, token) };
+    },
     webSearch: async (query) => ({ results: await searchWebResults(String(query).slice(0, 300)) }),
     webFetch: readPublicPage,
   });
@@ -4916,6 +4958,8 @@ module.exports = {
   workspaceRunRefusal,
   workspaceRunTimeoutMs,
   runEnvironment,
+  gitRunEnv,
+  scrubToken,
   capRunOutput,
   resolveWorkspaceCwd,
   listWorkspaceFiles,

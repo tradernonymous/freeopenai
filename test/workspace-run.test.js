@@ -19,6 +19,8 @@ const {
   listWorkspaceFiles,
   resolveWorkspaceCwd,
   runEnvironment,
+  gitRunEnv,
+  scrubToken,
   workspaceRunRefusal,
   workspaceRunRoot,
   workspaceRunTimeoutMs,
@@ -104,6 +106,19 @@ test('a command is handed a shell, a home, and none of the operator\'s secrets',
   // way to run code around the command that was actually approved.
   assert.equal('NODE_OPTIONS' in env, false);
   assert.equal('PORT' in env, false);
+});
+
+test('a build\'s git runs as the connected account, and the token never comes back out', () => {
+  assert.deepEqual(gitRunEnv(null), {}, 'no account, no credential');
+  const env = gitRunEnv({ token: 'ghu_secret123', login: 'octo cat' });
+  assert.equal(env.GIT_TERMINAL_PROMPT, '0', 'git must fail rather than wait for a password');
+  const pairs = {};
+  for (let i = 0; i < Number(env.GIT_CONFIG_COUNT); i++) pairs[env['GIT_CONFIG_KEY_' + i]] = env['GIT_CONFIG_VALUE_' + i];
+  assert.equal(pairs['url.https://x-access-token:ghu_secret123@github.com/.insteadOf'], 'https://github.com/');
+  assert.equal(pairs['user.name'], 'octocat', 'identity is the login, made safe');
+  assert.equal(pairs['user.email'], 'octocat@users.noreply.github.com');
+  assert.equal(scrubToken('remote: https://x-access-token:ghu_secret123@github.com/a/b', 'ghu_secret123'), 'remote: https://x-access-token:***@github.com/a/b');
+  assert.equal(scrubToken('plain', ''), 'plain');
 });
 
 test('output is capped rather than returned in full', () => {

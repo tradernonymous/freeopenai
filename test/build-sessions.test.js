@@ -18,6 +18,8 @@ const {
   parseTextToolCalls,
   matchToolName,
   lineDiff,
+  globToRegExp,
+  refusedGit,
   createBuildSessions,
   BUILD_TOOL_NAMES,
 } = require('../agent-sessions.js');
@@ -128,6 +130,89 @@ test('a tool call written as tags is run, and the tags never reach the phone', a
     assert.ok(texts.includes('Reading first.'), 'prose around the call is shown');
     assert.ok(texts.every((t) => !t.includes('<function=')), 'the markup is not');
     assert.ok(model.seen.length >= 2 && model.seen[1].messages.some((m) => m.role === 'tool' || m.fromTool), 'the call ran and its result went back');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('search, find, delete and move: the coding tools a real change needs', async () => {
+  assert.ok(globToRegExp('src/**/*.kt').test('src/a/b/Main.kt'));
+  assert.ok(globToRegExp('*.js').test('index.js'));
+  assert.ok(!globToRegExp('*.js').test('src/index.js'), 'a single star stays inside one folder');
+  assert.ok(globToRegExp('**/*.test.js').test('test/x.test.js'));
+  assert.ok(globToRegExp('**/*.test.js').test('x.test.js'), 'a leading ** may match nothing');
+
+  const root = tempRoot();
+  try {
+    const seen = [];
+    const model = scriptedModel([
+      reply('', [call('search_files', { query: 'needle', glob: '*.md' }, 'c1'), call('find_files', { pattern: '**/*.txt' }, 'c2')]),
+      (request) => {
+        seen.push(...request.messages.filter((m) => m.role === 'tool').map((m) => m.content));
+        return reply('', [call('move_file', { from: 'notes/a.txt', to: 'notes/b.txt' }, 'c3')]);
+      },
+      reply('', [call('delete_file', { path: 'README.md' }, 'c4')]),
+      reply('Done.'),
+    ]);
+    const store = engine(root, model);
+    // Seed the build folder before the loop gets to it.
+    const original = store.create;
+    const session = original({ owner: 'op', plan: 'tidy up' });
+    fs.mkdirSync(path.join(session.dir, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(session.dir, 'README.md'), 'line one\nthe NEEDLE is here\n');
+    fs.writeFileSync(path.join(session.dir, 'notes/a.txt'), 'needle too');
+    const approval = await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.equal(approval.tool, 'move_file');
+    assert.match(approval.summary, /notes\/a\.txt → notes\/b\.txt/);
+    assert.equal(store.input(session, { requestId: approval.requestId, decision: 'approve' }).status, 200);
+    const second = await waitForEvent(store, session, (e) => e.type === 'approval' && e.tool === 'delete_file');
+    assert.equal(store.input(session, { requestId: second.requestId, decision: 'approve' }).status, 200);
+    await waitForEvent(store, session, terminal);
+    assert.match(seen[0], /^README\.md:2: the NEEDLE is here$/m, 'search is case-insensitive and names the line');
+    assert.ok(!seen[0].includes('a.txt'), 'the glob limited the search to markdown');
+    assert.equal(seen[1].trim(), 'notes/a.txt');
+    assert.ok(fs.existsSync(path.join(session.dir, 'notes/b.txt')) && !fs.existsSync(path.join(session.dir, 'notes/a.txt')));
+    assert.ok(!fs.existsSync(path.join(session.dir, 'README.md')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('git that would hang or rewrite history is refused before anyone is asked', () => {
+  assert.equal(refusedGit('npm test'), '');
+  assert.equal(refusedGit('git status && git push origin HEAD:main'), '');
+  assert.equal(refusedGit('git push --force-with-lease origin main').length > 0, true);
+  assert.match(refusedGit('git push -f origin main'), /force/);
+  assert.match(refusedGit('git rebase -i HEAD~3'), /interactive|rewrite/);
+  assert.match(refusedGit('git commit --amend -m x'), /rewrite/);
+  assert.match(refusedGit('git config --global user.name x'), /outside/);
+  assert.equal(refusedGit('git commit -m "fix: -i flag parsing"'), '', 'text inside the message is not a flag');
+});
+
+test('a build with a connected account runs git as that account and reads the project notes', async () => {
+  const root = tempRoot();
+  try {
+    const runs = [];
+    const model = scriptedModel([
+      reply('', [call('run_command', { command: 'git status' }, 'c1')]),
+      (request) => {
+        assert.match(request.messages[0].content, /Project notes from AGENTS\.md/);
+        assert.match(request.messages[0].content, /always run npm test/);
+        assert.match(request.messages[0].content, /connected GitHub account \(octocat\)/);
+        return reply('Done.');
+      },
+    ]);
+    const store = engine(root, model, { runCommand: async (args) => { runs.push(args); return { stdout: 'clean', stderr: '', exitCode: 0 }; } });
+    const session = store.create({ owner: 'op', plan: 'check', ctx: { headers: {}, git: { token: 'ghu_x', login: 'octocat' } } });
+    fs.writeFileSync(path.join(session.dir, 'AGENTS.md'), '# Notes\nalways run npm test before you finish\n');
+    const approval = await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.match(approval.preview, /git runs as your GitHub account octocat/);
+    assert.ok(!approval.preview.includes('ghu_x'), 'the token is never shown');
+    store.input(session, { requestId: approval.requestId, decision: 'approve' });
+    await waitForEvent(store, session, terminal);
+    assert.equal(runs[0].git.login, 'octocat');
+    assert.ok(!JSON.stringify(store.view(session)).includes('ghu_x'), 'the token is not in the view');
+    assert.ok(!JSON.stringify(session.events).includes('ghu_x'), 'nor in any event');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
