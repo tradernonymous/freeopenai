@@ -1459,50 +1459,27 @@ const LLM_PROVIDERS = {
         'auto/fast',
         'auto/cheap',
         'auto/smart',
-        // Then the best of what a free-tier account actually reaches here,
-        // read off a live catalogue rather than guessed: Kiro's frontier tier,
-        // GitHub Copilot, Mistral, Groq, Gemini, SambaNova, Ollama Cloud, LLM7
-        // and Cloudflare. The page keeps the first 60 usable rows, so what
-        // leads this list is what can be picked by name. DeepSeek's own API
-        // (`ds/`) is not here: it sells no free tier, and Ollama Cloud's Kimi
-        // K3 answered 402 "requires a subscription" on the free plan.
+        // One named flagship per free namespace -- a quick pick for someone who
+        // wants a specific model by name, not a dump of the whole catalogue.
+        // Everything else each namespace offers still reaches the picker
+        // through includeRest below; naming fewer ids here only changes what
+        // leads, never what is reachable. Picked from a live catalogue: Kiro's
+        // frontier tier, GitHub Copilot, Mistral, Groq, Gemini, SambaNova,
+        // Ollama Cloud, LLM7, Cloudflare, Antigravity and AgentRouter's credit
+        // tier. DeepSeek's own API (`ds/`) is not here: it sells no free tier.
         'kr/claude-sonnet-5',
-        'kr/claude-sonnet-4.5',
-        'kr/claude-haiku-4.5',
-        'kr/gpt-5.6-sol',
-        'kr/glm-5',
-        'kr/qwen3-coder-next',
-        'kr/deepseek-3.2',
-        'kr/minimax-m2.5',
         'gh/claude-opus-5',
-        'gh/claude-sonnet-5',
-        'gh/gpt-5.6-sol',
-        'gh/kimi-k2.7-code',
         'mistral/codestral-latest',
-        'mistral/devstral-latest',
-        'mistral/mistral-large-latest',
-        'mistral/mistral-medium-3-5',
         'groq/llama-3.3-70b-versatile',
-        'groq/openai/gpt-oss-120b',
-        'groq/qwen/qwen3-32b',
         'gemini/gemini-3.1-pro-preview',
-        'gemini/gemini-3-flash-preview',
-        'gemini/gemini-2.5-pro',
-        'gemini/gemini-2.5-flash',
         'ollamacloud/glm-5.2',
-        'ollamacloud/gpt-oss:120b',
         'samba/DeepSeek-V3.2',
-        'samba/Llama-4-Maverick-17B-128E-Instruct',
         'cf/@cf/openai/gpt-oss-120b',
-        'cf/@cf/moonshotai/kimi-k2.7-code',
         'llm7/deepseek-r1-0528',
         'antigravity/gemini-3.7-flash-high',
-        // AgentRouter's flagships, the one paid-catalogue affiliate here that
+        // AgentRouter's one flagship, the one paid-catalogue affiliate here that
         // is reached on signup credit rather than a card.
         'agentrouter/glm-5.3',
-        'agentrouter/claude-opus-5',
-        'agentrouter/claude-opus-4-8',
-        'agentrouter/gpt-5.6-sol',
       ],
       includeRest: true,
       // The rest of the catalogue follows the named list -- but only from
