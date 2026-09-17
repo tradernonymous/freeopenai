@@ -45,6 +45,26 @@ test('status labels and row titles read as words', () => {
   assert.equal(hub.timeAgo(0, 2 * 3600 * 1000), '2 h ago');
 });
 
+test('the desktop app is recognised, and remembered across the login redirect', () => {
+  assert.equal(hub.appModeFrom('?app=desktop', null), 'desktop');
+  assert.equal(hub.appModeFrom('', 'desktop'), 'desktop', 'the login redirect drops the query; the saved flag keeps the layout');
+  assert.equal(hub.appModeFrom('?app=web', 'desktop'), '', 'and it can be turned off');
+  assert.equal(hub.appModeFrom('', null), '');
+  assert.equal(hub.appModeFrom('?app=evil', null), '');
+});
+
+test('keyboard shortcuts switch modes and panels, and leave typing alone', () => {
+  const key = (code, mods = {}) => ({ code, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...mods });
+  assert.deepEqual(hub.shortcutFor(key('Digit2', { altKey: true })), { kind: 'mode', mode: 'plan' });
+  assert.deepEqual(hub.shortcutFor(key('Digit3', { altKey: true })), { kind: 'mode', mode: 'build' });
+  assert.deepEqual(hub.shortcutFor(key('KeyB', { ctrlKey: true, shiftKey: true })), { kind: 'panel', tab: 'builds' });
+  assert.deepEqual(hub.shortcutFor(key('KeyK', { metaKey: true, shiftKey: true })), { kind: 'panel', tab: 'knowledges' });
+  assert.equal(hub.shortcutFor(key('Digit2')), null, 'a plain 2 is typing');
+  assert.equal(hub.shortcutFor(key('KeyB', { ctrlKey: true })), null, 'Ctrl+B is left to the page');
+  assert.equal(hub.shortcutFor(null), null);
+  assert.ok(hub.SHORTCUTS.length >= 3, 'the shortcuts are listed for people to find');
+});
+
 test('the page loads the hub and hands it what it needs', () => {
   assert.match(html, /<script src="hub\.js" defer><\/script>/);
   assert.match(html, /<link rel="stylesheet" href="hub\.css">/);

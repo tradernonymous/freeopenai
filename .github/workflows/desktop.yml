@@ -1,0 +1,95 @@
+name: Desktop
+
+# FreeAI4U Desktop for Windows: one .exe that opens the FreeAI4U server (on
+# Railway) in its own app window. The launcher is plain Node with no
+# dependencies (desktop/freeai4u-desktop.js), packaged with Node's
+# single-executable-application support and published to the rolling
+# `desktop-latest` release. The app itself lives on the server, so the exe only
+# needs rebuilding when the launcher changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Builds with a read-only token: this job runs a package from npm (postject),
+  # so it must not hold a token that can change the repository or its releases.
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test the launcher
+        run: node --test test/desktop.test.js
+      - name: Build FreeAI4U-Desktop.exe
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          node --experimental-sea-config sea-config.json
+          Copy-Item (Get-Command node).Source FreeAI4U-Desktop.exe
+          # node.exe carries Node's signature; injecting the app invalidates it,
+          # so it is removed first rather than left corrupted.
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if ($signtool) { & $signtool.FullName remove /s FreeAI4U-Desktop.exe }
+          # postject is a build-time tool only (pinned version); nothing is added
+          # to the app or the server.
+          npx --yes postject@1.0.0-alpha.6 FreeAI4U-Desktop.exe NODE_SEA_BLOB sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+          node tools/set-gui-subsystem.js FreeAI4U-Desktop.exe
+      - name: Check the exe starts and reports its version
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'version.txt'
+          Start-Process -FilePath .\FreeAI4U-Desktop.exe -ArgumentList '--write-version', $out -Wait
+          $reported = (Get-Content $out -Raw).Trim()
+          $expected = (node -p "require('./freeai4u-desktop.js').VERSION").Trim()
+          if ($reported -ne $expected) { throw "The exe reported '$reported', expected '$expected'" }
+          $hash = (Get-FileHash .\FreeAI4U-Desktop.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path FreeAI4U-Desktop.exe.sha256 -Value "$hash  FreeAI4U-Desktop.exe" -NoNewline
+          Write-Output "FreeAI4U-Desktop.exe $reported sha256 $hash"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: freeai4u-desktop
+          path: |
+            desktop/FreeAI4U-Desktop.exe
+            desktop/FreeAI4U-Desktop.exe.sha256
+          retention-days: 30
+
+  # Publishes what the build produced. Only this job can write, and it runs no
+  # third-party code.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: freeai4u-desktop
+          path: desktop
+      - name: Publish to the rolling desktop-latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="FreeAI4U Desktop for Windows (from ${GITHUB_SHA:0:7}). Download FreeAI4U-Desktop.exe and double-click it: it opens your FreeAI4U server in its own window. Windows may warn that the app is unrecognised because it is not code-signed: choose More info, then Run anyway. FreeAI4U-Desktop.exe.sha256 holds its checksum."
+          if gh release view desktop-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit desktop-latest --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+          else
+            gh release create desktop-latest --repo "$GITHUB_REPOSITORY" --title "FreeAI4U Desktop for Windows (latest build)" --notes "$NOTES"
+          fi
+          gh release upload desktop-latest desktop/FreeAI4U-Desktop.exe desktop/FreeAI4U-Desktop.exe.sha256 --repo "$GITHUB_REPOSITORY" --clobber

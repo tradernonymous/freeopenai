@@ -132,6 +132,14 @@ html[data-chat-mode="build"] .composer { box-shadow: 0 0 0 1px var(--hub-violet-
     color: var(--text);
 }
 .hub-form { display: flex; flex-direction: column; gap: 12px; }
+
+/* Desktop app, wide window: the panel docks beside the chat instead of covering
+   it, so a build can be watched and approved while the conversation goes on. */
+@media (min-width: 1100px) {
+    html[data-hub-docked] main { margin-right: var(--hub-dock-w, 440px); transition: margin-right var(--hub-in) var(--hub-ease); }
+    html[data-hub-docked] .hub-overlay { left: auto; width: var(--hub-dock-w, 440px); background: transparent; }
+    html[data-hub-docked] .hub-sheet { width: 100%; transform: none; box-shadow: none; }
+}
 /* Classes here set display, which would otherwise beat the hidden attribute. */
 .hub-overlay [hidden] { display: none !important; }
 .hub-overlay.open .hub-sheet { transform: none; }

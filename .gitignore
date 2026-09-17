@@ -3,6 +3,11 @@ node_modules/
 npm-debug.log*
 *.log
 
+# Desktop app build outputs (built and published by CI)
+desktop/sea-prep.blob
+desktop/FreeAI4U-Desktop.exe
+desktop/FreeAI4U-Desktop.exe.sha256
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

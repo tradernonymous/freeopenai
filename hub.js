@@ -76,7 +76,39 @@
     return { title: first || 'Build', progress: total ? done + '/' + total + ' steps' : '' };
   }
 
-  const helpers = { statusLabel, looksLikePlan, badgeFor, diffLines, timeAgo, planTitle, WAITING, RUNNING, FINISHED };
+  // The Windows app opens the page with ?app=desktop. The flag is remembered,
+  // because the login redirect drops the query string on the first visit.
+  function appModeFrom(search, stored) {
+    const wanted = new URLSearchParams(String(search || '')).get('app');
+    if (wanted === 'desktop' || wanted === 'web') return wanted === 'desktop' ? 'desktop' : '';
+    return stored === 'desktop' ? 'desktop' : '';
+  }
+
+  // Keyboard shortcuts, the same in the browser and the desktop app:
+  //   Alt+1 / Alt+2 / Alt+3   Chat / Plan / Build
+  //   Ctrl+Shift+B            Builds panel
+  //   Ctrl+Shift+K            Knowledges
+  function shortcutFor(e) {
+    if (!e) return null;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      const modes = { Digit1: 'chat', Digit2: 'plan', Digit3: 'build' };
+      if (modes[e.code]) return { kind: 'mode', mode: modes[e.code] };
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+      if (e.code === 'KeyB') return { kind: 'panel', tab: 'builds' };
+      if (e.code === 'KeyK') return { kind: 'panel', tab: 'knowledges' };
+    }
+    return null;
+  }
+
+  const SHORTCUTS = [
+    ['Alt+1 · Alt+2 · Alt+3', 'Switch to Chat, Plan or Build'],
+    ['Ctrl+Shift+B', 'Open or close the Builds panel'],
+    ['Ctrl+Shift+K', 'Open Knowledges'],
+    ['Esc', 'Close the panel'],
+  ];
+
+  const helpers = { statusLabel, looksLikePlan, badgeFor, diffLines, timeAgo, planTitle, appModeFrom, shortcutFor, SHORTCUTS, WAITING, RUNNING, FINISHED };
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = helpers;
@@ -91,6 +123,7 @@
   // --- DOM plumbing ---
 
   const API = '/api/build/sessions';
+  const DOCK_MIN_WIDTH = 1100;
   // Static markup only: these strings never contain data.
   const ICONS = {
     hammer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 12-8.5 8.5a2.12 2.12 0 1 1-3-3L12 9"/><path d="M17.64 15 22 10.64"/><path d="m20.91 11.7-1.25-1.25a1.9 1.9 0 0 1-.55-1.34V7.5l-2.46-2.46A6 6 0 0 0 12.5 3.3l-.9-.02 1.6 1.6c.4.4.6.93.6 1.47v1.3l1.8 1.8h1.3c.54 0 1.07.2 1.47.6l1.6 1.6"/></svg>',
@@ -164,6 +197,7 @@
     draft: { plan: '', repo: '', branch: '' },
     lastFocus: null,
     pollTimer: null,
+    desktop: false,
   };
 
   let overlay = null;
@@ -196,10 +230,22 @@
     }, true);
   }
 
+  // In the desktop app on a wide window the panel docks beside the chat instead
+  // of covering it, so a build can be watched and approved while chatting.
+  function dockable() {
+    return state.desktop && root.innerWidth >= DOCK_MIN_WIDTH;
+  }
+
   function open(tab) {
     ensureSheet();
-    state.lastFocus = document.activeElement;
+    const docked = dockable();
+    if (!docked) state.lastFocus = document.activeElement;
     overlay.hidden = false;
+    overlay.querySelector('.hub-sheet').setAttribute('aria-modal', docked ? 'false' : 'true');
+    if (docked) {
+      document.documentElement.dataset.hubDocked = '1';
+      remember('freeai4uDock', 'open');
+    }
     requestAnimationFrame(() => overlay.classList.add('open'));
     showTab(tab || state.tab);
   }
@@ -208,8 +254,17 @@
     if (!overlay || overlay.hidden) return;
     overlay.classList.remove('open');
     disconnect();
+    if (document.documentElement.dataset.hubDocked) {
+      delete document.documentElement.dataset.hubDocked;
+      remember('freeai4uDock', 'closed');
+    }
     setTimeout(() => { overlay.hidden = true; }, 160);
     if (state.lastFocus && typeof state.lastFocus.focus === 'function') state.lastFocus.focus();
+    state.lastFocus = null;
+  }
+
+  function isOpen() {
+    return !!overlay && !overlay.hidden;
   }
 
   function showTab(tab) {
@@ -751,7 +806,25 @@
       el('p', { class: 'hub-sub', text: 'Type these in the message box. Tap one to put it there.' }),
       el('div', { class: 'hub-cards' }, ...commands.map((c) => el('button', { class: 'hub-card hub-kcard', type: 'button', onclick: () => { insertIntoComposer('/' + c.name + ' '); close(); } },
         el('div', { class: 'hub-card-title', text: c.usage }),
-        el('p', { text: c.desc })))));
+        el('p', { text: c.desc })))),
+      el('h3', { class: 'hub-title', text: 'Keyboard shortcuts' }),
+      el('table', { class: 'hub-table' },
+        el('tbody', null, ...SHORTCUTS.map(([keys, what]) => el('tr', null,
+          el('td', null, el('code', { text: keys })),
+          el('td', { text: what }))))));
+  }
+
+  function handleShortcut(e) {
+    const action = shortcutFor(e);
+    if (!action) return;
+    e.preventDefault();
+    if (action.kind === 'mode') {
+      setMode(action.mode);
+    } else if (isOpen() && state.tab === action.tab) {
+      close();
+    } else {
+      open(action.tab);
+    }
   }
 
   // --- Page hooks ---
@@ -848,13 +921,29 @@
   }
 
   function init() {
+    state.desktop = appModeFrom(root.location.search, recall('freeai4uApp')) === 'desktop';
+    if (state.desktop) {
+      remember('freeai4uApp', 'desktop');
+      document.documentElement.dataset.app = 'desktop';
+    } else if (new URLSearchParams(root.location.search).get('app') === 'web') {
+      remember('freeai4uApp', '');
+    }
     mountModeSegment();
     mountHeaderButton();
     mountDrawerItems();
     for (const bar of document.querySelectorAll('#chatMessages .message.bot .message-actions')) decorateActions(bar);
+    document.addEventListener('keydown', handleShortcut);
     const params = new URLSearchParams(root.location.search);
     const wanted = params.get('hub');
     if (wanted === 'builds' || wanted === 'knowledges') open(wanted);
+    else if (dockable() && recall('freeai4uDock') !== 'closed') open('builds');
+    // Leaving a wide window narrow turns the docked panel back into an overlay.
+    root.addEventListener('resize', () => {
+      if (!isOpen()) return;
+      const docked = !!document.documentElement.dataset.hubDocked;
+      if (docked && !dockable()) delete document.documentElement.dataset.hubDocked;
+      else if (!docked && dockable()) document.documentElement.dataset.hubDocked = '1';
+    });
     startPolling();
   }
 
