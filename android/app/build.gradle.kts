@@ -75,7 +75,11 @@ android {
             // and read memory, and logcat must not see app logs. Installs and
             // runs like any store app; debugging happens through the UI itself.
             isDebuggable = false
-            applicationIdSuffix = ".debug"
+            // No applicationIdSuffix: this variant only ever exists as CI's
+            // no-keystore fallback and testDebugUnitTest's target, never
+            // installed alongside a release build on the same device, and a
+            // suffixed id has no matching client in google-services.json --
+            // processDebugGoogleServices failed the whole build over it.
         }
         release {
             // The build that goes on the phone: non-debuggable, minified,
