@@ -643,6 +643,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         added.forEach { name -> io.execute { skillBody(name) } }
     }
 
+    /** Stops using a skill in this chat. The composer's chips call it, and so
+     * does `/skill off <name>`, so both go through one path. */
+    fun unpinSkill(id: String, name: String) {
+        val chat = conversation(id) ?: return
+        val skill = name.lowercase()
+        if (skill !in chat.skills) return
+        replace(chat.copy(skills = chat.skills - skill, updatedAt = System.currentTimeMillis()))
+        notice = "Stopped using $skill."
+    }
+
     private fun runKnownCommand(chat: Conversation, name: String, args: String) {
         when (name) {
             "help" -> commandInfo = renderCommandsHelp()
@@ -741,6 +751,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
                 val persona = personaFor(lib, chat.personaId)
                 val skillTexts = chat.skills.mapNotNull { skillBodies[it] ?: skillBody(it) }
+                // A pinned skill whose text the server has not got is a skill
+                // that is not applying, which is invisible from the chip alone.
+                if (skillTexts.size < chat.skills.size && round == 0) {
+                    main.post { notice = "Some pinned skills could not be loaded, so they are not applying." }
+                }
                 val body = buildChatBody(
                     chat.model,
                     systemPrompt(persona.systemPrompt, lib.instructions, chat.mode, skills = skillTexts),

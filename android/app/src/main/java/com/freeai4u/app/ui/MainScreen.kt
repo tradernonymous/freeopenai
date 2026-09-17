@@ -108,6 +108,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -576,9 +578,18 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
         }
         Surface(color = Palette.surface, shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
-                if (photos.isNotEmpty() || chat.mode != "chat" || vm.imageArmed) {
+                run {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (chat.mode == "plan") ModeChip(modeLabel(chat.mode), Icons.Filled.Checklist) { vm.setMode(chat.id, "chat") }
+                        // Mode is a visible switch rather than something buried in
+                        // a sheet: it decides whether a reply can change anything,
+                        // so it belongs where the message is written.
+                        ModeToggle(chat.mode) { vm.setMode(chat.id, it) }
+                        // The skills riding along with this chat, each one lettable
+                        // go. Without these the only way to know what was applied
+                        // was to type /skills.
+                        chat.skills.forEach { skill ->
+                            ModeChip(skill, Icons.Filled.AutoAwesome) { vm.unpinSkill(chat.id, skill) }
+                        }
                         if (vm.imageArmed) ModeChip(if (vm.puterImages) "Image · Puter" else "Image", Icons.Filled.PaletteIcon) { vm.imageArmed = false }
                         photos.forEachIndexed { index, url ->
                             Box {
@@ -686,6 +697,38 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                     }
                     Switch(vm.puterImages, { vm.puterImages = it })
                 }
+            }
+        }
+    }
+}
+
+/** Chat or Plan, as two halves of one control: the mode in force is filled in,
+ * the other is a tap away. Plan is read-only, so which one is on decides
+ * whether a reply can change anything. */
+@Composable
+private fun ModeToggle(mode: String, onPick: (String) -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(14.dp)).background(Palette.surfaceHigh).padding(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (option in listOf("chat", "plan")) {
+            val on = mode == option
+            Row(
+                Modifier.clip(RoundedCornerShape(12.dp))
+                    .background(if (on) Palette.greenDark.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable { if (!on) onPick(option) }
+                    .semantics { contentDescription = modeLabel(option) + " mode" + if (on) ", on" else "" }
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (option == "plan") Icons.Filled.Checklist else Icons.AutoMirrored.Filled.Chat,
+                    null,
+                    tint = if (on) Palette.green else Palette.muted,
+                    modifier = Modifier.size(15.dp),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(modeLabel(option), color = if (on) Palette.text else Palette.muted, fontSize = 13.sp)
             }
         }
     }
