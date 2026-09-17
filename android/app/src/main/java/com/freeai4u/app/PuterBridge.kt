@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -55,6 +56,15 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean =
                     openSignInPopup(resultMsg)
             }
+            // A WebView that is never part of any window can run JavaScript
+            // fine (chat and draw always have), but Chromium's window-creation
+            // path -- what has to fire for puter.auth.signIn()'s popup to
+            // exist at all -- needs the WebView attached to an active window.
+            // 1x1 and invisible: present in the tree, never seen.
+            (context as? android.app.Activity)?.window?.decorView
+                ?.findViewById<ViewGroup>(android.R.id.content)
+                ?.addView(created, 1, 1)
+            created.visibility = View.INVISIBLE
             web = created
         }
         onLoaded = then
@@ -296,6 +306,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     }
 
     fun close() {
+        web?.let { (it.parent as? ViewGroup)?.removeView(it) }
         web?.destroy()
         web = null
     }
