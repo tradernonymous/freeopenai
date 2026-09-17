@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalizeProviderModel, normalizePricing, normalizeProviderBaseUrl, clearModelCache, LLM_PROVIDERS } = require('../server.js');
+const { normalizeProviderModel, normalizePricing, clearModelCache, LLM_PROVIDERS } = require('../server.js');
 const { isFreeModel, isFreeModelId, emitsText, usableChatModels } = require('../chatlib.js');
 
 // The OpenRouter allowlist is a free-tier commitment: paid ids only ever
@@ -459,7 +459,7 @@ test('the removed providers are gone and the new ones are present', async () => 
   assert.ok(!ids.includes('cerebras'), 'Cerebras was removed');
   assert.ok(!ids.includes('sambanova'), 'SambaNova was removed');
   assert.ok(!ids.includes('opencode'), "OpenCode's free tier only works inside its own client");
-  for (const id of ['nara', 'openrouter', 'nvidia', 'omniroute']) {
+  for (const id of ['nara', 'openrouter', 'nvidia']) {
     assert.ok(ids.includes(id), `${id} should be offered`);
   }
   assert.ok(!ids.includes('aigateway'), 'AI Gateway was removed');
@@ -1299,13 +1299,6 @@ test('a stream with no headers fails fast with a headers message', async () => {
     delete process.env.NVIDIA_BASE_URL;
     delete process.env.PROVIDER_TIMEOUT_HEADERS_MS;
   }
-});
-
-test('OmniRoute base URLs normalize to the OpenAI-compatible route only once', () => {
-  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com'), 'https://gateway.example.com/v1');
-  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com/'), 'https://gateway.example.com/v1');
-  assert.equal(normalizeProviderBaseUrl('omniroute', 'https://gateway.example.com/v1'), 'https://gateway.example.com/v1');
-  assert.equal(normalizeProviderBaseUrl('nara', 'https://router.example.com'), 'https://router.example.com');
 });
 
 test('NVIDIA returns its whole live catalogue', async () => {

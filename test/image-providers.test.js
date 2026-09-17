@@ -19,7 +19,6 @@ const PROVIDER_VARS = [
   'NARA_API_KEY', 'NARA_BASE_URL', 'NARA_MODELS', 'NARA_IMAGE_MODEL', 'NARA_IMAGES_BASE_URL', 'NARA_IMAGE_SIZE',
   'OPENROUTER_API_KEY', 'OPENROUTER_IMAGE_MODEL', 'OPENROUTER_IMAGES_BASE_URL',
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
-  'OMNIROUTE_API_KEY', 'OMNIROUTE_IMAGE_MODEL', 'OMNIROUTE_BASE_URL',
   'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
@@ -348,33 +347,6 @@ test('an edit to a service that takes a reference rides the generations endpoint
   });
   process.env.OPENROUTER_API_KEY = 'or-key';
   process.env.OPENROUTER_IMAGES_BASE_URL = up.url;
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
-    assert.equal(res.status, 200);
-    assert.equal((await res.json()).data[0].url, 'https://img.test/edited.png');
-  } finally {
-    app.close();
-    await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('a gateway edit carries the source as a reference too', async () => {
-  // Verified against a live gateway (0.7.x): its images endpoint takes the same
-  // `input_references` body OpenRouter does, and the store did not say so -- so an
-  // "edit" through the gateway sent the prompt alone, the source picture was never
-  // handed over, and the fresh drawing that came back was presented as an edit.
-  const up = await upstreamOf((req, res, raw) => {
-    assert.match(req.url, /\/images\/generations$/);
-    const body = JSON.parse(raw);
-    assert.equal(body.model, 'gateway/default-image');
-    assert.equal(body.prompt, 'make it red');
-    assert.deepEqual(body.input_references, [{ type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } }]);
-    jsonAnswer(res, 200, { data: [{ url: 'https://img.test/edited.png' }] });
-  });
-  process.env.OMNIROUTE_API_KEY = 'gw-key';
-  process.env.OMNIROUTE_BASE_URL = up.url;
-  process.env.OMNIROUTE_IMAGE_MODEL = 'gateway/default-image';
   const app = await startApp();
   try {
     const res = await post(app, '/api/llm/images/edits', { prompt: 'make it red', image: 'data:image/png;base64,QUJD' });
@@ -755,31 +727,34 @@ test('when every service hangs, the message names them rather than nobody', asyn
 });
 
 test('a chat model is a preference, not what makes a provider able to draw', async () => {
-  // Chatting on OmniRoute's `auto/minimax` router made OmniRoute an image
-  // candidate purely by borrowing that id, so every draw spent a round trip
-  // being told `400 Invalid image model: auto/minimax`. It also made
-  // /api/llm/images/providers a liar: that endpoint reported OmniRoute as not
-  // ready while the draw went on trying it anyway.
-  const gateway = await upstreamOf((req, res) => jsonAnswer(res, 400, { error: { message: 'Invalid image model: auto/minimax' } }));
+  // Chatting on a keyless gateway's own router model used to make that gateway
+  // an image candidate purely by borrowing the chat's id, so every draw spent a
+  // round trip being told "not an image model". It also made
+  // /api/llm/images/providers a liar: that endpoint reported the provider as not
+  // ready while the draw went on trying it anyway. Nara stands in for the shape
+  // here -- a provider with no image model of its own until the operator names
+  // one or its catalogue publishes one -- the rule under test is generic.
+  const gateway = await upstreamOf((req, res) => jsonAnswer(res, 400, { error: { message: 'agnes-2.5-flash is not an image model' } }));
   const draws = await upstreamOf((req, res) => jsonAnswer(res, 200, { data: [{ url: 'https://img.test/nv.png' }] }));
-  process.env.OMNIROUTE_API_KEY = 'gw-key';
-  process.env.OMNIROUTE_BASE_URL = gateway.url;
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_BASE_URL = gateway.url;
+  process.env.NARA_IMAGES_BASE_URL = gateway.url;
   process.env.NVIDIA_API_KEY = 'nv-key';
   process.env.NVIDIA_IMAGES_BASE_URL = draws.url;
   const app = await startApp();
   try {
     const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    const gw = listed.providers.find((p) => p.id === 'omniroute');
-    assert.equal(gw.ready, false, 'the report says it cannot draw');
+    const nara = listed.providers.find((p) => p.id === 'nara');
+    assert.equal(nara.ready, false, 'the report says it cannot draw');
 
     // preferProvider, not provider: this is the chat's own service being moved
     // to the front of the order, which is how a draw reaches it in real use.
-    const res = await post(app, '/api/llm/images/generations', { preferProvider: 'omniroute', model: 'auto/minimax', prompt: 'a fox' });
+    const res = await post(app, '/api/llm/images/generations', { preferProvider: 'nara', model: 'agnes-2.5-flash', prompt: 'a fox' });
     assert.equal(res.status, 200);
     assert.equal((await res.json()).provider, 'nvidia', 'the draw goes to a service that can actually draw');
-    // And the report is telling the truth: the gateway's catalogue is read for an
-    // image model, and it is never asked to draw one.
-    assert.deepEqual(gateway.seen.map((s) => s.url), ['/v1/models?prefix=alias'],
+    // And the report is telling the truth: the provider's catalogue is read for
+    // an image model, and it is never asked to draw one.
+    assert.deepEqual(gateway.seen.map((s) => s.url), ['/models'],
       'a provider with no image model of its own is read, never tried');
   } finally {
     app.close();
@@ -795,14 +770,14 @@ test('an image model of its own still takes the chat model as a preference', asy
     assert.equal(JSON.parse(raw).model, 'stability/sdxl');
     jsonAnswer(res, 200, { data: [{ url: 'https://img.test/gw.png' }] });
   });
-  process.env.OMNIROUTE_API_KEY = 'gw-key';
-  process.env.OMNIROUTE_BASE_URL = up.url;
-  process.env.OMNIROUTE_IMAGE_MODEL = 'gateway/default-image';
+  process.env.NARA_API_KEY = 'nara-key';
+  process.env.NARA_IMAGES_BASE_URL = up.url;
+  process.env.NARA_IMAGE_MODEL = 'nara-image';
   const app = await startApp();
   try {
-    const res = await post(app, '/api/llm/images/generations', { provider: 'omniroute', model: 'stability/sdxl', prompt: 'a fox' });
+    const res = await post(app, '/api/llm/images/generations', { provider: 'nara', model: 'stability/sdxl', prompt: 'a fox' });
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).provider, 'omniroute');
+    assert.equal((await res.json()).provider, 'nara');
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));

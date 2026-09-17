@@ -1425,140 +1425,6 @@ const LLM_PROVIDERS = {
   // into `429` for every model, including ones nothing had asked for. Cloudflare
   // Workers AI is the roomier free drawer (10,000 Neurons a day) and already
   // leads the order; this is what to reach for once Cloudflare's day is spent.
-  // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
-  // one OpenAI-compatible endpoint in front of hundreds of upstream providers
-  // (OpenAI, Anthropic, Google, GLM, DeepSeek, Mistral, Kimi, plus dozens of
-  // free tiers), with automatic routing and fallback between them. It keeps
-  // its own catalogue and key/account database in SQLite, so this app needs
-  // nothing more than the gateway's address -- and optionally a key, for when
-  // the operator has hardened the gateway with REQUIRE_API_KEY=true.
-  //
-  // The model ids below are the point of it. `auto` and its variants are
-  // virtual combos that route each request to whichever connected provider
-  // best fits at that moment; direct `provider/model` ids are pinned for when
-  // the picker wants a concrete name. All of them are intersected with the
-  // gateway's live /v1/models catalogue, so an id a release retires drops out
-  // silently instead of failing on use. OMNIROUTE_MODELS replaces the whole
-  // list, like the other providers.
-  omniroute: {
-    label: 'OmniRoute',
-    baseUrl: 'http://127.0.0.1:20128/v1',
-    envVar: 'OMNIROUTE_API_KEY',
-    freeTier: {
-      all: true,
-      limits: { scope: 'account' },
-      note: "The gateway's own connected free tiers. It answers 402 for a model none of them can serve, and the turn moves on when it does.",
-    },
-    // A fresh install answers without a key (REQUIRE_API_KEY=false). When the
-    // operator turns that on, the key here is sent as Bearer; when it stays
-    // off, no auth header goes at all, never a bare "Bearer ".
-    needsKey: false,
-    // The gateway lists every model twice by default (a `cc/...` alias and a
-    // `provider/...` canonical id for the same model). One id per model is
-    // enough for a picker, and the allowlist below is written in those alias
-    // ids, so ask for the deduplicated catalogue.
-    modelsPath: '/models?prefix=alias',
-    // Ordering, not gating. This used to be a plain allowlist, which made
-    // sense when the gateway was assumed to front a handful of flagships --
-    // but the operator already curates it in its own dashboard, so a second
-    // allowlist here could only overrule that, and did: connecting Mistral
-    // published 48 `mistral/...` ids that could not be picked by name. So the
-    // router and the flagships lead, and the rest of the live catalogue
-    // follows. A pinned id that is retired upstream just stops leading.
-    models: {
-      exact: [
-        // The router itself, free-first: `auto/best-free` and `auto/coding:free`
-        // route only to providers on a free tier, which is the whole point of
-        // running this gateway on free keys. The general routers follow. Bare
-        // `auto` is the documented headline id and stays named even though one
-        // install's catalogue did not list it -- a name with nothing behind it
-        // now simply does not lead, rather than shrinking the picker.
-        'auto',
-        'auto/best-free',
-        'auto/coding:free',
-        'auto/best-coding',
-        'auto/best-reasoning',
-        'auto/best-chat',
-        'auto/best-fast',
-        'auto/coding',
-        'auto/reasoning',
-        'auto/fast',
-        'auto/cheap',
-        'auto/smart',
-        // One named flagship per free namespace -- a quick pick for someone who
-        // wants a specific model by name, not a dump of the whole catalogue.
-        // Everything else each namespace offers still reaches the picker
-        // through includeRest below; naming fewer ids here only changes what
-        // leads, never what is reachable. Picked from a live catalogue: Kiro's
-        // frontier tier, GitHub Copilot, Mistral, Groq, Gemini, SambaNova,
-        // Ollama Cloud, LLM7, Cloudflare, Antigravity and AgentRouter's credit
-        // tier. DeepSeek's own API (`ds/`) is not here: it sells no free tier.
-        'kr/claude-sonnet-5',
-        'gh/claude-opus-5',
-        'mistral/codestral-latest',
-        'groq/llama-3.3-70b-versatile',
-        'gemini/gemini-3.1-pro-preview',
-        'ollamacloud/glm-5.2',
-        'samba/DeepSeek-V3.2',
-        'cf/@cf/openai/gpt-oss-120b',
-        'llm7/deepseek-r1-0528',
-        'antigravity/gemini-3.7-flash-high',
-        // AgentRouter's one flagship, the one paid-catalogue affiliate here that
-        // is reached on signup credit rather than a card.
-        'agentrouter/glm-5.3',
-      ],
-      includeRest: true,
-      // The rest of the catalogue follows the named list -- but only from
-      // namespaces that are on a free tier. The gateway publishes no prices,
-      // so the namespace is the only thing that says whether a model can be
-      // used without a card: a connected OpenAI or Anthropic key would
-      // otherwise fill the picker with models that can only answer 402.
-      //
-      // This is the one list in this file that goes stale on the *gateway's*
-      // schedule rather than this app's, so it has to be re-read when the
-      // gateway majors. It is written against the free-tier catalog upstream
-      // documents (docs/reference/FREE_TIERS.md, refreshed 2026-07 and reaching
-      // 3.8.x), and every namespace the 0.7.x-era list was missing is how a
-      // picker that used to show free models comes back nearly empty after a
-      // gateway upgrade -- the failure reads as "OmniRoute cannot load models"
-      // even though the catalogue loaded perfectly well.
-      //
-      // A prefix that matches nothing costs nothing: it hides no model and
-      // breaks no request. A prefix that is *missing* hides every model in that
-      // namespace from the list, which is the failure worth spending a line on.
-      // An id outside all of them is still reachable by naming it in
-      // OMNIROUTE_MODELS, so this is a default and not a lock.
-      restPrefixes: [
-        'auto/', 'kr/', 'gh/', 'mistral/', 'groq/', 'gemini/', 'samba/',
-        'ollamacloud/', 'cf/', 'llm7/', 'antigravity/', 'agentrouter/',
-        'openrouter/',
-        // Keyless free providers the gateway wires in by default -- these need
-        // no account at all, which is why they lead a fresh install.
-        'oc/', 'felo/', 'kilo-gateway/', 'opencode-zen/',
-        // Free tiers mapped after the 0.7.x list was written.
-        'ovhcloud/', 'requesty/', 'agnes/', 'navy/', 'aihorde/',
-        'zai/', 'glm/', 'glm-cn/', 'siliconflow/', 'tencent/',
-      ],
-      // OpenRouter reaches this gateway as 1,091 of its 2,330 ids, almost all
-      // of them paid, on a key that is free-only -- so passing them through
-      // would fill the picker with models that can only answer 402. It is
-      // also the one namespace here that says which is which, in the id.
-      freeOnlyPrefixes: ['openrouter/'],
-    },
-    // The gateway fronts plenty of upstreams that sell images, and it speaks
-    // OpenAI, so whatever image model it has connected is reachable through it
-    // -- named by the operator, because the gateway's catalogue is its own.
-    image: {
-      shape: 'openai-images',
-      modelEnv: 'OMNIROUTE_IMAGE_MODEL',
-      // An edit rides the generations endpoint as a reference, and this was
-      // missing: an "edit" through the gateway sent the prompt alone, so the
-      // source picture was never handed over and the answer was a fresh drawing
-      // presented as one. Verified against a live gateway (0.7.x): the same
-      // `input_references` body OpenRouter takes comes back as an edited picture.
-      edit: 'references',
-    },
-  },
   custom: {
     label: 'Custom endpoint',
     // No default address: a self-hosted OpenAI-compatible gateway -- free-one-api,
@@ -1745,7 +1611,7 @@ function providerIsConfigured(provider) {
 // shape for the same reason: its Interference API is served under /v1 on a
 // server that boots on a bare host and port, and "add the version segment" is a
 // step nobody remembers on the deploy where it matters.
-const V1_APPENDED_PROVIDERS = new Set(['omniroute', 'g4f']);
+const V1_APPENDED_PROVIDERS = new Set(['g4f']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
@@ -2089,9 +1955,7 @@ async function llmFetch(req, res) {
 // The order image requests fall back through, best first. Nara leads because it
 // is what this route has always fronted: an operator who has it configured sees
 // exactly the behaviour they had, and one who does not gets their next key.
-// OmniRoute is last because its image model is named by the operator or read
-// from the gateway's catalogue rather than published here.
-const IMAGE_PROVIDER_ORDER = ['cloudflare', 'nara', 'openrouter', 'nvidia', 'omniroute'];
+const IMAGE_PROVIDER_ORDER = ['cloudflare', 'nara', 'openrouter', 'nvidia'];
 
 // Which model name to ask for: the request's own, then the operator's variable,
 // then the store's default, then one read from the provider's own catalogue (see
@@ -2396,9 +2260,7 @@ function imageOrderIds(preferredId) {
 // Nothing named and nothing preferred means fall through, and that is what makes
 // this route cover every provider instead of the first one that happens to be
 // configured: an OpenRouter key draws without NARA_API_KEY, an NVIDIA key
-// draws without either, and so on down the order. OmniRoute comes last
-// because their model names are the operator's to supply, so they can only ever
-// be reached when one was.
+// draws without either, and so on down the order.
 function imageDrawOrder(requested, options) {
   const settings = options || {};
   const explicitModel = String(settings.explicitModel || '').trim();
@@ -4783,7 +4645,6 @@ const BUILD_MODEL_PREFERENCE = [
   ['nvidia', 'qwen/qwen3-coder-480b-a35b-instruct'],
   ['cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast'],
   ['openrouter', ''],
-  ['omniroute', 'auto/coding:free'],
   ['nara', ''],
   ['custom', ''],
 ];

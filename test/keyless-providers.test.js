@@ -136,7 +136,7 @@ test('gpt4free sits last in the draw order, behind every named service', async (
       const listed = await get(base, '/api/llm/images/providers');
       const ids = listed.providers.map((p) => p.id);
       assert.equal(ids[ids.length - 1], 'g4f', 'g4f is the last service tried, not a middle one');
-      for (const id of ['cloudflare', 'nara', 'openrouter', 'nvidia', 'omniroute']) {
+      for (const id of ['cloudflare', 'nara', 'openrouter', 'nvidia']) {
         assert.ok(ids.indexOf(id) < ids.indexOf('g4f'), `${id} must be tried before g4f`);
       }
       assert.equal(ids.includes('kilocode'), false, 'a keyless chat provider is not in this list at all');
