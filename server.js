@@ -1210,6 +1210,31 @@ const LLM_PROVIDERS = {
       ownModel: true,
     },
   },
+  // Mistral's own API (docs.mistral.ai). The no-card "Experiment" tier on La
+  // Plateforme answers every model here, rate-limited well below production
+  // use -- Mistral does not publish the exact numbers; an account's own
+  // Admin Console -> Limits has the real ceiling. A free key is generated at
+  // console.mistral.ai/api-keys. Verified against the live catalogue
+  // 2026-09-17: mistral-large-2411, mistral-medium-2508, mistral-small-2506
+  // and codestral-25-08 are today's dated ids -- Mistral retires these on its
+  // own schedule, so a stale one here just drops out of the intersection
+  // with the live GET /v1/models rather than failing on use.
+  mistral: {
+    label: 'Mistral',
+    baseUrl: 'https://api.mistral.ai/v1',
+    envVar: 'MISTRAL_API_KEY',
+    freeTier: {
+      all: true,
+      limits: { scope: 'account' },
+      note: "Mistral's own no-card Experiment tier. Rate-limited well below production use; exact numbers aren't published.",
+    },
+    models: [
+      'mistral-large-2411',
+      'mistral-medium-2508',
+      'mistral-small-2506',
+      'codestral-25-08',
+    ],
+  },
   // Groq: free tier with fast inference. API keys at https://console.groq.com/keys
   groq: {
     label: 'Groq',
