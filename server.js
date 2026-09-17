@@ -1490,12 +1490,6 @@ function isPrivateIp(addr) {
     (a === 169 && b === 254);
 }
 
-function lookupHost(hostname) {
-  return new Promise((resolve, reject) => {
-    dns.lookup(hostname, (err, address) => (err ? reject(err) : resolve(address)));
-  });
-}
-
 // Strip a page to readable text: drop scripts, styles, nav and comments,
 // decode the common entities, collapse whitespace. Crude next to
 // Readability, but dependency-free and honest about what it is.
@@ -1607,25 +1601,20 @@ async function llmFetch(req, res) {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return sendJson(res, 400, { error: 'Only http(s) pages can be read' });
   }
-  let address;
+  // readPublicPage follows redirects by hand and checks every hop's addresses,
+  // so a public page redirecting to an internal one is refused too.
+  let page;
   try {
-    address = await lookupHost(parsed.hostname);
-  } catch {
-    return sendJson(res, 502, { error: 'Could not resolve that host' });
-  }
-  if (isPrivateIp(address)) return sendJson(res, 403, { error: 'That address is not readable from here' });
-  let html;
-  try {
-    html = await fetchText(parsed.href);
+    page = await readPublicPage(parsed.href);
   } catch (e) {
-    return sendJson(res, 502, { error: e.name === 'AbortError' ? 'The page took too long to answer' : 'Could not read that page: ' + e.message });
+    const message = String((e && e.message) || '');
+    if (/not readable from here/.test(message)) return sendJson(res, 403, { error: message });
+    if (/too large/.test(message) || /http\(s\)/.test(message)) return sendJson(res, 400, { error: message });
+    if (/resolve|too long|Too many redirects/.test(message)) return sendJson(res, 502, { error: message });
+    return sendJson(res, 502, { error: 'Could not read that page: ' + message });
   }
-  if (html.length > WEB_FETCH_MAX_BYTES) {
-    return sendJson(res, 400, { error: 'That page is too large to read here' });
-  }
-  const { title, text } = extractPageText(html);
-  if (!text) return sendJson(res, 502, { error: 'Nothing readable on that page' });
-  sendJson(res, 200, { url: parsed.href, title, text: text.slice(0, 8000) });
+  if (!page.text) return sendJson(res, 502, { error: 'Nothing readable on that page' });
+  sendJson(res, 200, page);
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,15 +2420,28 @@ async function imageBytesFor(value, label) {
   if (!/^https?:\/\//i.test(raw)) {
     throw new Error(`Invalid ${label} image — expected a data URL or an http(s) link.`);
   }
-  const parsed = new URL(raw);
-  let address;
-  try {
-    address = await lookupHost(parsed.hostname);
-  } catch {
-    throw new Error(`Could not resolve the host for that ${label} image`);
+  // Redirects are followed by hand so every hop's addresses are checked again.
+  let current = new URL(raw);
+  let fetched = null;
+  for (let hop = 0; hop < 5 && !fetched; hop++) {
+    if (current.protocol !== 'http:' && current.protocol !== 'https:') {
+      throw new Error(`Invalid ${label} image — expected a data URL or an http(s) link.`);
+    }
+    let addresses;
+    try {
+      addresses = await lookupAllAddresses(current.hostname);
+    } catch {
+      throw new Error(`Could not resolve the host for that ${label} image`);
+    }
+    if (!addresses.length || addresses.some(isNonPublicAddress)) {
+      throw new Error(`That ${label} image address is not readable from here`);
+    }
+    const res = await fetch(current.href, { redirect: 'manual' });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) current = new URL(location, current);
+    else fetched = res;
   }
-  if (isPrivateIp(address)) throw new Error(`That ${label} image address is not readable from here`);
-  const fetched = await fetch(parsed.href);
+  if (!fetched) throw new Error(`Too many redirects for that ${label} image`);
   if (!fetched.ok) throw new Error(`Could not fetch the ${label} image (${fetched.status})`);
   const declared = Number(fetched.headers.get('content-length') || 0);
   if (declared > IMAGE_FETCH_MAX_BYTES) throw new Error(`That ${label} image is too large to edit here`);
