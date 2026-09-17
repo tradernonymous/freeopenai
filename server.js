@@ -1045,6 +1045,21 @@ const LLM_PROVIDERS = {
       ownModel: true,
     },
   },
+  // Groq: free tier with fast inference. API keys at https://console.groq.com/keys
+  groq: {
+    label: 'Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    envVar: 'GROQ_API_KEY',
+    // Free models verified from Groq's catalog. These are the models available
+    // on the free tier as of the last audit.
+    models: [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it',
+      'gemma-7b-it',
+    ],
+  },
   // Cloudflare Workers AI: an official free allowance on every Cloudflare
   // account (10,000 Neurons a day, no card), used with an API token the
   // account owner creates from the "Workers AI" template. Nothing here is
@@ -1279,6 +1294,20 @@ const LLM_PROVIDERS = {
     authScheme: '',
     kind: 'search',
     note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
+  },
+  airforce: {
+    label: 'AirForce',
+    baseUrl: 'https://api.airforce/v1',
+    envVar: 'AIRFORCE_API_KEY',
+    // Free models from AirForce's free tier. The catalogue is fetched live and
+    // intersected with this allowlist so retired models drop out silently.
+    models: [
+      'gpt-4o-mini',
+      'gpt-4o',
+      'gpt-3.5-turbo',
+      'claude-3-haiku',
+      'claude-3-sonnet',
+    ],
   },
 };
 
