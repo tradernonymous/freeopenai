@@ -16,8 +16,24 @@ do anything.**
 | **Cloudflare Workers AI** | Free image generation (FLUX.1 schnell), plus chat | Set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
 | **OVHcloud images** | Free image generation, no key | Set `OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10` |
 | **gpt4free** | Free image generation + a second chat pool | Deploy the service — see below |
+| **CLIProxyAPI** (slot) | Your own free agent-CLI logins: Gemini 3.1 Pro, GPT-5.6 series, Claude, Grok 4.5 | Deploy `deploy/cliproxy-railway/`, log accounts in via its web panel |
+| **Kiro Gateway** (slot) | Free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5, Qwen3-Coder | Deploy `deploy/kiro-gateway-railway/` + paste one refresh token |
 
-## 1 · The two providers that need nothing
+## 1 · The three gateway slots
+
+The app has three generic OpenAI-compatible slots — `custom`, `custom2`,
+`custom3` — so several self-hosted gateways can run beside each other:
+
+| Slot | Variable | First choice for |
+| --- | --- | --- |
+| Custom endpoint | `CUSTOM_BASE_URL` (+ `CUSTOM_API_KEY`) | FreeGPT4-WEB-API, Ollama, any OpenAI-shaped service |
+| Custom endpoint 2 | `CUSTOM2_BASE_URL` (+ `CUSTOM2_API_KEY`) | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — your free Gemini CLI / Claude Code / Codex / Grok logins as one API (`deploy/cliproxy-railway/`) |
+| Custom endpoint 3 | `CUSTOM3_BASE_URL` (+ `CUSTOM3_API_KEY`) | [Kiro Gateway](https://github.com/jwadow/kiro-gateway) — free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5 (`deploy/kiro-gateway-railway/`) |
+
+Each slot activates on its URL alone; the key is optional and only sent when
+set. All three can be filled at once, and each keeps its own model list.
+
+## 2 · The two providers that need nothing
 
 Kilo Code and OVHcloud are free tiers that answer on **your server's IP address**
 rather than on an API key. They are configured the moment the app ships:
@@ -70,7 +86,7 @@ KILO_DISABLED=1
 OVHCLOUD_DISABLED=1
 ```
 
-## 2 · Free image generation
+## 3 · Free image generation
 
 Pictures are where a free key runs out first, so this is worth reading if you
 want to draw things.
@@ -103,7 +119,7 @@ The first service that answers with a picture wins. `IMAGE_PROVIDER=<id>` pins
 **one** service for the whole deployment, honoured exactly, if you would rather
 decide than fall through.
 
-## 3 · gpt4free (a service you deploy)
+## 4 · gpt4free (a service you deploy)
 
 `deploy/g4f-railway/` runs
 [gpt4free](https://github.com/xtekky/gpt4free) as a Railway service. It is the
@@ -113,7 +129,7 @@ It is last for a reason: it reaches models by reading third-party web endpoints
 rather than through documented APIs, so individual adapters break without notice.
 A rescue, not a first choice. Full steps and caveats are in that folder's README.
 
-## 4 · If OmniRoute says `502: Application failed to respond`
+## 5 · If OmniRoute says `502: Application failed to respond`
 
 That message is not OmniRoute's — it is your host's own router saying it could
 not reach the gateway's container. The three causes, in order:
@@ -135,7 +151,7 @@ not reach the gateway's container. The three causes, in order:
 railway logs --service omniroute
 ```
 
-## 5 · Verification: two URLs that tell you the truth
+## 6 · Verification: two URLs that tell you the truth
 
 Both need no login and are never cached.
 
@@ -171,7 +187,7 @@ another provider answer until the cooldown expires. `callsToday` is this app
 counting its own calls — it resets on every deploy, and for a provider that sends
 no rate-limit headers (Kilo) it is the only count there is.
 
-## 6 · About the two services you may not need
+## 7 · About the two services you may not need
 
 This app was researched against a set of "free coding agent" projects. Two are
 worth a specific note, because both look like they would plug straight in and

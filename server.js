@@ -1451,6 +1451,29 @@ const LLM_PROVIDERS = {
     needsKey: false,
     needsBaseUrl: true,
   },
+  // The second and third generic slots exist because one is not enough once a
+  // deployment runs several self-hosted gateways at once -- FreeGPT4 on the
+  // first, a CLIProxyAPI wrapping agent-CLI logins beside a Kiro Gateway on
+  // these, or any pairing of OpenAI-compatible services. They are the custom
+  // slot's twins in every behaviour that matters: each activates on its URL
+  // alone with the key optional, serves the gateway's whole catalogue, and
+  // narrows through CUSTOMn_MODELS. Deliberately flat copies rather than an
+  // abstraction over the three: flat entries read faster than a parameterised
+  // one, and no slot should inherit behaviour the others must not grow.
+  custom2: {
+    label: 'Custom endpoint 2',
+    baseUrl: '',
+    envVar: 'CUSTOM2_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+  },
+  custom3: {
+    label: 'Custom endpoint 3',
+    baseUrl: '',
+    envVar: 'CUSTOM3_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+  },
   freegpt4: {
     label: 'FreeGPT4',
     // A self-hosted Free-GPT4-WEB-API gateway: plain-text answers over
@@ -4670,6 +4693,8 @@ const BUILD_MODEL_PREFERENCE = [
   ['openrouter', ''],
   ['nara', ''],
   ['custom', ''],
+  ['custom2', ''],
+  ['custom3', ''],
 ];
 
 function providerModelIds(models) {
