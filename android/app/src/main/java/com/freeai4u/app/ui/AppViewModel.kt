@@ -13,7 +13,6 @@ import com.freeai4u.app.ApiException
 import com.freeai4u.app.BaseUrlResult
 import com.freeai4u.app.ChatApi
 import com.freeai4u.app.SecureStore
-import com.freeai4u.app.WebShell
 import com.freeai4u.app.data.BUILT_IN_PERSONAS
 import com.freeai4u.app.data.ChatEvent
 import com.freeai4u.app.data.ChatMessage
@@ -169,7 +168,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 store.password = password
                 store.session = cookie
                 main.post {
-                    WebShell.setSessionCookie(server, cookie)
                     signInBusy = false
                     signedIn = true
                     refreshCatalogue()
@@ -197,7 +195,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (erase) repo.eraseEverything()
         }
         store.clearSecrets()
-        WebShell.setSessionCookie(server, null)
         if (erase) {
             conversations.clear()
             library = Library()

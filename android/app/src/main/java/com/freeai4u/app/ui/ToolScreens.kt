@@ -218,7 +218,7 @@ private val QUICK_TOOLS = listOf(
 )
 
 @Composable
-fun ToolsScreen(vm: AppViewModel, platform: Platform) {
+fun ToolsScreen(vm: AppViewModel) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Quick tools") }
         items(QUICK_TOOLS) { tool ->
@@ -230,7 +230,6 @@ fun ToolsScreen(vm: AppViewModel, platform: Platform) {
         item { SectionTitle("Server") }
         item { StatusCard(vm) }
         item { SectionTitle("More") }
-        item { ToolCard("🧰", "Web app", "Puter, GitHub, skills, workspace") { platform.openWebTools() } }
     }
 }
 

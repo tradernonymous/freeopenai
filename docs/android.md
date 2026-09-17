@@ -6,7 +6,7 @@
 
 ### 📲 The Android app
 
-`android/` is **FreeAI4U**, a native Android client (Kotlin, Jetpack Compose, Material 3) for this server. Its layout follows the ChatGPT Android app, always dark with the web app's green accent. It talks to the same routes the web page uses (`/api/llm/chat`, `/api/llm/models`, `/api/llm/images/generations`, `/api/llm/websearch`, `/api/llm/fetch`). Anything only the page can do — Puter models, GitHub, skills, the workspace — stays one tap away under **Web app**, a locked-down WebView of the deployed site.
+`android/` is **FreeAI4U**, a native Android client (Kotlin, Jetpack Compose, Material 3) for this server. Its layout follows the ChatGPT Android app, always dark with the web app's green accent. It talks to the same routes the web page uses (`/api/llm/chat`, `/api/llm/models`, `/api/llm/images/generations`, `/api/llm/websearch`, `/api/llm/fetch`). Everything runs as native Compose screens; there is no in-app browser view of the deployed site.
 
 **Install it (first time)**
 
@@ -19,11 +19,11 @@
 **What is in it**
 
 - **Chat:** streamed replies with a folding *Thought* section and copyable code blocks. Under each reply are **copy, read aloud, regenerate, share** and **⋯** (branch, select text). Long-press your own message to copy or edit it; an edit can continue in a new branch. A **Latest** button jumps down, and the screen stays awake while a reply streams.
-- **Side drawer:** search, **New chat**, **Images**, **Tools** and **Web app**, then pinned chats and history grouped by day. Long-press a chat to pin, rename, share or delete it. Your account row opens **Settings**.
+- **Side drawer:** search, **New chat**, **Images** and **Tools**, then pinned chats and history grouped by day. Long-press a chat to pin, rename, share or delete it. Your account row opens **Settings**.
 - **Composer:** the **+** sheet adds photos (for vision models), text and code files, **Image**, and the mode; there is also a **Puter images** switch. Type `/` for saved prompts. The mic dictates, the waveform button starts **voice mode** (hands-free: listen, reply, read aloud, listen again; say "stop" to end), and while a reply streams the same button stops it.
 - **Chat / Plan / Build:** *Chat* answers, searches and reads the web, draws, and proposes phone actions. *Plan* also records a task list. *Build* also writes files into the chat and works through the tasks. Tool steps fold into a **Worked · n steps** log with a live timer. The task list sits above the composer, and **Build it** hands a plan over to Build.
 - **Phone actions:** the assistant can propose setting an alarm or timer, adding a calendar event, opening a map, dialling, drafting an email, opening a link, sharing or copying. Each one appears as a button and **does nothing until you tap it**. Every action then opens the phone's own app for you to finish, so nothing is sent or saved behind your back.
-- **Images:** the free server services draw by default (Cloudflare FLUX first). **Puter images** is an optional switch that draws with *your* Puter account. It is off by default and turns itself off after a failure (such as used-up credits) or an app restart. Sign in to Puter once in **Web app** with a Puter username and password; Google sign-in cannot work inside apps. Pictures open full screen with pinch-zoom, save and share, and are listed in **Images** with style presets and an **Enhance** button.
+- **Images:** the free server services draw by default (Cloudflare FLUX first). **Puter images** is an optional switch that draws with *your* Puter account. It is off by default and turns itself off after a failure (such as used-up credits) or an app restart. Puter is reached through a hidden bridge page that keeps the Puter sign-in the app already holds; first-time signing in to Puter (a username and password — Google sign-in cannot work inside apps) is moving into the app itself in an upcoming build. Pictures open full screen with pinch-zoom, save and share, and are listed in **Images** with style presets and an **Enhance** button.
 - **Tools:** quick tools (translate, summarize a link, fix grammar, explain code, rewrite, reply), personas, the prompt library, and a status card that tests each provider's speed.
 - **Also:** custom instructions sent with every chat, share text or photos from any app into a new chat, **Ask FreeAI4U** in any app's text-selection menu, launcher shortcuts, a Quick Settings tile, a "reply ready" notification when a reply finishes in the background, export as text, Markdown or PDF, an optional fingerprint/screen lock, and a copyable crash log.
 
@@ -33,7 +33,7 @@
 - Traffic is HTTPS only, with system trust anchors only, and the window is flagged secure, so screenshots and the recents thumbnail come out blank.
 - The sign-in screen ignores taps while another app draws over it.
 - Error text masks anything that looks like a key.
-- **Web app** and the hidden Puter page run with no JavaScript bridge. The Puter picture is read back in slices by polling a page property.
+- The hidden Puter page runs with no JavaScript bridge. The Puter picture is read back in slices by polling a page property.
 - Permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `USE_BIOMETRIC` and `SET_ALARM` are granted at install. `RECORD_AUDIO` is asked for the first time voice mode opens, and `POST_NOTIFICATIONS` once on Android 13+. The app requests no location, contacts, SMS, call-log or storage permission.
 - Nothing in the app drives other apps, uses an accessibility service, or impersonates another client.
 

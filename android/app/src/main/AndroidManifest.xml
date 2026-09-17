@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  FreeAI4U Android app: the deployed web app in a hardened WebView, with a
-  native sign-in that keeps the phone logged in. Security posture:
+  FreeAI4U Android app: a native Kotlin/Compose client for the FreeAI4U
+  server, with a native sign-in that keeps the phone logged in. Security
+  posture:
   - Permissions: INTERNET, ACCESS_NETWORK_STATE, USE_BIOMETRIC and SET_ALARM
     are install-time "normal" permissions. RECORD_AUDIO (voice mode) and
     POST_NOTIFICATIONS (reply ready) are runtime permissions asked for in
@@ -13,15 +14,15 @@
   - Exported: the native launcher activity, which also accepts shared text,
     shared images and selected text (all treated as untrusted input that only
     ever lands in a chat composer), and the Quick Settings tile, which only
-    the system can bind. The web tools activity and the FileProvider are not
-    exported.
+    the system can bind. The FileProvider is not exported.
   - Chats, pictures, personas and prompts are sealed with a Keystore
     AES-256-GCM key in app-private storage (data/Storage.kt).
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
     content never crosses the network unencrypted.
-  - The WebView itself is locked down in WebShell.kt: no file or content
-    URLs, no JavaScript bridge, no geolocation, mixed content refused, and
-    navigation held to the configured server.
+  - The only WebView left is the hidden Puter drawing page, locked down in
+    WebShell.kt: no file or content URLs, no JavaScript bridge, no
+    geolocation, mixed content refused -- the page is never given a handle
+    into the app.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -83,12 +84,6 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
-        <!-- The full web app. Not exported: only this app can open it. -->
-        <activity
-            android:name=".WebActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
-            android:windowSoftInputMode="adjustResize" />
         <!-- Share / PDF exports: private cache files handed out one at a time
              with a temporary read grant. -->
         <provider

@@ -73,8 +73,7 @@ import com.freeai4u.app.ui.ToolsScreen
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 
-/** The launcher: native chats, images, tools and settings. The full web app
- * is one tap away in [WebActivity] for what only the page can do. */
+/** The launcher: native chats, images, tools and settings. */
 class NativeActivity : ComponentActivity(), Platform {
     private val vm: AppViewModel by viewModels()
     private var locked by mutableStateOf(false)
@@ -187,7 +186,7 @@ class NativeActivity : ComponentActivity(), Platform {
                                 when (screen) {
                                     null -> Unit
                                     Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
-                                    Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm, this@NativeActivity) }
+                                    Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
                                     Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
                                     Screen.Personas -> PersonasScreen(vm)
                                     Screen.Prompts -> PromptsScreen(vm)
@@ -501,10 +500,6 @@ class NativeActivity : ComponentActivity(), Platform {
             onTextFile = null
             toast("No file picker on this phone.")
         }
-    }
-
-    override fun openWebTools() {
-        startActivity(Intent(this, WebActivity::class.java))
     }
 
     override fun checkUpdates() = checkForUpdate(manual = true)

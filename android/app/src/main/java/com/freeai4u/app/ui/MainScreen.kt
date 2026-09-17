@@ -125,7 +125,7 @@ import com.freeai4u.app.data.personaFor
 import kotlinx.coroutines.launch
 
 /** Everything the screens need from Android itself, implemented by the
- * activity: clipboard, share sheet, files, speech, intents, web tools. */
+ * activity: clipboard, share sheet, files, speech, intents. */
 interface Platform {
     val version: String
     fun copy(text: String)
@@ -142,7 +142,6 @@ interface Platform {
     fun pickPhotos(onPicked: (List<String>) -> Unit)
     fun pickTextFile(onPicked: (name: String, text: String) -> Unit)
     fun runAction(action: PhoneAction)
-    fun openWebTools()
     fun startVoice()
     fun checkUpdates()
     fun appLockOn(): Boolean
@@ -210,7 +209,6 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
         DrawerRow(Icons.Filled.Image, "Images") { vm.push(Screen.Images); close() }
         DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Screen.Tools); close() }
-        DrawerRow(Icons.Filled.Language, "Web app") { platform.openWebTools(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
             if (visible.isEmpty()) {

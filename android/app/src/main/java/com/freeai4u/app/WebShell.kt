@@ -6,18 +6,14 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.View
-import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 
-/** The WebView's lockdown, in one place so the main page and a popup get the
- * same one. The page needs JavaScript and its own storage (that is where it
- * keeps conversations) and nothing else: no file or content URLs, no mixed
- * content, no geolocation, no zoom chrome, no JavaScript bridge anywhere. */
+/** The WebView's lockdown, in one place so the hidden Puter drawing page and
+ * any future window get the same one. That page needs JavaScript and its own
+ * storage (Puter's saved sign-in) and nothing else: no file or content
+ * URLs, no mixed content, no geolocation, no JavaScript bridge anywhere. */
 object WebShell {
-    const val SESSION_COOKIE = "fo_auth"
-    private const val SESSION_MAX_AGE = 7 * 24 * 60 * 60
-
     @SuppressLint("SetJavaScriptEnabled")
     @Suppress("DEPRECATION")
     fun harden(web: WebView, userAgentSuffix: String, popup: Boolean) {
@@ -48,21 +44,6 @@ object WebShell {
         val cookies = CookieManager.getInstance()
         cookies.setAcceptCookie(true)
         cookies.setAcceptThirdPartyCookies(web, false)
-    }
-
-    /** Puts the native sign-in's session into the WebView's cookie jar (or
-     * takes it out again), so the page's own fetches are signed in from the
-     * first one. HttpOnly, so the page's scripts cannot read it either. */
-    fun setSessionCookie(baseUrl: String, value: String?) {
-        if (baseUrl.isEmpty()) return
-        val manager = CookieManager.getInstance()
-        val secure = if (baseUrl.startsWith("https://")) "; Secure" else ""
-        if (value.isNullOrEmpty()) {
-            manager.setCookie(baseUrl, "$SESSION_COOKIE=; Path=/; Max-Age=0$secure")
-        } else {
-            manager.setCookie(baseUrl, "$SESSION_COOKIE=$value; Path=/; Max-Age=$SESSION_MAX_AGE; HttpOnly$secure")
-        }
-        manager.flush()
     }
 
     /** Writes a file into Downloads/FreeAI4U through MediaStore: visible in
