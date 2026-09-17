@@ -24,11 +24,13 @@
 
 | 💬 **Chat** | 🧩 **Plan · Build** | 🛠️ **Remote builds** |
 | :-- | :-- | :-- |
-| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, which need no key at all**. Web search built in. | One switch: Chat · Plan · Build. Skills, tasks, workspace, GitHub tools. | A plan runs on your server. You approve every change, from any device. |
-
-**Free models only, with the limits on the row.** The picker shows what a free tier actually allows — `free · 2/min · per IP · shared` — and Settings → Chat hides the metered rows entirely. A provider that rate-limits a turn is asked to wait no longer than the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the refusal is handed back and the work moves to another provider, which is the difference between a task that pauses and a task that stops. Everything reported about it is in [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
+| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, which need no key at all**. Web search built in. | One switch: Chat · Plan · Build. **Build edits files on the server, runs tests and git**, with your approval on every change. Skills, tasks, GitHub tools. | A plan runs on your server: search, read, edit, run, commit. You approve every change, from any device. |
 | 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
 | ChatGPT-style. Plan mode. **Build remotely** with approvals. Reopens where you left off. | One `.exe`. Builds panel docked beside the chat. | Free FLUX first. Puter only when you switch it on. |
+
+**Free models only, with the limits on the row.** The picker shows what a free tier actually allows — `free · 2/min · per IP · shared` — and Settings → Chat hides the metered rows entirely. A provider that rate-limits a turn is asked to wait no longer than the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the refusal is handed back and the work moves to another provider, which is the difference between a task that pauses and a task that stops. Everything reported about it is in [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
+
+**Coding tasks that finish.** A model that writes its tool call as text still gets it run. Build mode's workspace is the server folder the shell runs in, so a file the model writes is the file `npm test` runs and `git commit` records — as the GitHub account you connected, with force pushes refused. Build gets 60 tool steps a turn; a remote build gets 120 turns. Details in [Modes & tools](docs/modes-and-tools.md) and [Remote builds](docs/builds.md).
 
 ## 🚀 Quick start
 
