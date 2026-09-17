@@ -107,7 +107,7 @@ flowchart LR
 | 📖 [Features](docs/features.md) | ⚙️ [Configuration](docs/configuration.md) | 🧩 [Modes & tools](docs/modes-and-tools.md) |
 | ⌨️ [Using the app](docs/usage.md) | ☁️ [Deploy](docs/deploy.md) | 🖼️ [Image providers](docs/providers.md) |
 | 📲 [Android app](docs/android.md) | 🔀 [OmniRoute](docs/omniroute.md) | 🏗️ [Architecture](docs/architecture.md) |
-| 🛠️ [Remote builds](docs/builds.md) | 🖥️ [Desktop app](docs/desktop.md) | |
+| 🛠️ [Remote builds](docs/builds.md) | 🖥️ [Desktop app](docs/desktop.md) | 💸 [Free models, no key](docs/free-services.md) |
 
 <details>
 <summary><b>⚠️ Disclaimer</b></summary>
