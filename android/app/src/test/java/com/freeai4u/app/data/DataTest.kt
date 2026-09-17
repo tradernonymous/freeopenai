@@ -193,4 +193,60 @@ class DataTest {
         assertEquals(DEFAULT_PERSONA_ID, personaFor(lib, "gone").id)
         assertEquals(BUILT_IN_PERSONAS.size + 1, allPersonas(lib).size)
     }
+
+    @Test
+    fun slash_resolvesCommandsSkillsChainsAndPlainText() {
+        val skills = listOf("ponytail", "caveman", "review")
+        assertEquals(SlashMatch.Known("help", ""), resolveSlash("/help", skills))
+        assertEquals(SlashMatch.Known("skill", "off caveman"), resolveSlash("/skill off caveman", skills))
+        assertEquals(SlashMatch.Skill("ponytail"), resolveSlash("/ponytail", skills))
+        assertEquals(SlashMatch.Chain(listOf("review", "caveman")), resolveSlash("/review /caveman", skills))
+        assertEquals(SlashMatch.Chain(listOf("review", "caveman")), resolveSlash("/review /caveman extra words", skills))
+        assertNull("a path is a message", resolveSlash("/etc/hosts is broken", skills))
+        assertNull("unknown slash word is a message", resolveSlash("/shrug", skills))
+        assertNull(resolveSlash("hello", skills))
+    }
+
+    @Test
+    fun slash_suggestionsFilterByPrefix() {
+        val rows = slashSuggestions("/com", emptyList())
+        assertEquals(1, rows.size)
+        assertEquals("compact", rows.first().first)
+        val withSkill = slashSuggestions("/pon", listOf("ponytail"))
+        assertEquals("ponytail", withSkill.first().first)
+        assertTrue("an argument finishes the name", slashSuggestions("/compact on", emptyList()).isEmpty())
+        assertTrue(slashSuggestions("hello", listOf("ponytail")).isEmpty())
+    }
+
+    @Test
+    fun skills_parseCatalogueAndContent() {
+        val catalogue = parseSkills("[{\"source\":\"acme/skills\",\"name\":\"ponytail\",\"description\":\"Lazy senior dev\",\"allowedTools\":[\"read\"],\"userOnly\":true}]")
+        assertEquals(1, catalogue.size)
+        assertEquals("ponytail", catalogue[0].name)
+        assertEquals(listOf("read"), catalogue[0].allowedTools)
+        assertTrue(catalogue[0].userOnly)
+        assertTrue("catalogue has no body", catalogue[0].body.isEmpty())
+        assertEquals(emptyList<Skill>(), parseSkills("not json"))
+
+        val one = parseSkill("{\"source\":\"acme/skills\",\"name\":\"ponytail\",\"description\":\"d\",\"body\":\"# Steps\"}")!!
+        assertEquals("# Steps", one.body)
+        assertNull(parseSkill("{}"))
+    }
+
+    @Test
+    fun conversation_roundTripsSkillsAndCompact() {
+        val original = chat(ChatMessage("user", "hi")).copy(skills = listOf("ponytail"), compact = true)
+        val restored = conversationFromJson(original.toJson().toString())!!
+        assertEquals(listOf("ponytail"), restored.skills)
+        assertTrue(restored.compact)
+        assertTrue(conversationFromJson("{\"id\":\"old\"}")!!.skills.isEmpty())
+    }
+
+    @Test
+    fun prompt_carriesPinnedSkillsAndSkipsJunk() {
+        val prompt = systemPrompt("Be a pirate.", "", "chat", now = 0, skills = listOf("Rule one.", "", "  "))
+        assertTrue(prompt.contains("Active skills for this chat"))
+        assertTrue(prompt.contains("Rule one."))
+        assertFalse(systemPrompt("", "", "chat", now = 0).contains("Active skills"))
+    }
 }

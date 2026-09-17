@@ -78,6 +78,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -121,6 +123,7 @@ import com.freeai4u.app.data.groupByDate
 import com.freeai4u.app.data.matchPrompts
 import com.freeai4u.app.data.modeLabel
 import com.freeai4u.app.data.personaFor
+import com.freeai4u.app.data.slashSuggestions
 import kotlinx.coroutines.launch
 
 /** Everything the screens need from Android itself, implemented by the
@@ -206,8 +209,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
-        DrawerRow(Icons.Filled.Image, "Images") { vm.push(Screen.Images); close() }
-        DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Screen.Tools); close() }
+        DrawerRow(Icons.Filled.AutoAwesome, "Knowledges") { vm.push(Screen.Knowledges); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
             if (visible.isEmpty()) {
@@ -277,12 +279,44 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
 private fun DrawerRow(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
+            .padding(horizontal = 12.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = Palette.text, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, color = Palette.text, fontSize = 15.sp)
+    }
+}
+
+/** The four places the app opens to, always at the bottom of the chat: the
+ * other three push their page over it, and their back arrow returns here. */
+@Composable
+private fun BottomTabs(vm: AppViewModel) {
+    NavigationBar(containerColor = Palette.surface, tonalElevation = 0.dp) {
+        NavigationBarItem(
+            selected = true,
+            onClick = {},
+            icon = { Icon(Icons.AutoMirrored.Filled.Chat, "Chat") },
+            label = { Text("Chat") },
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = { vm.push(Screen.Images) },
+            icon = { Icon(Icons.Filled.Image, "Images") },
+            label = { Text("Images") },
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = { vm.push(Screen.Tools) },
+            icon = { Icon(Icons.Filled.Construction, "Tools") },
+            label = { Text("Tools") },
+        )
+        NavigationBarItem(
+            selected = false,
+            onClick = { vm.push(Screen.Settings) },
+            icon = { Icon(Icons.Filled.Settings, "Settings") },
+            label = { Text("Settings") },
+        )
     }
 }
 
@@ -310,6 +344,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
     Scaffold(
         containerColor = Palette.background,
         snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = { BottomTabs(vm) },
         topBar = {
             Column {
                 TopAppBar(
@@ -478,10 +513,24 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
     }
     var plusSheet by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+    LaunchedEffect(Unit) { vm.loadSkills() }
     val suggestions = matchPrompts(text, allPrompts(vm.library))
+    val slashRows = slashSuggestions(text, vm.skills.map { it.name })
     val canSend = text.isNotBlank() || photos.isNotEmpty()
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 8.dp)) {
+        AnimatedVisibility(slashRows.isNotEmpty(), enter = slideInVertically { it / 2 } + fadeIn(), exit = fadeOut()) {
+            Surface(color = Palette.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                LazyColumn(Modifier.heightIn(max = 240.dp)) {
+                    items(slashRows, key = { it.first }) { (name, detail) ->
+                        Column(Modifier.fillMaxWidth().clickable { setText("/$name ") }.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                            Text("/$name", color = Palette.green, fontSize = 14.sp)
+                            Text(detail, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
         AnimatedVisibility(suggestions.isNotEmpty(), enter = slideInVertically { it / 2 } + fadeIn(), exit = fadeOut()) {
             Surface(color = Palette.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                 LazyColumn(Modifier.heightIn(max = 220.dp)) {

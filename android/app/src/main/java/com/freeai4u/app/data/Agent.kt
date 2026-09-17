@@ -47,12 +47,26 @@ fun modeInstructions(mode: String): String = when (mode) {
     ).joinToString("\n")
 }
 
-/** The whole system prompt: persona, custom instructions, mode, and today. */
-fun systemPrompt(personaPrompt: String, instructions: String, mode: String, now: Long = System.currentTimeMillis()): String {
+/** A skill can be long; the pinned set is capped so a chat never balloons the
+ * prompt by accident. */
+const val MAX_SKILL_CHARS = 4000
+
+/** The whole system prompt: persona, custom instructions, pinned skills, mode,
+ * and today. */
+fun systemPrompt(
+    personaPrompt: String,
+    instructions: String,
+    mode: String,
+    now: Long = System.currentTimeMillis(),
+    skills: List<String> = emptyList(),
+): String {
     val today = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm z", Locale.US).format(Date(now))
+    val skillBlock = skills.map { it.trim() }.filter { it.isNotEmpty() }
+        .joinToString("\n\n---\n\n") { it.take(MAX_SKILL_CHARS) }
     return listOfNotNull(
         personaPrompt.trim().ifEmpty { null },
         instructions.trim().ifEmpty { null }?.let { "About the user and how to answer:\n$it" },
+        skillBlock.ifEmpty { null }?.let { "Active skills for this chat (follow them):\n\n$it" },
         modeInstructions(mode),
         "Current date and time: $today. You are running in the FreeAI4U Android app.",
     ).joinToString("\n\n")

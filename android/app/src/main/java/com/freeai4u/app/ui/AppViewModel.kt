@@ -22,6 +22,12 @@ import com.freeai4u.app.data.GeneratedImage
 import com.freeai4u.app.data.ImageSize
 import com.freeai4u.app.data.Library
 import com.freeai4u.app.data.Limits
+import com.freeai4u.app.data.COMPACT_HISTORY_MESSAGES
+import com.freeai4u.app.data.MAX_HISTORY_MESSAGES
+import com.freeai4u.app.data.Skill
+import com.freeai4u.app.data.SlashMatch
+import com.freeai4u.app.data.renderCommandsHelp
+import com.freeai4u.app.data.resolveSlash
 import com.freeai4u.app.data.imageRatio
 import com.freeai4u.app.data.ModelInfo
 import com.freeai4u.app.data.NativeApi
@@ -48,6 +54,7 @@ import com.freeai4u.app.data.toolBudget
 import com.freeai4u.app.data.toolsForMode
 import com.freeai4u.app.data.deriveTitle
 import com.freeai4u.app.data.personaFor
+import com.freeai4u.app.ReplyService
 import com.freeai4u.app.normalizeBaseUrl
 import java.net.HttpURLConnection
 import java.util.UUID
@@ -61,6 +68,8 @@ sealed interface Screen {
     data object Settings : Screen
     data object Personas : Screen
     data object Prompts : Screen
+    data object Skills : Screen
+    data object Knowledges : Screen
 }
 
 /** All app state for the native screens. Network and disk work runs on a
@@ -74,6 +83,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val io = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
     private val activeStream = AtomicReference<HttpURLConnection?>(null)
+    private val context = app.applicationContext
 
     var signedIn by mutableStateOf(store.server != null && (store.session != null || store.password != null))
         private set
@@ -105,6 +115,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** What the server reports about its own timeouts and retries. */
     var limits by mutableStateOf<Limits?>(null)
         private set
+
+    /** The installed skill catalogue from GET /api/skills. */
+    var skills by mutableStateOf<List<Skill>>(emptyList())
+        private set
+    /** SKILL.md text by name, fetched once per skill for the chats that pin it. */
+    private val skillBodies = java.util.concurrent.ConcurrentHashMap<String, String>()
+    /** A long client-side answer to a slash command (/help, /doctor), shown in
+     * a sheet. Command replies never enter the transcript, so a model is never
+     * sent "Commands: ..." as if it had said it. */
+    var commandInfo by mutableStateOf<String?>(null)
 
     var streamingId by mutableStateOf<String?>(null)
         private set
@@ -215,10 +235,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         signedIn = false
     }
 
+    /** Re-signs in with the password the app already holds when the server's
+     * session lapses, so a turn in flight finishes instead of dumping the user
+     * at the sign-in screen. False means the password is gone or was refused. */
+    private fun silentSignIn(): Boolean {
+        val server = store.server ?: return false
+        val username = store.username ?: return false
+        val password = store.password ?: return false
+        return try {
+            store.session = ChatApi(server).login(username, password)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     val serverUrl: String get() = store.server ?: ""
     val username: String get() = store.username ?: ""
 
     // --- Providers and models ---------------------------------------------------
+
+    /** Runs a read, re-signing in once if the server says the session lapsed. */
+    private fun <T> reauthing(block: () -> T): T = try {
+        block()
+    } catch (e: ApiException) {
+        if (e.authRequired && silentSignIn()) block() else throw e
+    }
 
     fun refreshCatalogue() {
         if (catalogueBusy) return
@@ -226,7 +268,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         catalogueError = null
         io.execute {
             try {
-                val list = api.providers()
+                val list = reauthing { api.providers() }
                 main.post {
                     providers = list
                     catalogueBusy = false
@@ -247,7 +289,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadModelsBlocking(provider: String) {
         try {
-            val list = api.models(provider)
+            val list = reauthing { api.models(provider) }
             main.post { models[provider] = list }
         } catch (e: ApiException) {
             main.post { notice = e.message }
@@ -265,6 +307,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = try { api.limits() } catch (e: Exception) { null }
             main.post { result?.let { limits = it } }
         }
+    }
+
+    /** Fills the Skills screen from the server's installed catalogue. */
+    fun loadSkills(force: Boolean = false) {
+        if (!force && skills.isNotEmpty()) return
+        io.execute {
+            val result = try { api.skills() } catch (e: Exception) { null }
+            if (result != null) main.post { skills = result }
+        }
+    }
+
+    /** The SKILL.md shown in the Skills detail sheet, keyed by skill name. */
+    var skillDetail by mutableStateOf<Pair<String, String>?>(null)
+        private set
+
+    /** Fetches a skill's SKILL.md for the detail sheet off the main thread. */
+    fun loadSkillInstructions(name: String) {
+        io.execute {
+            val body = skillBody(name) ?: ""
+            main.post { skillDetail = name to body }
+        }
+    }
+
+    /** One skill's SKILL.md, cached for the chats that pin it. */
+    private fun skillBody(name: String): String? {
+        skillBodies[name]?.let { return it }
+        val body = try { api.skillContent(name).body } catch (e: Exception) { null } ?: return null
+        skillBodies[name] = body
+        return body
     }
 
     /** The provider and model a new chat starts on. */
@@ -351,6 +422,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val chat = conversation(id) ?: return
         val trimmed = text.trim()
         if ((trimmed.isEmpty() && images.isEmpty()) || streamingId != null) return
+        if (images.isEmpty() && handleCommand(id, trimmed)) return
         if (chat.provider.isEmpty() || chat.model.isEmpty()) {
             notice = "Pick a model first (tap the model name at the top)."
             return
@@ -417,12 +489,110 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun stop() {
         stopRequested = true
         activeStream.getAndSet(null)?.let { connection -> io.execute { connection.disconnect() } }
+        ReplyService.stop(context)
     }
 
     fun setMode(id: String, mode: String) {
         val chat = conversation(id) ?: return
         if (mode !in com.freeai4u.app.data.MODES) return
         replace(chat.copy(mode = mode))
+    }
+
+    // --- Slash commands ---------------------------------------------------
+
+    /** Runs a slash command locally. Returns true when [text] was a command and
+     * must not be sent to the model. */
+    fun handleCommand(id: String, text: String): Boolean {
+        val chat = conversation(id) ?: return false
+        val match = resolveSlash(text, skills.map { it.name }) ?: return false
+        drafts.remove(id)
+        when (match) {
+            is SlashMatch.Skill -> {
+                pinSkills(chat, listOf(match.name))
+                notice = "Using ${match.name} for this chat."
+            }
+            is SlashMatch.Chain -> {
+                pinSkills(chat, match.names)
+                notice = "Using " + match.names.joinToString(", ") + "."
+            }
+            is SlashMatch.Known -> runKnownCommand(chat, match.name, match.args)
+        }
+        return true
+    }
+
+    /** Starts a chat with one skill already pinned, from the Skills screen. */
+    fun newChatWithSkill(name: String) {
+        val id = newChat()
+        conversation(id)?.let { pinSkills(it, listOf(name)) }
+        skillDetail = null
+    }
+
+    /** Pin skills to a chat, fetching each SKILL.md once for its prompt. */
+    private fun pinSkills(chat: Conversation, names: List<String>) {
+        val added = names.map { it.lowercase() }.distinct().filter { it !in chat.skills }
+        if (added.isNotEmpty()) replace(chat.copy(skills = chat.skills + added, updatedAt = System.currentTimeMillis()))
+        added.forEach { name -> io.execute { skillBody(name) } }
+    }
+
+    private fun runKnownCommand(chat: Conversation, name: String, args: String) {
+        when (name) {
+            "help" -> commandInfo = renderCommandsHelp()
+            "skills" -> commandInfo = if (chat.skills.isEmpty()) {
+                "No skills pinned to this chat.\n\nType / and a skill name, or open Knowledges → Skills."
+            } else {
+                "Pinned to this chat:\n\n" + chat.skills.joinToString("\n") { "- $it" }
+            }
+            "skill" -> {
+                val arg = args.trim()
+                when {
+                    arg.isEmpty() -> commandInfo = renderCommandsHelp()
+                    arg.lowercase().startsWith("off ") -> {
+                        val skill = arg.substring(4).trim().lowercase()
+                        replace(chat.copy(skills = chat.skills - skill))
+                        notice = "Stopped using $skill."
+                    }
+                    else -> {
+                        val skill = arg.split(Regex("\\s+")).first().lowercase()
+                        pinSkills(chat, listOf(skill))
+                        notice = "Using $skill for this chat."
+                    }
+                }
+            }
+            "mode" -> when (args.lowercase()) {
+                "chat" -> { setMode(chat.id, "chat"); notice = "Chat mode." }
+                "plan" -> { setMode(chat.id, "plan"); notice = "Plan mode." }
+                "build" -> notice = "Build runs on the FreeAI4U web/desktop app, not on this phone."
+                else -> notice = "Usage: /mode chat | plan"
+            }
+            "clear" -> {
+                newChat()
+                notice = "New chat started."
+            }
+            "compact" -> when (args.lowercase()) {
+                "on" -> { replace(chat.copy(compact = true)); notice = "Sending a shorter history." }
+                "off" -> { replace(chat.copy(compact = false)); notice = "Sending the full history." }
+                else -> notice = if (chat.compact) "Compact is on." else "Compact is off."
+            }
+            "doctor" -> commandInfo = doctorReport(chat)
+        }
+    }
+
+    /** A local health read-out: what the phone knows without asking a model. */
+    private fun doctorReport(chat: Conversation): String = buildString {
+        append("**Doctor**\n\n")
+        append("- Server: ").append(if (serverUrl.isEmpty()) "not set" else serverUrl).append('\n')
+        append("- Session: ").append(if (signedIn) "signed in" else "signed out").append('\n')
+        append("- Providers: ").append(providers.size)
+        if (providers.isEmpty()) append(" — refresh in Tools → Status")
+        append('\n')
+        append("- Models loaded: ").append(models.size).append(" provider(s)\n")
+        append("- Skills installed: ").append(skills.size)
+        if (skills.isEmpty()) append(" — open Knowledges → Skills to load")
+        append('\n')
+        append("- Mode: ").append(modeLabel(chat.mode)).append('\n')
+        append("- Pinned skills: ").append(if (chat.skills.isEmpty()) "none" else chat.skills.joinToString(", ")).append('\n')
+        append("- Compact: ").append(if (chat.compact) "on" else "off").append('\n')
+        limits?.let { append("- Server budget: ").append(it.summary()).append('\n').append("- Timeouts: ").append(it.detail()).append('\n') }
     }
 
     /** Set when a reply finishes, so voice mode can read it aloud and listen again. */
@@ -448,19 +618,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         streamingId = start.id
         stopRequested = false
         val lib = library
+        ReplyService.start(context, start.id, start.title)
         io.execute {
+          try {
             var chat = start
             var useTools = true
             var round = 0
             var stepsTaken = 0
             var finalText = ""
+            var authRetried = false
             val seenCalls = HashMap<String, Int>()
             while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
                 val persona = personaFor(lib, chat.personaId)
+                val skillTexts = chat.skills.mapNotNull { skillBodies[it] ?: skillBody(it) }
                 val body = buildChatBody(
                     chat.model,
-                    systemPrompt(persona.systemPrompt, lib.instructions, chat.mode),
+                    systemPrompt(persona.systemPrompt, lib.instructions, chat.mode, skills = skillTexts),
                     chat.messages,
+                    maxHistory = if (chat.compact) COMPACT_HISTORY_MESSAGES else MAX_HISTORY_MESSAGES,
                     tools = if (useTools) toolsForMode(chat.mode) else null,
                 )
                 val started = System.currentTimeMillis()
@@ -496,6 +671,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 } catch (e: ApiException) {
                     failure = e.message
+                    if (e.authRequired && !authRetried && silentSignIn()) {
+                        authRetried = true
+                        continue
+                    }
                     if (e.authRequired) main.post { signedIn = false }
                 } catch (e: Exception) {
                     failure = e.message ?: "The reply failed."
@@ -553,6 +732,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 streamingId = null
                 finishedReply = Triple(done.id, text, System.currentTimeMillis())
             }
+          } finally {
+            ReplyService.stop(context)
+          }
         }
     }
 

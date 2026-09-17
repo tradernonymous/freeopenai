@@ -53,6 +53,10 @@ data class Conversation(
     /** The chat's own scratch files, path to text. Kept only so chats saved
      * by older builds still open; nothing in this build writes them. */
     val files: Map<String, String> = emptyMap(),
+    /** Installed skills pinned to this chat with /skill. */
+    val skills: List<String> = emptyList(),
+    /** /compact on: send a shorter history without changing what is on screen. */
+    val compact: Boolean = false,
 )
 
 data class Persona(
@@ -128,6 +132,8 @@ fun Conversation.toJson(): JSONObject {
         .put("mode", mode)
         .put("tasks", JSONArray().also { array -> tasks.forEach { array.put(JSONObject().put("id", it.id).put("title", it.title).put("status", it.status).put("detail", it.detail)) } })
         .put("files", JSONObject(files))
+        .put("skills", JSONArray(skills))
+        .put("compact", compact)
 }
 
 fun conversationFromJson(text: String): Conversation? = try {
@@ -152,6 +158,8 @@ fun conversationFromJson(text: String): Conversation? = try {
             }.filter { it.id.isNotEmpty() }
         } ?: emptyList(),
         files = obj.optJSONObject("files")?.let { map -> map.keys().asSequence().associateWith { key -> map.optString(key, "") } } ?: emptyMap(),
+        skills = obj.optJSONArray("skills")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
+        compact = obj.optBoolean("compact", false),
     )
 } catch (e: Exception) {
     null

@@ -35,6 +35,9 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- "Reply ready" when a reply finishes in the background (Android 13+ asks once). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps a streaming reply alive while the app is in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Package visibility for the phone's own speech services (targetSdk 30+). -->
     <queries>
@@ -105,5 +108,12 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+        <!-- Holds the process open while a reply streams; started only while
+             the app is in the foreground, so no background-start exemption is
+             needed. -->
+        <service
+            android:name=".ReplyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

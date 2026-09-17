@@ -76,8 +76,10 @@ import androidx.compose.ui.unit.sp
 import com.freeai4u.app.data.GeneratedImage
 import com.freeai4u.app.data.IMAGE_GENERATE_MODELS
 import com.freeai4u.app.data.IMAGE_SIZES
+import com.freeai4u.app.data.CHAT_COMMANDS
 import com.freeai4u.app.data.Persona
 import com.freeai4u.app.data.PromptTemplate
+import com.freeai4u.app.data.Skill
 import com.freeai4u.app.data.allPersonas
 import com.freeai4u.app.data.allPrompts
 import com.freeai4u.app.data.imageModelsFor
@@ -293,6 +295,7 @@ fun ToolsScreen(vm: AppViewModel) {
             ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt) }
         }
         item { SectionTitle("Library") }
+        item { ToolCard("🧩", "Knowledges", "Skills, personas, prompts and gallery") { vm.push(Screen.Knowledges) } }
         item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
         item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
         item { SectionTitle("Server") }
@@ -567,4 +570,104 @@ fun PromptsScreen(vm: AppViewModel) {
             },
         )
     }
+}
+
+// --- Knowledges ---------------------------------------------------------------------
+
+/** The hub the drawer opens: everything that teaches a chat something, in one
+ * place, the way the web app groups Skills, Personas, Prompts and the gallery. */
+@Composable
+fun KnowledgesScreen(vm: AppViewModel) {
+    LaunchedEffect(Unit) { vm.loadSkills() }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { SectionTitle("Knowledges") }
+        item { ToolCard("🧩", "Skills", "${vm.skills.size} installed · pin with /skill") { vm.push(Screen.Skills) } }
+        item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
+        item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
+        item { ToolCard("🖼️", "Gallery", "${vm.library.images.size} image(s)") { vm.push(Screen.Images) } }
+        item { SectionTitle("Commands") }
+        CHAT_COMMANDS.forEach { command ->
+            item(key = command.name) {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Text(command.usage, color = Palette.green, fontSize = 14.sp)
+                    Text(command.desc, color = Palette.muted, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+/** The installed skill catalogue. "Use" starts a chat with the skill pinned. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SkillsScreen(vm: AppViewModel) {
+    LaunchedEffect(Unit) { vm.loadSkills(force = vm.skills.isEmpty()) }
+    var open by remember { mutableStateOf<Skill?>(null) }
+    val detailBody = open?.let { skill -> vm.skillDetail?.takeIf { it.first == skill.name }?.second }
+    Scaffold(
+        containerColor = Palette.background,
+        topBar = {
+            TopAppBar(
+                title = { Text("Skills") },
+                navigationIcon = { IconButton({ vm.back() }) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                actions = { IconButton({ vm.loadSkills(force = true) }) { Icon(Icons.Filled.Refresh, "Refresh") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
+            )
+        },
+    ) { padding ->
+        if (vm.skills.isEmpty()) {
+            Column(Modifier.padding(padding).fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("No skills installed.", color = Palette.text)
+                Text("The server loads skills from its configured GitHub sources. Pull to refresh, or check the server in Tools → Status.", color = Palette.muted, fontSize = 13.sp)
+            }
+        } else {
+            LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(vm.skills, key = { it.name }) { skill ->
+                    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface), modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(skill.name + if (skill.userOnly) "  · user only" else "")
+                                Text(skill.description, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
+                                Text(skill.source, color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            TextButton({ open = skill; vm.loadSkillInstructions(skill.name) }) { Text("View") }
+                            TextButton({ vm.newChatWithSkill(skill.name) }) { Text("Use") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    open?.let { skill ->
+        AlertDialog(
+            onDismissRequest = { open = null },
+            title = { Text(skill.name) },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(skill.description, color = Palette.text)
+                    if (skill.allowedTools.isNotEmpty()) Text("Tools: " + skill.allowedTools.joinToString(", "), color = Palette.muted, fontSize = 12.sp)
+                    HorizontalDivider(color = Palette.outline)
+                    when {
+                        detailBody == null -> Text("Loading…", color = Palette.muted, fontSize = 12.sp)
+                        detailBody.isBlank() -> Text("Could not load the skill text.", color = Palette.red, fontSize = 12.sp)
+                        else -> Text(detailBody, color = Palette.muted, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = { TextButton({ vm.newChatWithSkill(skill.name); open = null }) { Text("Use in a new chat") } },
+            dismissButton = { TextButton({ open = null }) { Text("Close") } },
+        )
+    }
+}
+
+/** Reads a long client-side command reply (/help, /doctor) without putting it
+ * into the transcript. */
+@Composable
+fun CommandInfoDialog(text: String, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("FreeAI4U") },
+        text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) { Text(text, fontSize = 13.sp) } },
+        confirmButton = { TextButton(onClose) { Text("Close") } },
+    )
 }

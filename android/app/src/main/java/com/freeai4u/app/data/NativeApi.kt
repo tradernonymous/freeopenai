@@ -107,6 +107,14 @@ class NativeApi(
     /** The server's own timeouts and retry budget. */
     fun limits(): Limits = parseLimits(getJson("/api/llm/limits")) ?: throw ApiException("The server did not report its limits.")
 
+    /** The installed skill catalogue, bodies omitted. */
+    fun skills(): List<Skill> = parseSkills(getJson("/api/skills"))
+
+    /** One skill's SKILL.md, for the rest of a chat. */
+    fun skillContent(name: String): Skill =
+        parseSkill(getJson("/api/skills/content?name=" + java.net.URLEncoder.encode(name, "UTF-8")))
+            ?: throw ApiException("No installed skill named \"$name\".")
+
     /** Streams one reply. [onEvent] runs on the calling thread for every
      * event; [cancel] receives the connection so a Stop button can close it. */
     fun streamChat(

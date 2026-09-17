@@ -55,7 +55,10 @@ import androidx.lifecycle.Lifecycle
 import com.freeai4u.app.data.PhoneAction
 import com.freeai4u.app.data.parseLocalDateTime
 import com.freeai4u.app.ui.AppViewModel
+import com.freeai4u.app.ui.CommandInfoDialog
 import com.freeai4u.app.ui.FreeAITheme
+import com.freeai4u.app.ui.KnowledgesScreen
+import com.freeai4u.app.ui.SkillsScreen
 import com.freeai4u.app.ui.ImageViewer
 import com.freeai4u.app.ui.ImageStudioScreen
 import com.freeai4u.app.ui.LockScreen
@@ -190,6 +193,8 @@ class NativeActivity : ComponentActivity(), Platform {
                                     Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
                                     Screen.Personas -> PersonasScreen(vm)
                                     Screen.Prompts -> PromptsScreen(vm)
+                                    Screen.Skills -> SkillsScreen(vm)
+                                    Screen.Knowledges -> Page("Knowledges", vm) { KnowledgesScreen(vm) }
                                 }
                             }
                         }
@@ -198,6 +203,7 @@ class NativeActivity : ComponentActivity(), Platform {
                         ImageViewer(bytes, onClose = { viewer = null }, onSave = { saveImage("freeai4u-" + id.take(8) + ext(mime), mime, bytes) }, onShare = { shareImage("freeai4u-" + id.take(8) + ext(mime), mime, bytes) })
                     }
                     selecting?.let { text -> SelectTextDialog(text) { selecting = null } }
+                    vm.commandInfo?.let { text -> CommandInfoDialog(text) { vm.commandInfo = null } }
                 }
             }
         }
