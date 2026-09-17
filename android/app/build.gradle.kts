@@ -1,7 +1,8 @@
 plugins {
-    id("com.android.application")
-    kotlin("android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.detekt)
 }
 
 // Build-time defaults, so the first launch has the server (and, if set, the
@@ -95,21 +96,29 @@ android {
     }
 }
 
+detekt {
+    config.setFrom(rootProject.file("gradle/detekt-config.yml"))
+    source.setFrom(files("src/main/java", "src/test/java"))
+    // Only the rules listed in detekt-config.yml; the default suite flags
+    // style and metric noise this codebase does not want to chase.
+    buildUponDefaultConfig.set(false)
+}
+
 dependencies {
-    // Native screens are Compose + Material 3; the web tools screen stays a
-    // plain-view WebView. R8 strips the unused parts of the icon set.
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    // Native screens are Compose + Material 3. R8 strips the unused parts of
+    // the icon set.
+    implementation(libs.androidx.activity.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     // Real org.json for local JVM tests only: on device the framework copy is
     // used and this never ships. (android.jar methods throw "not mocked"
     // under plain unit tests, so the parser tests need the real thing.)
-    testImplementation("org.json:json:20240303")
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.org.json)
+    testImplementation(libs.junit)
 }

@@ -1,0 +1,30 @@
+name: Bug report
+description: Something is broken in the web app or the Android app.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong? Paste the error text if there is one.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you see it?
+      options:
+        - Android app (APK)
+        - Web app
+        - Server / deploy
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+  - type: input
+    id: build
+    attributes:
+      label: Android build number (if the app)
+      description: Only used when the bug is in the APK; build number is the run number + 100.

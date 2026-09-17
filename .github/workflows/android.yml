@@ -42,18 +42,21 @@ jobs:
       # The action is kept for PATH + ANDROID_HOME, but its default package
       # list names the `tools` package, which no longer exists -- that failed
       # the whole job before Gradle ever ran. Only platform-tools comes from
-      # the action; the API-35 pieces install below.
-      - uses: android-actions/setup-android@v3
+      # the action; the API-35 pieces install below. (Pinned to a full SHA:
+      # it is third party and this job signs the APK.)
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
         with:
           packages: platform-tools
       - run: yes | sdkmanager --licenses
       - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+      # Pinned to a full SHA (third-party action in a job that holds the
+      # keystore secrets).
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
         with:
           gradle-version: 8.10.2
       # Every build's versionCode goes up, so each installs over the last.
       - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - run: gradle :app:testDebugUnitTest
+      - run: gradle :app:testDebugUnitTest :app:detekt
       - name: Restore the signing key
         if: env.HAS_KEYSTORE == 'true'
         run: |
@@ -69,7 +72,7 @@ jobs:
         run: |
           gradle :app:assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/freeai4u.apk"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: freeai4u-apk
           path: ${{ runner.temp }}/freeai4u.apk
