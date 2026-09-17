@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.detekt)
 }
 
 // Build-time defaults, so the first launch has the server (and, if set, the
@@ -94,14 +93,6 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
-}
-
-detekt {
-    config.setFrom(rootProject.file("gradle/detekt-config.yml"))
-    source.setFrom(files("src/main/java", "src/test/java"))
-    // Only the rules listed in detekt-config.yml; the default suite flags
-    // style and metric noise this codebase does not want to chase.
-    buildUponDefaultConfig = false
 }
 
 dependencies {

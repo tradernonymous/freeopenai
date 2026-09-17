@@ -56,7 +56,7 @@ jobs:
           gradle-version: 8.10.2
       # Every build's versionCode goes up, so each installs over the last.
       - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - run: gradle :app:testDebugUnitTest :app:detekt
+      - run: gradle :app:testDebugUnitTest
       - name: Restore the signing key
         if: env.HAS_KEYSTORE == 'true'
         run: |

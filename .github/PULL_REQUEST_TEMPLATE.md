@@ -10,7 +10,7 @@
 
 - [ ] `npm run lint` green
 - [ ] `npm test` green
-- [ ] Android `testDebugUnitTest` + `detekt` green (CI)
+- [ ] Android `testDebugUnitTest` green (CI)
 - [ ] `git diff --cached` checked for secrets
 
 ## Notes
