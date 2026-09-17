@@ -1311,10 +1311,31 @@ const LLM_PROVIDERS = {
       // so the namespace is the only thing that says whether a model can be
       // used without a card: a connected OpenAI or Anthropic key would
       // otherwise fill the picker with models that can only answer 402.
+      //
+      // This is the one list in this file that goes stale on the *gateway's*
+      // schedule rather than this app's, so it has to be re-read when the
+      // gateway majors. It is written against the free-tier catalog upstream
+      // documents (docs/reference/FREE_TIERS.md, refreshed 2026-07 and reaching
+      // 3.8.x), and every namespace the 0.7.x-era list was missing is how a
+      // picker that used to show free models comes back nearly empty after a
+      // gateway upgrade -- the failure reads as "OmniRoute cannot load models"
+      // even though the catalogue loaded perfectly well.
+      //
+      // A prefix that matches nothing costs nothing: it hides no model and
+      // breaks no request. A prefix that is *missing* hides every model in that
+      // namespace from the list, which is the failure worth spending a line on.
+      // An id outside all of them is still reachable by naming it in
+      // OMNIROUTE_MODELS, so this is a default and not a lock.
       restPrefixes: [
         'auto/', 'kr/', 'gh/', 'mistral/', 'groq/', 'gemini/', 'samba/',
         'ollamacloud/', 'cf/', 'llm7/', 'antigravity/', 'agentrouter/',
         'openrouter/',
+        // Keyless free providers the gateway wires in by default -- these need
+        // no account at all, which is why they lead a fresh install.
+        'oc/', 'felo/', 'kilo-gateway/', 'opencode-zen/',
+        // Free tiers mapped after the 0.7.x list was written.
+        'ovhcloud/', 'requesty/', 'agnes/', 'navy/', 'aihorde/',
+        'zai/', 'glm/', 'glm-cn/', 'siliconflow/', 'tencent/',
       ],
       // OpenRouter reaches this gateway as 1,091 of its 2,330 ids, almost all
       // of them paid, on a key that is free-only -- so passing them through
@@ -1976,7 +1997,7 @@ async function discoverImageModel(req, id) {
     // Through the *configured* provider, not the declared one: an operator's
     // base URL override is how a proxy or a gateway is reached at all, and the
     // key that reaches its catalogue is the same key that draws.
-    const result = await providerFetch(req, config, config.modelsPath || '/models', {}, IMAGE_DISCOVERY_TIMEOUT_MS);
+    const result = await fetchCatalogue(req, config, IMAGE_DISCOVERY_TIMEOUT_MS);
     if (result && result.ok) model = imageModelFromCatalogue(catalogueRows(result.data));
   } catch {
     model = '';
@@ -3163,7 +3184,7 @@ async function llmModels(req, res) {
     return sendJson(res, 200, cached.models);
   }
   try {
-    const result = await providerFetch(req, provider, provider.modelsPath || '/models');
+    const result = await fetchCatalogue(req, provider);
     const { ok, status, data } = result;
     if (!ok) {
       // Nara's catalogue endpoint occasionally answers 500 ("An internal
@@ -3179,9 +3200,19 @@ async function llmModels(req, res) {
           return sendJson(res, 200, pinned);
         }
       }
-      return sendJson(res, status, { error: describeProviderError(status, data, provider) });
+      // Name the paths that were read. A gateway that answered nothing on its
+      // deduplicated path *and* nothing on the plain one is a different problem
+      // from one that never answered at all, and this message is the only place
+      // that difference can reach whoever has to fix it.
+      const where = result.fallbackUsed
+        ? ` (read ${provider.modelsPath} and /models; neither answered)`
+        : ` (read ${result.path || '/models'})`;
+      return sendJson(res, status, { error: describeProviderError(status, data, provider) + where });
     }
-    const models = catalogueRows(data, provider);
+    // Deduplicated here as well as at the source: a gateway version that ignores
+    // `?prefix=alias` answers with both ids for one model, and one model shown
+    // twice in a picker reads as a bug in this app rather than in the gateway.
+    const models = collapseAliasedIds(catalogueRows(data, provider));
     // A curated allowlist pins the picker to exactly those ids, in that
     // order. Either form works: an array of ids, or a rule object
     // ({ exact, newestOf, freeOnly }) for a catalogue that needs collapsing
@@ -3223,6 +3254,17 @@ async function llmModels(req, res) {
       if (!listed.length && models.length) listed = models;
       if (!listed.length && Array.isArray(provider.models)) {
         listed = provider.models.map((id) => ({ id })).filter((m) => m && m.id);
+      }
+      // The same rescue for the other shape of allowlist. A rules object whose
+      // `exact` list matched nothing -- every named id retired upstream, or a
+      // catalogue that answered with a shape nothing here recognised -- used to
+      // reach the client as an empty 200, which it renders as "this provider
+      // returned no chat models" and blames the provider for. Serving the named
+      // ids bare costs nothing when the catalogue is empty: they are what the
+      // operator asked for, and a pickable id that fails on use is a better
+      // answer than a picker with no rows and no reason.
+      if (!listed.length && provider.models && Array.isArray(provider.models.exact)) {
+        listed = provider.models.exact.map((id) => ({ id })).filter((m) => m && m.id);
       }
     }
     // Only a successful, non-empty answer is worth caching; errors rust
@@ -3402,6 +3444,81 @@ async function llmSkillContent(req, res) {
   const skill = skills.find((s) => s.name === name);
   if (!skill) return sendJson(res, 404, { error: `No installed skill named "${name}"` });
   sendJson(res, 200, skill);
+}
+
+// A provider's model catalogue, with one tolerance the OmniRoute gateway needs.
+//
+// A gateway's catalogue path is not this app's to fix. `?prefix=alias` was
+// verified against OmniRoute 0.7.x and upstream is past 3.8.x, and the versions
+// in between added providers, retired others, and changed how the list is
+// deduplicated. A build pinned to one version's query string answers an empty
+// picker on another -- and "OmniRoute cannot load models" is exactly what that
+// looks like from the outside, with nothing anywhere saying that a query
+// parameter was the reason.
+//
+// So the declared path is tried first, and plain /models is tried when the
+// declared one does not answer *as a catalogue*. The order matters: the
+// declared path is the one an operator configured, so it wins whenever it
+// works, and the fallback only ever rescues a request that would otherwise have
+// come back empty.
+//
+// The fallback is deliberately narrow, because a retry on every failure is how
+// a second round trip gets spent on problems a different path cannot fix. Only
+// two answers are signatures of version drift: a 404, which is a path the
+// gateway does not serve, and a 200 carrying nothing this app can read as a
+// catalogue. A 401 or 403 is about the key, a 5xx is about the gateway's state,
+// and a 400 is the gateway rejecting the request for its own reasons -- all
+// three get the same answer from the other path, so none of them pays for it.
+//
+// Which path answered rides back with the result. That is the fact that tells
+// an operator their gateway ignored a parameter rather than being unreachable
+// -- two failures with the same message and completely different fixes.
+async function fetchCatalogue(req, provider, budgetMs = 0) {
+  const declared = provider.modelsPath || '/models';
+  const first = await providerFetch(req, provider, declared, {}, budgetMs);
+  const usable = (result) => result.ok && catalogueRows(result.data).length;
+  if (usable(first)) return { ...first, path: declared };
+  const drift = !first.ok ? first.status === 404 : true;
+  // Nothing to fall back to when the declared path is already the plain one.
+  if (!drift || declared === '/models') return { ...first, path: declared };
+  const second = await providerFetch(req, provider, '/models', {}, budgetMs);
+  if (usable(second)) return { ...second, path: '/models', fallbackUsed: true };
+  // Neither path answered. Report the one that was configured for it, since
+  // that is the one whose parameter the operator would change.
+  return { ...first, path: declared, fallbackUsed: true };
+}
+
+// A gateway can publish one model twice: once under an alias namespace and once
+// under the canonical provider one. OmniRoute documents a `cc/x` alias beside
+// its `x`, which is why this app asks for the deduplicated catalogue in the
+// first place -- but a gateway version that ignores that parameter hands back
+// both, and a picker showing the same model twice is a bug report waiting to
+// happen.
+//
+// The rule is deliberately narrow: an aliased row is dropped only when another
+// row carries the same tail after its *own* namespace, and the canonical row is
+// the survivor. Collapsing on the tail alone would take `openai/gpt-4` for
+// `azure/gpt-4` -- different vendors, not aliases at all -- so the alias
+// namespace has to be what identifies the duplicate. Keeping the canonical id
+// also keeps the pinned list working, since that is written in canonical ids.
+const CATALOGUE_ALIAS_NAMESPACES = ['cc/'];
+
+function collapseAliasedIds(models) {
+  const rows = Array.isArray(models) ? models : [];
+  const isAlias = (id) => CATALOGUE_ALIAS_NAMESPACES.some((prefix) => String(id).startsWith(prefix));
+  if (!rows.some((m) => m && isAlias(m.id))) return rows;
+  const canonicalTails = new Set(
+    rows
+      .filter((m) => m && typeof m.id === 'string' && !isAlias(m.id))
+      .map((m) => m.id.slice(m.id.indexOf('/') + 1)),
+  );
+  return rows.filter((m) => {
+    const id = m && typeof m.id === 'string' ? m.id : '';
+    const prefix = CATALOGUE_ALIAS_NAMESPACES.find((p) => id.startsWith(p));
+    // An alias with nothing canonical behind it survives: dropping it would
+    // remove a model the gateway serves rather than a duplicate of one.
+    return !prefix || !canonicalTails.has(id.slice(prefix.length));
+  });
 }
 
 // The rows in whatever shape a catalogue arrived in.

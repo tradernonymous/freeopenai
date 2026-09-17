@@ -283,3 +283,98 @@ test('a declared list that matches nothing falls back to the build list, not the
     assert.ok(ids.indexOf('auto/coding') < ids.indexOf('mistral/codestral-latest'), 'and not skip the ordering');
   });
 });
+
+// --- Version drift in the gateway's own catalogue path -----------------------
+//
+// `?prefix=alias` was verified against OmniRoute 0.7.x. Upstream is past 3.8.x,
+// and in between the gateway added providers, retired others and changed how the
+// list is deduplicated -- so a build pinned to one version's query string can
+// answer an empty picker on another. From the outside that reads as "OmniRoute
+// cannot load models", with nothing anywhere naming a query parameter as the
+// reason, which is the report these three tests exist to close.
+
+test('a gateway that no longer serves the dedupe path still loads its models', async () => {
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      // Only the deduplicated path is gone, which is what a removed or renamed
+      // parameter looks like: a 404 on the path this app chose for itself.
+      if (req.url.startsWith('/v1/models?')) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Not Found' }));
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: CATALOGUE }));
+    },
+  }, async ({ base, hits }) => {
+    const res = await fetch(modelsUrl(base));
+    assert.equal(res.status, 200, 'the picker loads rather than reporting a broken gateway');
+    const ids = (await res.json()).map((m) => m.id);
+    assert.ok(ids.includes(AUTO), 'the auto router is listed from the plain path');
+    assert.deepEqual(hits.map((h) => h.url), ['/v1/models?prefix=alias', '/v1/models'],
+      'the configured path is tried first, and the plain one rescues it');
+  });
+});
+
+test('a catalogue that arrives deduplicated anyway does not show one model twice', async () => {
+  // The gateway lists every model twice by default -- a `cc/...` alias beside
+  // the canonical `provider/...` id. Asking for the deduplicated catalogue is
+  // the first answer; a version that ignores the parameter hands back both, and
+  // the same model twice in a picker reads as a bug in this app.
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [
+        { id: 'cc/claude-opus-4-6' },
+        { id: 'claude/claude-opus-4-6' },
+        // An alias with nothing canonical behind it is a model the gateway
+        // really serves, not a duplicate of one -- dropping it would remove a
+        // model rather than tidy a list.
+        { id: 'cc/solo-model' },
+      ] }));
+    },
+  }, async ({ base }) => {
+    const ids = (await (await fetch(modelsUrl(base))).json()).map((m) => m.id);
+    assert.ok(ids.includes('claude/claude-opus-4-6'), 'the canonical id survives');
+    assert.equal(ids.includes('cc/claude-opus-4-6'), false, 'and its alias does not');
+    assert.ok(ids.includes('cc/solo-model'), 'an alias with nothing canonical behind it is kept');
+  });
+});
+
+test('a refusal is not retried on a second path, because the path is not the problem', async () => {
+  // The narrow half of the fallback rule. A 401 or 403 is about the key and a
+  // 5xx is about the gateway's state; neither gets a different answer from
+  // another path. Only a 404, or a 200 carrying nothing readable as a
+  // catalogue, is a signature of the path itself having moved.
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Invalid API key' } }));
+    },
+  }, async ({ base, hits }) => {
+    const res = await fetch(modelsUrl(base));
+    assert.equal(res.status, 401);
+    assert.match((await res.json()).error, /Invalid API key/);
+    assert.deepEqual(hits.map((h) => h.url), ['/v1/models?prefix=alias'],
+      'one request, not two: the key is wrong on both paths');
+  });
+});
+
+test('an empty catalogue still names the ids the operator pinned', async () => {
+  // The last resort, and the one that makes an empty picker impossible: a
+  // catalogue that parses to nothing used to reach the client as an empty 200,
+  // which it renders as "this provider returned no chat models" -- blaming the
+  // gateway for what is always a configuration or version problem.
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+    },
+  }, async ({ base }) => {
+    const ids = (await (await fetch(modelsUrl(base))).json()).map((m) => m.id);
+    assert.ok(ids.includes(AUTO), 'the pinned router is offered as a bare id rather than nothing');
+  });
+});
