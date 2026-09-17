@@ -10,10 +10,18 @@
 # rather than a partial copy that drifts. No published container image exists
 # to wrap, so there is nothing better to base this on.
 #
+# Kiro rotates refresh tokens: every refresh hands back a NEW refresh token
+# and invalidates the old one, and signing in again in the IDE invalidates
+# every token the previous session produced. A token that lives only in a
+# Railway variable is therefore dead the first time anything rotates it.
+# This image enables upstream's account system and points its two state
+# files at /data/kiro -- mount a Railway volume there and rotations survive
+# redeploys; the entrypoint still lets a freshly pasted token win.
+#
 # Source: https://github.com/jwadow/kiro-gateway (AGPL-3.0).
 FROM python:3.10-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # A pinned clone would rot; --depth 1 of their main tracks their fixes, and
@@ -22,12 +30,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 RUN git clone --depth 1 https://github.com/jwadow/kiro-gateway /app
 WORKDIR /app
 RUN pip install --no-cache-dir -r requirements.txt \
-    && useradd -r kiro && chown -R kiro:kiro /app
-USER kiro
+    && useradd -r kiro \
+    && mkdir -p /data/kiro \
+    && chown -R kiro:kiro /app /data/kiro
+
+# Account system ON: rotated tokens persist into credentials.json on the
+# volume instead of dying inside process memory at the next restart.
+ENV ACCOUNT_SYSTEM=true \
+    ACCOUNTS_CONFIG_FILE=/data/kiro/credentials.json \
+    ACCOUNTS_STATE_FILE=/data/kiro/state.json
 
 # The gateway reads its port from --port (or SERVER_PORT); Railway routes to
 # the port it injects as PORT, so the two are joined here. 8000 is the
 # upstream default for local runs.
 ENV SERVER_PORT=8000
 EXPOSE 8000
+ENTRYPOINT ["/app/deploy/kiro-entrypoint.sh"]
 CMD ["sh", "-c", "exec python main.py --port ${PORT:-8000}"]
