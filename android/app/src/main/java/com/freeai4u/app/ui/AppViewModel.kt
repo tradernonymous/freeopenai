@@ -524,14 +524,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         io.execute { repo.deleteAllConversations() }
     }
 
-    fun send(id: String, text: String, images: List<String> = emptyList()) {
-        val chat = conversation(id) ?: return
+    /** True when the message was accepted, so the composer can let go of the
+     * photos it was holding; false leaves them attached for another try. */
+    fun send(id: String, text: String, images: List<String> = emptyList()): Boolean {
+        val chat = conversation(id) ?: return false
         val trimmed = text.trim()
-        if ((trimmed.isEmpty() && images.isEmpty()) || streamingId != null) return
-        if (images.isEmpty() && handleCommand(id, trimmed)) return
+        if ((trimmed.isEmpty() && images.isEmpty()) || streamingId != null) return false
+        if (images.isEmpty() && handleCommand(id, trimmed)) return true
         if (chat.provider.isEmpty() || chat.model.isEmpty()) {
             notice = "Pick a model first (tap the model name at the top)."
-            return
+            return false
         }
         val now = System.currentTimeMillis()
         val withUser = chat.copy(
@@ -542,6 +544,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         drafts.remove(id)
         replace(withUser)
         runReply(withUser)
+        return true
     }
 
     /** Asks again for the last reply: drops it and streams a new one. */

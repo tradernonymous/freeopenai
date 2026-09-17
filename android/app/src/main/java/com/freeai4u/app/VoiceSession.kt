@@ -89,6 +89,12 @@ class VoiceSession(private val context: Context, private val onHeard: (String) -
         engine.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "voice-reply")
     }
 
+    /** Back to listening after a turn that never started -- a refused message
+     * would otherwise leave voice mode thinking with nothing on the way. */
+    fun listenAgain() {
+        if (active) listen()
+    }
+
     private fun listen() {
         if (!active) return
         val speech = recognizer ?: SpeechRecognizer.createSpeechRecognizer(context).also { created ->

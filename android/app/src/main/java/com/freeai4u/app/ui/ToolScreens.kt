@@ -67,6 +67,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -365,7 +367,10 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
     var lockOn by remember { mutableStateOf(platform.appLockOn()) }
     var confirmSignOut by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
-    var instructions by remember { mutableStateOf(vm.library.instructions) }
+    // Seeded from the library each time it changes: the first composition can
+    // run before the library is read from disk, and saving then wrote an empty
+    // box over what was there.
+    var instructions by remember(vm.library.instructions) { mutableStateOf(vm.library.instructions) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("Account")
         Text(vm.username.ifEmpty { "Signed out" }, style = MaterialTheme.typography.titleSmall)
@@ -448,7 +453,7 @@ private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onC
             Text(title, color = Palette.text)
             Text(subtitle, color = Palette.muted, fontSize = 12.sp)
         }
-        Switch(checked, onChange)
+        Switch(checked, onChange, Modifier.semantics { contentDescription = title })
     }
 }
 

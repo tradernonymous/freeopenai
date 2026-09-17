@@ -29,7 +29,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -191,8 +193,13 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<Conversation?>(null) }
     val needle = query.trim().lowercase()
-    val visible = vm.conversations.filter { it.messages.isNotEmpty() }
-        .filter { chat -> needle.isEmpty() || chat.title.lowercase().contains(needle) || chat.messages.any { it.content.lowercase().contains(needle) } }
+    // Filtering reads every message of every chat, so it is done when the list
+    // or the search changes rather than on every recomposition -- during a
+    // stream that was once per delta.
+    val visible = remember(vm.conversations.toList(), needle) {
+        vm.conversations.filter { it.messages.isNotEmpty() }
+            .filter { chat -> needle.isEmpty() || chat.title.lowercase().contains(needle) || chat.messages.any { it.content.lowercase().contains(needle) } }
+    }
     Column(Modifier.fillMaxHeight()) {
         Row(Modifier.padding(start = 12.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
@@ -460,6 +467,7 @@ private fun Home(vm: AppViewModel, chat: Conversation) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation, streaming: Boolean, onEdit: (Int) -> Unit) {
     // One scroll position per chat: opening another chat must not inherit
@@ -474,6 +482,12 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
     LaunchedEffect(turns.size) { follow = true }
     LaunchedEffect(state.isScrollInProgress) { if (state.isScrollInProgress && state.lastScrolledBackward) follow = false }
     LaunchedEffect(atBottom) { if (atBottom) follow = true }
+    // The composer rises with the keyboard, so the last turn ends up behind it
+    // unless the list is asked to move too.
+    val keyboardOpen = WindowInsets.isImeVisible
+    LaunchedEffect(keyboardOpen) {
+        if (keyboardOpen && turns.isNotEmpty() && follow) state.scrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
+    }
     val last = chat.messages.lastOrNull()
     LaunchedEffect(turns.size, last?.content?.length, last?.toolCalls?.size) {
         if (turns.isNotEmpty() && (atBottom || (streaming && follow))) state.animateScrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
@@ -623,10 +637,9 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                                             if (vm.imageArmed && text.isNotBlank()) {
                                                 vm.drawInChat(chat.id, text)
                                                 vm.imageArmed = false
-                                            } else {
-                                                vm.send(chat.id, text, photos.toList())
+                                            } else if (vm.send(chat.id, text, photos.toList())) {
+                                                photos.clear()
                                             }
-                                            photos.clear()
                                         }
                                         else -> platform.startVoice()
                                     }

@@ -506,8 +506,12 @@ fun DataUrlThumb(url: String, sizeDp: Int) {
  * check mark, horizontal scroll. */
 @Composable
 fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
+    // Split once per text rather than on every frame: during a stream this
+    // composable is recomposed for each delta, and every visible turn was
+    // re-parsed each time.
+    val segments = remember(text) { splitCodeBlocks(text) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (segment in splitCodeBlocks(text)) {
+        for (segment in segments) {
             if (segment.code) {
                 var copied by remember(segment.text) { mutableStateOf(false) }
                 LaunchedEffect(copied) {

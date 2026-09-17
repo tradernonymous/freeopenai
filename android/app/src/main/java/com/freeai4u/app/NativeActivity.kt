@@ -169,8 +169,10 @@ class NativeActivity : ComponentActivity(), Platform {
             val chat = vm.currentOrNew()
             if (Regex("^(stop|cancel|that's all|bye|goodbye)[.!]*$", RegexOption.IGNORE_CASE).matches(heard.trim())) {
                 voice.release()
-            } else {
-                vm.send(chat.id, heard)
+            } else if (!vm.send(chat.id, heard)) {
+                // A refused message (no model picked, a reply still running)
+                // would otherwise leave voice mode thinking forever.
+                voice.listenAgain()
             }
         }
         puter = PuterBridge(this) { vm.serverUrl }

@@ -12,7 +12,10 @@ object Palette {
     val background = Color(0xFF0D1117)
     val surface = Color(0xFF161B22)
     val surfaceHigh = Color(0xFF21262D)
-    val outline = Color(0xFF30363D)
+    // 3:1 against the surfaces it is drawn on: the old line (0xFF30363D) read
+    // at about 1.3:1, which is below what a control's boundary needs to be
+    // seen at all outdoors.
+    val outline = Color(0xFF6B7683)
     val text = Color(0xFFE6EDF3)
     val muted = Color(0xFF8B949E)
     val green = Color(0xFF3FB950)

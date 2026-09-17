@@ -44,7 +44,21 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ImageViewer(bytes: ByteArray, onClose: () -> Unit, onSave: () -> Unit, onShare: () -> Unit) {
     BackHandler(onBack = onClose)
-    val bitmap = remember(bytes) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
+    // Decoded at roughly screen size rather than full size: a 12-megapixel
+    // photo is 48 MB as a bitmap, which is an OutOfMemoryError on a small
+    // phone and a visible freeze on a large one. A decode that fails is an
+    // empty frame with a message, never a crash.
+    val bitmap = remember(bytes) {
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+        } catch (e: Throwable) {
+            null
+        }
+    }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
