@@ -27,8 +27,8 @@ The app has three generic OpenAI-compatible slots — `custom`, `custom2`,
 | Slot | Variable | First choice for |
 | --- | --- | --- |
 | Custom endpoint | `CUSTOM_BASE_URL` (+ `CUSTOM_API_KEY`) | FreeGPT4-WEB-API, Ollama, any OpenAI-shaped service |
-| Custom endpoint 2 | `CUSTOM2_BASE_URL` (+ `CUSTOM2_API_KEY`) | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — your free Gemini CLI / Claude Code / Codex / Grok logins as one API (`deploy/cliproxy-railway/`) |
-| Custom endpoint 3 | `CUSTOM3_BASE_URL` (+ `CUSTOM3_API_KEY`) | [Kiro Gateway](https://github.com/jwadow/kiro-gateway) — free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5 (`deploy/kiro-gateway-railway/`) |
+| CLIProxyAPI | `CUSTOM2_BASE_URL` (+ `CUSTOM2_API_KEY`) | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — your free Gemini CLI / Claude Code / Codex / Grok logins as one API (`deploy/cliproxy-railway/`) |
+| Kiro Gateway | `CUSTOM3_BASE_URL` (+ `CUSTOM3_API_KEY`) | [Kiro Gateway](https://github.com/jwadow/kiro-gateway) — free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5 (`deploy/kiro-gateway-railway/`) |
 
 Each slot activates on its URL alone; the key is optional and only sent when
 set. All three can be filled at once, and each keeps its own model list.

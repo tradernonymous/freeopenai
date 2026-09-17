@@ -1465,7 +1465,7 @@ const LLM_PROVIDERS = {
   // abstraction over the three: flat entries read faster than a parameterised
   // one, and no slot should inherit behaviour the others must not grow.
   custom2: {
-    label: 'Custom endpoint 2',
+    label: 'CLIProxyAPI',
     note: 'Slot 2 of 3. Point CUSTOM2_BASE_URL at a second gateway — e.g. CLIProxyAPI wrapping your free Gemini CLI / Claude Code / Codex / Grok logins (deploy/cliproxy-railway).',
     baseUrl: '',
     envVar: 'CUSTOM2_API_KEY',
@@ -1473,7 +1473,7 @@ const LLM_PROVIDERS = {
     needsBaseUrl: true,
   },
   custom3: {
-    label: 'Custom endpoint 3',
+    label: 'Kiro Gateway',
     note: 'Slot 3 of 3. Point CUSTOM3_BASE_URL at a third gateway — e.g. Kiro Gateway with free-tier Claude Sonnet 4.5, DeepSeek-V3.2 and GLM-5 (deploy/kiro-gateway-railway).',
     baseUrl: '',
     envVar: 'CUSTOM3_API_KEY',

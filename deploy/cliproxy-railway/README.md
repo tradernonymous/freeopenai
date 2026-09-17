@@ -1,6 +1,8 @@
 # CLIProxyAPI on Railway (slot 1)
 
-One gateway in front of your own **free agent-CLI logins** — Gemini CLI, Claude Code, OpenAI Codex, Grok. After you log the accounts in, models like **Gemini 3.1 Pro, GPT-5.6 series, Claude, Grok 4.5** appear as an ordinary OpenAI-compatible `/v1` API that this app's *Custom endpoint 2* slot speaks.
+One gateway in front of your own **free agent-CLI logins** — Gemini CLI, Claude Code, OpenAI Codex, Grok. After you log the accounts in, models like **Gemini 3.1 Pro, GPT-5.6 series, Claude, Grok 4.5** appear as an ordinary OpenAI-compatible `/v1` API that this app's *CLIProxyAPI* slot speaks.
+
+> The gateway ships with an **empty model list until at least one account is logged in** — `/v1/models` returns `{"data":[]}` and clients see `404` on chat until then. That is expected, not a fault.
 
 Source: <https://github.com/router-for-me/CLIProxyAPI> (52k+ stars, actively maintained).
 
@@ -20,7 +22,7 @@ Source: <https://github.com/router-for-me/CLIProxyAPI> (52k+ stars, actively mai
 
 ## Log your free accounts in (the part that needs a browser)
 
-1. Open `https://<your-service-domain>` in a browser → the management panel asks for `CLIPROXY_SECRET_KEY`.
+1. Open `https://<your-service-domain>/management.html` in a browser → the management panel asks for `CLIPROXY_SECRET_KEY`.
 2. In the panel, choose **Log in / Add account** → pick Gemini, Claude (Claude Code), Codex or Grok → a Google/OpenAI/xAI login page opens → sign in with the free account you already have.
 3. The panel shows the account as connected and the gateway starts listing its models. Repeat for as many accounts as you like — they load-balance automatically.
 
