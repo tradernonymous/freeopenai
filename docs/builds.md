@@ -1,0 +1,49 @@
+# Remote builds
+
+A plan written anywhere (Plan mode on the phone, the web app or the desktop app) is carried out **on the server**, in its own folder, one approved change at a time.
+
+## How it works
+
+1. Ask for a plan in **Plan** mode.
+2. Press **Build** under the reply (web/desktop) or **Build remotely** (phone).
+3. The build agent works through the steps in `workspace/builds/<id>/`.
+4. Every **file write, edit and command** stops and waits for **Approve** or **Reject** (with a reason the agent reads).
+5. Watch it live in **Builds**. A build started on the phone shows up on the web and desktop too.
+
+| Guard | What it does |
+| :-- | :-- |
+| Approval per call | The exact arguments are frozen when the question is asked; what runs is what you saw. |
+| Stale answers | An answer for an older request is refused (`409`). |
+| Expiry | An approval nobody answers in 30 minutes stops the build. |
+| Folder | Paths outside the build folder, `.git/` internals and `.env` files are refused before you are asked. |
+| Commands | Off unless `WORKSPACE_RUN=1`; they run with a clean environment (no server keys) and a time limit. |
+| Weak models | Tool calls written as JSON are accepted; a model repeating one call is stopped. |
+| Owner | Each build belongs to the account that started it. Builds need a login (`AUTH_USER_1`). |
+
+## Settings
+
+| Variable | Default | What it does |
+| :-- | :-- | :-- |
+| `WORKSPACE_RUN` | *(unset)* | `1` lets builds run commands (tests, builds, git), each after approval. |
+| `BUILD_AGENT_PROVIDER` | *(auto)* | Provider for the build agent. Auto order: NVIDIA → Cloudflare → OpenRouter → OmniRoute → Nara → Custom. |
+| `BUILD_AGENT_MODEL` | *(provider's first)* | Model for the build agent, e.g. `qwen/qwen3-coder-480b-a35b-instruct`. |
+
+> [!NOTE]
+> Railway's disk is temporary: build folders disappear on redeploy. Clone a repo into the build and push results with git (approved as a command) to keep them.
+
+## API
+
+All routes need the login cookie. `POST` bodies must be `application/json`.
+
+| Route | Body / answer |
+| :-- | :-- |
+| `POST /api/build/sessions` | `{ chatId, plan, repo?, branch?, provider?, model? }` → session (`201`) |
+| `GET /api/build/sessions` | `{ enabled, reason, runEnabled, runReason, tools[], sessions[] }` |
+| `GET /api/build/sessions/:id` | `{ id, status, steps[], pending, provider, model, startedAt, summary, error, lastSeq }` |
+| `GET /api/build/sessions/:id/events` | SSE. `id:` is the sequence number; send `Last-Event-ID` to resume. Events: `status`, `step` (`phase`: started/done/failed/skipped/output), `diff`, `approval`, `question`, `answer`, `message`, `done`, `failed`, `gap`. |
+| `POST /api/build/sessions/:id/input` | `{ requestId, decision: "approve" \| "reject", text? }` or `{ requestId, text }` for a question |
+| `POST /api/build/sessions/:id/cancel` | `{}` → session |
+
+Status values: `queued`, `running`, `awaiting_approval`, `awaiting_input`, `done`, `failed`, `cancelled`, `expired`.
+
+Code: [`agent-sessions.js`](../agent-sessions.js) · tests: [`test/build-sessions.test.js`](../test/build-sessions.test.js).

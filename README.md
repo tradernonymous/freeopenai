@@ -6,25 +6,27 @@
   <a href="#-quick-start"><img src="docs/readme/btn-quickstart.svg" alt="Quick start" height="48"></a>
   <a href="docs/deploy.md"><img src="docs/readme/btn-deploy.svg" alt="Deploy" height="48"></a>
   <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="docs/readme/btn-apk.svg" alt="Get the APK" height="48"></a>
+  <a href="https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest"><img src="docs/readme/btn-desktop.svg" alt="Desktop app" height="48"></a>
   <a href="#-docs"><img src="docs/readme/btn-docs.svg" alt="Docs" height="48"></a>
 </p>
 
 <p align="center">
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/ci.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml/badge.svg?branch=main" alt="Android build"></a>
+  <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml/badge.svg?branch=main" alt="Desktop build"></a>
   <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="https://img.shields.io/github/release-date/tradernonymous/freeopenai?label=APK&logo=android&color=3fb950" alt="APK"></a>
-  <img src="https://img.shields.io/badge/tests-987%20passing-3fb950" alt="987 tests passing">
+  <img src="https://img.shields.io/badge/tests-1024%20passing-3fb950" alt="1024 tests passing">
   <img src="https://img.shields.io/badge/node-22%2B-3fb950?logo=node.js&logoColor=white" alt="Node 22+">
   <img src="https://img.shields.io/badge/license-MIT-3fb950" alt="MIT">
 </p>
 
 ## ✨ What you get
 
-| 💬 **Chat** | 🧩 **Plan · Build** | 🖼️ **Images** |
+| 💬 **Chat** | 🧩 **Plan · Build** | 🛠️ **Remote builds** |
 | :-- | :-- | :-- |
-| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute. Web search built in. | Task lists, skills, workspace, GitHub tools, optional commands. | Free FLUX first. Puter only when you switch it on. |
-| 📲 **Android** | 🔐 **Your login** | ☁️ **One deploy** |
-| ChatGPT-style app. Voice mode. Encrypted chats. | Up to 3 accounts. Keys never reach the browser. | Push to `main`. Railway ships it. |
+| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute. Web search built in. | One switch: Chat · Plan · Build. Skills, tasks, workspace, GitHub tools. | A plan runs on your server. You approve every change, from any device. |
+| 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
+| ChatGPT-style. Plan mode. **Build remotely** with approvals. | One `.exe`. Builds panel docked beside the chat. | Free FLUX first. Puter only when you switch it on. |
 
 ## 🚀 Quick start
 
@@ -73,16 +75,28 @@ curl -s https://<project>.up.railway.app/api/health
 > [!NOTE]
 > Puter sign-in inside apps needs a Puter username and password. Google sign-in is blocked in app browsers.
 
+## 🖥️ Desktop app (Windows)
+
+1. Download **`FreeAI4U-Desktop.exe`** from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
+2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**.
+3. Sign in once. Shortcuts: `Alt+1/2/3` modes · `Ctrl+Shift+B` Builds. More in [Desktop](docs/desktop.md).
+
+## 🛠️ Remote builds
+
+Plan → **Build** → approve each change. Commands (tests, git) need `WORKSPACE_RUN=1` on the server. Details in [Remote builds](docs/builds.md).
+
 ## 🧭 How it fits
 
 ```mermaid
 flowchart LR
   W[Web app] --> S
+  D[Desktop app] --> S
   A[Android app] --> S
   S[server.js<br/>login · keys] --> C[Cloudflare]
   S --> N[NVIDIA]
   S --> O[OpenRouter free]
   S --> R[Nara · OmniRoute]
+  S --> B[Build sandbox<br/>approve each change]
   W -. your account .-> P[Puter]
 ```
 
@@ -93,6 +107,7 @@ flowchart LR
 | 📖 [Features](docs/features.md) | ⚙️ [Configuration](docs/configuration.md) | 🧩 [Modes & tools](docs/modes-and-tools.md) |
 | ⌨️ [Using the app](docs/usage.md) | ☁️ [Deploy](docs/deploy.md) | 🖼️ [Image providers](docs/providers.md) |
 | 📲 [Android app](docs/android.md) | 🔀 [OmniRoute](docs/omniroute.md) | 🏗️ [Architecture](docs/architecture.md) |
+| 🛠️ [Remote builds](docs/builds.md) | 🖥️ [Desktop app](docs/desktop.md) | |
 
 <details>
 <summary><b>⚠️ Disclaimer</b></summary>

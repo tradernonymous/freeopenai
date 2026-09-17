@@ -24,6 +24,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `SESSION_SECRET` | *(random)* | Signs the login cookie. Set it so sessions survive a restart. |
 | `WORKSPACE_RUN` | *(unset)* | Set to `1` to let the model run shell commands on the server (see [Running a command](modes-and-tools.md)). Requires a configured login — with no accounts set, every visitor would get a shell. |
 | `WORKSPACE_RUN_TIMEOUT_MS` | `120000` | How long one command may run before it and its process tree are killed. 1s–10min. |
+| `BUILD_AGENT_PROVIDER` / `BUILD_AGENT_MODEL` | *(auto)* | Provider and model that carry out [remote builds](builds.md). Unset picks the first configured of NVIDIA, Cloudflare, OpenRouter, OmniRoute, Nara, Custom. Builds need a login; their commands also need `WORKSPACE_RUN=1`. |
 | `GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth App client id — enables the GitHub connector in Settings. |
 | `GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth App client secret. |
 | `NARA_API_KEY` | *(unset)* | Adds the Nara router — pinned to seven allowed models: agnes-2.5-flash, agnes-3-flash, atria-dawn, laguna-s-2.1, stepfun-3.7-flash, deepseek-v4.1-flash-free, muse-spark-1.3-contributor-free. |
