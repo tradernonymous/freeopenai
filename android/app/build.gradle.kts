@@ -123,6 +123,12 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    // Firebase Messaging pulls in an old transitive androidx.fragment that
+    // fails the release build's mandatory lint check against the
+    // registerForActivityResult calls this app already had
+    // (InvalidFragmentVersionForActivityResult wants >= 1.3.0); pinning a
+    // current version here is what Gradle's resolution actually picks.
+    implementation(libs.androidx.fragment.ktx)
     // Self-installs via a ContentProvider, 0 methods in a release build (the
     // dependency itself is debug-only) -- catches a leaked Activity, Fragment,
     // View or ViewModel with a heap dump, rather than a slow memory creep
