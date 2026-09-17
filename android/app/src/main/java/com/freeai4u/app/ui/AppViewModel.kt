@@ -31,6 +31,7 @@ import com.freeai4u.app.data.Skill
 import com.freeai4u.app.data.SlashMatch
 import com.freeai4u.app.data.renderCommandsHelp
 import com.freeai4u.app.data.resolveSlash
+import com.freeai4u.app.data.imageModelsFor
 import com.freeai4u.app.data.imageRatio
 import com.freeai4u.app.data.ModelInfo
 import com.freeai4u.app.data.NativeApi
@@ -1002,22 +1003,40 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         var bytes: ByteArray? = null
         val bridge = puterDraw
         if (puterImages && bridge != null) {
-            val latch = java.util.concurrent.CountDownLatch(1)
-            var outcome: Result<Pair<String, ByteArray>>? = null
+            // The picked chip is a preference, not the only name Puter will take:
+            // a model absent from this account's catalogue refuses instantly, so
+            // every candidate for this job is tried before giving up on Puter,
+            // same order the web app's txt2img loop uses.
+            val candidates = (listOf(model) + imageModelsFor(editSource != null)).distinct().filter { it.isNotEmpty() }
             val ratio = imageRatio(size)
-            main.post { bridge(prompt, model, ratio, editSource) { result -> outcome = result; latch.countDown() } }
-            val finished = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
-            val result = outcome
-            if (finished && result != null && result.isSuccess) {
-                val (type, data) = result.getOrThrow()
-                drawnProvider = "puter"
-                mime = type
-                bytes = data
-            } else {
-                val reason = result?.exceptionOrNull()?.message ?: "timed out"
+            var lastReason = "timed out"
+            for (candidate in candidates) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var outcome: Result<Pair<String, ByteArray>>? = null
+                main.post { bridge(prompt, candidate, ratio, editSource) { result -> outcome = result; latch.countDown() } }
+                val finished = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
+                val result = outcome
+                if (finished && result != null && result.isSuccess) {
+                    val (type, data) = result.getOrThrow()
+                    drawnProvider = "puter"
+                    mime = type
+                    bytes = data
+                    break
+                }
+                // A timeout means the bridge itself is stuck, not that this one
+                // model was refused -- retrying it per candidate would multiply a
+                // 150s stall by the candidate count. Only a prompt refusal (a
+                // definite result within the window) is worth trying past.
+                if (!finished) {
+                    lastReason = "timed out"
+                    break
+                }
+                lastReason = result?.exceptionOrNull()?.message ?: lastReason
+            }
+            if (bytes == null) {
                 main.post {
                     puterImages = false
-                    notice = "Puter off: $reason. Using free server images."
+                    notice = "Puter off: $lastReason. Using free server images."
                 }
             }
         }
