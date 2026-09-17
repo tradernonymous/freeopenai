@@ -1437,6 +1437,10 @@ const LLM_PROVIDERS = {
   // leads the order; this is what to reach for once Cloudflare's day is spent.
   custom: {
     label: 'Custom endpoint',
+    // The sentence the reports show while the slot is still dark. An
+    // unconfigured slot with no note reads as a bug; the same slot with the
+    // variable named reads as a starting state.
+    note: 'Points at any self-hosted OpenAI-compatible gateway — FreeGPT4-WEB-API, Ollama, llama.cpp, vLLM — via CUSTOM_BASE_URL (https://…/v1). Its models load into the picker once the URL answers.',
     // No default address: a self-hosted OpenAI-compatible gateway -- free-one-api,
     // Free-GPT4-WEB-API/g4f, Ollama, llama.cpp, vLLM, or anything serving
     // /models and /chat/completions -- is reached through CUSTOM_BASE_URL,
@@ -1462,6 +1466,7 @@ const LLM_PROVIDERS = {
   // one, and no slot should inherit behaviour the others must not grow.
   custom2: {
     label: 'Custom endpoint 2',
+    note: 'Slot 2 of 3. Point CUSTOM2_BASE_URL at a second gateway — e.g. CLIProxyAPI wrapping your free Gemini CLI / Claude Code / Codex / Grok logins (deploy/cliproxy-railway).',
     baseUrl: '',
     envVar: 'CUSTOM2_API_KEY',
     needsKey: false,
@@ -1469,6 +1474,7 @@ const LLM_PROVIDERS = {
   },
   custom3: {
     label: 'Custom endpoint 3',
+    note: 'Slot 3 of 3. Point CUSTOM3_BASE_URL at a third gateway — e.g. Kiro Gateway with free-tier Claude Sonnet 4.5, DeepSeek-V3.2 and GLM-5 (deploy/kiro-gateway-railway).',
     baseUrl: '',
     envVar: 'CUSTOM3_API_KEY',
     needsKey: false,

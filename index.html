@@ -428,6 +428,7 @@
         .image-provider-row:last-child { border-bottom: 0; }
         .image-provider-dot { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: var(--danger); }
         .image-provider-row.ready .image-provider-dot { background: #22c55e; box-shadow: 0 0 7px rgba(34,197,94,.45); }
+        .image-provider-row.setup .image-provider-dot { background: #eab308; }
         .image-provider-name { min-width: 0; color: var(--text); font-weight: 600; }
         .image-provider-detail { display: block; margin-top: 2px; color: var(--text-muted); overflow-wrap: anywhere; line-height: 1.45; }
         .image-provider-state { color: var(--text-muted); white-space: nowrap; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
@@ -5424,8 +5425,12 @@
                 list.innerHTML = '';
                 rows.forEach((provider) => {
                     const row = document.createElement('div');
-                    const ready = provider.ready === true;
-                    row.className = 'image-provider-row' + (ready ? ' ready' : '');
+                    // One vocabulary across both tabs: green is a service that
+                    // answers, amber is one awaiting its variable. A dark slot
+                    // is a starting state the operator chose, not a fault --
+                    // red stays reserved for things that tried and failed.
+                    const ready = provider.ready === true || provider.configured === true;
+                    row.className = 'image-provider-row' + (ready ? ' ready' : ' setup');
                     row.innerHTML = '<span class="image-provider-dot" aria-hidden="true"></span>'
                         + '<span><span class="image-provider-name"></span><span class="image-provider-detail"></span></span>'
                         + '<span class="image-provider-state"></span>';
@@ -5437,14 +5442,19 @@
                 if (!rows.length) list.innerHTML = '<div class="image-provider-report-empty">' + emptyText + '</div>';
             };
             imageProviderReportRequest = Promise.all([read('/api/llm/providers'), read('/api/llm/images/providers')]).then(([chatProviders, imageBody]) => {
-                const chats = Array.isArray(chatProviders) ? chatProviders.filter((provider) => provider && provider.configured && (!provider.kind || provider.kind === 'chat')) : [];
+                // Every chat-kind provider is listed, not only the configured
+                // ones: a slot that has not been pointed at a gateway yet is
+                // the moment a new operator most needs to see it, with the
+                // variable that wakes it named on the row.
+                const chats = Array.isArray(chatProviders) ? chatProviders.filter((provider) => provider && (!provider.kind || provider.kind === 'chat')) : [];
+                const chatsReady = chats.filter((provider) => provider.configured).length;
                 const images = [imageBody && imageBody.browser].concat(imageBody && Array.isArray(imageBody.providers) ? imageBody.providers : []).filter(Boolean);
-                renderRows(chatList, chats, 'No server chat providers configured. Puter chat remains available in the browser.', (provider) => provider.note || 'Configured; models load when selected.', () => 'configured');
+                renderRows(chatList, chats, 'No server chat providers yet. Puter chat remains available in the browser.', (provider) => provider.note || 'Configured; models load when selected.', (provider) => provider.configured ? 'ready' : 'setup');
                 renderRows(imageList, images, 'No image services were reported.', (provider) => provider.ready
                     ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
                     : (provider.reason || provider.note || 'Not configured'), (provider) => provider.ready ? 'ready' : 'setup');
                 if (status) {
-                    status.textContent = chats.length + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
+                    status.textContent = chatsReady + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
                     status.dataset.state = 'ready';
                 }
             }).catch(() => {

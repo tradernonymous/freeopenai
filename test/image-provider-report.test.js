@@ -26,5 +26,7 @@ test('provider diagnostics render provider names as text, not HTML', () => {
   assert.match(html, /querySelector\('\.image-provider-name'\)\.textContent/);
   assert.match(html, /querySelector\('\.image-provider-detail'\)\.textContent/);
   assert.match(html, /provider\.reason \|\| provider\.note/);
-  assert.match(html, /provider\.configured &&/);
+  // Configured state decides the row's state label on the chat tab: a slot
+  // that answers reads as ready, one still awaiting its variable as setup.
+  assert.match(html, /provider\.configured \? 'ready' : 'setup'/);
 });
