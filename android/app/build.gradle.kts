@@ -101,7 +101,7 @@ detekt {
     source.setFrom(files("src/main/java", "src/test/java"))
     // Only the rules listed in detekt-config.yml; the default suite flags
     // style and metric noise this codebase does not want to chase.
-    buildUponDefaultConfig.set(false)
+    buildUponDefaultConfig = false
 }
 
 dependencies {
