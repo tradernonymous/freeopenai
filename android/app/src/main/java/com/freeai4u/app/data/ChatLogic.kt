@@ -22,6 +22,8 @@ sealed interface ChatEvent {
     data class Partial(val notice: String) : ChatEvent
     /** A fragment of a tool call; fragments with the same index join up. */
     data class ToolDelta(val index: Int, val id: String, val name: String, val arguments: String) : ChatEvent
+    /** Several fragments in one chunk, which is how a gateway that does not stream sends parallel calls. */
+    data class ToolDeltas(val deltas: List<ToolDelta>) : ChatEvent
     data object Done : ChatEvent
 }
 
@@ -76,14 +78,21 @@ fun parseSseData(data: String): ChatEvent? {
         val delta = first.optJSONObject("delta") ?: first.optJSONObject("message") ?: return null
         val calls = delta.optJSONArray("tool_calls")
         if (calls != null && calls.length() > 0) {
-            val call = calls.optJSONObject(0) ?: return null
-            val function = call.optJSONObject("function")
-            return ChatEvent.ToolDelta(
-                call.optInt("index", 0),
-                if (call.isNull("id")) "" else call.optString("id", ""),
-                if (function == null || function.isNull("name")) "" else function.optString("name", ""),
-                if (function == null || function.isNull("arguments")) "" else function.optString("arguments", ""),
-            )
+            val deltas = (0 until calls.length()).mapNotNull { at ->
+                val call = calls.optJSONObject(at) ?: return@mapNotNull null
+                val function = call.optJSONObject("function")
+                ChatEvent.ToolDelta(
+                    call.optInt("index", at),
+                    if (call.isNull("id")) "" else call.optString("id", ""),
+                    if (function == null || function.isNull("name")) "" else function.optString("name", ""),
+                    if (function == null || function.isNull("arguments")) "" else function.optString("arguments", ""),
+                )
+            }
+            return when (deltas.size) {
+                0 -> null
+                1 -> deltas[0]
+                else -> ChatEvent.ToolDeltas(deltas)
+            }
         }
         val content = delta.optString("content", "").let { if (delta.isNull("content")) "" else it }
         val reasoning = listOf("reasoning_content", "reasoning")
@@ -98,6 +107,9 @@ fun parseSseData(data: String): ChatEvent? {
 /** How many past messages ride along with each turn. Free models have small
  * context windows, and a long chat would otherwise fail on its own weight. */
 const val MAX_HISTORY_MESSAGES = 30
+
+/** How many of the most recent photo turns are sent as pictures. */
+const val MAX_PHOTO_TURNS_IN_HISTORY = 2
 
 /** Joins streamed tool-call fragments into whole calls, in index order. */
 class ToolCallCollector {
@@ -140,8 +152,14 @@ fun buildChatBody(
         }
     }.takeLast(maxHistory)
     while (kept.isNotEmpty() && kept.first().role == "tool") kept = kept.drop(1)
-    kept.forEach { message ->
+    // Photos are the heavy part of a history: a few turns of them pass the
+    // server's body limit and every later turn fails on weight. Only the most
+    // recent ones ride along in full; older turns keep their text.
+    val withPhotos = kept.withIndex().filter { it.value.images.isNotEmpty() }.map { it.index }.takeLast(MAX_PHOTO_TURNS_IN_HISTORY).toSet()
+    kept.forEachIndexed { index, message ->
         when {
+            message.role == "user" && message.images.isNotEmpty() && index !in withPhotos ->
+                messages.put(JSONObject().put("role", "user").put("content", message.content.ifBlank { "(a photo was sent here)" }))
             message.role == "user" && message.images.isNotEmpty() -> {
                 // OpenAI vision shape: text part first, then one part per photo.
                 val parts = JSONArray().put(JSONObject().put("type", "text").put("text", message.content))

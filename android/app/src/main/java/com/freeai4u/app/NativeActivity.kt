@@ -18,6 +18,7 @@ import android.speech.tts.TextToSpeech
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -153,7 +154,13 @@ class NativeActivity : ComponentActivity(), Platform {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        enableEdgeToEdge()
+        // The app is always dark, so the status and navigation bar icons are
+        // always light; the default follows the system theme and vanishes on
+        // a light-themed phone.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         CrashLog.install(this)
         publishShortcuts()
         if (savedInstanceState == null) takeIntent(intent)
@@ -453,6 +460,7 @@ class NativeActivity : ComponentActivity(), Platform {
                 null
             }
             vm.runOnMain {
+                if (isFinishing || isDestroyed) return@runOnMain
                 if (result == null) toast("Could not build the PDF.")
                 else {
                     val name = com.freeai4u.app.data.safeFileName(title, "pdf")

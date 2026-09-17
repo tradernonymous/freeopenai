@@ -20,6 +20,16 @@ class ReplyService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    // Android 15 gives a dataSync service six hours a day and then calls this;
+    // a service that does not stop itself here is killed with the whole app.
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
+    }
+
+    override fun onTimeout(startId: Int) {
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopSelf()

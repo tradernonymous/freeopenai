@@ -628,7 +628,7 @@ fun SkillsScreen(vm: AppViewModel) {
             }
         } else {
             LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(vm.skills, key = { it.name }) { skill ->
+                items(vm.skills.distinctBy { it.source + "/" + it.name }, key = { it.source + "/" + it.name }) { skill ->
                     Card(colors = CardDefaults.cardColors(containerColor = Palette.surface), modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {

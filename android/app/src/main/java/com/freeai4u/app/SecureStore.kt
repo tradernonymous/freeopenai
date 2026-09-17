@@ -81,12 +81,17 @@ class SecureStore(context: Context) {
         return generator.generateKey()
     }
 
-    private fun seal(plain: String): String {
+    private fun seal(plain: String): String = try {
         val cipher = Cipher.getInstance(TRANSFORM)
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
         val encoder = Base64.getEncoder()
-        return encoder.encodeToString(cipher.iv) + ":" + encoder.encodeToString(sealed)
+        encoder.encodeToString(cipher.iv) + ":" + encoder.encodeToString(sealed)
+    } catch (e: Exception) {
+        // A Keystore that refuses to make or use a key (some OEM builds, a
+        // restore from another phone) is an error the sign-in screen shows,
+        // not a crash on the IO thread.
+        throw ApiException("This phone's secure storage refused to keep the credential: " + (e.message ?: e.javaClass.simpleName))
     }
 
     /** Null for anything that does not open cleanly -- a key the OS rotated,

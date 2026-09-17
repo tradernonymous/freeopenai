@@ -65,12 +65,20 @@ class Repository(context: Context) {
 
     private fun safeId(id: String): String = id.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(64)
 
-    private fun writeSealed(file: File, bytes: ByteArray) {
+    /** A full disk or a Keystore fault is reported back, never thrown across a
+     * thread: the copy in memory stands and the next save tries again. */
+    private fun writeSealed(file: File, bytes: ByteArray): Boolean {
         val temp = File(file.parentFile, file.name + ".tmp")
-        temp.writeBytes(SecureBox.seal(bytes))
-        if (!temp.renameTo(file)) {
-            file.delete()
-            temp.renameTo(file)
+        return try {
+            temp.writeBytes(SecureBox.seal(bytes))
+            if (!temp.renameTo(file)) {
+                file.delete()
+                temp.renameTo(file)
+            }
+            true
+        } catch (e: Exception) {
+            temp.delete()
+            false
         }
     }
 

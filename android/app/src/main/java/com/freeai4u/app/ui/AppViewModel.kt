@@ -61,7 +61,9 @@ import com.freeai4u.app.ReplyService
 import com.freeai4u.app.normalizeBaseUrl
 import java.net.HttpURLConnection
 import java.util.UUID
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicReference
 
 /** Pages that open over the chat, ChatGPT-style: the chat is always the base. */
@@ -92,7 +94,23 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private val repo = Repository(app)
     private val session = SessionManager(store)
     private val api = NativeApi(session)
-    private val io = Executors.newFixedThreadPool(3)
+    // Every IO block runs through this guard: an exception on a pool thread
+    // would otherwise end the process (a full disk on save, a Keystore fault),
+    // and a block posted after the pool is shut down would throw on main.
+    private val pool = Executors.newFixedThreadPool(3)
+    private val io = Executor { block ->
+        try {
+            pool.execute {
+                try {
+                    block.run()
+                } catch (e: Exception) {
+                    main.post { notice = "Something went wrong: " + (e.message ?: e.javaClass.simpleName) }
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            // The screen is gone; there is nobody to do this for.
+        }
+    }
     private val main = Handler(Looper.getMainLooper())
     private val activeStream = AtomicReference<HttpURLConnection?>(null)
     private val context = app.applicationContext
@@ -139,6 +157,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     var commandInfo by mutableStateOf<String?>(null)
 
     var streamingId by mutableStateOf<String?>(null)
+
+    /** When the current reply started, so a second tap on Send does not land on Stop. */
+    @Volatile var streamStartedAt = 0L
         private set
     /** Text waiting in a chat's composer, per chat. */
     val drafts = mutableStateMapOf<String, String>()
@@ -158,8 +179,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val chats = repo.loadConversations()
             val lib = repo.loadLibrary()
             main.post {
+                // A chat started before the disk was read (a shared photo, a
+                // notification tap) is kept rather than replaced by the load.
+                val fresh = conversations.filter { open -> chats.none { it.id == open.id } }
                 conversations.clear()
-                conversations.addAll(chats)
+                conversations.addAll(fresh + chats)
                 library = lib
                 loaded = true
             }
@@ -169,7 +193,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     override fun onCleared() {
         activeStream.getAndSet(null)?.disconnect()
-        io.shutdownNow()
+        pool.shutdownNow()
         builds.shutdown()
         super.onCleared()
     }
@@ -693,6 +717,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * that refuses tools is asked once more without them. */
     private fun runReply(start: Conversation) {
         streamingId = start.id
+        streamStartedAt = System.currentTimeMillis()
         stopRequested = false
         val lib = library
         ReplyService.start(context, start.id, start.title)
@@ -741,6 +766,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                                 }
                             }
                             is ChatEvent.ToolDelta -> collector.add(event)
+                            is ChatEvent.ToolDeltas -> event.deltas.forEach { collector.add(it) }
                             is ChatEvent.Failure -> failure = event.message
                             is ChatEvent.Partial -> failure = event.notice
                             ChatEvent.Done -> Unit
@@ -802,6 +828,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     }
                     stepsTaken++
                     publishChat(chat, persist = false)
+                }
+                // A call the loop never reached (stopped, or out of steps) still
+                // needs an answer in the history, or every later turn is refused
+                // by the provider for a tool_call without its result.
+                val answered = chat.messages.filter { it.role == "tool" }.map { it.toolCallId }.toSet()
+                calls.filter { it.id !in answered }.forEach { call ->
+                    chat = chat.copy(messages = chat.messages + ChatMessage("tool", "Skipped: the turn was stopped before this call ran.", createdAt = System.currentTimeMillis(), toolCallId = call.id, toolName = call.name))
                 }
                 round++
                 if (stepsTaken >= MAX_TOOL_STEPS_PER_TURN) break
@@ -1079,6 +1112,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                         is ChatEvent.Failure -> failure = event.message
                         is ChatEvent.Partial -> failure = event.notice
                         is ChatEvent.ToolDelta -> Unit
+                        is ChatEvent.ToolDeltas -> Unit
                         ChatEvent.Done -> Unit
                     }
                 }

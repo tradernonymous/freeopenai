@@ -17,8 +17,26 @@ A plan written anywhere (Plan mode on the phone, the web app or the desktop app)
 | Expiry | An approval nobody answers in 30 minutes stops the build. |
 | Folder | Paths outside the build folder, `.git/` internals and `.env` files are refused before you are asked. |
 | Commands | Off unless `WORKSPACE_RUN=1`; they run with a clean environment (no server keys) and a time limit. |
-| Weak models | Tool calls written as JSON are accepted; a model repeating one call is stopped. |
+| Git | Runs as the GitHub account you connected: the token goes to git in its environment, never into a command or a file, and is scrubbed from output. Force pushes, `--amend`, `rebase`, `-i` and global config are refused. |
+| Weak models | Tool calls written as text — JSON, `<tool_call>`, `<function=…>`, `[TOOL_CALLS]` — are run, not printed; a model repeating one call is stopped. |
+| Budget | 120 model turns and 300 tool calls per build; three turns before the end the agent is told to wrap up with a summary. |
 | Owner | Each build belongs to the account that started it. Builds need a login (`AUTH_USER_1`). |
+
+## Tools
+
+| Tool | Asks first | What it does |
+| :-- | :-- | :-- |
+| `step_update` | | Marks a plan step in progress, done, failed or skipped. |
+| `list_files`, `find_files` | | Lists a folder with sizes; finds files by glob (`src/**/*.kt`). |
+| `read_file` | | Reads a file, or a line window of it (`offset`, `limit`). |
+| `search_files` | | Grep: `path:line: text`, case-insensitive, plain or regex, optional glob. |
+| `write_file`, `edit_file` | ✔ | Whole file, or one exact `old_text` → `new_text` (`all` for every occurrence). |
+| `delete_file`, `move_file` | ✔ | Remove or rename one file. |
+| `run_command` | ✔ | Shell in the build folder: install, test, build, git. |
+| `web_search`, `web_fetch` | | The web, public pages only. |
+| `ask_user` | | One short question, waits for the answer. |
+
+The agent also reads the repository's `AGENTS.md` or `CLAUDE.md` into its prompt each turn, so project rules apply without being pasted into the plan.
 
 ## Settings
 

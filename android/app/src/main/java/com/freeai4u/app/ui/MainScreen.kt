@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -461,12 +462,21 @@ private fun Home(vm: AppViewModel, chat: Conversation) {
 
 @Composable
 private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation, streaming: Boolean, onEdit: (Int) -> Unit) {
-    val state = rememberLazyListState()
+    // One scroll position per chat: opening another chat must not inherit
+    // where the previous one was.
+    val state = remember(chat.id) { LazyListState() }
     val turns = remember(chat.messages) { buildTurns(chat.messages) }
     val atBottom by remember { derivedStateOf { !state.canScrollForward } }
+    // Follow a streaming reply, but let go the moment the user scrolls up to
+    // read, and take hold again when they return to the bottom or a new turn
+    // starts. Without this every delta yanked the transcript back down.
+    var follow by remember(chat.id) { mutableStateOf(true) }
+    LaunchedEffect(turns.size) { follow = true }
+    LaunchedEffect(state.isScrollInProgress) { if (state.isScrollInProgress && state.lastScrolledBackward) follow = false }
+    LaunchedEffect(atBottom) { if (atBottom) follow = true }
     val last = chat.messages.lastOrNull()
     LaunchedEffect(turns.size, last?.content?.length, last?.toolCalls?.size) {
-        if (turns.isNotEmpty() && (atBottom || streaming)) state.animateScrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
+        if (turns.isNotEmpty() && (atBottom || (streaming && follow))) state.animateScrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
     }
     val startedAt = remember(streaming) { System.currentTimeMillis() }
     Box(Modifier.fillMaxSize()) {
@@ -606,7 +616,9 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                                 .clickable {
                                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     when (state) {
-                                        2 -> vm.stop()
+                                        // The Send button becomes Stop the instant a reply starts, so a
+                                        // double-tap on Send would cancel what it just sent.
+                                        2 -> if (System.currentTimeMillis() - vm.streamStartedAt > 700) vm.stop()
                                         1 -> {
                                             if (vm.imageArmed && text.isNotBlank()) {
                                                 vm.drawInChat(chat.id, text)
@@ -751,7 +763,7 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
                 }
             } else {
                 LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(list.filter { filter.isBlank() || it.id.contains(filter, true) || it.name.contains(filter, true) }, key = { it.id }) { model ->
+                    items(list.distinctBy { it.id }.filter { filter.isBlank() || it.id.contains(filter, true) || it.name.contains(filter, true) }, key = { it.id }) { model ->
                         val selected = model.id == chat.model && provider == chat.provider
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable {
