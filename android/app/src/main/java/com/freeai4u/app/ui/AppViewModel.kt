@@ -722,10 +722,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 var failure: String? = null
                 var lastPost = 0L
                 val base = chat
-                fun draft(error: String?): ChatMessage = when {
-                    error != null && content.isEmpty() -> ChatMessage("assistant", error, createdAt = started, error = true, model = chat.model)
-                    error != null -> ChatMessage("assistant", "$content\n\n⚠️ $error", reasoning.toString(), started, model = chat.model)
-                    else -> ChatMessage("assistant", content.toString(), reasoning.toString(), started, model = chat.model)
+                fun draft(rawError: String?): ChatMessage = when {
+                    rawError == null -> ChatMessage("assistant", content.toString(), reasoning.toString(), started, model = chat.model)
+                    content.isEmpty() -> ChatMessage("assistant", maskSecrets(rawError), createdAt = started, error = true, model = chat.model)
+                    else -> ChatMessage("assistant", "$content\n\n⚠️ ${maskSecrets(rawError)}", reasoning.toString(), started, model = chat.model)
                 }
                 publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
                 try {

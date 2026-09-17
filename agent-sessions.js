@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { parseToolCallText, stripToolCallText } = require('./tool-call-text');
 
 const MAX_STEPS = 20;
 const MAX_PLAN_CHARS = 20000;
@@ -229,10 +230,17 @@ function callFromObject(obj) {
   return { id: 'text_' + crypto.randomBytes(4).toString('hex'), type: 'function', function: { name, arguments: JSON.stringify(args) } };
 }
 
-// Fenced ```json blocks first, then any bare object. One call per reply is what
-// the text protocol asks for, so only the first usable one is taken.
+// Tagged shapes first (<tool_call>, <function=…>, <invoke>, [TOOL_CALLS]): a
+// model that writes those meant every one of them, so all are kept, in order.
+// Then fenced ```json blocks and any bare object, where one call per reply is
+// what the text protocol asks for, so only the first usable one is taken.
 function parseTextToolCalls(content) {
   const text = String(content || '');
+  const tagged = parseToolCallText(text)
+    .map((c) => ({ name: matchToolName(c.name), args: c.arguments }))
+    .filter((c) => c.name)
+    .map((c) => ({ id: 'text_' + crypto.randomBytes(4).toString('hex'), type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }));
+  if (tagged.length) return tagged;
   const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((m) => m[1]);
   for (const source of [...fences, text]) {
     for (const obj of jsonObjectsIn(source)) {
@@ -891,7 +899,9 @@ function createBuildSessions(deps) {
       const content = textOf(message.content).trim();
       let toolCalls = !textProtocol && Array.isArray(message.tool_calls) ? message.tool_calls.filter((c) => c && c.function) : [];
       if (!toolCalls.length) toolCalls = parseTextToolCalls(content);
-      if (content) emit(session, 'message', { text: cap(content, 4000) });
+      // A call written as text is shown as the step it became, not as markup.
+      const shown = toolCalls.length ? stripToolCallText(content) : content;
+      if (shown) emit(session, 'message', { text: cap(shown, 4000) });
 
       if (!toolCalls.length) {
         const open = session.steps.filter((s) => s.status === 'pending' || s.status === 'in_progress');

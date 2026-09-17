@@ -107,6 +107,32 @@ test('a tool call written as text is still a tool call', () => {
   assert.deepEqual(parseTextToolCalls('{broken', names), []);
 });
 
+test('a tool call written as tags is run, and the tags never reach the phone', async () => {
+  const tagged = parseTextToolCalls('Let me check.\n<tool_call>\n<function=run_command>\n<parameter=command>ls</parameter>\n</function>\n</tool_call>');
+  assert.equal(tagged.length, 1);
+  assert.equal(tagged[0].function.name, 'run_command');
+  assert.deepEqual(JSON.parse(tagged[0].function.arguments), { command: 'ls' });
+  const two = parseTextToolCalls('<tool_call>{"name":"read_file","arguments":{"path":"a"}}</tool_call><tool_call>{"name":"read_file","arguments":{"path":"b"}}</tool_call>');
+  assert.equal(two.length, 2, 'every tagged call is kept');
+
+  const root = tempRoot();
+  try {
+    const model = scriptedModel([
+      reply('Reading first.\n<tool_call>\n<function=read_file>\n<parameter=path>README.md</parameter>\n</function>\n</tool_call>'),
+      reply('All done.'),
+    ]);
+    const store = engine(root, model);
+    const session = store.create({ owner: 'op', plan: 'read the readme' });
+    await waitForEvent(store, session, terminal);
+    const texts = session.events.filter((e) => e.type === 'message').map((e) => e.text);
+    assert.ok(texts.includes('Reading first.'), 'prose around the call is shown');
+    assert.ok(texts.every((t) => !t.includes('<function=')), 'the markup is not');
+    assert.ok(model.seen.length >= 2 && model.seen[1].messages.some((m) => m.role === 'tool' || m.fromTool), 'the call ran and its result went back');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('tool names are matched loosely but never guessed', () => {
   assert.equal(matchToolName('write_file'), 'write_file');
   assert.equal(matchToolName('WriteFile'), 'write_file');

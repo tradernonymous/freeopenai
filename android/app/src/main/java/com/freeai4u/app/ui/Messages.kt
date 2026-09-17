@@ -370,11 +370,16 @@ private fun ErrorCard(text: String, onRetry: (() -> Unit)?) {
 
 private val Color_error = androidx.compose.ui.graphics.Color(0xFF2A1215)
 
+/** Provider keys and bearer values hidden, so an error that echoes a key never
+ * reaches the screen, the saved chat, a share or an export. Raw strings: in a
+ * plain Kotlin literal "\b" is a backspace, not a word boundary. */
+fun maskSecrets(raw: String): String = raw
+    .replace(Regex("""(?i)\b(sk|cfat|cfut|nvapi|gsk|xai|hf|pplx)[-_][A-Za-z0-9_-]{8,}"""), "•••")
+    .replace(Regex("""(?i)(bearer|authorization:|api[_-]?key[=:])\s*\S+"""), "$1 •••")
+
 /** Short, plain error text: the status code's meaning first, secrets masked. */
 fun friendlyError(raw: String): String {
-    val masked = raw
-        .replace(Regex("(?i)\b(sk|cfat|cfut|nvapi)[-_][A-Za-z0-9_-]{8,}"), "•••")
-        .replace(Regex("(?i)(bearer|authorization:|api[_-]?key=)\\s*\\S+"), "$1 •••")
+    val masked = maskSecrets(raw)
     val code = Regex("^(\\d{3})").find(masked.trim())?.value?.toIntOrNull()
     val lead = when (code) {
         401, 403 -> "Not allowed. "
