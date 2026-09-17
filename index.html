@@ -3080,8 +3080,78 @@
             chatId: () => activeConversationId || '',
         };
 
+        // Skills you made yourself. They live in this browser rather than on
+        // the server: the deployment is shared and its container is rebuilt on
+        // every push, so a server-side copy would be both visible to other
+        // people and temporary -- the same reasoning as the workspace.
+        const USER_SKILLS_KEY = 'freeopenaiUserSkills';
+
+        function loadUserSkills() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(USER_SKILLS_KEY) || '[]');
+                return Array.isArray(raw) ? raw.filter((s) => s && s.name && s.body) : [];
+            } catch {
+                return [];
+            }
+        }
+
+        function saveUserSkills(list) {
+            try {
+                localStorage.setItem(USER_SKILLS_KEY, JSON.stringify(list));
+                return '';
+            } catch (e) {
+                return 'Could not save it in this browser: ' + e.message;
+            }
+        }
+
+        let userSkills = loadUserSkills();
+
+        function userSkillNamed(name) {
+            return userSkills.find((s) => s.name === String(name || '').toLowerCase()) || null;
+        }
+
+        // The whole library as the picker and the router see it: the installed
+        // catalogue with yours in front, so a name of yours wins over a remote
+        // one of the same name -- it is the one you wrote on purpose.
+        function withUserSkills(catalog) {
+            // Your own skills carry their text with them: the library's rows
+            // are name and description until use_skill fetches the body, but
+            // yours is already here and you wrote it to be applied.
+            const mine = userSkills.map((s) => ({ source: 'you', name: s.name, description: s.description, body: s.body, allowedTools: null, userOnly: false }));
+            const names = new Set(mine.map((s) => s.name));
+            return mine.concat((Array.isArray(catalog) ? catalog : []).filter((s) => !names.has(s.name)));
+        }
+
+        // Turns this conversation into a skill: the model writes it, the draft
+        // is checked, and only then is it kept. The check matters because a
+        // saved skill rides along in later prompts.
+        async function makeSkillFromChat() {
+            if (!messages.some((m) => m.role === 'assistant')) {
+                return 'There is nothing to make a skill from yet — do the work first, then run /makeskill.';
+            }
+            showStatus('info', 'Writing a skill from this chat…');
+            let text = '';
+            try {
+                const convo = buildConversation([{ role: 'user', content: SKILL_CREATOR_PROMPT }]);
+                const answer = await callModel(convo, {}, null);
+                text = extractMessageText(answer && answer.message) || '';
+            } catch (e) {
+                return 'The model could not write the skill: ' + e.message;
+            }
+            const { skill, error } = parseSkillDraft(text);
+            if (error) return error + '\n\nWhat it wrote:\n\n' + String(text).slice(0, 1500);
+            const next = addUserSkill(userSkills, skill);
+            const failed = saveUserSkills(next);
+            if (failed) return failed;
+            userSkills = next;
+            pinSkillForChat(skill.name);
+            renderSkillsList();
+            return 'Saved **' + skill.name + '** and pinned it to this chat.\n\n' + skill.description +
+                '\n\nIt is yours, kept in this browser. Type `/' + skill.name + '` in any chat to use it again.';
+        }
+
         async function ensureSkillsLoaded() {
-            if (skillsCatalog.length) return skillsCatalog;
+            if (skillsCatalog.length) return withUserSkills(skillsCatalog);
             try {
                 const res = await fetch('/api/skills');
                 const data = await safeJson(res);
@@ -3094,7 +3164,7 @@
             } catch {
                 renderSkillsList('Skill library unreachable — continuing without skills');
             }
-            return skillsCatalog;
+            return withUserSkills(skillsCatalog);
         }
 
         // Remembered so the picker can explain an empty library in the same words
@@ -3448,6 +3518,7 @@
             if (parsed.name === 'skill') return applySkillCommand(parsed.args);
             if (parsed.name === 'compact') return applyCompactCommand(parsed.args);
             if (parsed.name === 'doctor') return runDoctorCommand();
+            if (parsed.name === 'makeskill') return makeSkillFromChat();
             return null;
         }
 
@@ -3526,6 +3597,11 @@
         async function runUseSkillTool(args) {
             const name = String(args.name || '').trim();
             if (!name) return 'Error: skill name is required';
+            const own = userSkillNamed(name);
+            if (own) {
+                pinSkillQuietly(own.name);
+                return own.body.slice(0, 12000);
+            }
             try {
                 const res = await fetch('/api/skills/content?name=' + encodeURIComponent(name));
                 const data = await safeJson(res);

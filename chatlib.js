@@ -812,10 +812,77 @@ function suggestSkillFor(requestText, catalog, usage, { active = [], dismissed =
 // Deliberately short: a command has to do something the buttons cannot, or it is
 // noise in a list people have to read. `/skill` is the important one, and typing
 // the skill's own name is shorthand for it -- how people actually reach for one.
+// --- Making a skill out of work you just did ---
+//
+// A skill is a procedure someone already worked out, written so a model can
+// follow it next time. The hard part is not storing it, it is that a model
+// asked for "a skill" writes an essay: what makes one useful is a description
+// that says when to reach for it, and a body of terse numbered steps with the
+// mistakes named. So the instruction is specific, and what comes back is
+// checked before it is kept -- a saved skill is injected into later prompts,
+// which is the last place for something nobody read.
+const SKILL_CREATOR_PROMPT = [
+  'Write a reusable SKILL.md from what we just did. Answer with the file and nothing else.',
+  '',
+  'Shape:',
+  '---',
+  'name: lowercase-words-with-hyphens',
+  'description: One sentence that says WHEN to use this, in the words someone would type. This is the trigger: a skill nobody matches is a skill nobody gets.',
+  '---',
+  '',
+  '# Title',
+  '',
+  '1. The first step, as an imperative.',
+  '2. The next one. Terse: no preamble, no restating the task.',
+  '',
+  'Rules for the body:',
+  '- Numbered steps in the order they happen. Short, imperative sentences.',
+  '- Name the mistake where one was made, as a RIGHT / WRONG pair with the smallest code that shows it.',
+  '- Include only what generalises. Facts about this one repository belong in the steps as an example, not as the point.',
+  '- No apology, no summary of the conversation, no "as we saw above".',
+].join('\n');
+
+/** At most this many skills of your own, and this much of each: they live in
+ * this browser beside the conversations, in the same few megabytes. */
+const MAX_USER_SKILLS = 30;
+const MAX_USER_SKILL_CHARS = 20000;
+
+/** A model's answer read as a skill: { skill, error }. Everything that would
+ * make it unusable later is a refusal now, with the reason to show. */
+function parseSkillDraft(text) {
+  const raw = String(text == null ? '' : text).trim();
+  if (!raw) return { skill: null, error: 'There is nothing to save: the model wrote no skill.' };
+  // A fenced answer is the common shape; the fence is not part of the file.
+  const fenced = /^```[\w-]*\s*\n([\s\S]*?)```\s*$/.exec(raw);
+  const source = (fenced ? fenced[1] : raw).trim();
+  const meta = parseSkillFrontmatter(source);
+  if (!meta.name) return { skill: null, error: 'That draft has no name in its frontmatter, so nothing could reach for it.' };
+  if (!/^[a-z0-9][a-z0-9-]{1,48}$/.test(meta.name)) {
+    return { skill: null, error: 'The name has to be lowercase words joined by hyphens, like "railway-deploys"; this one is "' + meta.name + '".' };
+  }
+  if (!meta.description) return { skill: null, error: 'That draft has no description, which is what decides when the skill applies.' };
+  const body = source.replace(/^---[\s\S]*?\n---\s*/, '').trim();
+  if (body.length < 40) return { skill: null, error: 'The body is empty or too short to follow.' };
+  if (body.length > MAX_USER_SKILL_CHARS) {
+    return { skill: null, error: 'That skill is too long (' + body.length + ' characters, limit ' + MAX_USER_SKILL_CHARS + '). Keep the steps, drop the prose.' };
+  }
+  return {
+    skill: { name: meta.name, description: meta.description, body, source: 'you', createdAt: Date.now() },
+    error: '',
+  };
+}
+
+/** The list with this skill in it: newest first, one per name, capped. */
+function addUserSkill(list, skill) {
+  const kept = (Array.isArray(list) ? list : []).filter((s) => s && s.name && s.name !== skill.name);
+  return [skill, ...kept].slice(0, MAX_USER_SKILLS);
+}
+
 const CHAT_COMMANDS = [
   { name: 'help', usage: '/help', desc: 'List these commands' },
   { name: 'skill', usage: '/skill <name>  ·  /skill off <name>', desc: 'Use an installed skill for the rest of this chat' },
   { name: 'skills', usage: '/skills', desc: 'Show what this chat is using' },
+  { name: 'makeskill', usage: '/makeskill', desc: 'Turn what this chat just worked out into a skill you can reuse' },
   { name: 'mode', usage: '/mode chat | plan | build', desc: 'Switch mode' },
   { name: 'clear', usage: '/clear', desc: 'Start a new chat — this one stays in the sidebar' },
   { name: 'compact', usage: '/compact on | off | status', desc: 'Reduce sent history for this session without changing the visible chat' },
@@ -5110,6 +5177,11 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_MODE,
     isValidMode,
     modePrompt,
+    SKILL_CREATOR_PROMPT,
+    parseSkillDraft,
+    addUserSkill,
+    MAX_USER_SKILLS,
+    MAX_USER_SKILL_CHARS,
     workspacePrompt,
     toolRoundsForMode,
     TOOL_ROUNDS_BY_MODE,
