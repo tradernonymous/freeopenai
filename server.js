@@ -1168,6 +1168,11 @@ const LLM_PROVIDERS = {
     label: 'NVIDIA',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     envVar: 'NVIDIA_API_KEY',
+    freeTier: {
+      all: true,
+      limits: { requestsPerMinute: 40, scope: 'account' },
+      note: 'NIM free credits: no card to start, roughly 1,000 inference credits (up to 5,000 on request) -- a balance that runs out, not a daily allowance that resets.',
+    },
     // The allowed set, in picker order. Anything else the key can reach stays
     // out of the list rather than appearing and failing on use. Declared as
     // rules rather than a bare array so a repeated id here cannot put the same
@@ -1240,14 +1245,19 @@ const LLM_PROVIDERS = {
     label: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1',
     envVar: 'GROQ_API_KEY',
-    // Free models verified from Groq's catalog. These are the models available
-    // on the free tier as of the last audit.
+    freeTier: {
+      all: true,
+      limits: { requestsPerMinute: 30, requestsPerDay: 14400, scope: 'account' },
+      note: "Groq's own free tier: no card, 30 requests/min, 6,000 tokens/min, 14,400 requests/day.",
+    },
+    // Re-verified 2026-09-17: mixtral-8x7b-32768, gemma2-9b-it and gemma-7b-it
+    // are all retired upstream (each was live at an earlier audit, each
+    // superseded on Groq's own schedule since). Only these two survive on the
+    // live catalogue today; a future retirement here just drops out of the
+    // intersection with GET /v1/models rather than failing on use.
     models: [
       'llama-3.3-70b-versatile',
       'llama-3.1-8b-instant',
-      'mixtral-8x7b-32768',
-      'gemma2-9b-it',
-      'gemma-7b-it',
     ],
   },
   // Cloudflare Workers AI: an official free allowance on every Cloudflare
@@ -1490,20 +1500,6 @@ const LLM_PROVIDERS = {
     authScheme: '',
     kind: 'search',
     note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
-  },
-  airforce: {
-    label: 'AirForce',
-    baseUrl: 'https://api.airforce/v1',
-    envVar: 'AIRFORCE_API_KEY',
-    // Free models from AirForce's free tier. The catalogue is fetched live and
-    // intersected with this allowlist so retired models drop out silently.
-    models: [
-      'gpt-4o-mini',
-      'gpt-4o',
-      'gpt-3.5-turbo',
-      'claude-3-haiku',
-      'claude-3-sonnet',
-    ],
   },
   // gpt4free (github.com/xtekky/gpt4free) runs as the "Interference API": one
   // OpenAI-compatible endpoint in front of a large set of community provider
