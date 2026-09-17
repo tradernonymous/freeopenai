@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -158,7 +159,9 @@ fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
     val chat = vm.currentChatId?.let { vm.conversation(it) }
     if (chat == null) {
         // Created outside composition, then shown on the next frame.
-        LaunchedEffect(vm.currentChatId, vm.conversations.size) { vm.currentOrNew() }
+        // Wait for saved chats to load, so a chat restored after Android closed
+        // the app is found instead of being replaced by a new one.
+        LaunchedEffect(vm.currentChatId, vm.conversations.size, vm.loaded) { if (vm.loaded) vm.currentOrNew() }
         Box(Modifier.fillMaxSize().background(Palette.background))
         return
     }
@@ -323,7 +326,7 @@ private fun BottomTabs(vm: AppViewModel) {
 
 // --- Chat --------------------------------------------------------------------------
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation, onMenu: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
@@ -370,7 +373,9 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
             }
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().imePadding()) {
+        // consumeWindowInsets tells imePadding that the bottom bar and navigation
+        // bar already take up space, so the keyboard adds only what is left.
+        Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             Box(Modifier.weight(1f)) {
                 AnimatedContent(chat.messages.isEmpty(), transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "home") { empty ->
                     if (empty) Home(vm, chat) else Transcript(vm, platform, chat, streaming, onEdit = { editing = it })
@@ -468,7 +473,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
         LazyColumn(state = state, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             items(turns, key = { it.key }, contentType = { it::class }) { turn ->
                 when (turn) {
-                    is Turn.User -> UserBubble(turn.message, onEdit = { onEdit(turn.index) }, onCopy = { platform.copy(turn.message.content) })
+                    is Turn.User -> UserBubble(turn.message, onEdit = { onEdit(turn.index) }, onCopy = { platform.copy(turn.message.content) }, onSelect = { platform.selectText(turn.message.content) })
                     is Turn.Assistant -> AssistantTurn(
                         turn,
                         streaming = streaming && turn.lastIndex == chat.messages.lastIndex,

@@ -1,6 +1,7 @@
 package com.freeai4u.app.ui
 
 import android.app.Application
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
@@ -10,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import com.freeai4u.app.ApiException
 import com.freeai4u.app.BaseUrlResult
 import com.freeai4u.app.ChatApi
@@ -78,7 +80,14 @@ sealed interface Screen {
 /** All app state for the native screens. Network and disk work runs on a
  * small pool; every state change is posted back to the main thread, which
  * is the only thread Compose state is written from. */
-class AppViewModel(app: Application) : AndroidViewModel(app) {
+private const val UI_STATE_KEY = "ui_state"
+private const val DRAFT_SAVE_BUDGET = 50_000
+private val RESTORABLE_SCREENS = listOf(
+    Screen.Images, Screen.Tools, Screen.Settings, Screen.Personas, Screen.Prompts,
+    Screen.Skills, Screen.Knowledges, Screen.Builds, Screen.Build,
+)
+
+class AppViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val store = SecureStore(app)
     private val repo = Repository(app)
     private val session = SessionManager(store)
@@ -170,6 +179,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // RemoteBuilds; these are the entry points the screens use.
 
     val builds = RemoteBuilds(api) { block -> main.post(block) }
+
+    // --- Restore after Android closes the app in the background ------------------
+    // Chats are already on disk; what would be lost is where you were. The
+    // provider is read only when Android saves, so it always has the latest.
+
+    init {
+        saved.get<Bundle>(UI_STATE_KEY)?.let { restoreUiState(it) }
+        saved.setSavedStateProvider(UI_STATE_KEY) { saveUiState() }
+    }
+
+    private fun saveUiState(): Bundle = Bundle().apply {
+        putString("chat", currentChatId)
+        putStringArrayList("screens", ArrayList(backStack.map { it.toString() }))
+        builds.current?.id?.let { putString("build", it) }
+        // Drafts are capped so a long paste cannot overflow the saved-state limit.
+        val kept = Bundle()
+        var budget = DRAFT_SAVE_BUDGET
+        drafts.forEach { (chatId, text) ->
+            if (text.isNotEmpty() && text.length <= budget) {
+                kept.putString(chatId, text)
+                budget -= text.length
+            }
+        }
+        putBundle("drafts", kept)
+    }
+
+    private fun restoreUiState(state: Bundle) {
+        currentChatId = state.getString("chat")
+        state.getBundle("drafts")?.let { kept -> kept.keySet().forEach { id -> kept.getString(id)?.let { drafts[id] = it } } }
+        val buildId = state.getString("build")
+        state.getStringArrayList("screens").orEmpty().forEach { name ->
+            val screen = RESTORABLE_SCREENS.firstOrNull { it.toString() == name } ?: return@forEach
+            if (screen == Screen.Build) {
+                if (buildId == null || !signedIn) return@forEach
+                builds.open(buildId)
+            }
+            push(screen)
+        }
+    }
 
     fun openBuilds() = push(Screen.Builds)
 

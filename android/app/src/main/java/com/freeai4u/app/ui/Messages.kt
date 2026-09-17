@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -105,6 +106,10 @@ sealed interface Turn {
 data class Step(val summary: String, val done: Boolean, val failed: Boolean, val output: String)
 
 fun buildTurns(messages: List<ChatMessage>): List<Turn> {
+    // One pass to index tool results, so each call's result is a map lookup
+    // instead of a copy-and-scan of the rest of the chat.
+    val results = HashMap<String, ChatMessage>()
+    messages.forEach { if (it.role == "tool" && it.toolCallId.isNotEmpty()) results.putIfAbsent(it.toolCallId, it) }
     val turns = mutableListOf<Turn>()
     var index = 0
     while (index < messages.size) {
@@ -134,7 +139,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
                     if (part.error) error = true
                     if (part.model.isNotEmpty()) model = part.model
                     part.toolCalls.forEach { call ->
-                        val result = messages.drop(index + 1).firstOrNull { it.role == "tool" && it.toolCallId == call.id }
+                        val result = results[call.id]
                         steps.add(Step(toolCallSummary(call), result != null, result?.content?.startsWith("Error") == true, result?.content ?: ""))
                     }
                 }
@@ -152,7 +157,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun UserBubble(message: ChatMessage, onEdit: () -> Unit, onCopy: () -> Unit) {
+fun UserBubble(message: ChatMessage, onEdit: () -> Unit, onCopy: () -> Unit, onSelect: () -> Unit = {}) {
     var menu by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().enterUp(), horizontalArrangement = Arrangement.End) {
         Box {
@@ -172,6 +177,9 @@ fun UserBubble(message: ChatMessage, onEdit: () -> Unit, onCopy: () -> Unit) {
             }
             DropdownMenu(menu, { menu = false }) {
                 DropdownMenuItem({ Text("Copy") }, { onCopy(); menu = false }, leadingIcon = { Icon(Icons.Filled.ContentCopy, null) })
+                if (message.content.isNotBlank()) {
+                    DropdownMenuItem({ Text("Select text") }, { onSelect(); menu = false }, leadingIcon = { Icon(Icons.Filled.TextFields, null) })
+                }
                 DropdownMenuItem({ Text("Edit") }, { onEdit(); menu = false }, leadingIcon = { Icon(Icons.Filled.Edit, null) })
             }
         }
