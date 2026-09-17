@@ -3278,16 +3278,56 @@ const MAX_PROVIDER_FAILOVERS = 2;
 // serves no chat models at all (speech, search), and anything not configured,
 // since a turn moved to a provider with no key can only fail.
 function failoverProviderOrder(providers, options = {}) {
-  const ids = (Array.isArray(providers) ? providers : [])
+  const list = (Array.isArray(providers) ? providers : [])
     .filter((p) => p && typeof p.id === 'string' && p.id)
-    .filter((p) => p.configured === true && (!p.kind || p.kind === 'chat'))
-    .map((p) => p.id);
+    .filter((p) => p.configured === true && (!p.kind || p.kind === 'chat'));
+  const health = options.health && typeof options.health === 'object' ? options.health : null;
+  // With nothing measured, this is the picker's own order -- which is all a
+  // fresh process has. With health, it is the cheapest order to try: a provider
+  // cooling down goes last, then one whose free tier is nearly spent, then by
+  // observed latency. A score against the original order as the tie-break
+  // means nothing moves without something to move it.
+  const scored = list.map((p, index) => ({
+    id: p.id,
+    index,
+    score: health ? providerRouteScore(p, health[p.id]) : 0,
+  }));
+  scored.sort((a, b) => a.score - b.score || a.index - b.index);
+  const ids = scored.map((entry) => entry.id);
   // Puter goes last, and only when it is actually usable: it is the one provider
   // that needs an account rather than a key, so a turn that moved there because
   // a keyed provider failed would often fail on the sign-in instead. It is still
   // worth reaching when it is the only thing left.
   if (options.puterUsable && !ids.includes(PUTER_PROVIDER)) ids.push(PUTER_PROVIDER);
   return ids;
+}
+
+// Lower is better, and the weights are ordered by what actually interrupts a
+// task: a provider that asked to be left alone will sleep the turn or refuse
+// it, a free tier at its daily edge fails mid-task, and a slow provider only
+// costs time. An unmeasured provider is unknown rather than bad, so it sits
+// just behind one that has answered quickly -- never behind one that is cooling.
+function providerRouteScore(provider, health) {
+  let score = 0;
+  if (health && health.cooling) score += 1000;
+  const tier = provider && provider.freeTier;
+  if (tier && typeof tier.share === 'number' && tier.share >= 0.8) score += 100;
+  if (!health) return score + 5;
+  if (typeof health.latencyMs === 'number') score += Math.min(60, Math.round(health.latencyMs / 1000));
+  return score;
+}
+
+// The picker's own free-only switch. Filtering happens in the page rather than
+// on the server because it is a preference about what to look at -- and because
+// the server's answer is what says which rows are free in the first place.
+// An empty result is reported rather than obeyed: a provider whose whole
+// catalogue reads as paid is a real thing to look at, and a picker with no rows
+// and no reason is worse than showing what was filtered.
+function freeRowsOnly(models) {
+  const rows = Array.isArray(models) ? models : [];
+  const kept = rows.filter((m) => m && m.free === true);
+  if (!kept.length) return { rows, hidden: 0, empty: rows.length > 0 };
+  return { rows: kept, hidden: rows.length - kept.length, empty: false };
 }
 
 // The first provider in that order which has not been tried this turn and is not
@@ -4030,6 +4070,11 @@ function explainEmptyReply(message, finishReason) {
 // list is free within it, which is why a missing price counts as free.
 function isFreeModel(model) {
   if (!model) return false;
+  // A server that declares its provider's free tier has already answered this
+  // question, and its answer is about entitlement rather than price -- which is
+  // the only way a keyless tier that publishes per-token prices (OVHcloud)
+  // reads as free instead of as seven paid models ranked last.
+  if (model.free === true) return true;
   const pricing = model.pricing;
   if (pricing && (pricing.prompt !== undefined || pricing.completion !== undefined)) {
     return Number(pricing.prompt || 0) === 0 && Number(pricing.completion || 0) === 0;
@@ -4046,6 +4091,14 @@ function isFreeModel(model) {
 
 // Providers mark a free model in the id when they publish no prices. OpenRouter
 // uses a ":free" suffix; others use "-free".
+// Whether a catalogue published a price at all. The difference matters to the
+// label rather than the colour: a provider that states a price of zero has said
+// something, and a provider that states nothing has not.
+function hasPublishedPrice(model) {
+  const pricing = model && model.pricing;
+  return !!(pricing && (pricing.prompt !== undefined || pricing.completion !== undefined));
+}
+
 function isFreeModelId(id) {
   return /[:-]free$/i.test(String(id || ''));
 }
@@ -4111,6 +4164,12 @@ function usableChatModels(models, limit = 60) {
       contextLength: m.contextLength,
       supportedParameters: m.supportedParameters,
       free: isFreeModel(m),
+      // A free row the catalogue never priced. Only used for the label.
+      assumed: !hasPublishedPrice(m),
+      // The free tier's limits, in words, when the server declared them.
+      limits: m.limits,
+      // How long this server has watched that model take, when it has.
+      observedMs: m.observedMs,
       capable: isCapableModelId(m.id),
       tools: supportsTools(m),
       // Rides along because a capability is not a picker label: the picture
@@ -4311,12 +4370,29 @@ function describeRoute(route) {
 }
 
 // One line under a model's name in the picker.
+// A model this server has watched take this long is worth flagging before it is
+// picked: the interruption the user feels is a slow model's turn, and the row
+// is the last place that can be warned about it.
+const SLOW_MODEL_MS = 25000;
+
 function describeProviderModel(model) {
   if (!model) return '';
   const parts = [];
-  if (model.free) parts.push('free');
-  if (model.tools === false) parts.push('no tools');
-  if (model.capable) parts.push('code / research');
+  // "free (assumed)" is the honest label for a catalogue that publishes no
+  // prices: the app is treating it as free because nothing says otherwise, and
+  // a provider that wanted billing to come first is free to say so.
+  if (model.free) parts.push(model.assumed ? 'free (assumed)' : 'free');
+  // The limit is what the row is really about when there is one: two requests a
+  // minute shared across every visitor is a different proposition from a daily
+  // pool, and no other field carries it.
+  if (model.limits) parts.push(model.limits);
+  if (typeof model.observedMs === 'number' && model.observedMs >= SLOW_MODEL_MS) {
+    parts.push('slow here (' + Math.round(model.observedMs / 1000) + 's)');
+  } else if (model.tools === false) {
+    parts.push('no tools');
+  } else if (model.capable) {
+    parts.push('code / research');
+  }
   if (model.contextLength >= 1000000) parts.push('1M ctx');
   else if (model.contextLength >= 200000) parts.push(Math.round(model.contextLength / 1000) + 'k ctx');
   if (!parts.length && model.ownedBy) parts.push(model.ownedBy);
@@ -5219,6 +5295,8 @@ if (typeof module !== 'undefined' && module.exports) {
     imageMediaType,
     MAX_PROVIDER_FAILOVERS,
     failoverProviderOrder,
+    providerRouteScore,
+    freeRowsOnly,
     nextFailoverProvider,
     isFailoverWorthyFailure,
     flattenToolTurn,

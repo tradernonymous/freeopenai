@@ -97,6 +97,121 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- The provider ledger ----------------------------------------------------
+//
+// Every number the app already sees and used to throw away: how long a provider
+// took, what it answered, when it last rate limited us, and how many of today's
+// calls it has served. This is what makes "move this turn to another provider"
+// a decision instead of a guess, and it is deliberately per process and in
+// memory: a deploy restarts the count, and these are our own beats against an
+// allowance the provider keeps -- an estimate, never an authority on it.
+const providerLedger = new Map();
+
+function utcDayKey(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+function ledgerFor(providerId) {
+  const key = String(providerId || '');
+  let entry = providerLedger.get(key);
+  if (!entry) {
+    entry = {
+      attempts: 0,
+      failures: 0,
+      lastStatus: 0,
+      lastAt: 0,
+      latencyMs: null,
+      lastQuotaAt: 0,
+      lastRetryAfterMs: null,
+      modelMs: new Map(),
+      calls: 0,
+      day: '',
+    };
+    providerLedger.set(key, entry);
+  }
+  return entry;
+}
+
+// An exponentially weighted mean, so one slow call does not condemn a provider
+// and one fast one does not forgive it. 30% of the newest beat is enough to
+// follow a provider that gets worse within a handful of calls.
+function foldLatency(previous, ms) {
+  return previous === null || previous === undefined ? ms : Math.round(previous * 0.7 + ms * 0.3);
+}
+
+function recordProviderAttempt(providerId, outcome = {}) {
+  const entry = ledgerFor(providerId);
+  const ms = Number(outcome.ms);
+  const status = Number(outcome.status) || 0;
+  const day = utcDayKey();
+  if (entry.day !== day) {
+    entry.day = day;
+    entry.calls = 0;
+  }
+  entry.attempts += 1;
+  // The unit a free tier's daily cap is written in. Counted when the call is
+  // made rather than when it succeeds, because a rate-limited attempt spent
+  // the provider's time either way.
+  entry.calls += 1;
+  entry.lastStatus = status;
+  entry.lastAt = Date.now();
+  if (outcome.ok === false) entry.failures += 1;
+  if (Number.isFinite(ms) && ms > 0) {
+    entry.latencyMs = foldLatency(entry.latencyMs, ms);
+    const model = typeof outcome.model === 'string' ? outcome.model : '';
+    if (model) entry.modelMs.set(model, foldLatency(entry.modelMs.get(model), ms));
+  }
+  if (outcome.quota) entry.lastQuotaAt = entry.lastAt;
+  const retryAfterMs = Number(outcome.retryAfterMs);
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) entry.lastRetryAfterMs = retryAfterMs;
+}
+
+function providerLedgerSnapshot(providerId) {
+  const entry = providerLedger.get(String(providerId || ''));
+  const cooldownMs = providerCooldownRemaining(providerId);
+  if (!entry && !cooldownMs) return null;
+  // A count from yesterday is not today's count. The rollover happens here as
+  // well as on the way in, so a deployment that idled overnight reports zero
+  // rather than the number it stopped at.
+  const day = utcDayKey();
+  const callsToday = entry && entry.day === day ? entry.calls : 0;
+  return {
+    attempts: entry ? entry.attempts : 0,
+    failures: entry ? entry.failures : 0,
+    lastStatus: entry ? entry.lastStatus : 0,
+    lastAt: entry ? entry.lastAt : 0,
+    latencyMs: entry ? entry.latencyMs : null,
+    cooldownMs,
+    cooling: cooldownMs > 0,
+    lastQuotaAt: entry ? entry.lastQuotaAt : 0,
+    lastRetryAfterMs: entry ? entry.lastRetryAfterMs : null,
+    callsToday,
+    day,
+  };
+}
+
+// The observed time for one model, for the picker: a row that has answered
+// slowly every time it was asked is worth knowing about before it is picked,
+// not after it stalls the turn.
+function providerModelLatency(providerId, modelId) {
+  const entry = providerLedger.get(String(providerId || ''));
+  if (!entry) return null;
+  const ms = entry.modelMs.get(String(modelId || ''));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// How long one call may spend *waiting* to retry, in total. An attempt count
+// alone cannot bound this: a free tier's Retry-After is routinely longer than
+// the whole turn is worth -- OVHcloud asks for 40-57s on an allowance of two
+// requests a minute -- so six attempts at that schedule is minutes of dead air
+// before the app even considers another provider. Past this budget the refusal
+// is handed back as-is, which is exactly the signal the caller needs to move
+// the turn somewhere else.
+function retryBudgetMs() {
+  const n = Number(process.env.RATE_LIMIT_RETRY_BUDGET_MS);
+  return Number.isFinite(n) && n >= 0 ? n : 20000;
+}
+
 function providerCooldownRemaining(providerId) {
   const until = providerCooldownUntil.get(providerId) || 0;
   return Math.max(0, until - Date.now());
@@ -111,12 +226,21 @@ function markProviderCooldown(providerId, durationMs) {
 // `{ ok, status, data, retryAfterMs }` packet or a raw `Response`), retrying
 // only on retryable statuses. A packet carries an optional retryAfterMs; a
 // raw Response is read directly so the stream path honours upstream headers.
-async function retryProviderRequest(providerId, attempt) {
+async function retryProviderRequest(providerId, attempt, meta = {}) {
   const maxAttempts = rateLimitMaxAttempts();
+  // Waiting has a clock of its own: see retryBudgetMs. `waitedMs` is what this
+  // call has actually spent asleep, so a provider asking for a long wait cannot
+  // spend a turn on retries that were never going to succeed.
+  const budget = retryBudgetMs();
+  let waitedMs = 0;
   let result;
   for (let tryNum = 0; tryNum < maxAttempts; tryNum += 1) {
     const wait = providerCooldownRemaining(providerId);
-    if (wait > 0) await sleep(wait);
+    if (wait > 0) {
+      await sleep(wait);
+      waitedMs += wait;
+    }
+    const startedAt = Date.now();
     try {
       result = await attempt();
     } catch (err) {
@@ -125,14 +249,37 @@ async function retryProviderRequest(providerId, attempt) {
       // same budget again. A genuine connection failure, though, is worth
       // probing up to the cap before the caller reports the real error.
       if (err.name === 'AbortError') throw err;
+      recordProviderAttempt(providerId, { ms: Date.now() - startedAt, status: 0, ok: false, model: meta.model });
       const delay = Math.min(retryBackoffMs(tryNum), 30000);
       markProviderCooldown(providerId, delay + retryBaseDelayMs());
       if (tryNum >= maxAttempts - 1) throw err;
+      // The same waiting budget the refusal path below enforces: a connection
+      // that keeps failing is worth probing, but not past the point where the
+      // turn is worth more somewhere else.
+      if (waitedMs + delay > budget) throw err;
+      waitedMs += delay;
       await sleep(delay);
       continue;
     }
     let status = result && typeof result.status === 'number' ? result.status : 0;
     if (result && typeof result.status !== 'number') status = result.ok ? 200 : 599;
+    // One beat per attempt, for the ledger. Retry-After comes along because it
+    // is the fact that tells an operator how long the provider wanted to be
+    // left alone -- which is what /api/llm/providers reports and what the
+    // client uses to steer clear of a provider still cooling down.
+    recordProviderAttempt(providerId, {
+      ms: Date.now() - startedAt,
+      status,
+      ok: result.ok !== false && status < 400,
+      model: meta.model,
+      quota: !!(result && (result.__quotaExhausted || isQuotaExhausted(packetErrorMessage(result)))),
+      retryAfterMs:
+        result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
+          ? parseRetryAfterMs(result.headers)
+          : result && typeof result.retryAfterMs === 'number'
+            ? result.retryAfterMs
+            : undefined,
+    });
     // A timeout we imposed (providerFetch's own deadline) is a budget spent,
     // not a transient refusal to retry through.
     if (result.selfTimeout) return result;
@@ -153,6 +300,18 @@ async function retryProviderRequest(providerId, attempt) {
     // run of refusals never sleeps past the hosting platform's own patience
     // (OpenCode caps its no-header delay at 30s too).
     const delay = retryAfterMs !== undefined ? retryAfterMs : Math.min(retryBackoffMs(tryNum), 30000);
+    // A provider's own Retry-After is honoured in full, and a free tier's is
+    // routinely longer than the turn is worth (OVHcloud asks for 40-57s on an
+    // allowance of two requests a minute). Past the budget, hand the refusal
+    // back instead of sleeping through it: the caller moves the turn on with
+    // the work already done, which is the only outcome that keeps the user's
+    // task alive. The cooldown is set for the wait we declined, so the next
+    // call skips this provider until it has had the time it asked for.
+    if (waitedMs + delay > budget) {
+      markProviderCooldown(providerId, delay);
+      return result;
+    }
+    waitedMs += delay;
     markProviderCooldown(providerId, delay + retryBaseDelayMs());
     await sleep(delay);
   }
@@ -161,15 +320,15 @@ async function retryProviderRequest(providerId, attempt) {
 
 // Retries an idempotent provider call (chat completions) on retryable statuses.
 // The last attempt is always returned as-is, so the caller can describe it.
-async function fetchProviderWithRetry(providerId, fetchOnce) {
-  return retryProviderRequest(providerId, fetchOnce);
+async function fetchProviderWithRetry(providerId, fetchOnce, meta) {
+  return retryProviderRequest(providerId, fetchOnce, meta);
 }
 
 // The streaming sibling: each attempt resolves to a raw Response so the caller
 // can pipe the upstream body through. The retryable status arrives as the
 // initial status before any body is read, so the same retry/cooldown logic
 // applies. When the client cancels, `onAbort` aborts the in-flight read.
-async function fetchStreamWithRetry(providerId, fetchRaw) {
+async function fetchStreamWithRetry(providerId, fetchRaw, meta) {
   return retryProviderRequest(providerId, async () => {
     const response = await fetchRaw();
     if (!response || typeof response.status !== 'number' || !isRetryableStatus(response.status)) return response;
@@ -187,7 +346,7 @@ async function fetchStreamWithRetry(providerId, fetchRaw) {
     // shared shell, and the caller needs the real `.ok`/`.json()`/`.body`.
     try { await response.body?.cancel(); } catch { /* ignore */ }
     return response;
-  });
+  }, meta);
 }
 
 // Model catalogues are read from each provider at runtime so they can't go
@@ -926,6 +1085,11 @@ const LLM_PROVIDERS = {
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     envVar: 'OPENROUTER_API_KEY',
+    freeTier: {
+      models: [':free'],
+      limits: { requestsPerDay: 50, scope: 'account' },
+      note: "OpenRouter's own free cap: 50 requests a day on an unfunded account, 1,000 once $10 of credit has been bought.",
+    },
     // Free-tier only. Every id below carries the ":free" suffix and was
     // verified against the live catalogue (https://openrouter.ai/api/v1/models)
     // on 2026-09-12: 445 models total, 19 of them free. Paid ids were pulled —
@@ -1078,6 +1242,11 @@ const LLM_PROVIDERS = {
     label: 'Cloudflare Workers AI',
     baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1',
     envVar: 'CLOUDFLARE_API_TOKEN',
+    freeTier: {
+      all: true,
+      limits: { neuronsPerDay: 10000, scope: 'account' },
+      note: 'Workers AI free allowance: 10,000 Neurons a day per Cloudflare account, reset daily.',
+    },
     accountEnv: 'CLOUDFLARE_ACCOUNT_ID',
     catalogue: false,
     models: [
@@ -1125,6 +1294,15 @@ const LLM_PROVIDERS = {
     label: 'Kilo Code',
     baseUrl: 'https://api.kilo.ai/api/gateway/v1',
     envVar: 'KILO_API_KEY',
+    // Kilo publishes no rate-limit headers at all, so its caps cannot be read
+    // off a response. What can be said honestly is what this app can observe:
+    // its own count of the calls it made today, which is what /api/llm/providers
+    // reports next to this note.
+    freeTier: {
+      all: true,
+      limits: { scope: 'ip' },
+      note: 'Free and keyless. Kilo sends no rate-limit headers, so the count here is this app counting its own calls, not the gateway reporting.',
+    },
     keyless: true,
     needsKey: false,
     models: [
@@ -1167,6 +1345,19 @@ const LLM_PROVIDERS = {
     label: 'OVHcloud AI Endpoints',
     baseUrl: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1',
     envVar: 'OVHCLOUD_API_KEY',
+    // Measured live 2026-09-18: the anonymous tier answers `ratelimit-limit: 2`
+    // and `x-ratelimit-limit-minute: 2`, and a single request leaves
+    // `remaining: 0` for every model on that address -- so the allowance is per
+    // IP and shared across the whole catalogue, not one per model.
+    //
+    // This declaration is the difference between a picker that lists seven rows
+    // priced like paid models and one that says what they are: entitlement, and
+    // the two-a-minute allowance that is the real constraint.
+    freeTier: {
+      all: true,
+      limits: { requestsPerMinute: 2, scope: 'ip', shared: true },
+      note: 'Free, keyless, and metered per IP: two requests a minute for the whole catalogue, shared by every visitor behind one address.',
+    },
     keyless: true,
     needsKey: false,
     models: [
@@ -1224,6 +1415,11 @@ const LLM_PROVIDERS = {
     label: 'OmniRoute',
     baseUrl: 'http://127.0.0.1:20128/v1',
     envVar: 'OMNIROUTE_API_KEY',
+    freeTier: {
+      all: true,
+      limits: { scope: 'account' },
+      note: "The gateway's own connected free tiers. It answers 402 for a model none of them can serve, and the turn moves on when it does.",
+    },
     // A fresh install answers without a key (REQUIRE_API_KEY=false). When the
     // operator turns that on, the key here is sent as Bearer; when it stays
     // off, no auth header goes at all, never a bare "Bearer ".
@@ -1655,6 +1851,12 @@ function llmProviders(req, res) {
     // empty dropdown that looks like a bug.
     kind: provider.kind || 'chat',
     note: provider.note,
+    // The two reports the page needs to route rather than guess: what this
+    // provider's free tier meters, and what this process has observed of it.
+    // Together they are what turns "the turn stalled" into "it was rate limited
+    // with 42s left to wait, so the app used another provider instead".
+    freeTier: freeTierReport(id, provider),
+    health: providerLedgerSnapshot(id),
   })));
 }
 
@@ -1664,7 +1866,17 @@ function llmLimits(req, res) {
   const t = providerTimeoutMs();
   sendJson(res, 200, {
     timeouts: { models: t.models, chat: t.chat, headers: t.headers, stall: t.stall },
-    retries: { maxAttempts: rateLimitMaxAttempts(), baseDelayMs: retryBaseDelayMs() },
+    retries: {
+      maxAttempts: rateLimitMaxAttempts(),
+      baseDelayMs: retryBaseDelayMs(),
+      // The total a call may spend asleep before a refusal is handed back for
+      // another provider to answer. See retryBudgetMs for why an attempt count
+      // alone cannot bound this.
+      budgetMs: retryBudgetMs(),
+    },
+    freeTiers: Object.entries(LLM_PROVIDERS)
+      .filter(([, provider]) => provider.kind !== 'image' && providerFreeTier(provider))
+      .map(([id, provider]) => ({ id, label: provider.label, ...freeTierReport(id, provider) })),
   });
 }
 
@@ -3014,6 +3226,16 @@ function isSelfExplanatory(message) {
   return message.length >= 60;
 }
 
+// Retryable statuses are one thing; the *words* are another. A hosting edge
+// answers with its own sentence when its router cannot reach the container,
+// and that sentence is the single most useful fact in the whole failure: the
+// provider's own API never answered, so nothing about the request is wrong.
+function isEdgeFailureMessage(message) {
+  return /application failed to respond|no healthy upstream|upstream connect error|upstream request timeout/i.test(
+    String(message || ''),
+  );
+}
+
 function describeProviderError(status, data, provider) {
   const who = provider && provider.label ? provider.label : 'The provider';
   // Cloudflare's API wraps failures as {errors:[{code, message}]}.
@@ -3027,6 +3249,18 @@ function describeProviderError(status, data, provider) {
   // failed to parse. "request failed" told the user nothing, least of all
   // which of several configured providers had stalled.
   if (!message && status >= 500) message = `${who} returned a gateway error with no detail`;
+
+  // A 502 that carries the edge's own words is about the deployment, not the
+  // provider's capacity, so it gets its own sentence. The distinction is the
+  // one that costs people the most time: "slow or unreachable" sends them to
+  // check a provider that was never asked, while "nothing is listening on the
+  // port this address names" points at the service's own settings.
+  if ((status === 502 || status === 503) && isEdgeFailureMessage(message)) {
+    return (
+      `${status}: ${message} — the host's own router answered, not ${who}: nothing is listening on the port this address names, ` +
+      'or that service is still starting. Check its logs and its PORT.'
+    );
+  }
 
   // A hint is for a bare status with nothing behind it. When the provider has
   // already explained itself -- "only available on agentic harnesses", with a
@@ -3101,11 +3335,40 @@ async function providerFetch(req, provider, path, init = {}, budgetMs = 0) {
         ...(init.headers || {}),
       },
     });
+    // Read the body as text first, then parse: a body that is not JSON still
+    // has words in it, and for a gateway behind a host's own edge those words
+    // are the only diagnosis there is. Railway answers 502 "Application failed
+    // to respond" when its router cannot reach the container, which is a
+    // completely different problem from the gateway answering an error -- and
+    // res.json() consumes the stream, so a failed parse used to throw that
+    // sentence away and report "no detail" instead.
     let data = null;
+    let bodyText = '';
     try {
-      data = await res.json();
+      bodyText = await res.text();
     } catch {
-      data = null;
+      bodyText = '';
+    }
+    if (bodyText) {
+      try {
+        data = JSON.parse(bodyText);
+      } catch {
+        // A failure's HTML page becomes one readable line rather than a wall of
+        // markup, named after the provider it came from, because the message
+        // built from it is the only place that fact appears. A *successful*
+        // status with an unreadable body stays null on purpose: an answer this
+        // app cannot parse is not an answer, and reporting it as one would be a
+        // success it cannot stand behind.
+        data = res.ok
+          ? null
+          : {
+              error: `${provider.label}: ${bodyText
+                .replace(/<[^>]*>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 300)}`,
+            };
+      }
     }
     // A provider's Retry-After rides the packet so the shared retry shell can
     // respect their schedule instead of guessing our own backoff.
@@ -3176,12 +3439,15 @@ async function llmModels(req, res) {
           ' (Leave it unset to use the list this build ships with.)',
       });
     }
-    return sendJson(res, 200, ids);
+    return sendJson(res, 200, annotateCatalogueRows(id, provider, ids));
   }
   const ttl = modelsCacheTtlMs();
   const cached = modelCache.get(id);
   if (cached && Date.now() - cached.fetchedAt < ttl) {
-    return sendJson(res, 200, cached.models);
+    // Annotated per request rather than cached: the free-tier label is settled,
+    // but the observed latency behind a row moves, and a cached number would be
+    // stale exactly when it is being used to choose.
+    return sendJson(res, 200, annotateCatalogueRows(id, provider, cached.models));
   }
   try {
     const result = await fetchCatalogue(req, provider);
@@ -3197,7 +3463,7 @@ async function llmModels(req, res) {
         const pinned = provider.models.map((id) => ({ id })).filter((m) => m && m.id);
         if (pinned.length) {
           modelCache.set(id, { fetchedAt: Date.now(), models: pinned });
-          return sendJson(res, 200, pinned);
+          return sendJson(res, 200, annotateCatalogueRows(id, provider, pinned));
         }
       }
       // Name the paths that were read. A gateway that answered nothing on its
@@ -3223,7 +3489,11 @@ async function llmModels(req, res) {
       : provider.models && typeof provider.models === 'object'
         ? selectAllowedModels(models, provider.models)
         : models;
-    if (provider.freeOnly) listed = listed.filter((m) => isFreeModelId(m.id));
+    // Free is a question about entitlement wherever the provider declares its
+    // free tier, and about price everywhere else. isFreeModelId is only the
+    // second half of that rule, which is how a keyless tier's priced catalogue
+    // used to be filtered away entirely.
+    if (provider.freeOnly) listed = listed.filter((m) => modelIsFreeOnProvider(provider, m));
     // An allowlist that intersects the live catalogue at zero rows means every
     // pinned id was retired upstream — the empty picker that follows reads as
     // a bug ("no model" + a fetch error on the user's side). Serve the live
@@ -3235,7 +3505,7 @@ async function llmModels(req, res) {
     // picker with no rows at all.
     if (listed.length === 0) {
       if (provider.freeOnly) {
-        const free = models.filter((m) => isFreeModelId(m.id));
+        const free = models.filter((m) => modelIsFreeOnProvider(provider, m));
         if (free.length) listed = free;
       }
       // A declared list (PROVIDER_MODELS) that matches nothing is a typo or a
@@ -3271,7 +3541,7 @@ async function llmModels(req, res) {
     // nothing, and an empty list would outlive the upstream hiccup that
     // caused it, pinning "no models" for the cache's whole lifetime.
     if (listed.length) modelCache.set(id, { fetchedAt: Date.now(), models: listed });
-    sendJson(res, 200, listed);
+    sendJson(res, 200, annotateCatalogueRows(id, provider, applyFreeOnlyGate(provider, listed)));
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
@@ -3473,15 +3743,176 @@ async function llmSkillContent(req, res) {
 // Which path answered rides back with the result. That is the fact that tells
 // an operator their gateway ignored a parameter rather than being unreachable
 // -- two failures with the same message and completely different fixes.
+// --- Free tiers -------------------------------------------------------------
+//
+// Which models a provider will serve without being paid for, and what it meters
+// while it does. This exists because "is it free?" cannot be answered from a
+// price. OVHcloud publishes per-token prices for a funded account and still
+// answers on a keyless anonymous tier, so its whole catalogue read as paid: the
+// picker offered those rows with no free label, ranked them last, and said
+// nothing about the two-requests-a-minute allowance that is the only thing
+// standing between the user and a stalled turn.
+//
+// A declaration wins over the price. Everything not declared here keeps the
+// price-based rule, including its documented assumption about a catalogue that
+// publishes no prices at all.
+function providerFreeTier(provider) {
+  return provider && provider.freeTier && typeof provider.freeTier === 'object' ? provider.freeTier : null;
+}
+
+// "2/min · per IP", "10,000 neurons/day" -- one short line for a picker row.
+function freeTierLimitText(tier) {
+  const limits = (tier && tier.limits) || {};
+  const parts = [];
+  if (limits.requestsPerDay) parts.push(Number(limits.requestsPerDay).toLocaleString('en-US') + '/day');
+  if (limits.requestsPerMinute) parts.push(limits.requestsPerMinute + '/min');
+  if (limits.neuronsPerDay) parts.push(Number(limits.neuronsPerDay).toLocaleString('en-US') + ' neurons/day');
+  if (limits.scope === 'ip') parts.push('per IP');
+  if (limits.shared) parts.push('shared');
+  return parts.join(' · ');
+}
+
+function freeTierCovers(tier, modelId) {
+  if (!tier) return false;
+  if (tier.all) return true;
+  const id = String(modelId || '');
+  const wanted = Array.isArray(tier.models) ? tier.models : [];
+  // Three shapes, because three are what providers actually use: a bare `:free`
+  // or `-free` is a suffix, `*` is a wildcard anywhere in the pattern, and
+  // anything else is an exact id. Deliberately not a regex: the patterns here
+  // are ids, and an id with a bracket in it should not become a pattern.
+  return wanted.some((pattern) => {
+    const text = String(pattern || '');
+    if (!text) return false;
+    if (text.startsWith(':') || text.startsWith('-')) return id.endsWith(text);
+    if (text.includes('*')) {
+      let from = 0;
+      for (const part of text.split('*').filter((p) => p !== '')) {
+        const at = id.indexOf(part, from);
+        if (at === -1) return false;
+        from = at + part.length;
+      }
+      return true;
+    }
+    return id === text;
+  });
+}
+
+// Free is a question about entitlement, not price, wherever a provider declares
+// its free tier. Everywhere else the price-based rule stands.
+function modelIsFreeOnProvider(provider, model) {
+  const tier = providerFreeTier(provider);
+  if (tier && freeTierCovers(tier, model && model.id)) return true;
+  return isFreeModelId(model && model.id);
+}
+
+// The catalogue rows as the picker should see them: free-ness settled by the
+// provider's own declaration where there is one, the tier's limits spelled out,
+// and the observed time for that model when this process has measured it.
+// Fresh objects every time, because the list itself is cached and a cached
+// latency reading would be a lie exactly when it mattered.
+function annotateCatalogueRows(providerId, provider, rows) {
+  const tier = providerFreeTier(provider);
+  const limitText = tier ? freeTierLimitText(tier) : '';
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const free = modelIsFreeOnProvider(provider, row);
+    const observedMs = providerModelLatency(providerId, row.id);
+    const annotated = { ...row };
+    if (free) annotated.free = true;
+    if (free && limitText) annotated.limits = limitText;
+    if (free && tier && tier.note) annotated.limitsNote = tier.note;
+    if (observedMs !== null) annotated.observedMs = observedMs;
+    return annotated;
+  });
+}
+
+// FREE_MODELS_ONLY=1 answers the API consumer rather than the page: it is the
+// same free-only rule the picker applies, applied at the source. It is off by
+// default because a provider the operator is paying for is not a mistake, and
+// the page has its own switch for the person who wants the short list.
+function freeOnlyGateEnabled() {
+  return String(process.env.FREE_MODELS_ONLY || '') === '1';
+}
+
+function applyFreeOnlyGate(provider, listed) {
+  if (!freeOnlyGateEnabled()) return listed;
+  const free = listed.filter((m) => modelIsFreeOnProvider(provider, m));
+  // Never gate a picker down to nothing. A provider whose whole catalogue
+  // reads as paid is either a paid provider or a catalogue this build cannot
+  // read, and an empty list says "no models", which is untrue in both cases.
+  return free.length ? free : listed;
+}
+
+// What the page needs to say about a provider's free tier without repeating the
+// declaration: the limits in words, the note, and today's share of a cap the
+// provider keeps.
+function freeTierReport(providerId, provider) {
+  const tier = providerFreeTier(provider);
+  if (!tier) return null;
+  const limits = tier.limits || {};
+  const snapshot = providerLedgerSnapshot(providerId);
+  const callsToday = snapshot ? snapshot.callsToday : 0;
+  const cap = Number(limits.requestsPerDay) || null;
+  return {
+    limits,
+    text: freeTierLimitText(tier),
+    note: tier.note,
+    scope: limits.scope,
+    callsToday,
+    cap,
+    share: cap ? Math.min(1, callsToday / cap) : null,
+  };
+}
+
+// A host's own edge answers 502/503/504 when its router cannot reach the
+// container at all, and that is usually over by the next request: a deploy
+// finishing, a process restarting, one request the router could not place. One
+// quick second attempt is the difference between a picker that works after a
+// hiccup and one that reports a failure whose only remedy is a page reload.
+// Only a *fast* refusal is retried -- a slow one is an outage, and a second
+// attempt against a gateway that is already struggling just doubles the wait.
+const CATALOGUE_RETRY_STATUSES = new Set([502, 503, 504]);
+const CATALOGUE_RETRY_BUDGET_MS = 8000;
+
+// Read at call time so a test can shrink it, like every other wait in here.
+function catalogueRetryDelayMs() {
+  const n = Number(process.env.CATALOGUE_RETRY_DELAY_MS);
+  return Number.isFinite(n) && n >= 0 ? n : 600;
+}
+
+async function providerFetchBriefly(req, provider, path, budgetMs = 0) {
+  const first = await providerFetch(req, provider, path, {}, budgetMs);
+  if (!CATALOGUE_RETRY_STATUSES.has(first.status)) return first;
+  await sleep(catalogueRetryDelayMs() + Math.floor(Math.random() * 400));
+  const second = await providerFetch(
+    req,
+    provider,
+    path,
+    {},
+    Math.min(budgetMs > 0 ? budgetMs : providerTimeoutMs().models, CATALOGUE_RETRY_BUDGET_MS),
+  );
+  // The first answer is what would have been reported anyway, so a second
+  // failure reports that one rather than a status the first attempt never saw.
+  return second.ok ? second : first;
+}
+
 async function fetchCatalogue(req, provider, budgetMs = 0) {
   const declared = provider.modelsPath || '/models';
-  const first = await providerFetch(req, provider, declared, {}, budgetMs);
+  const first = await providerFetchBriefly(req, provider, declared, budgetMs);
   const usable = (result) => result.ok && catalogueRows(result.data).length;
   if (usable(first)) return { ...first, path: declared };
-  const drift = !first.ok ? first.status === 404 : true;
+  // Version drift has more than one signature, and a 502 is one of them: a
+  // gateway that does not know a parameter answers 404, while one whose own
+  // edge rejects the query string answers a gateway error. From here the two
+  // are the same fact -- the query string is a suspect and the plain path is
+  // one request away from ruling it out. Only the catalogue pays for that
+  // second request; a chat turn never falls back.
+  // 401/403 stay out on purpose: those are about the key, and no other path
+  // makes a key correct.
+  const drift = !first.ok ? first.status === 404 || first.status >= 500 : true;
   // Nothing to fall back to when the declared path is already the plain one.
-  if (!drift || declared === '/models') return { ...first, path: declared };
-  const second = await providerFetch(req, provider, '/models', {}, budgetMs);
+  if (!drift || declared === '/models') return { ...first, path: declared };    const second = await providerFetchBriefly(req, provider, '/models', budgetMs);
   if (usable(second)) return { ...second, path: '/models', fallbackUsed: true };
   // Neither path answered. Report the one that was configured for it, since
   // that is the one whose parameter the operator would change.
@@ -3612,7 +4043,7 @@ async function llmChatTextQuery(req, res, id, provider, body) {
       } finally {
         clearTimeout(timer);
       }
-    });
+    }, { model: body.model });
   } catch (e) {
     return sendJson(res, 502, { error: e.message });
   }
@@ -3696,7 +4127,7 @@ function llmChat(req, res) {
           } finally {
             clearTimeout(headerTimer);
           }
-        });
+        }, { model: body.model });
         res.writeHead(upstream.status, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -3781,7 +4212,7 @@ function llmChat(req, res) {
           // Passed through rather than rebuilt: these are OpenAI-shaped already,
           // and rebuilding would quietly drop anything new the caller sends.
           body: upstreamBody,
-        })
+        }), { model: body.model }
       );
       if (!ok) {
         // Collapsing every upstream failure into one string made it impossible
@@ -4251,7 +4682,7 @@ async function callBuildModel({ provider: id, model, messages, tools, ctx }) {
   const body = JSON.stringify({ model, messages, ...(tools ? { tools } : {}), temperature: 0.2 });
   const pseudoReq = { headers: (ctx && ctx.headers) || {} };
   const result = await fetchProviderWithRetry(id, () =>
-    providerFetch(pseudoReq, provider, '/chat/completions', { method: 'POST', body })
+    providerFetch(pseudoReq, provider, '/chat/completions', { method: 'POST', body }), { model },
   );
   if (!result.ok) {
     return {
@@ -4501,6 +4932,16 @@ module.exports = {
   fetchProviderWithRetry,
   fetchStreamWithRetry,
   clearModelCache,
+  // The ledger is process state, so a test that leaves a provider cooling would
+  // slow every test after it. Same for the retry budget: both are read at call
+  // time and cleared here.
+  clearProviderLedger: () => {
+    providerLedger.clear();
+    providerCooldownUntil.clear();
+  },
+  providerCooldownUntil,
+  providerLedgerSnapshot,
+  retryBudgetMs,
   clearImageDiscoveryCache,
   imageModelFromCatalogue,
   clearSkillsCache,

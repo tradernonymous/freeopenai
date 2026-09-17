@@ -18,6 +18,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `PROVIDER_STALL_MS` | `60000` | Aborts a stream quiet longer than this, with a stall message instead of silence. |
 | `PROVIDER_TIMEOUT_MODELS_MS` | `20000` | Budget for model-catalogue fetches. |
 | `RATE_LIMIT_MAX_ATTEMPTS` | `6` | Retries per call for a transient answer — 429, a 5xx, or no response at all. 1–10. Backoff grows per attempt with jitter; a provider's `Retry-After` header is honoured when one is sent. |
+| `RATE_LIMIT_RETRY_BUDGET_MS` | `20000` | How long one call may spend **waiting** to retry, in total. An attempt count cannot bound this on a free tier: OVHcloud answers a rate limit with `Retry-After: 40-57`, so six attempts at its own schedule is minutes of a stalled turn before the app even considers another provider. Past this budget the refusal is handed back and the turn moves on — which is why a spent free tier now costs a hop instead of a wait. Set it higher to be patient with one provider, lower to fail over sooner. |
+| `CATALOGUE_RETRY_DELAY_MS` | `600` | How long to pause before the one quick second attempt at a model catalogue whose host answered 502/503/504. A container host's own router says "Application failed to respond" when it cannot reach a container for a moment, and one more request is the difference between a picker that loads and a page that reports a broken gateway. |
 | `AUTH_USER_1` / `AUTH_PASS_1` | *(unset)* | Login gate. Set both halves and the app requires a sign-in; leave either unset and the app stays open to everyone. It also decides what a *direct* provider (Nara, OpenRouter, NVIDIA, OmniRoute) needs: with a login of its own the app has already identified the visitor and enforces that on every API route, so those providers work with no Puter account. With no login gate, the Puter sign-in stays required even for a direct provider, because there it is the only thing between an anonymous visitor and your API keys. |
 | `AUTH_USER_2` / `AUTH_PASS_2` | *(unset)* | A second account. Optional. |
 | `AUTH_USER_3` / `AUTH_PASS_3` | *(unset)* | A third account. Optional — three is the maximum. |
@@ -44,7 +46,7 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `NVIDIA_API_KEY` | *(unset)* | Adds NVIDIA's hosted models — live catalogue (GLM, DeepSeek, Kimi, MiniMax, Devstral, Qwen, Nemotron, Gemma, Mistral, gpt-oss and the rest, as served). |
 | `GROQ_API_KEY` | *(unset)* | Adds **Groq** — free tier with fast inference. Models include Llama 3.3 70B, Llama 3.1 8B, Mixtral 8x7B, Gemma 2 9B, Gemma 7B. Get your API key from https://console.groq.com/keys. |
 | `KILO_API_KEY` | *(not needed)* | Adds **Kilo Code** — a free gateway that answers with **no key at all**, so this provider is on in every deployment without anything being set. 200 requests an hour per IP (shared by every visitor on a container host), no signup, no card. Pinned to Kilo's free pool, led by `kilo-auto/free` (its own rotating router), Poolside **Laguna S 2.1** and **North Mini Code** (agentic coding, tool calling, 262K context), and Nemotron 3 Ultra 550B at 1M context. Setting this variable is only ever an override for a keyed account; `KILO_MODELS` pins a different subset and `KILO_DISABLED=1` switches it off. |
-| `OVHCLOUD_API_KEY` | *(not needed)* | Adds **OVHcloud AI Endpoints** — also **keyless**, EU-hosted, no signup. Qwen3-Coder 30B, gpt-oss 120B/20B, Qwen3.5 397B, Llama 3.3 70B, Qwen2.5-VL 72B. Its limit is the tightest here: **2 requests a minute per IP per model**, and measured live a handful of requests from one address turns the whole endpoint into `429` — so it is a pool to fall back on, never one to rely on. `OVHCLOUD_MODELS` pins a subset; `OVHCLOUD_DISABLED=1` switches it off. |
+| `OVHCLOUD_API_KEY` | *(not needed)* | Adds **OVHcloud AI Endpoints** — also **keyless**, EU-hosted, no signup. Qwen3-Coder 30B, gpt-oss 120B/20B, Qwen3.5 397B, Llama 3.3 70B, Qwen2.5-VL 72B. Its limit is the tightest here: **2 requests a minute per IP for the whole catalogue** — measured live, one request leaves `remaining: 0` for every model on that address, so the allowance is shared rather than one per model — and a handful of requests from one address turns the endpoint into `429`. It is a pool to fall back on, never one to rely on. `OVHCLOUD_MODELS` pins a subset; `OVHCLOUD_DISABLED=1` switches it off. |
 | `OVHCLOUD_IMAGE_MODEL` | *(unset)* | **The one free image drawer this app has that needs no key at all.** Setting it to `stable-diffusion-xl-base-v10` makes OVHcloud a drawing service — verified live, a request with no `Authorization` header at all answers `200` with a real PNG. It is opt-in rather than always-on because 2 requests a minute per IP is far too tight to sit silently in front of every draw; with the variable set it joins the order behind the five named services. |
 | `G4F_BASE_URL` | *(unset)* | Points the **gpt4free** provider at a self-hosted `Interference API` (see `deploy/g4f-railway/`). Include `/v1` or leave it off — the version segment is added when it is missing. This is the **last** service tried for a picture, because it works by reading third-party sites rather than through a documented API and individual adapters break without notice. `G4F_API_KEY` is only sent when set; `G4F_MODELS` pins the picker and `G4F_IMAGE_MODEL` (default `flux`) picks the drawing model. It declares no edit support, so an edit is stepped past rather than mis-drawn. |
 | `<PROVIDER>_DISABLED` | *(unset)* | Switches any provider off — `KILO_DISABLED=1`, `OVHCLOUD_DISABLED=1`, and so on. It exists because of the keyless providers: they activate with nothing set, so before this there was no variable to remove to deactivate one. |
@@ -55,7 +57,56 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | `OMNIROUTE_BASE_URL` | *(unset)* | Adds **OmniRoute** — a self-hosted AI gateway that fronts hundreds of upstream providers behind one OpenAI-compatible endpoint, including the `auto` model that routes each request to the best connected provider. Set it or `OMNIROUTE_API_KEY`. See [OmniRoute](omniroute.md). |
 | `OMNIROUTE_API_KEY` | *(unset)* | Optional key, sent as `Bearer`. A fresh OmniRoute install answers without one (`REQUIRE_API_KEY=false`); when the gateway is hardened to require a key, set it here — and an unset key means *no* auth header at all, never a bare `Bearer`. |
 | `OMNIROUTE_MODELS` | *(the lead list)* | Comma-separated ids that replace the lead list — the `auto` variants and the free-tier flagships — when your gateway's catalogue routes different names. |
+| `FREE_MODELS_ONLY` | `0` | `1` applies the picker's free-only rule at the source: `/api/llm/models` returns only the rows a free tier covers, which is what an API consumer wants and what the page has its own switch for. Off by default, because a provider the operator is paying for is not a mistake. |
 | `OPENROUTER_FREE_ONLY` | `1` | Free models only. Also means **no drawing**: OpenRouter's Image API has no free tier — its own docs say so, and none of its image models carries a `:free` id — so a free-only key is not offered as an image candidate. Set `0` once the key has credits. |
+
+## Free tiers, and what they meter
+
+Free-ness is settled by **entitlement**, not by price. A provider that declares a
+free tier has its declaration win: every model it covers is reported `free: true`
+with the limits in words, whatever its catalogue says about pricing. That is what
+makes OVHcloud read correctly — it publishes per-token prices for a funded
+account while answering on a keyless anonymous tier, so a price-based rule
+offered its seven chat models as paid rows with no free label and ranked them
+last.
+
+Declared today: **OVHcloud** (`2/min · per IP · shared`), **Kilo Code**,
+**Cloudflare** (10,000 Neurons a day), **OpenRouter** (`:free` ids, 50 requests a
+day unfunded) and **OmniRoute** (whatever its own connections serve). Everything
+else keeps the price rule, including its documented assumption about a catalogue
+that publishes no prices — those rows are labelled **`free (assumed)`**, because a
+provider that wanted billing first is free to say so, and its error is the honest
+answer.
+
+Two surfaces report it:
+
+- `GET /api/llm/models?provider=<id>` — each row carries `free`, `limits` (the
+text above), and `observedMs` when this process has measured that model.
+- `GET /api/llm/providers` — each provider carries `freeTier` (`limits`, `text`,
+  `note`, `callsToday`, `cap`, `share`) and `health` (`latencyMs`, `cooling`,
+  `cooldownMs`, `lastStatus`, `lastRetryAfterMs`, `lastAt`).
+
+The numbers are this process's own beats, not the provider's reporting: they reset
+on every deploy, and a provider that publishes no rate-limit headers (Kilo) can
+only ever be counted rather than quoted. `GET /api/llm/limits` lists every declared
+tier with its limits and today's count.
+
+Those two reports are what the app routes by. The failover order puts a cooling
+provider last, then one whose free tier is past 80% of a known cap, then orders
+by observed latency; the picker labels a row that has been slow here, and says
+once a day when a free tier is nearly spent — before the turn that would have run
+into it.
+
+### The free-only picker
+
+**Settings → Chat → Free models only** (on by default) hides the rows a provider
+charges for, so the picker leads with what costs nothing. It is a view preference,
+stored in the browser, and it never filters a provider down to nothing: a provider
+whose whole catalogue reads as paid is shown anyway, with the row count and the
+reason stated under the list. `FREE_MODELS_ONLY=1` applies the same rule at the
+API instead, for consumers that are not this page.
+
+<br>
 
 > Each provider stays out of the picker until its key is set — **except the two keyless ones** (`KILO_API_KEY`, `OVHCLOUD_API_KEY`, both of which need no variable at all and are on in every deployment), because a free tier behind a key is the one that runs out, and a variable that has to be set is the one that is missing on a fresh deploy. Any `*_API_KEY` also accepts a matching `*_BASE_URL` override, for a self-hosted endpoint or a proxy.
 >

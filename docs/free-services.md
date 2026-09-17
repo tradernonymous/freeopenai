@@ -36,15 +36,24 @@ app's own outbound address — **shared by every visitor.**
 
 - **Kilo Code:** 200 requests an hour per IP. Plenty for one person, shared among
   a crowd.
-- **OVHcloud:** 2 requests a minute **per model** per IP, which is the tightest
-  limit here. Measured live, a handful of requests from one address turned the
-  whole endpoint into `429` — including models nothing had asked for. It is a
-  pool to fall back on, never the one to live on.
+- **OVHcloud:** 2 requests a minute per IP for the **whole catalogue** —
+  measured live, one request leaves `remaining: 0` for every model on that
+  address, so it is a shared allowance rather than one per model. It is the
+  tightest limit here, and a pool to fall back on rather than the one to live on.
+
+Those limits are on the model rows themselves, so you can see them where you
+choose: the picker labels each row `free · 2/min · per IP · shared`, and
+Settings → **Server response limits** lists every declared free tier with today's
+call count. Both come from `/api/llm/providers` and `/api/llm/limits`.
 
 The app handles a `429` the way it handles any other transient failure: the turn
 moves to the next configured provider with everything it had already collected,
-so you see the work continue rather than an error. You just should not be
-surprised when it happens.
+so you see the work continue rather than an error. It also **stops waiting**
+before it does that — a free tier's own `Retry-After` is often longer than the
+turn is worth (40-57s on OVHcloud), so past a 20-second waiting budget the app
+hands the refusal back and moves on instead of sleeping through it. Raise or
+lower that with `RATE_LIMIT_RETRY_BUDGET_MS`. You just should not be surprised
+when a hop happens.
 
 Neither service is private. Both may route a prompt to a provider that logs it,
 and Kilo's free pool explicitly warns that prompts may be used to improve
@@ -104,7 +113,29 @@ It is last for a reason: it reaches models by reading third-party web endpoints
 rather than through documented APIs, so individual adapters break without notice.
 A rescue, not a first choice. Full steps and caveats are in that folder's README.
 
-## 4 · Verification: two URLs that tell you the truth
+## 4 · If OmniRoute says `502: Application failed to respond`
+
+That message is not OmniRoute's — it is your host's own router saying it could
+not reach the gateway's container. The three causes, in order:
+
+1. **The port does not match.** The service listens on one port while
+   `OMNIROUTE_BASE_URL` names another. `deploy/omniroute-railway/` now pins
+   `PORT=20128` inside the container, so this should not happen on a fresh
+   deploy; on an older one, open the service's deploy log and look for
+   `[entrypoint] ... port=20128`.
+2. **The container is restarting** — a deploy in progress, or a crash loop. The
+   deploy log's last lines say which; a healthy boot ends with
+   `SQLite database ready` and a run of scheduler lines.
+3. **One request the router could not place.** Over by the next try. The app now
+   makes one quick second attempt at that 502, and if the gateway's deduplicated
+   catalogue path answers a gateway error it falls back to the plain `/models` —
+   so a single hiccup no longer empties the model picker.
+
+```bash
+railway logs --service omniroute
+```
+
+## 5 · Verification: two URLs that tell you the truth
 
 Both need no login and are never cached.
 
@@ -124,7 +155,23 @@ would actually fix it rather than a service you never configured.
 set at all**. If they do not, something is overriding them — check for a
 `*_DISABLED` variable.
 
-## 5 · About the two services you may not need
+Each provider in that report also carries a `freeTier` and a `health` block:
+
+```json
+{
+  "id": "ovhcloud",
+  "configured": true,
+  "freeTier": { "text": "2/min · per IP · shared", "scope": "ip", "callsToday": 3, "cap": null, "share": null },
+  "health": { "latencyMs": 1840, "cooling": false, "cooldownMs": 0, "lastStatus": 200, "lastRetryAfterMs": 54000 }
+}
+```
+
+`health.cooling: true` means the app declined a rate limit's wait and is letting
+another provider answer until the cooldown expires. `callsToday` is this app
+counting its own calls — it resets on every deploy, and for a provider that sends
+no rate-limit headers (Kilo) it is the only count there is.
+
+## 6 · About the two services you may not need
 
 This app was researched against a set of "free coding agent" projects. Two are
 worth a specific note, because both look like they would plug straight in and

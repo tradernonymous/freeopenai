@@ -2580,6 +2580,13 @@
                     </div>
                     <div class="settings-row">
                         <div>
+                            <strong>Free models only</strong>
+                            <p class="settings-hint">Hide models a provider meters or charges for, so the picker leads with what costs nothing. Keyless free tiers stay, with the limit each one enforces on the row.</p>
+                        </div>
+                        <input type="checkbox" id="freeOnlyCheck" checked onchange="setFreeModelsOnly(this.checked)" aria-label="Show free models only">
+                    </div>
+                    <div class="settings-row">
+                        <div>
                             <strong>Reasoning summary</strong>
                             <p class="settings-hint">Show what a reasoning model is thinking: one moving line while it works, folded away behind a summary when the answer arrives.</p>
                         </div>
@@ -3553,6 +3560,12 @@
         let generationId = 0;
         let autoRetryEnabled = true;
         let compactNotices = false;
+        // On by default, because every provider this app ships a keyless tier for
+        // is free: a picker that leads with the free rows and hides the metered
+        // ones is the honest default for an app whose whole premise is free
+        // models. A paid provider the operator configured is one click away, and
+        // the grid says how many rows the setting is hiding.
+        let freeModelsOnly = true;
         // Compact session: send a short recent history instead of the full one.
         // A context policy for token spend, not a destructive operation -- the
         // visible transcript is untouched. Persisted so it survives a reload,
@@ -3874,10 +3887,25 @@
 
         // The dropdown shows the current provider's catalogue: the curated Puter
         // list, or whatever the direct provider actually offers.
+        // Every surface reads its rows from here -- the dropdown, the card grid
+        // and the default-model select -- which is why the free-only filter
+        // belongs at this one place rather than in each of them.
         function activeModels() {
-            return selectedProvider === PUTER_PROVIDER
-                ? MODELS
-                : providerModels.map((m) => ({ id: m.id, name: m.id, desc: describeProviderModel(m) }));
+            if (selectedProvider === PUTER_PROVIDER) return MODELS;
+            const rows = freeModelsOnly ? freeRowsOnly(providerModels).rows : providerModels;
+            return rows.map((m) => ({ id: m.id, name: m.id, desc: describeProviderModel(m) }));
+        }
+
+        // What the free-only setting is hiding, in words. An empty result is
+        // reported rather than obeyed: a provider whose whole catalogue reads as
+        // paid is a real thing to look at, and a picker with no rows and no
+        // reason is worse than showing what was filtered.
+        function hiddenModelRowsNote() {
+            if (!freeModelsOnly || selectedProvider === PUTER_PROVIDER) return '';
+            const { hidden, empty } = freeRowsOnly(providerModels);
+            if (empty) return 'No model here reads as free — showing all of them. Turn off "Free models only" to stop filtering.';
+            if (!hidden) return '';
+            return hidden + ' model' + (hidden === 1 ? '' : 's') + ' hidden by "Free models only"';
         }
 
         function renderModelOptions() {
@@ -3936,6 +3964,15 @@
             // any, goes right back on so the grid does not forget what it showed.
             const cardSearch = document.getElementById('modelCardSearch');
             if (cardSearch) filterModelCards(cardSearch.value);
+            // Last, so the note sits under the rows it is about and cannot be
+            // picked: it is a paragraph, not a button.
+            const note = hiddenModelRowsNote();
+            if (note) {
+                const line = document.createElement('p');
+                line.className = 'models-note';
+                line.textContent = note;
+                modelsList.appendChild(line);
+            }
         }
 
         // The Models view is a card grid, and a grid with dozens of rows needs
@@ -5792,7 +5829,73 @@
         // trying. Built from the server's own list rather than from the picker,
         // which can only show one at a time.
         function providerFailoverOrder() {
-            return failoverProviderOrder(Object.values(providerInfo || {}), { puterUsable: puterCanDraw() });
+            // Health rides along so the order is the one that costs least: a
+            // provider cooling down goes last, then one whose free tier is nearly
+            // spent, then by observed latency. With nothing measured yet this is
+            // exactly the order the picker shows.
+            return failoverProviderOrder(Object.values(providerInfo || {}), {
+                puterUsable: puterCanDraw(),
+                health: providerHealthMap(),
+            });
+        }
+
+        // Per provider, what this server has measured: the last status, the
+        // observed latency, and how long it asked to be left alone. A provider
+        // with no entry is unknown rather than fine, which is how
+        // providerRouteScore in chatlib reads it.
+        function providerHealthMap() {
+            const map = {};
+            Object.values(providerInfo || {}).forEach((p) => {
+                if (p && p.id && p.health) map[p.id] = p.health;
+            });
+            return map;
+        }
+
+        // Health and free-tier usage come from the endpoint the picker already
+        // uses, at most once a minute: cheap, no model call, and it is what lets
+        // the app say "this provider is out of allowance" before the user finds
+        // out mid-task.
+        let providerHealthFetchedAt = 0;
+        const providerHealthNotesShown = new Set();
+
+        async function refreshProviderHealth() {
+            if (Date.now() - providerHealthFetchedAt < 60000) return;
+            providerHealthFetchedAt = Date.now();
+            try {
+                const all = await safeJson(await fetch('/api/llm/providers'));
+                if (!Array.isArray(all)) return;
+                all.forEach((p) => {
+                    if (p && p.id && providerInfo[p.id]) {
+                        providerInfo[p.id] = { ...providerInfo[p.id], freeTier: p.freeTier, health: p.health };
+                    }
+                });
+            } catch { /* a health read that fails changes nothing */ }
+        }
+
+        function healthDayKey() {
+            return new Date().toISOString().slice(0, 10);
+        }
+
+        // Said once a day per provider per reason. A warning that repeats on every
+        // message is one the user learns to scroll past, and the point is the line
+        // that arrives *before* the allowance runs out rather than after.
+        async function noteProviderHealth() {
+            await refreshProviderHealth();
+            const info = providerInfo[selectedProvider];
+            if (!info) return;
+            const notes = [];
+            if (info.health && info.health.cooling) {
+                notes.push(providerLabel(selectedProvider) + ' is cooling down for another ' + Math.ceil(info.health.cooldownMs / 1000) + 's after a rate limit.');
+            }
+            const tier = info.freeTier;
+            if (tier && tier.cap && typeof tier.share === 'number' && tier.share >= 0.8) {
+                notes.push(providerLabel(selectedProvider) + ': about ' + tier.callsToday + ' of ' + tier.cap + ' free calls used today' + (tier.text ? ' (' + tier.text + ')' : '') + '.');
+            }
+            if (!notes.length) return;
+            const key = selectedProvider + ':' + healthDayKey() + ':' + notes.join(' ');
+            if (providerHealthNotesShown.has(key)) return;
+            providerHealthNotesShown.add(key);
+            addMessage('system', notes.join(' '));
         }
 
         // The provider's own words, short enough to sit inside a sentence.
@@ -7174,6 +7277,10 @@
             escalatedBlankThisTurn = false;
             lastReplyModel = null;
             maybeWarnAboutCost();
+            // What the server already knows about the provider this turn is about
+            // to use -- a cooldown, or a free tier close to its cap -- said before
+            // the turn rather than by the failure it causes.
+            noteProviderHealth().catch(() => {});
 
                 const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
 
@@ -7326,8 +7433,11 @@
                     // An image has to be carried in the message array here, and
                     // only a model that can read it should get the turn.
                     let convo = buildConversation(outgoing);
+                    // Held outside the branch below, because a hop to another
+                    // provider has to rebuild the turn with the same picture.
+                    let imageUrl = null;
                     if (attachedImageFile) {
-                        const imageUrl = await imageDataUrlForRequest(attachedImageFile);
+                        imageUrl = await imageDataUrlForRequest(attachedImageFile);
                         if (!imageUrl) {
                             removeTypingIndicator();
                             addMessage('system', 'That image could not be sent here — try a smaller one.', { error: true });
@@ -7340,36 +7450,59 @@
                         }
                         convo = withImageTurn(convo, imageUrl, outgoing);
                     }
-                    const bubble = createBotBubble();
-                    const renderer = createStreamRenderer(bubble);
-                    try {
-                        const partial = await streamProviderChat(convo, renderer, controller.signal, bubble);
-                        if (!isActiveRun(runId, controller)) {
+                    // An image turn is the one path that cannot use the agent
+                    // loop, and it was also the one path with no rescue: a
+                    // provider that died here ended the turn outright, so a photo
+                    // attached to a request that met a spent free tier lost the
+                    // work while an identical text turn would have been carried
+                    // to another provider. Same hop, same bookkeeping.
+                    let bubble = null;
+                    let renderer = null;
+                    let partial = null;
+                    const blockedProviders = new Set([selectedProvider, ...providersSuspended]);
+                    for (let hop = 0; hop <= MAX_PROVIDER_FAILOVERS; hop++) {
+                        bubble = createBotBubble();
+                        renderer = createStreamRenderer(bubble);
+                        try {
+                            partial = await streamProviderChat(convo, renderer, controller.signal, bubble);
+                            break;
+                        } catch (error) {
+                            removeTypingIndicator();
                             renderer.abort();
-                            if (bubble.parentNode) bubble.remove();
-                            return;
+                            // Aborted or failed with no content — discard the empty bubble.
+                            if (!renderer.full && bubble.parentNode) bubble.remove();
+                            if (error.name === 'AbortError' || !isActiveRun(runId, controller)) {
+                                showStatus('info', 'Generation stopped');
+                                return;
+                            }
+                            // The test the tool loop already applies: an outage, a
+                            // spent allowance or a refused account belongs to
+                            // another provider, while a refused model does not.
+                            if (!isFailoverWorthyFailure(error.message, error.statusCode, error.modelId)) throw error;
+                            const moved = await moveTurnToNextProvider(blockedProviders, error);
+                            if (!moved) throw error;
+                            // The next provider has its own catalogue, so the
+                            // model that answers is a different one -- and the
+                            // picture has to be readable there too.
+                            if (!insistOnImageModel()) throw new Error(providerLabel(moved) + ' has no model that can read images.');
+                            convo = withImageTurn(buildConversation(outgoing), imageUrl, outgoing);
                         }
-                        removeTypingIndicator();
-                        // A partial ending already finalized its bubble and set
-                        // the status; finalizing again would double the message.
-                        if (partial) {
-                            noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
-                            return;
-                        }
-                        finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
-                        noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
-                        showStatus('success', 'Sent');
-                    } catch (error) {
-                        removeTypingIndicator();
-                        renderer.abort();
-                        // Aborted or failed with no content — discard the empty bubble.
-                        if (!renderer.full && bubble.parentNode) bubble.remove();
-                        if (error.name === 'AbortError' || !isActiveRun(runId, controller)) {
-                            showStatus('info', 'Generation stopped');
-                            return;
-                        }
-                        throw error;
                     }
+                    if (!isActiveRun(runId, controller)) {
+                        renderer.abort();
+                        if (bubble.parentNode) bubble.remove();
+                        return;
+                    }
+                    removeTypingIndicator();
+                    // A partial ending already finalized its bubble and set
+                    // the status; finalizing again would double the message.
+                    if (partial) {
+                        noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
+                        return;
+                    }
+                    finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
+                    showStatus('success', 'Sent');
                     return;
                 }
 
@@ -9671,6 +9804,9 @@
             autoRetryEnabled = localStorage.getItem('puterChatAutoRetry') !== '0';
             const arc = document.getElementById('autoRetryCheck');
             if (arc) arc.checked = autoRetryEnabled;
+            freeModelsOnly = localStorage.getItem('freeai4uFreeModelsOnly') !== '0';
+            const foc = document.getElementById('freeOnlyCheck');
+            if (foc) foc.checked = freeModelsOnly;
             compactNotices = localStorage.getItem('puterChatCompactNotices') === '1';
             const cnc = document.getElementById('compactNoticesCheck');
             if (cnc) cnc.checked = compactNotices;
@@ -9684,6 +9820,19 @@
         function setAutoRetry(on) {
             autoRetryEnabled = !!on;
             try { if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatAutoRetry', autoRetryEnabled ? '1' : '0'); } catch { /* private mode */ }
+        }
+
+        // The free-only switch changes what the picker shows, so the rows have to
+        // be rebuilt on the spot -- and the choice has to survive a reload, which
+        // is what the storage key is for.
+        function setFreeModelsOnly(on) {
+            freeModelsOnly = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('freeai4uFreeModelsOnly', freeModelsOnly ? '1' : '0'); } catch { /* private mode */ }
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('freeOnlyCheck');
+            if (box) box.checked = freeModelsOnly;
+            renderModelOptions();
+            updateModelLabel();
+            showStatus('info', freeModelsOnly ? 'Showing free models only' : 'Showing every model, free or paid');
         }
 
         function setCompactNotices(on) {
@@ -9719,7 +9868,19 @@
             try {
                 const data = await (await fetch('/api/llm/limits')).json();
                 const t = data.timeouts, r = data.retries;
-                el.textContent = `Chat ${Math.round(t.chat / 1000)}s · headers ${Math.round(t.headers / 1000)}s · stall ${Math.round(t.stall / 1000)}s · up to ${r.maxAttempts} tries`;
+                // The waiting budget belongs in this line more than any other
+                // number here: it is what stops a free tier's Retry-After from
+                // being spent on a turn that could be answered elsewhere.
+                const lines = [
+                    `Chat ${Math.round(t.chat / 1000)}s · headers ${Math.round(t.headers / 1000)}s · stall ${Math.round(t.stall / 1000)}s · up to ${r.maxAttempts} tries within ${Math.round((r.budgetMs || 0) / 1000)}s of waiting`,
+                ];
+                (Array.isArray(data.freeTiers) ? data.freeTiers : []).forEach((tier) => {
+                    const used = tier.cap
+                        ? ` — ${tier.callsToday}/${tier.cap} calls today`
+                        : (tier.callsToday ? ` — ${tier.callsToday} calls today` : '');
+                    lines.push(`${tier.label}: ${tier.text || 'free'}${used}`);
+                });
+                el.textContent = lines.join(' · ');
             } catch {
                 el.textContent = 'Server limits unavailable.';
             }

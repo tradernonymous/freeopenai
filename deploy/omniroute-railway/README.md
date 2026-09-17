@@ -47,6 +47,12 @@ fresh Railway bind mount): the unwrapped image fails with repeated
    the app listens on a port nothing is pointed at.
 5. **Settings → Networking → Generate Domain**, target port `20128`. You
    need this once, to open the dashboard and connect your providers.
+
+   The image pins `PORT=20128` itself, so you no longer need to set `PORT` in
+   step 4 -- and if you already did, leave it: the entrypoint forces the same
+   value either way. What must match is this target port and the port in
+   `OMNIROUTE_BASE_URL` in step 8. `OMNIROUTE_PORT` overrides the pin if you
+   genuinely need a different one.
 6. Open that URL, log in with `INITIAL_PASSWORD`, connect your providers.
 7. Harden it: create an API key in the dashboard, then set
    `REQUIRE_API_KEY=true` here.
@@ -56,3 +62,32 @@ fresh Railway bind mount): the unwrapped image fails with repeated
    OMNIROUTE_API_KEY=<the key from step 7>
    ```
    That's Railway's private network — no public exposure for that traffic.
+
+## If freeopenai says `502: Application failed to respond`
+
+That message is not OmniRoute's. It is Railway's own router saying it could not
+reach the container at all, and it comes with exactly three causes:
+
+1. **The port does not match.** The service is listening on one port while the
+   address in `OMNIROUTE_BASE_URL` names another. Check the entrypoint's
+   `[entrypoint] ... port=20128` line in the deploy log, then check that
+   `OMNIROUTE_BASE_URL` ends in the same number, and that the domain's target
+   port is that number too.
+2. **The container is restarting.** A deploy in progress, a crash loop, or a
+   process that exited. The deploy log's last lines say which: `SQLite database
+   ready`, then the scheduler lines, is a healthy boot.
+3. **One request the router could not place.** Usually over by the next try.
+   freeopenai now makes that opaque 502 worth one quick second attempt, and
+   falls back to the gateway's plain `/models` when its deduplicated path
+   answers a gateway error — so a single edge hiccup no longer empties the
+   picker.
+
+Read the log with the CLI rather than the dashboard, because it survives the
+page reload you are about to do:
+
+```bash
+railway logs --service omniroute
+```
+
+If the log shows a healthy boot and the port matches, the service is fine and
+the failure was the third case.

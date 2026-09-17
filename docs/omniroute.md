@@ -55,3 +55,17 @@ docker inspect app-omniroute-1 --format '{{range .Config.Env}}{{println .}}{{end
 ```
 
 Recover them into `.env` from there rather than inventing new ones. Once the container is removed, they are gone, and the only way back is a fresh admin password and a new API key on every client.
+
+**`502: Application failed to respond` is your host talking, not the gateway.** It is what a container host's own router says when it cannot reach the container at all, and there are three causes:
+
+1. **Port mismatch.** The gateway listens on one port while `OMNIROUTE_BASE_URL` names another. `deploy/omniroute-railway/` pins `PORT=20128` inside the container and logs it as `[entrypoint] data=… port=20128 command=…` on every boot, so the deploy log states which port it chose; the port in the URL and the domain's target port have to be that same number.
+2. **A container that is restarting**, or crash-looping. A healthy boot ends with `SQLite database ready` followed by the scheduler lines.
+3. **One request the router could not place**, usually over by the next try.
+
+The app now covers the third case twice over: a catalogue request answered 502/503/504 gets one quick second attempt (`CATALOGUE_RETRY_DELAY_MS`, default 600ms), and a gateway error on the deduplicated path falls back to the plain `/models` — because a gateway that no longer recognises a query parameter can answer a gateway error rather than a `404`, and one extra request is a cheap way to tell the two apart. A non-JSON body is also kept now: an edge answers HTML, and the sentence inside it used to be discarded as "returned a gateway error with no detail".
+
+```bash
+railway logs --service omniroute
+```
+
+**What the app reports back about the gateway.** `GET /api/llm/providers` gives OmniRoute a `health` block (measured latency, the last status, how long it asked to be left alone) and a `freeTier` block (its connected free tiers, and today's call count). A gateway that rate-limited a call and asked for a wait the app declined is reported as `cooling`, and the failover order puts it last until the cooldown expires — so a busy gateway does not become the provider every retry lands on.

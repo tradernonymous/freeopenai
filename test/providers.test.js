@@ -1225,9 +1225,18 @@ test('/api/llm/limits reports the effective knobs', async () => {
   await new Promise((r) => app.listen(0, r));
   const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/limits`)).json();
   app.close();
-  assert.deepEqual(Object.keys(body).sort(), ['retries', 'timeouts']);
+  assert.deepEqual(Object.keys(body).sort(), ['freeTiers', 'retries', 'timeouts']);
   assert.equal(body.timeouts.chat, 55000);
   assert.equal(body.retries.maxAttempts, 6);
+  // The waiting budget is what bounds a free tier's Retry-After: without it, an
+  // attempt count of six and a 54s wait is five minutes of a stalled turn.
+  assert.equal(body.retries.budgetMs, 20000);
+  // Every declared free tier travels with its limits in words, so Settings and
+  // the picker can say what a provider meters without repeating the table.
+  const ovh = body.freeTiers.find((t) => t.id === 'ovhcloud');
+  assert.ok(ovh, 'the keyless OVHcloud tier declares itself');
+  assert.equal(ovh.text, '2/min · per IP · shared');
+  assert.equal(ovh.scope, 'ip');
 });
 
 test('a stream that goes quiet aborts with a stall message, not silence', async () => {

@@ -12,6 +12,7 @@ function snapshotEnv() {
     key: process.env.OMNIROUTE_API_KEY,
     models: process.env.OMNIROUTE_MODELS,
     delay: process.env.RATE_LIMIT_BASE_DELAY_MS,
+    catalogueDelay: process.env.CATALOGUE_RETRY_DELAY_MS,
   };
 }
 
@@ -21,6 +22,7 @@ function restoreEnv(saved) {
     ['OMNIROUTE_API_KEY', saved.key],
     ['OMNIROUTE_MODELS', saved.models],
     ['RATE_LIMIT_BASE_DELAY_MS', saved.delay],
+    ['CATALOGUE_RETRY_DELAY_MS', saved.catalogueDelay],
   ]) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -80,6 +82,9 @@ async function withGateway({ baseUrl, key, models, respond } = {}, run) {
   if (key !== undefined) process.env.OMNIROUTE_API_KEY = key;
   if (models !== undefined) process.env.OMNIROUTE_MODELS = models;
   process.env.RATE_LIMIT_BASE_DELAY_MS = '1';
+  // The catalogue's own edge-retry wait, shrunk for the same reason: these tests
+  // are about which requests were sent, not how long the app paused between them.
+  process.env.CATALOGUE_RETRY_DELAY_MS = '0';
   clearModelCache();
 
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
@@ -342,11 +347,64 @@ test('a catalogue that arrives deduplicated anyway does not show one model twice
   });
 });
 
+test('a gateway error on the dedupe path still loads the models', async () => {
+  // The other signature of drift, and the one a real deployment reported: a
+  // gateway that no longer recognises the query string can answer a gateway
+  // error rather than a 404 -- 502 "Application failed to respond" is what a
+  // host's own edge says when it cannot reach the container. From here the
+  // query string is a suspect like any other, and the plain path is one request
+  // away from ruling it out.
+  let prefixedHits = 0;
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      if (req.url.startsWith('/v1/models?')) {
+        prefixedHits += 1;
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        return res.end('Application failed to respond');
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: CATALOGUE }));
+    },
+  }, async ({ base, hits }) => {
+    const res = await fetch(modelsUrl(base));
+    assert.equal(res.status, 200, 'the picker loads rather than reporting a broken gateway');
+    const ids = (await res.json()).map((m) => m.id);
+    assert.ok(ids.includes(AUTO), 'the catalogue comes from the plain path');
+    assert.equal(prefixedHits, 2, 'an edge failure is worth one quick second attempt before it is believed');
+    assert.deepEqual(hits.map((h) => h.url),
+      ['/v1/models?prefix=alias', '/v1/models?prefix=alias', '/v1/models'],
+      'the configured path is tried twice, then the plain one rescues it');
+  });
+});
+
+test("a gateway that never answers is reported as the host's own failure", async () => {
+  await withGateway({
+    baseUrl: 'http://127.0.0.1:PORT',
+    respond: (req, res) => {
+      // HTML, because that is what an edge serves: the old reader called
+      // res.json(), the parse failed, and the one useful sentence in the whole
+      // response was thrown away as "no detail".
+      res.writeHead(502, { 'Content-Type': 'text/html' });
+      res.end('<html><body>Application failed to respond</body></html>');
+    },
+  }, async ({ base }) => {
+    const res = await fetch(modelsUrl(base));
+    assert.equal(res.status, 502);
+    const { error } = await res.json();
+    assert.match(error, /Application failed to respond/, 'the edge\'s own words survive');
+    assert.match(error, /nothing is listening on the port this address names/,
+      'and the fix named is the deployment, not the provider\'s capacity');
+    assert.equal(/slow or unreachable/.test(error), false,
+      'the generic 502 hint sends the operator to the wrong place');
+  });
+});
+
 test('a refusal is not retried on a second path, because the path is not the problem', async () => {
-  // The narrow half of the fallback rule. A 401 or 403 is about the key and a
-  // 5xx is about the gateway's state; neither gets a different answer from
-  // another path. Only a 404, or a 200 carrying nothing readable as a
-  // catalogue, is a signature of the path itself having moved.
+  // The narrow half of the fallback rule. A 401 or 403 is about the key, and no
+  // other path makes a key correct. (A 5xx *is* retried on the plain path: a
+  // gateway or an edge is free to dislike the query string, and that costs one
+  // request to find out.)
   await withGateway({
     baseUrl: 'http://127.0.0.1:PORT',
     respond: (req, res) => {
