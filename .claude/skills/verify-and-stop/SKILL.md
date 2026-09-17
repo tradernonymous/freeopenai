@@ -1,0 +1,16 @@
+---
+name: verify-and-stop
+description: "Validation-only task. Use when asked to check, confirm, test or prove something already built (is the deploy live, did CI pass, does the APK install) without changing scope."
+---
+
+# Verify and stop
+
+Translate acceptance conditions into smallest sufficient proof set.
+
+- Reuse still-current results with matching repository state.
+- Run focused checks before wider gates.
+- Distinguish pass, fail, unavailable, and blocked exactly.
+- Do not edit product code unless verification request includes fixes.
+- Do not add polish, cleanup, or unrelated tests after criteria pass.
+
+Stop immediately when acceptance proof is complete. Report commands, results, and unresolved risk only.
