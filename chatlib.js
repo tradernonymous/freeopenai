@@ -191,6 +191,28 @@ const SKILL_SOURCES = [
     dir: '.claude/skills',
     pick: ['design', 'ui-styling'],
   },
+  // Android, which this project is half made of: the app is Kotlin and
+  // Compose, and a model asked about a ViewModel or a Gradle build otherwise
+  // answers from whatever it remembers of a fast-moving platform. Seventeen
+  // skills across architecture, Compose, coroutines, Gradle and migration
+  // (Apache-2.0).
+  { repo: 'new-silvermoon/awesome-android-agent-skills', branch: 'main', dir: '.github/skills', pick: 'all' },
+  // Android testing, the part a build agent needs most, and the part hardest
+  // to guess: Compose UI tests, JVM unit tests, instrumentation and the adb
+  // commands around them. Fifty-four skills, so the picked set is the ones
+  // that answer a question rather than drive a device (Apache-2.0).
+  {
+    repo: 'skydoves/android-testing-skills',
+    branch: 'main',
+    dir: '',
+    pick: [
+      'structuring-a-compose-test', 'finding-nodes-by-tag-text-content', 'asserting-node-state-and-text',
+      'synchronizing-with-idle', 'testing-lazy-lists', 'testing-state-restoration',
+      'testing-coroutines-with-runtest', 'testing-flows-with-turbine', 'choosing-test-rule-vs-runtest',
+      'understanding-the-testing-pyramid', 'choosing-what-to-test', 'picking-test-doubles',
+      'using-robolectric-correctly', 'running-instrumented-tests-via-adb', 'running-tests-on-gradle-managed-devices',
+    ],
+  },
 ];
 
 // The skills in one repo's git tree, as { name, path } pairs.
