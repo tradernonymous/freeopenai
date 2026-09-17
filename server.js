@@ -28,6 +28,7 @@ const {
   pickAccount,
 } = require('./github.js');
 const { createBuildSessions, handleBuildRoute, resolveInside, protectedPath, searchFolder, refusedGit } = require('./agent-sessions.js');
+const { parseServiceAccount, sendPush } = require('./fcm-push.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -4930,6 +4931,77 @@ async function readPublicPage(raw) {
   throw new Error('Too many redirects');
 }
 
+// Instant push for a build waiting on its owner, so an approval shows up even
+// with the app fully closed -- the SSE stream in agent-sessions.js already
+// covers an open app instantly, so this only has to matter when that stream
+// is not running. Entirely optional: FCM_SERVICE_ACCOUNT is the service
+// account JSON a free Firebase project issues; unset, this parses to null and
+// every call below is a silent no-op. See fcm-push.js for why this needs no
+// firebase-admin package. Read fresh per call, like every other provider's
+// env var here, rather than cached once at startup.
+function configuredFcmAccount() {
+  return parseServiceAccount(process.env.FCM_SERVICE_ACCOUNT);
+}
+
+/** Device tokens per signed-in username, in memory only -- like every other
+ * piece of build state, this does not need to survive a redeploy: a device
+ * re-registers the next time its app opens. Multiple tokens per user covers
+ * more than one phone signed into the same account. */
+function createPushRegistry() {
+  const tokensByUser = new Map();
+  return {
+    register(username, token) {
+      if (!username || !token) return;
+      if (!tokensByUser.has(username)) tokensByUser.set(username, new Set());
+      tokensByUser.get(username).add(token);
+    },
+    unregister(username, token) {
+      tokensByUser.get(username)?.delete(token);
+    },
+    tokensFor(username) {
+      return [...(tokensByUser.get(username) || [])];
+    },
+  };
+}
+
+const pushRegistry = createPushRegistry();
+
+/** The notifyOwner build sessions call. Fire-and-forget by contract (see
+ * agent-sessions.js's notify()): a stale token is dropped from the registry
+ * so it stops being tried, anything else is swallowed -- a push failing must
+ * never surface as a build failing. */
+function notifyOwnerByPush(owner, notification) {
+  const account = configuredFcmAccount();
+  if (!account) return;
+  for (const token of pushRegistry.tokensFor(owner)) {
+    sendPush(account, token, notification).catch((err) => {
+      if (err && err.staleToken) pushRegistry.unregister(owner, token);
+    });
+  }
+}
+
+function handlePushRegister(req, res) {
+  const owner = currentAppUser(req);
+  if (!owner) return sendJson(res, 401, { error: 'Not signed in' });
+  readJsonBody(req, 4096, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const token = String((body && body.token) || '').trim();
+    if (!token || token.length > 4096) return sendJson(res, 400, { error: 'token is required' });
+    pushRegistry.register(owner, token);
+    sendJson(res, 200, { ok: true, configured: !!configuredFcmAccount() });
+  });
+}
+
+function handlePushUnregister(req, res) {
+  const owner = currentAppUser(req);
+  if (!owner) return sendJson(res, 401, { error: 'Not signed in' });
+  readJsonBody(req, 4096, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    pushRegistry.unregister(owner, String((body && body.token) || '').trim());
+    sendJson(res, 200, { ok: true });
+  });
+}
+
 function createBuildStore(root) {
   return createBuildSessions({
     rootDir: workspaceRunRoot(root),
@@ -4949,6 +5021,7 @@ function createBuildStore(root) {
     },
     webSearch: async (query) => ({ results: await searchWebResults(String(query).slice(0, 300)) }),
     webFetch: readPublicPage,
+    notifyOwner: notifyOwnerByPush,
   });
 }
 
@@ -5029,6 +5102,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/build/sessions' || urlPath.startsWith('/api/build/sessions/')) {
       return handleBuildRoute(req, res, urlPath, buildStore, buildHelpers);
     }
+    if (urlPath === '/api/push/register' && req.method === 'POST') return handlePushRegister(req, res);
+    if (urlPath === '/api/push/unregister' && req.method === 'POST') return handlePushUnregister(req, res);
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });

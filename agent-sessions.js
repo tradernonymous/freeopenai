@@ -701,6 +701,10 @@ function createBuildSessions(deps) {
     maxActivePerOwner: MAX_ACTIVE_PER_OWNER,
     sessionTtlMs: SESSION_TTL_MS,
     now: () => Date.now(),
+    // Fires the moment a build starts waiting on its owner -- a push
+    // notification when one is configured, a no-op otherwise. Never awaited:
+    // a slow or failing notifier must not be able to stall the build loop.
+    notifyOwner: () => {},
     ...deps,
   };
   const sessions = new Map();
@@ -891,6 +895,19 @@ function createBuildSessions(deps) {
     clearPending(session);
   }
 
+  // Best-effort only: a push is a convenience for when the app is closed, the
+  // SSE stream (which already reaches an open app instantly) is the source of
+  // truth either way, and a session with no owner has nowhere to send one.
+  function notify(session, title, body) {
+    if (!session.owner) return;
+    try {
+      Promise.resolve(opts.notifyOwner(session.owner, { title, body: String(body).slice(0, 400) })).catch(() => {});
+    } catch {
+      // notifyOwner threw synchronously rather than rejecting; either way the
+      // build must not care.
+    }
+  }
+
   // Ask, and wait. Resolves with { decision: approve|reject|answer|expired|cancelled, text }.
   function waitFor(session, pending) {
     return new Promise((resolve) => {
@@ -909,9 +926,11 @@ function createBuildSessions(deps) {
       if (pending.kind === 'question') {
         setStatus(session, 'awaiting_input');
         emit(session, 'question', { requestId, question: pending.question });
+        notify(session, 'Build has a question', pending.question);
       } else {
         setStatus(session, 'awaiting_approval');
         emit(session, 'approval', { requestId, tool: pending.tool, summary: pending.summary, preview: pending.preview });
+        notify(session, 'Build needs your approval', pending.summary || pending.tool || '');
       }
     });
   }

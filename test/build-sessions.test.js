@@ -323,6 +323,58 @@ test('a write waits for approval, then lands exactly as approved', async () => {
   }
 });
 
+test('an approval or a question notifies the session\'s owner, not a stranger', async () => {
+  const root = tempRoot();
+  try {
+    const notified = [];
+    const model = scriptedModel([
+      reply('', [call('write_file', { path: 'a.txt', content: 'x' })]),
+      reply('Done.'),
+    ]);
+    const store = engine(root, model, { notifyOwner: (owner, msg) => notified.push({ owner, msg }) });
+    const session = store.create({ owner: 'op', plan: 'write a.txt' });
+    await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.equal(notified.length, 1);
+    assert.equal(notified[0].owner, 'op');
+    assert.equal(notified[0].msg.title, 'Build needs your approval');
+    store.input(session, { text: 'approve' });
+    await waitForEvent(store, session, terminal);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a notifier that throws or rejects never stops the build', async () => {
+  const root = tempRoot();
+  try {
+    const model = scriptedModel([
+      reply('', [call('write_file', { path: 'a.txt', content: 'x' })]),
+      reply('Done.'),
+    ]);
+    const store = engine(root, model, { notifyOwner: () => { throw new Error('push service is down'); } });
+    const session = store.create({ owner: 'op', plan: 'write a.txt' });
+    const approval = await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.equal(approval.tool, 'write_file');
+    assert.equal(store.view(session).status, 'awaiting_approval', 'the build still reached the same state a failed push would not change');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a session with no owner is never pushed to', async () => {
+  const root = tempRoot();
+  try {
+    let calls = 0;
+    const model = scriptedModel([reply('', [call('write_file', { path: 'a.txt', content: 'x' })]), reply('Done.')]);
+    const store = engine(root, model, { notifyOwner: () => { calls++; } });
+    const session = store.create({ plan: 'write a.txt' });
+    await waitForEvent(store, session, (e) => e.type === 'approval');
+    assert.equal(calls, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a rejection is not a write, and the reason reaches the model', async () => {
   const root = tempRoot();
   try {
@@ -612,5 +664,25 @@ test('an app with no login cannot start builds at all', async () => {
     });
     assert.equal(res.status, 403);
     assert.match((await res.json()).error, /login/i);
+  });
+});
+
+test('push registration needs a sign-in and a real token, and answers whether push is even configured', async () => {
+  await withApp({ ...ACCOUNTS, FCM_SERVICE_ACCOUNT: undefined }, async ({ base, cookie }) => {
+    const post = (url, body, headers) => fetch(base + url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+    });
+    assert.equal((await post('/api/push/register', { token: 'device-1' })).status, 401, 'signed out');
+    assert.equal((await post('/api/push/register', { token: '' }, { Cookie: cookie('alice') })).status, 400, 'empty token');
+
+    const registered = await post('/api/push/register', { token: 'device-1' }, { Cookie: cookie('alice') });
+    assert.equal(registered.status, 200);
+    const body = await registered.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.configured, false, 'no FCM_SERVICE_ACCOUNT is set for this test run');
+
+    const gone = await post('/api/push/unregister', { token: 'device-1' }, { Cookie: cookie('alice') });
+    assert.equal(gone.status, 200);
+    assert.equal((await post('/api/push/unregister', { token: 'device-1' })).status, 401);
   });
 });
