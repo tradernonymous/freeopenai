@@ -209,6 +209,46 @@ fun errorMessage(body: String?, status: Int): String {
     return fromBody.ifEmpty { "Server answered HTTP $status." }
 }
 
+/** What the server reports about its own patience: how long it waits on a
+ * provider, and how many times it retries a rate-limited call. */
+data class Limits(val timeoutsMs: Map<String, Int>, val maxAttempts: Int, val baseDelayMs: Int) {
+    /** A short spoken-in-UI summary, e.g. "chat 55s · retry 3×". */
+    fun summary(): String {
+        val chat = timeoutsMs["chat"] ?: 0
+        return "chat " + secs(chat) + " · retry " + maxAttempts + "×"
+    }
+
+    fun detail(): String {
+        val parts = listOf("models", "chat", "image", "headers", "stall").mapNotNull { key ->
+            timeoutsMs[key]?.let { key + " " + secs(it) }
+        }
+        return parts.joinToString(" · ") + " · " + baseDelayMs + "ms base"
+    }
+
+    private fun secs(ms: Int): String {
+        if (ms <= 0) return "—"
+        val seconds = ms / 1000f
+        return if (seconds == seconds.toInt().toFloat()) seconds.toInt().toString() + "s" else seconds.toString() + "s"
+    }
+}
+
+/** Reads `/api/llm/limits`, falling back to null on anything unexpected. */
+fun parseLimits(body: String): Limits? = try {
+    val obj = JSONObject(body)
+    val timeouts = obj.optJSONObject("timeouts") ?: JSONObject()
+    val map = mutableMapOf<String, Int>()
+    val keys = timeouts.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        map[key] = timeouts.optInt(key, 0)
+    }
+    val retries = obj.optJSONObject("retries") ?: JSONObject()
+    if (map.isEmpty() && retries.length() == 0) null
+    else Limits(map, retries.optInt("maxAttempts", 0), retries.optInt("baseDelayMs", 0))
+} catch (e: Exception) {
+    null
+}
+
 /** A chat's title from its first message: one line, at most 48 characters. */
 fun deriveTitle(text: String): String {
     val line = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: return "New chat"

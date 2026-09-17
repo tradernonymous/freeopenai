@@ -28,11 +28,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,10 +74,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeai4u.app.data.GeneratedImage
+import com.freeai4u.app.data.IMAGE_GENERATE_MODELS
+import com.freeai4u.app.data.IMAGE_SIZES
 import com.freeai4u.app.data.Persona
 import com.freeai4u.app.data.PromptTemplate
 import com.freeai4u.app.data.allPersonas
 import com.freeai4u.app.data.allPrompts
+import com.freeai4u.app.data.imageModelsFor
+import com.freeai4u.app.data.imageSizeById
 import java.util.UUID
 
 /** A full page over the chat, with a back arrow. */
@@ -114,23 +121,59 @@ fun enhancePrompt(prompt: String): String {
     return "$base, highly detailed, sharp focus, balanced composition, beautiful lighting"
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
     var prompt by rememberSaveable { mutableStateOf("") }
     var style by rememberSaveable { mutableStateOf("None") }
+    var sizeId by rememberSaveable { mutableStateOf("") }
+    var model by rememberSaveable { mutableStateOf(IMAGE_GENERATE_MODELS.first()) }
+    var source by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<GeneratedImage?>(null) }
+    val editing = source != null
+    val models = imageModelsFor(editing)
+    LaunchedEffect(editing) { if (model !in models) model = models.first() }
+    val size = imageSizeById(sizeId)
+
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(
                 prompt, { prompt = it },
-                placeholder = { Text("Describe an image") },
+                placeholder = { Text(if (editing) "Describe the change" else "Describe an image") },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                 maxLines = 4,
             )
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IMAGE_STYLES.forEach { (name, _) ->
-                    FilterChip(style == name, { style = name }, label = { Text(name) })
+                IMAGE_STYLES.forEach { (name, _) -> FilterChip(style == name, { style = name }, label = { Text(name) }) }
+            }
+            Text(if (editing) "Edit a photo" else "Shape", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (editing) {
+                    source?.let { DataUrlThumb(it, 40) }
+                    AssistChip(
+                        { platform.pickPhotos { picked -> picked.firstOrNull()?.let { source = it } } },
+                        label = { Text("Change") },
+                        leadingIcon = { Icon(Icons.Filled.Photo, null, Modifier.size(16.dp)) },
+                    )
+                    AssistChip(
+                        { source = null },
+                        label = { Text("Start fresh") },
+                        leadingIcon = { Icon(Icons.Filled.Close, null, Modifier.size(16.dp)) },
+                    )
+                } else {
+                    IMAGE_SIZES.forEach { option ->
+                        FilterChip(sizeId == option.id, { sizeId = if (sizeId == option.id) "" else option.id }, label = { Text(option.label) })
+                    }
+                    AssistChip(
+                        { platform.pickPhotos { picked -> picked.firstOrNull()?.let { source = it } } },
+                        label = { Text("Edit a photo") },
+                        leadingIcon = { Icon(Icons.Filled.Photo, null, Modifier.size(16.dp)) },
+                    )
                 }
+            }
+            Text("Model", color = Palette.muted, fontSize = 12.sp)
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                models.forEach { id -> FilterChip(model == id, { model = id }, label = { Text(shortModel(id)) }) }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton({ prompt = enhancePrompt(prompt) }, enabled = prompt.isNotBlank()) {
@@ -140,9 +183,12 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 }
                 Spacer(Modifier.size(8.dp))
                 Button(
-                    { vm.generateImage(prompt + (IMAGE_STYLES.firstOrNull { it.first == style }?.second ?: "")) },
+                    {
+                        val full = prompt + (IMAGE_STYLES.firstOrNull { it.first == style }?.second ?: "")
+                        vm.generateImage(full, size, model, provider = "", editSource = source)
+                    },
                     enabled = prompt.isNotBlank() && !vm.imageBusy,
-                ) { Text(if (vm.imageBusy) "Drawing…" else "Generate") }
+                ) { Text(if (vm.imageBusy) "Working…" else if (editing) "Edit" else "Generate") }
                 if (vm.imageBusy) {
                     Spacer(Modifier.size(12.dp))
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -173,14 +219,35 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
             onDismissRequest = { viewing = null },
             title = { Text(image.prompt, maxLines = 3, overflow = TextOverflow.Ellipsis, fontSize = 14.sp) },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).clickable { bytes?.let { platform.viewImage(image.id, it, image.mime) } })
-                    Text("by " + image.provider.ifEmpty { "server" }, color = Palette.muted, fontSize = 12.sp)
-                    Row {
-                        IconButton({ bytes?.let { platform.saveImage(name, image.mime, it) } }) { Icon(Icons.Filled.Download, "Save") }
-                        IconButton({ bytes?.let { platform.shareImage(name, image.mime, it) } }) { Icon(Icons.Filled.Share, "Share") }
-                        IconButton({ prompt = image.prompt; viewing = null; vm.generateImage(image.prompt) }) { Icon(Icons.Filled.Refresh, "Again") }
-                        IconButton({ vm.deleteImage(image.id); viewing = null }) { Icon(Icons.Filled.Delete, "Delete", tint = Palette.red) }
+                    Text("by " + image.provider.ifEmpty { "server" } + if (image.mime.isNotEmpty()) " · " + image.mime.substringAfter('/') else "", color = Palette.muted, fontSize = 12.sp)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button({ bytes?.let { platform.saveImage(name, image.mime, it) } }, enabled = bytes != null, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Download, null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Save")
+                        }
+                        OutlinedButton({ bytes?.let { platform.shareImage(name, image.mime, it) } }, enabled = bytes != null, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Share, null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Share")
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            { prompt = image.prompt; sizeId = ""; viewing = null; vm.generateImage(image.prompt, null, model, provider = "") },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Filled.Refresh, null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Again")
+                        }
+                        OutlinedButton({ source = null; viewing = null; vm.deleteImage(image.id) }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Filled.Delete, null, Modifier.size(18.dp), tint = Palette.red)
+                            Spacer(Modifier.size(8.dp))
+                            Text("Delete", color = Palette.red)
+                        }
                     }
                 }
             },
@@ -188,6 +255,7 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
         )
     }
 }
+
 
 @Composable
 private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modifier) {
@@ -310,6 +378,10 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }) {}
         SectionTitle("Images")
         SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
+        SectionTitle("Server")
+        LaunchedEffect(Unit) { if (vm.limits == null) vm.loadLimits() }
+        SettingRow("Timeouts", vm.limits?.detail() ?: "Tap to load") { vm.loadLimits() }
+        SettingRow("Retries", vm.limits?.let { it.maxAttempts.toString() + " × " + it.baseDelayMs + "ms" } ?: "—") { vm.loadLimits() }
         SectionTitle("Security")
         SettingSwitch("App lock", "Fingerprint or screen lock", lockOn) { wanted -> platform.setAppLock(wanted) { lockOn = it } }
         SectionTitle("Data")

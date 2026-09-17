@@ -160,7 +160,7 @@ class NativeActivity : ComponentActivity(), Platform {
             }
         }
         puter = PuterImages(this) { vm.serverUrl }
-        vm.puterDraw = { prompt, done -> puter.draw(prompt, done) }
+        vm.puterDraw = { prompt, model, ratio, source, done -> puter.draw(prompt, model, ratio, source, done) }
         setContent {
             FreeAITheme {
                 LaunchedEffect(vm.finishedReply) {

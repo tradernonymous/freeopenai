@@ -134,6 +134,59 @@ class DataTest {
     }
 
     @Test
+    fun imageSizes_areOnlyTheDeclaredOnes() {
+        assertEquals(5, IMAGE_SIZES.size)
+        assertEquals("1024x1024", imageSizeById("square")!!.body())
+        assertEquals("1536x864", imageSizeById("wide")!!.body())
+        assertEquals("864x1536", imageSizeById("tall")!!.body())
+        assertNull("an undeclared shape is never guessed", imageSizeById("huge"))
+        assertNull(imageSizeById(""))
+    }
+
+    @Test
+    fun imageRatio_isReducedForPuter() {
+        assertNull(imageRatio(null))
+        assertEquals(1 to 1, imageRatio(imageSizeById("square")))
+        assertEquals(3 to 2, imageRatio(imageSizeById("landscape")))
+        assertEquals(2 to 3, imageRatio(imageSizeById("portrait")))
+        assertEquals(16 to 9, imageRatio(imageSizeById("wide")))
+        assertEquals(9 to 16, imageRatio(imageSizeById("tall")))
+    }
+
+    @Test
+    fun imageModels_splitDrawFromEdit() {
+        assertTrue(IMAGE_GENERATE_MODELS.contains("gpt-image-2"))
+        assertTrue(IMAGE_EDIT_MODELS.contains("gpt-image-2.5-sunburst"))
+        assertFalse(IMAGE_EDIT_MODELS.contains("gpt-image-1.5"))
+        assertEquals(IMAGE_GENERATE_MODELS, imageModelsFor(edit = false))
+        assertEquals(IMAGE_EDIT_MODELS, imageModelsFor(edit = true))
+    }
+
+    @Test
+    fun limits_parseTimeoutsAndRetries() {
+        val body = "{\"timeouts\":{\"models\":20000,\"chat\":55000,\"image\":22000,\"headers\":25000,\"stall\":60000}," +
+            "\"retries\":{\"maxAttempts\":3,\"baseDelayMs\":1000}}"
+        val limits = parseLimits(body)!!
+        assertEquals(55000, limits.timeoutsMs["chat"])
+        assertEquals(3, limits.maxAttempts)
+        assertEquals(1000, limits.baseDelayMs)
+        assertTrue(limits.summary().contains("55s"))
+        assertTrue(limits.detail().contains("image 22s"))
+        assertNull("nothing useful is not limits", parseLimits("{}"))
+        assertNull(parseLimits("not json"))
+    }
+
+    @Test
+    fun parseImageResult_readsBase64UrlAndProvider() {
+        val inline = parseImageResult("{\"provider\":\"puter\",\"data\":[{\"b64_json\":\"aGVsbG8=\",\"media_type\":\"image/png\"}]}")
+        assertEquals("puter", inline.first)
+        assertEquals("aGVsbG8=", inline.second.first().base64)
+        assertEquals("image/png", inline.second.first().mime)
+        val linked = parseImageResult("{\"data\":[{\"url\":\"https://x/y.png\"}]}")
+        assertEquals("https://x/y.png", linked.second.first().url)
+    }
+
+    @Test
     fun personas_fallBackToDefault() {
         val lib = Library(personas = listOf(Persona("mine", "Mine", "🙂", "x")))
         assertEquals("Mine", personaFor(lib, "mine").name)

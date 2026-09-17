@@ -2,27 +2,33 @@ package com.freeai4u.app.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Chat / Plan / Build for the native app, as pure functions: the mode
-// instructions, which tools each mode offers, and how the local tools (tasks,
-// files, phone actions) change a conversation. The network tools (web search,
-// page reading, image generation) run in the view model; everything that can
-// be decided without a phone or a server lives here and is unit-tested.
+// Chat / Plan for the native app, as pure functions: the mode instructions,
+// which tools each mode offers, the approval each tool call needs, and how the
+// local tools (tasks, phone actions) change a conversation. The network tools
+// (web search, page reading, image generation) run in the view model;
+// everything that can be decided without a phone or a server lives here and is
+// unit-tested.
+//
+// Build is deliberately not here: the phone only researches and plans. The
+// agreed plan is carried out on the web/desktop app over remote access, so no
+// file-writing or execution tool ships in the APK.
 
 const val MAX_TOOL_ROUNDS = 8
+/** The most tool steps one turn may take across every round, so a looping
+ * model cannot spend the whole allowance on its own. */
+const val MAX_TOOL_STEPS_PER_TURN = 12
 // Declared before the tool schemas below, which read them while the file's
 // top-level values initialise in order.
 val TASK_STATUSES = listOf("todo", "doing", "done", "blocked")
 val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "open_url", "share", "copy")
-private const val MAX_FILE_CHARS = 60_000
-private const val MAX_FILES = 40
 
 fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "Plan"
-    "build" -> "Build"
     else -> "Chat"
 }
 
@@ -31,17 +37,8 @@ fun modeInstructions(mode: String): String = when (mode) {
         "MODE: PLAN. The user wants a plan, not changes.",
         "Investigate first: search the web and read pages for anything you are not sure of.",
         "Then answer with: a one-line goal, what you found, a numbered step-by-step plan, risks, and open questions.",
-        "Record every step with task_add so Build mode can carry it out. Keep task titles short.",
-        "End by suggesting the user switch to Build to execute.",
-    ).joinToString("\n")
-    "build" -> listOf(
-        "MODE: BUILD. You execute agreed work with tools.",
-        "- Start from the task list: call task_list, add missing steps, and move each task to doing/done as you go.",
-        "- Write drafts, code and documents to the chat's files with file_write; read them back with file_read.",
-        "- Use phone_action only for what the user asked (alarm, timer, calendar event, map, call, email, link, share). The user confirms each one with a tap; never claim it already happened.",
-        "- Use generate_image when a picture is wanted.",
-        "- Verify before saying done; finish every task or say why it is still open.",
-        "- End with a short summary: what changed, what is left.",
+        "Record every step with task_add. Keep task titles short.",
+        "This phone cannot carry the plan out: say plainly that execution happens on the FreeAI4U web/desktop app, where the user can start a remote build.",
     ).joinToString("\n")
     else -> listOf(
         "MODE: CHAT. Answer directly and concisely.",
@@ -79,9 +76,6 @@ private val TASK_UPDATE = tool(
     JSONObject().put("id", prop("string", "Task id, e.g. t2.")).put("status", JSONObject().put("type", "string").put("enum", JSONArray(TASK_STATUSES))),
     listOf("id", "status"),
 )
-private val FILE_LIST = tool("file_list", "List this chat's files.", JSONObject(), emptyList())
-private val FILE_READ = tool("file_read", "Read one of this chat's files.", JSONObject().put("path", prop("string", "File path, e.g. notes.md.")), listOf("path"))
-private val FILE_WRITE = tool("file_write", "Create or replace one of this chat's files.", JSONObject().put("path", prop("string", "File path, e.g. plan.md.")).put("content", prop("string", "Full file text.")), listOf("path", "content"))
 private val GENERATE_IMAGE = tool("generate_image", "Draw a picture from a detailed prompt; it is shown in the chat.", JSONObject().put("prompt", prop("string", "Detailed image prompt: subject, style, lighting.")), listOf("prompt"))
 private val PHONE_ACTION = tool(
     "phone_action",
@@ -103,13 +97,12 @@ private val PHONE_ACTION = tool(
     listOf("kind"),
 )
 
-/** Which tools a mode offers. Chat researches and draws; Plan also records tasks;
- * Build also writes files. Phone actions are offered everywhere
- * because each one waits for the user's tap. */
+/** Which tools a mode offers. Chat researches and draws; Plan also records
+ * tasks. Phone actions are offered everywhere because each one waits for the
+ * user's tap before anything happens. */
 fun toolsForMode(mode: String): JSONArray {
     val list = when (mode) {
-        "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, FILE_LIST, FILE_READ, PHONE_ACTION)
-        "build" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, FILE_LIST, FILE_READ, FILE_WRITE, GENERATE_IMAGE, PHONE_ACTION)
+        "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION)
         else -> listOf(WEB_SEARCH, WEB_FETCH, GENERATE_IMAGE, PHONE_ACTION)
     }
     return JSONArray().also { array -> list.forEach { array.put(JSONObject(it.toString())) } }
@@ -120,6 +113,30 @@ fun toolAllowed(mode: String, name: String): Boolean {
     return (0 until tools.length()).any { tools.getJSONObject(it).getJSONObject("function").getString("name") == name }
 }
 
+// --- Approvals -------------------------------------------------------------
+
+/** How a tool call is gated before it runs.
+ * AUTO runs the moment the model asks. CONFIRM means the user must tap: the
+ * call is offered as a button, never carried out on its own. DENY means the
+ * call never runs in this mode. */
+enum class ToolApproval { AUTO, CONFIRM, DENY }
+
+/** The approval a mode gives a tool call. Plan is risk-based: research and
+ * planning run freely, anything that could touch the phone or the outside
+ * world waits for a tap. Chat has nothing to gate but images and actions, and
+ * those confirm too. An unknown tool is denied rather than run: the policy
+ * fails closed, so a mis-parsed or injected name cannot slip through. */
+fun approvalFor(mode: String, name: String): ToolApproval {
+    if (!toolAllowed(mode, name)) return ToolApproval.DENY
+    return when (name) {
+        "phone_action" -> ToolApproval.CONFIRM
+        else -> ToolApproval.AUTO
+    }
+}
+
+/** How many tool steps this turn has left. Never negative. */
+fun toolBudget(stepsTaken: Int): Int = (MAX_TOOL_STEPS_PER_TURN - stepsTaken).coerceAtLeast(0)
+
 fun parseArguments(raw: String): JSONObject = try {
     JSONObject(raw.ifBlank { "{}" })
 } catch (e: Exception) {
@@ -129,8 +146,8 @@ fun parseArguments(raw: String): JSONObject = try {
 /** What a local tool did: the text the model reads back, and the chat after. */
 data class LocalResult(val output: String, val conversation: Conversation)
 
-/** Runs task_* and file_* tools against the conversation. Returns null for a
- * tool this function does not own (network tools, images, phone actions). */
+/** Runs task_* tools against the conversation. Returns null for a tool this
+ * function does not own (network tools, images, phone actions). */
 fun runLocalTool(conversation: Conversation, call: ToolCall): LocalResult? {
     val args = parseArguments(call.arguments)
     if (!toolAllowed(conversation.mode, call.name)) {
@@ -156,33 +173,9 @@ fun runLocalTool(conversation: Conversation, call: ToolCall): LocalResult? {
             if (conversation.tasks.none { it.id == id }) return LocalResult("Error: no task $id. Call task_list.", conversation)
             LocalResult("$id is now $status.", conversation.copy(tasks = conversation.tasks.map { if (it.id == id) it.copy(status = status) else it }))
         }
-        "file_list" -> LocalResult(
-            if (conversation.files.isEmpty()) "No files yet."
-            else conversation.files.entries.joinToString("\n") { "${it.key} (${it.value.length} chars)" },
-            conversation,
-        )
-        "file_read" -> {
-            val path = cleanPath(args.optString("path", ""))
-            val text = conversation.files[path] ?: return LocalResult("Error: no file $path.", conversation)
-            LocalResult(text, conversation)
-        }
-        "file_write" -> {
-            val path = cleanPath(args.optString("path", ""))
-            if (path.isEmpty()) return LocalResult("Error: path is required.", conversation)
-            val content = args.optString("content", "")
-            if (content.length > MAX_FILE_CHARS) return LocalResult("Error: files are limited to $MAX_FILE_CHARS characters.", conversation)
-            if (!conversation.files.containsKey(path) && conversation.files.size >= MAX_FILES) return LocalResult("Error: this chat already has $MAX_FILES files.", conversation)
-            LocalResult("Wrote $path (${content.length} chars).", conversation.copy(files = conversation.files + (path to content)))
-        }
         else -> null
     }
 }
-
-/** A relative path with no traversal, backslashes or leading slashes. */
-fun cleanPath(raw: String): String = raw.trim().replace('\\', '/').split('/')
-    .filter { it.isNotEmpty() && it != "." && it != ".." }
-    .joinToString("/")
-    .take(120)
 
 /** A phone action the user can run with one tap. */
 data class PhoneAction(
@@ -261,6 +254,55 @@ fun parsePhoneAction(raw: String): Pair<PhoneAction?, String> {
     return if (problem != null) null to "Error: $problem." else action to "Shown to the user as a button: \"${action.label()}\". It runs only if they tap it."
 }
 
+/** How long a proposed phone action stays valid. After this its button is
+ * dead and the model must propose it again; a stale ticket never runs. */
+const val ACTION_TTL_MS = 10 * 60 * 1000L
+
+/** A phone action the user may still run: the action, a fingerprint of its
+ * contents, and the moment it expires. The phone checks both before running
+ * anything, so a ticket that was altered or has gone stale fails closed. */
+data class ActionTicket(val action: PhoneAction, val fingerprint: String, val expiresAt: Long) {
+    fun toJson(): String = JSONObject(action.toJson())
+        .put("fingerprint", fingerprint)
+        .put("expiresAt", expiresAt)
+        .toString()
+}
+
+/** A digest of everything that decides what an action does, so a changed
+ * field invalidates the ticket. */
+fun actionFingerprint(action: PhoneAction): String = MessageDigest.getInstance("SHA-256")
+    .digest(
+        listOf(
+            action.kind, action.title, action.text, action.url, action.query, action.number, action.email,
+            action.hour.toString(), action.minute.toString(), action.seconds.toString(),
+            action.start, action.end, action.location,
+        ).joinToString("\u0000").toByteArray(Charsets.UTF_8)
+    )
+    .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
+fun sealAction(action: PhoneAction, now: Long, ttlMs: Long = ACTION_TTL_MS): ActionTicket =
+    ActionTicket(action, actionFingerprint(action), now + ttlMs)
+
+/** The action if this ticket is intact and unexpired, else null. */
+fun openAction(ticket: ActionTicket, now: Long): PhoneAction? =
+    if (now < ticket.expiresAt && ticket.fingerprint == actionFingerprint(ticket.action)) ticket.action else null
+
+fun actionTicketFromJson(json: String): ActionTicket? = try {
+    val obj = JSONObject(json)
+    val action = PhoneAction(
+        obj.optString("kind", ""), obj.optString("title", ""), obj.optString("text", ""), obj.optString("url", ""),
+        obj.optString("query", ""), obj.optString("number", ""), obj.optString("email", ""), obj.optInt("hour", -1),
+        obj.optInt("minute", -1), obj.optInt("seconds", -1), obj.optString("start", ""), obj.optString("end", ""),
+        obj.optString("location", ""),
+    )
+    val fingerprint = obj.optString("fingerprint", "")
+    val expiresAt = obj.optLong("expiresAt", 0L)
+    if (action.kind !in ACTION_KINDS || fingerprint.isEmpty() || expiresAt <= 0L) null
+    else ActionTicket(action, fingerprint, expiresAt)
+} catch (e: Exception) {
+    null
+}
+
 fun phoneActionFromJson(json: String): PhoneAction? = try {
     val obj = JSONObject(json)
     PhoneAction(
@@ -316,9 +358,6 @@ fun toolCallSummary(call: ToolCall): String {
         "task_list" -> "Checked tasks"
         "task_add" -> "Added task · " + args.optString("title", "")
         "task_update" -> "Task " + args.optString("id", "") + " → " + args.optString("status", "")
-        "file_list" -> "Listed files"
-        "file_read" -> "Read " + args.optString("path", "")
-        "file_write" -> "Wrote " + args.optString("path", "")
         "generate_image" -> "Drew an image"
         "phone_action" -> "Proposed " + args.optString("kind", "action")
         else -> call.name

@@ -67,8 +67,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +75,9 @@ import androidx.compose.ui.unit.sp
 import com.freeai4u.app.data.ChatMessage
 import com.freeai4u.app.data.Conversation
 import com.freeai4u.app.data.TaskItem
-import com.freeai4u.app.data.phoneActionFromJson
+import com.freeai4u.app.data.actionTicketFromJson
+import com.freeai4u.app.data.openAction
+import com.freeai4u.app.data.safeFileName
 import com.freeai4u.app.data.splitCodeBlocks
 import com.freeai4u.app.data.toolCallSummary
 import kotlinx.coroutines.delay
@@ -199,7 +199,14 @@ fun AssistantTurn(
         if (turn.imageIds.isNotEmpty()) {
             turn.imageIds.forEach { id -> ChatImage(vm, platform, id) }
         }
-        turn.actions.forEach { json -> phoneActionFromJson(json)?.let { action -> ActionButton(action.label()) { platform.runAction(action) } } }
+        turn.actions.forEach { json ->
+            val ticket = actionTicketFromJson(json)
+            val action = ticket?.let { openAction(it, System.currentTimeMillis()) }
+            when {
+                action != null -> ActionButton(action.label()) { platform.runAction(action) }
+                ticket != null -> ExpiredAction()
+            }
+        }
         AnimatedVisibility(!streaming && !turn.error && turn.text.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
             ActionRow(turn, isLast, platform, onRegenerate, onBranch)
         }
@@ -229,6 +236,8 @@ private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform,
         Box {
             SmallAction(Icons.Filled.MoreHoriz, "More") { more = true }
             DropdownMenu(more, { more = false }) {
+                DropdownMenuItem({ Text("Save as Markdown") }, { platform.saveText(safeFileName(turn.text, "md"), "text/markdown", turn.text); more = false })
+                DropdownMenuItem({ Text("Export PDF") }, { platform.exportPdf(turn.text.take(60), turn.text); more = false })
                 DropdownMenuItem({ Text("Branch") }, { onBranch(); more = false })
                 DropdownMenuItem({ Text("Select text") }, { platform.selectText(turn.text); more = false })
             }
@@ -277,8 +286,12 @@ private fun WorkLog(steps: List<Step>, streaming: Boolean, startedAt: Long) {
             Icon(Icons.Filled.ExpandMore, if (open) "Hide steps" else "Show steps", tint = Palette.muted, modifier = Modifier.rotate(rotation))
         }
         if (open) {
-            steps.forEach { step ->
-                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.Top) {
+            steps.forEachIndexed { index, step ->
+                var showOutput by remember(index) { mutableStateOf(false) }
+                Row(
+                    Modifier.padding(top = 6.dp).clickable(enabled = step.output.isNotBlank()) { showOutput = !showOutput },
+                    verticalAlignment = Alignment.Top,
+                ) {
                     Icon(
                         when {
                             step.failed -> Icons.Filled.ErrorOutline
@@ -288,9 +301,15 @@ private fun WorkLog(steps: List<Step>, streaming: Boolean, startedAt: Long) {
                         null, tint = if (step.failed) Palette.red else Palette.muted, modifier = Modifier.size(14.dp).padding(top = 2.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(step.summary, color = Palette.text, fontSize = 13.sp)
-                        if (step.output.isNotBlank()) Text(step.output.take(240), color = Palette.muted, fontSize = 11.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                        if (step.output.isNotBlank()) {
+                            Text(
+                                if (showOutput) step.output.take(4000) else step.output.take(140),
+                                color = Palette.muted, fontSize = 11.sp,
+                                maxLines = if (showOutput) 40 else 2, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
@@ -351,6 +370,18 @@ fun friendlyError(raw: String): String {
     return (lead + masked).take(400)
 }
 
+/** A proposed action whose ticket has gone stale: shown, but inert. */
+@Composable
+private fun ExpiredAction() {
+    Surface(color = Palette.surface, shape = RoundedCornerShape(20.dp)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.ErrorOutline, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Action expired", color = Palette.muted, fontSize = 14.sp)
+        }
+    }
+}
+
 @Composable
 fun ActionButton(label: String, onClick: () -> Unit) {
     Surface(
@@ -391,7 +422,7 @@ fun ChatImage(vm: AppViewModel, platform: Platform, id: String) {
 }
 
 @Composable
-fun TaskPanel(tasks: List<TaskItem>, mode: String, onBuild: (() -> Unit)?) {
+fun TaskPanel(tasks: List<TaskItem>) {
     if (tasks.isEmpty()) return
     var open by remember { mutableStateOf(false) }
     val done = tasks.count { it.status == "done" }
@@ -404,14 +435,6 @@ fun TaskPanel(tasks: List<TaskItem>, mode: String, onBuild: (() -> Unit)?) {
                     progress = { progress }, color = Palette.green, trackColor = Palette.surfaceHigh,
                     modifier = Modifier.width(72.dp).height(4.dp).clip(CircleShape),
                 )
-                if (onBuild != null && mode == "plan") {
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Build it", color = Palette.green, fontSize = 13.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onBuild).padding(horizontal = 8.dp, vertical = 4.dp)
-                            .semantics { contentDescription = "Switch to Build and implement the plan" },
-                    )
-                }
                 Icon(Icons.Filled.ExpandMore, null, tint = Palette.muted, modifier = Modifier.rotate(if (open) 180f else 0f))
             }
             AnimatedVisibility(open) {

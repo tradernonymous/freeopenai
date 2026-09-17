@@ -43,8 +43,16 @@ class PuterImages(private val context: Context, private val baseUrl: () -> Strin
         view.loadUrl(baseUrl() + "/puter-bridge.html")
     }
 
-    /** Calls [done] on the main thread with the media type and bytes. */
-    fun draw(prompt: String, done: (Result<Pair<String, ByteArray>>) -> Unit) {
+    /** Calls [done] on the main thread with the media type and bytes. [model]
+     * and [ratio] pick a Puter model and shape; [source] (a data URL) turns the
+     * job into an edit. All three are optional and ignored by an older page. */
+    fun draw(
+        prompt: String,
+        model: String = "",
+        ratio: Pair<Int, Int>? = null,
+        source: String? = null,
+        done: (Result<Pair<String, ByteArray>>) -> Unit,
+    ) {
         if (baseUrl().isEmpty()) {
             done(Result.failure(IllegalStateException("not signed in")))
             return
@@ -55,8 +63,12 @@ class PuterImages(private val context: Context, private val baseUrl: () -> Strin
                 done(Result.failure(IllegalStateException("no WebView")))
                 return@load
             }
+            val options = JSONObject()
+            if (model.isNotEmpty()) options.put("model", model)
+            if (ratio != null) options.put("ratio", JSONObject().put("w", ratio.first).put("h", ratio.second))
+            if (source != null) options.put("source", source)
             val job = "j" + System.nanoTime()
-            view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + ");", null)
+            view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
             poll(view, job, 0, done)
         }
     }

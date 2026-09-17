@@ -19,11 +19,11 @@ class AgentTest {
 
     @Test
     fun modes_offerMoreToolsAsTheyGetMorePowerful() {
-        assertFalse("chat cannot write files", names("chat").contains("file_write"))
         assertFalse("chat keeps no plan", names("chat").contains("task_add"))
         assertTrue(names("plan").contains("task_add"))
-        assertFalse("plan never writes", names("plan").contains("file_write"))
-        assertTrue(names("build").containsAll(listOf("task_update", "file_write", "generate_image", "phone_action")))
+        assertFalse("no write tools ship in the APK", names("plan").contains("file_write"))
+        assertFalse("no file tools ship in the APK", names("chat").contains("file_read"))
+        assertFalse("build is gone", MODES.contains("build"))
         assertEquals(names("chat"), names("nonsense"))
     }
 
@@ -51,12 +51,41 @@ class AgentTest {
     }
 
     @Test
-    fun files_areBuildOnlyForWritesAndPathsAreCleaned() {
-        assertTrue(runLocalTool(chat("plan"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!.output.contains("not available"))
-        val written = runLocalTool(chat("build"), call("file_write", "{\"path\":\"../../etc//notes.md\",\"content\":\"hello\"}"))!!
-        assertEquals(mapOf("etc/notes.md" to "hello"), written.conversation.files)
-        assertEquals("hello", runLocalTool(written.conversation, call("file_read", "{\"path\":\"etc/notes.md\"}"))!!.output)
+    fun fileTools_areGoneSoWritesAreRefused() {
+        assertTrue(runLocalTool(chat("plan"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!.output.startsWith("Error"))
+        assertTrue(runLocalTool(chat("chat"), call("file_read", "{\"path\":\"a.md\"}"))!!.output.startsWith("Error"))
         assertNull("network tools are not local", runLocalTool(chat("chat"), call("web_search", "{}")))
+    }
+
+    @Test
+    fun approvals_failClosed() {
+        assertEquals(ToolApproval.AUTO, approvalFor("chat", "web_search"))
+        assertEquals(ToolApproval.CONFIRM, approvalFor("chat", "phone_action"))
+        assertEquals(ToolApproval.CONFIRM, approvalFor("plan", "phone_action"))
+        assertEquals("plan never writes", ToolApproval.DENY, approvalFor("plan", "file_write"))
+        assertEquals("chat cannot plan", ToolApproval.DENY, approvalFor("chat", "task_add"))
+        assertEquals("an unknown tool is denied, not run", ToolApproval.DENY, approvalFor("plan", "use_skill"))
+    }
+
+    @Test
+    fun toolBudget_countsDownAndNeverGoesNegative() {
+        assertEquals(MAX_TOOL_STEPS_PER_TURN, toolBudget(0))
+        assertEquals(1, toolBudget(MAX_TOOL_STEPS_PER_TURN - 1))
+        assertEquals(0, toolBudget(MAX_TOOL_STEPS_PER_TURN))
+        assertEquals(0, toolBudget(MAX_TOOL_STEPS_PER_TURN + 5))
+    }
+
+    @Test
+    fun actionTickets_expireAndRejectTampering() {
+        val action = parsePhoneAction("{\"kind\":\"alarm\",\"hour\":7,\"minute\":30,\"title\":\"Gym\"}").first!!
+        val ticket = sealAction(action, now = 1_000, ttlMs = 60_000)
+        assertEquals(action, openAction(ticket, now = 30_000))
+        assertNull("an expired ticket fails closed", openAction(ticket, now = 61_000))
+        val tampered = ActionTicket(action.copy(title = "Bank"), ticket.fingerprint, ticket.expiresAt)
+        assertNull("a changed field fails closed", openAction(tampered, now = 30_000))
+        assertEquals(ticket, actionTicketFromJson(ticket.toJson()))
+        assertNull(actionTicketFromJson("{\"kind\":\"alarm\"}"))
+        assertNull(actionTicketFromJson("not json"))
     }
 
     @Test
@@ -116,7 +145,7 @@ class AgentTest {
 
     @Test
     fun conversation_roundTripsModeTasksFilesAndTools() {
-        val original = chat("build").copy(
+        val original = chat("plan").copy(
             tasks = listOf(TaskItem("t1", "Do", "doing", "x")),
             files = mapOf("a.md" to "hi"),
             messages = listOf(

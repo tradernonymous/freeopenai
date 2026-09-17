@@ -19,7 +19,10 @@ import com.freeai4u.app.data.ChatMessage
 import com.freeai4u.app.data.Conversation
 import com.freeai4u.app.data.DEFAULT_PERSONA_ID
 import com.freeai4u.app.data.GeneratedImage
+import com.freeai4u.app.data.ImageSize
 import com.freeai4u.app.data.Library
+import com.freeai4u.app.data.Limits
+import com.freeai4u.app.data.imageRatio
 import com.freeai4u.app.data.ModelInfo
 import com.freeai4u.app.data.NativeApi
 import com.freeai4u.app.data.Persona
@@ -27,8 +30,11 @@ import com.freeai4u.app.data.PromptTemplate
 import com.freeai4u.app.data.ProviderInfo
 import com.freeai4u.app.data.Repository
 import com.freeai4u.app.data.SessionManager
+import com.freeai4u.app.data.approvalFor
 import com.freeai4u.app.data.buildChatBody
 import com.freeai4u.app.data.MAX_TOOL_ROUNDS
+import com.freeai4u.app.data.MAX_TOOL_STEPS_PER_TURN
+import com.freeai4u.app.data.ToolApproval
 import com.freeai4u.app.data.ToolCall
 import com.freeai4u.app.data.ToolCallCollector
 import com.freeai4u.app.data.looksLikeToolsUnsupported
@@ -36,8 +42,9 @@ import com.freeai4u.app.data.modeLabel
 import com.freeai4u.app.data.parseArguments
 import com.freeai4u.app.data.parsePhoneAction
 import com.freeai4u.app.data.runLocalTool
+import com.freeai4u.app.data.sealAction
 import com.freeai4u.app.data.systemPrompt
-import com.freeai4u.app.data.toolAllowed
+import com.freeai4u.app.data.toolBudget
 import com.freeai4u.app.data.toolsForMode
 import com.freeai4u.app.data.deriveTitle
 import com.freeai4u.app.data.personaFor
@@ -94,6 +101,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var catalogueError by mutableStateOf<String?>(null)
         private set
     var catalogueBusy by mutableStateOf(false)
+        private set
+    /** What the server reports about its own timeouts and retries. */
+    var limits by mutableStateOf<Limits?>(null)
         private set
 
     var streamingId by mutableStateOf<String?>(null)
@@ -247,6 +257,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun loadModels(provider: String) {
         if (models.containsKey(provider)) return
         io.execute { loadModelsBlocking(provider) }
+    }
+
+    /** Reads the server's timeouts and retry budget for the Settings screen. */
+    fun loadLimits() {
+        io.execute {
+            val result = try { api.limits() } catch (e: Exception) { null }
+            main.post { result?.let { limits = it } }
+        }
     }
 
     /** The provider and model a new chat starts on. */
@@ -434,6 +452,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             var chat = start
             var useTools = true
             var round = 0
+            var stepsTaken = 0
             var finalText = ""
             val seenCalls = HashMap<String, Int>()
             while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
@@ -502,6 +521,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 publishChat(chat, persist = false)
                 for (call in calls) {
                     if (stopRequested) break
+                    // Per-turn budget: a model that keeps calling tools is cut
+                    // off here rather than spending the whole allowance.
+                    if (toolBudget(stepsTaken) == 0) {
+                        chat = chat.copy(messages = chat.messages + ChatMessage("assistant", "Stopped after $MAX_TOOL_STEPS_PER_TURN tool steps this turn. Say \"continue\" to go on.", createdAt = System.currentTimeMillis(), error = true))
+                        break
+                    }
                     // Loop guard (from Artemis): the same call twice gets a hint
                     // instead of a third identical result.
                     val key = call.name + "|" + call.arguments.filterNot { it.isWhitespace() }
@@ -512,9 +537,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     } else {
                         runTool(chat, call)
                     }
+                    stepsTaken++
                     publishChat(chat, persist = false)
                 }
                 round++
+                if (stepsTaken >= MAX_TOOL_STEPS_PER_TURN) break
                 if (round > MAX_TOOL_ROUNDS) {
                     chat = chat.copy(messages = chat.messages + ChatMessage("assistant", "Stopped after $MAX_TOOL_ROUNDS tool rounds. Say \"continue\" to go on.", createdAt = System.currentTimeMillis(), error = true))
                 }
@@ -537,8 +564,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runLocalTool(chat, call)?.let { local ->
             return local.conversation.copy(messages = local.conversation.messages + result(local.output))
         }
-        if (!toolAllowed(chat.mode, call.name)) {
-            return chat.copy(messages = chat.messages + result("Error: ${call.name} is not available in ${modeLabel(chat.mode)} mode."))
+        when (approvalFor(chat.mode, call.name)) {
+            ToolApproval.DENY ->
+                return chat.copy(messages = chat.messages + result("Error: ${call.name} is not available in ${modeLabel(chat.mode)} mode."))
+            // CONFIRM is the phone-action button: it is offered, never run here.
+            ToolApproval.CONFIRM, ToolApproval.AUTO -> Unit
         }
         val args = parseArguments(call.arguments)
         return when (call.name) {
@@ -556,7 +586,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             "phone_action" -> {
                 val (action, message) = parsePhoneAction(call.arguments)
-                chat.copy(messages = chat.messages + result(message, action = action?.toJson() ?: ""))
+                val ticket = action?.let { sealAction(it, now) }
+                chat.copy(messages = chat.messages + result(message, action = ticket?.toJson() ?: ""))
             }
             else -> chat.copy(messages = chat.messages + result("Error: unknown tool ${call.name}."))
         }
@@ -606,24 +637,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var puterImages by mutableStateOf(false)
     /** The composer's "Image" tool is armed: the next send draws. */
     var imageArmed by mutableStateOf(false)
-    var puterDraw: ((prompt: String, done: (Result<Pair<String, ByteArray>>) -> Unit) -> Unit)? = null
+    var puterDraw: ((prompt: String, model: String, ratio: Pair<Int, Int>?, source: String?, done: (Result<Pair<String, ByteArray>>) -> Unit) -> Unit)? = null
 
     /** Draws on the worker thread: Puter first when switched on, then the
-     * server's free image services. Saves the picture and returns its record. */
-    private fun drawBlocking(prompt: String): GeneratedImage {
-        var provider = ""
+     * server's free image services. [editSource] is a data URL to edit rather
+     * than draw fresh. Saves the picture and returns its record. */
+    private fun drawBlocking(
+        prompt: String,
+        size: ImageSize? = null,
+        model: String = "",
+        provider: String = "",
+        editSource: String? = null,
+    ): GeneratedImage {
+        var drawnProvider = ""
         var mime = ""
         var bytes: ByteArray? = null
         val bridge = puterDraw
         if (puterImages && bridge != null) {
             val latch = java.util.concurrent.CountDownLatch(1)
             var outcome: Result<Pair<String, ByteArray>>? = null
-            main.post { bridge(prompt) { result -> outcome = result; latch.countDown() } }
+            val ratio = imageRatio(size)
+            main.post { bridge(prompt, model, ratio, editSource) { result -> outcome = result; latch.countDown() } }
             val finished = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
             val result = outcome
             if (finished && result != null && result.isSuccess) {
                 val (type, data) = result.getOrThrow()
-                provider = "puter"
+                drawnProvider = "puter"
                 mime = type
                 bytes = data
             } else {
@@ -635,12 +674,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         if (bytes == null) {
-            val drawn = api.generateImage(prompt)
-            provider = drawn.first
+            val drawn = if (editSource != null) api.editImage(prompt, editSource, size?.body() ?: "", model, provider)
+            else api.generateImage(prompt, size?.body() ?: "", model, provider)
+            drawnProvider = drawn.first
             mime = drawn.second
             bytes = drawn.third
         }
-        val record = GeneratedImage(UUID.randomUUID().toString(), prompt, provider, mime, System.currentTimeMillis())
+        val record = GeneratedImage(UUID.randomUUID().toString(), prompt, drawnProvider, mime, System.currentTimeMillis())
         repo.saveImage(record.id, bytes!!)
         main.post { updateLibrary(library.copy(images = listOf(record) + library.images)) }
         return record
@@ -682,14 +722,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun generateImage(prompt: String) {
+    fun generateImage(
+        prompt: String,
+        size: ImageSize? = null,
+        model: String = "",
+        provider: String = "",
+        editSource: String? = null,
+    ) {
         val text = prompt.trim()
         if (text.isEmpty() || imageBusy) return
         imageBusy = true
         imageError = null
         io.execute {
             try {
-                drawBlocking(text)
+                drawBlocking(text, size, model, provider, editSource)
                 main.post { imageBusy = false }
             } catch (e: Exception) {
                 main.post {

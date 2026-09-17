@@ -10,7 +10,8 @@
       the user's own Puter account. It shares this origin's storage with the
       full web app, which is where the Puter sign-in happens; this page never
       opens a sign-in of its own. The app starts a job with fa4uDraw(id,
-      prompt), polls fa4uStatus(id), then reads the picture with fa4uChunk.
+      prompt, options), polls fa4uStatus(id), then reads the picture with
+      fa4uChunk. options is optional: { model, ratio: {w,h}, source }.
     -->
     <script src="https://js.puter.com/v2/"></script>
 </head>
@@ -66,14 +67,19 @@
         delete window.fa4uJobs[id];
     };
 
-    window.fa4uDraw = async function (id, prompt) {
+    window.fa4uDraw = async function (id, prompt, options) {
         var jobs = window.fa4uJobs;
+        options = options || {};
         jobs[id] = { state: 'pending' };
         try {
             if (typeof puter === 'undefined') throw new Error('Puter did not load');
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
             if (!signedIn) throw new Error('sign in to Puter in Web app first');
-            var image = await puter.ai.txt2img(String(prompt || '').slice(0, 2000));
+            var args = { quality: 'high' };
+            if (options.model) args.model = String(options.model);
+            if (options.ratio && options.ratio.w && options.ratio.h) args.ratio = { w: options.ratio.w, h: options.ratio.h };
+            if (options.source) args.input_images = [String(options.source)];
+            var image = await puter.ai.txt2img(String(prompt || '').slice(0, 2000), args);
             var dataUrl = await imageToDataUrl(image);
             // The app reads the picture back in slices (fa4uChunk), so no
             // single evaluateJavascript result has to carry megabytes.

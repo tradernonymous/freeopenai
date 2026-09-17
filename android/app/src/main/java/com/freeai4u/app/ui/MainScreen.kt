@@ -46,7 +46,6 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
@@ -342,7 +341,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                 }
             }
             if (chat.tasks.isNotEmpty()) {
-                TaskPanel(chat.tasks, chat.mode, onBuild = { vm.setMode(chat.id, "build"); vm.send(chat.id, "Build the plan. Work through the tasks in order.") })
+                TaskPanel(chat.tasks)
                 Spacer(Modifier.height(6.dp))
             }
             Composer(vm, platform, chat, streaming)
@@ -383,7 +382,6 @@ private val SUGGESTIONS = listOf(
     Suggestion(Icons.Filled.PaletteIcon, "Create image", "", image = true),
     Suggestion(Icons.Filled.AutoAwesome, "Brainstorm", "Brainstorm 10 ideas for "),
     Suggestion(Icons.Filled.Checklist, "Make a plan", "Plan how to ", mode = "plan"),
-    Suggestion(Icons.Filled.Build, "Build it", "Build ", mode = "build"),
     Suggestion(Icons.Filled.EditNote, "Summarize", "Summarize this:\n\n"),
     Suggestion(Icons.Filled.Language, "Research", "Research the latest on "),
 )
@@ -500,7 +498,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
             Column(Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
                 if (photos.isNotEmpty() || chat.mode != "chat" || vm.imageArmed) {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (chat.mode != "chat") ModeChip(modeLabel(chat.mode), if (chat.mode == "plan") Icons.Filled.Checklist else Icons.Filled.Build) { vm.setMode(chat.id, "chat") }
+                        if (chat.mode == "plan") ModeChip(modeLabel(chat.mode), Icons.Filled.Checklist) { vm.setMode(chat.id, "chat") }
                         if (vm.imageArmed) ModeChip(if (vm.puterImages) "Image · Puter" else "Image", Icons.Filled.PaletteIcon) { vm.imageArmed = false }
                         photos.forEachIndexed { index, url ->
                             Box {
@@ -595,7 +593,6 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 Text("Mode", color = Palette.muted, fontSize = 12.sp)
                 SheetOption(Icons.AutoMirrored.Filled.Chat, "Chat", "Answer and research", chat.mode == "chat") { vm.setMode(chat.id, "chat"); plusSheet = false }
                 SheetOption(Icons.Filled.Checklist, "Plan", "Think first, write a task list", chat.mode == "plan") { vm.setMode(chat.id, "plan"); plusSheet = false }
-                SheetOption(Icons.Filled.Build, "Build", "Do the tasks: files, images, actions", chat.mode == "build") { vm.setMode(chat.id, "build"); plusSheet = false }
                 HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

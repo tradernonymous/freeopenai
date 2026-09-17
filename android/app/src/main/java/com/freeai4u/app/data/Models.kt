@@ -47,10 +47,11 @@ data class Conversation(
     val createdAt: Long,
     val updatedAt: Long,
     val pinned: Boolean = false,
-    /** chat | plan | build */
+    /** chat | plan */
     val mode: String = "chat",
     val tasks: List<TaskItem> = emptyList(),
-    /** The chat's own scratch files (Build mode), path to text. */
+    /** The chat's own scratch files, path to text. Kept only so chats saved
+     * by older builds still open; nothing in this build writes them. */
     val files: Map<String, String> = emptyMap(),
 )
 
@@ -176,7 +177,7 @@ data class Library(
     val instructions: String = "",
 )
 
-val MODES = listOf("chat", "plan", "build")
+val MODES = listOf("chat", "plan")
 
 fun Library.toJson(): JSONObject {
     val personaList = JSONArray().also { array -> personas.forEach { array.put(it.toJson()) } }
