@@ -279,7 +279,7 @@ private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modif
 
 // --- Tools ------------------------------------------------------------------------
 
-private data class QuickTool(val emoji: String, val title: String, val personaId: String, val prompt: String)
+private data class QuickTool(val emoji: String, val title: String, val personaId: String, val prompt: String, val mode: String = "chat")
 
 private val QUICK_TOOLS = listOf(
     QuickTool("🌐", "Translate", "translator", ""),
@@ -290,12 +290,29 @@ private val QUICK_TOOLS = listOf(
     QuickTool("📧", "Reply", "writer", "Write a polite, short reply to this message:\n\n"),
 )
 
+// Plan mode answers with a step-by-step plan rather than touching any file
+// (see modeInstructions("plan") in Agent.kt) -- changes only happen after a
+// separate tap on "Build remotely" -- so these ask for a plan, the same shape
+// the built-in "Make a plan" prompt template already uses, rather than
+// phrasing like a command Plan mode was never going to carry out itself.
+private val PLAN_TEMPLATES = listOf(
+    QuickTool("🐛", "Plan a bug fix", "coder", "Make a plan to fix this bug: ", mode = "plan"),
+    QuickTool("➕", "Plan a feature", "coder", "Make a plan to add this feature: ", mode = "plan"),
+    QuickTool("🧪", "Plan test coverage", "coder", "Make a plan to add tests for: ", mode = "plan"),
+    QuickTool("🧹", "Plan a refactor", "coder", "Make a plan to refactor this, same behavior: ", mode = "plan"),
+    QuickTool("🔍", "Plan a code review", "coder", "Make a plan to review the latest changes for bugs and cleanups: ", mode = "plan"),
+)
+
 @Composable
 fun ToolsScreen(vm: AppViewModel) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Quick tools") }
         items(QUICK_TOOLS) { tool ->
             ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt) }
+        }
+        item { SectionTitle("Plan templates") }
+        items(PLAN_TEMPLATES) { tool ->
+            ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt, tool.mode) }
         }
         item { SectionTitle("Library") }
         item { ToolCard("🧩", "Knowledges", "Skills, personas, prompts and gallery") { vm.push(Screen.Knowledges) } }
