@@ -429,6 +429,9 @@ test('the build session routes: create, read, stream, and stay private', async (
     const aliceList = await (await fetch(base + '/api/build/sessions', { headers: { Cookie: cookie('alice') } })).json();
     assert.equal(aliceList.sessions[0].id, id);
     assert.equal(aliceList.enabled, true);
+    const writeTool = aliceList.tools.find((t) => t.name === 'write_file');
+    assert.equal(writeTool.approval, true, 'the hub can say which tools ask first');
+    assert.equal(aliceList.tools.find((t) => t.name === 'read_file').approval, false);
 
     assert.equal((await post('/api/build/sessions/' + id + '/input', { text: 'approve' }, { Cookie: cookie('alice') })).status, 409);
     assert.equal((await post('/api/build/sessions/' + id + '/cancel', {}, { Cookie: cookie('bob') })).status, 404);

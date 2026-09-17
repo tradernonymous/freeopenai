@@ -14,6 +14,7 @@
     <script src="transcript-controller.js"></script>
     <script src="attachment-helpers.js"></script>
     <script src="command-state.js"></script>
+    <script src="hub.js" defer></script>
     <style>
         /* The palette is the ChatGPT one: a near-neutral grey ladder where the
            chrome (rail, bar) sits one step darker than the conversation, and the
@@ -2212,6 +2213,8 @@
             .composer-settings { flex: 1 1 auto; }
         }
     </style>
+    <!-- After the inline styles so the mode switch and hub panels can build on them. -->
+    <link rel="stylesheet" href="hub.css">
 </head>
 <body>
     <div class="load-error-banner" id="loadErrorBanner" role="alert">
@@ -3027,6 +3030,7 @@
             label.textContent = meta.label;
             chip.title = meta.desc;
             updateCommandState();
+            if (window.FreeAI4UHub) window.FreeAI4UHub.syncMode(selectedMode);
         }
 
         function cycleMode() {
@@ -3037,6 +3041,31 @@
             showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
             if (selectedMode !== 'chat') ensureSkillsLoaded();
         }
+
+        // Picking a mode directly (the Chat | Plan | Build switch), with the same
+        // side effects as cycling to it: the saved preference, the chip (which
+        // also syncs the switch) and the skill preload.
+        function setChatMode(id) {
+            if (!isValidMode(id) || id === selectedMode) return;
+            selectedMode = id;
+            rememberPreference('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
+            if (selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        // What hub.js may read and do. Top-level consts from chatlib.js are not
+        // properties of window, so they are handed over here explicitly.
+        window.FreeAI4UPage = {
+            modes: MODES,
+            toolGroups: TOOL_GROUPS,
+            modeToolGroups: MODE_TOOL_GROUPS,
+            writeToolGroups: WRITE_TOOL_GROUPS,
+            chatCommands: CHAT_COMMANDS,
+            mode: () => selectedMode,
+            setMode: (id) => setChatMode(id),
+            chatId: () => activeConversationId || '',
+        };
 
         async function ensureSkillsLoaded() {
             if (skillsCatalog.length) return skillsCatalog;
@@ -9197,6 +9226,8 @@
                 });
                 bar.appendChild(retryBtn);
             }
+
+            if (window.FreeAI4UHub) window.FreeAI4UHub.decorateActions(bar);
 
             return bar;
         }

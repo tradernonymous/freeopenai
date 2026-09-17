@@ -990,6 +990,7 @@ function handleBuildRoute(req, res, urlPath, store, helpers) {
         reason: gateReason,
         runEnabled: !runReason,
         runReason,
+        tools: BUILD_TOOLS.map((t) => ({ name: t.name, description: t.description, approval: APPROVAL_TOOLS.has(t.name) })),
         sessions: gateReason ? [] : store.list(owner),
       });
     }
