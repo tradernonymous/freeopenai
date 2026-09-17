@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 
