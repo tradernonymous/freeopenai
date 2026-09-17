@@ -1098,6 +1098,113 @@ const LLM_PROVIDERS = {
       ownModel: true,
     },
   },
+  // A keyless free tier: a public gateway that answers an OpenAI-shaped
+  // catalogue and chat completions with no API key, no signup and no card, on a
+  // limit measured per IP rather than per account. (Verified live 2026-09-18:
+  // a chat completion with no Authorization header answers 200.)
+  //
+  // It is here because of what a free tier behind a key actually is: the one
+  // that runs out, on the deployment where a variable was never set. A provider
+  // that needs no credential cannot be left unconfigured, so the floor under
+  // this app stops depending on the operator having done anything at all.
+  //
+  // Two consequences come with that, and both are the operator's to know rather
+  // than this app's to hide. The limit is per IP, and on a container host that
+  // IP is the app's own egress address -- every visitor spends the same
+  // allowance, and a busy day spends it faster than a quiet one. And a gateway
+  // like this may route a prompt to a provider that logs it. Free, keyless and
+  // not private: a floor to fall back on, not the pool to live on.
+  //
+  // Pinned as a plain list rather than an ordering, unlike OmniRoute. Kilo does
+  // mark its free ids (`isFree`, and the `:free` suffix), but its own free
+  // router is `kilo-auto/free` -- which carries no suffix, so the app-wide
+  // "is this free?" rule reads it as paid and a freeOnly gate would drop the
+  // one id that does the rotating. Pin what is free; the router inside the
+  // list does the rest.
+  kilocode: {
+    label: 'Kilo Code',
+    baseUrl: 'https://api.kilo.ai/api/gateway/v1',
+    envVar: 'KILO_API_KEY',
+    keyless: true,
+    needsKey: false,
+    models: [
+      // The free router: rotates through Kilo's pool, so one rate-limited
+      // upstream does not end the turn. Confirmed answering with no key.
+      'kilo-auto/free',
+      // The reason this provider is here. Laguna S is Poolside's agentic
+      // coding model -- 118B total, 8B active, tool calling, 262K context.
+      'poolside/laguna-s-2.1:free',
+      'poolside/laguna-xs-2.1:free',
+      'cohere/north-mini-code:free',
+      // Context, for the turn that has to read a whole repository.
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      'stepfun/step-3.7-flash:free',
+      'tencent/hy3:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'google/gemma-4-31b-it:free',
+      'inclusionai/ling-3.0-flash-vl:free',
+      'nex-agi/nex-n2.5-pro:free',
+      'dots-studio/dots-3-note-preview:free',
+      'liquid/lfm-2.5-2.6b:free',
+    ],
+  },
+  // A second keyless official free tier, EU-hosted: OVHcloud's AI Endpoints
+  // answer anonymously with no key and no signup at 2 requests a minute per IP
+  // per model.
+  //
+  // That limit is the whole story of this provider and it is why it sits behind
+  // Kilo rather than beside it. Measured live on 2026-09-18: one model answered
+  // 200, and a handful of requests from a single address was enough to turn the
+  // whole endpoint into `429 API rate limit exceeded` for every model, including
+  // ones nothing had asked for. Two requests a minute per model is generous for
+  // one person and nothing at all for a container host, where the address is
+  // shared by every visitor -- so this is a pool to fall back on, never one to
+  // rely on. A 429 is handled the way any other is: the turn moves to the next
+  // provider with everything it had already collected.
+  ovhcloud: {
+    label: 'OVHcloud AI Endpoints',
+    baseUrl: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1',
+    envVar: 'OVHCLOUD_API_KEY',
+    keyless: true,
+    needsKey: false,
+    models: [
+      'Qwen3-Coder-30B-A3B-Instruct',
+      'gpt-oss-120b',
+      'gpt-oss-20b',
+      'Qwen3.5-397B-A17B',
+      'Qwen3-32B',
+      'Meta-Llama-3_3-70B-Instruct',
+      'Mistral-Small-3.2-24B-Instruct',
+      // Reads pictures, for the step that reviews a drawing against the request.
+      'Qwen2.5-VL-72B-Instruct',
+    ],
+  },
+  // The sibling fact to the block above, and the more surprising one: this
+  // service *draws*, and it is the only free image service this app can reach
+  // with no key, no signup and no card at all. Verified live 2026-09-18 -- a POST
+  // to /v1/images/generations with model `stable-diffusion-xl-base-v10` and no
+  // Authorization header answered 200 with a real PNG. Its catalogue publishes
+  // exactly one image model, and that is it.
+  //
+  // It is deliberately *not* declared as an `image` block, so pushing this does
+  // not move the draw order under a deployment that already had one. No image
+  // block means the keyless guard in imageStoreFor keeps it out of that order
+  // until the operator names a model -- and naming one is the entire opt-in:
+  //
+  //   OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10
+  //
+  // That is the same shape every other keyless service here already has:
+  // OmniRoute, the custom slot and FreeGPT4 all stay out of the picker until a
+  // variable points at them. One variable buys a free drawer with no key at all.
+  //
+  // Know what you are buying first. The limit is 2 requests a minute per IP per
+  // model, and on a container host that IP is shared by every visitor -- measured
+  // live, a handful of requests from a single address turned the whole endpoint
+  // into `429` for every model, including ones nothing had asked for. Cloudflare
+  // Workers AI is the roomier free drawer (10,000 Neurons a day) and already
+  // leads the order; this is what to reach for once Cloudflare's day is spent.
   // OmniRoute (github.com/diegosouzapw/OmniRoute) is a self-hosted AI gateway:
   // one OpenAI-compatible endpoint in front of hundreds of upstream providers
   // (OpenAI, Anthropic, Google, GLM, DeepSeek, Mistral, Kimi, plus dozens of
@@ -1309,6 +1416,50 @@ const LLM_PROVIDERS = {
       'claude-3-sonnet',
     ],
   },
+  // gpt4free (github.com/xtekky/gpt4free) runs as the "Interference API": one
+  // OpenAI-compatible endpoint in front of a large set of community provider
+  // adapters, including media generation. It is declared here because of the
+  // half of this app that has no free answer anywhere else -- see the image
+  // block below.
+  //
+  // Declared last on purpose. imageOrderIds walks the named order first and
+  // then every other provider that declares an image store, in declaration
+  // order -- so this block being the final entry is what puts g4f at the end of
+  // the draw order rather than in the middle of it.
+  //
+  // The honest description of what this is: an aggregator of adapters that talk
+  // to services by scraping their web endpoints rather than through a documented
+  // API. It is free and keyless, and individual adapters break without notice
+  // when the site they read changes. That is exactly why it is last: a service
+  // this shape is a better rescue than a first choice, and a failure here costs
+  // a round trip rather than a turn.
+  g4f: {
+    label: 'gpt4free',
+    // No default address, like the custom slot: a self-hosted gateway is reached
+    // through G4F_BASE_URL, with the /v1 segment added when it is missing.
+    baseUrl: '',
+    envVar: 'G4F_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+    // A short pinned list rather than the whole live catalogue, which is
+    // hundreds of aliases and would fill the picker with names that answer
+    // differently every day. An intersection that comes out empty falls back to
+    // the service's own catalogue, so a renamed alias degrades to "wrong order"
+    // rather than "nothing to pick".
+    models: ['gpt-4o-mini', 'gpt-4o', 'deepseek-v3', 'llama-3.3-70b'],
+    image: {
+      shape: 'openai-images',
+      // The model gpt4free routes text-to-image through. `flux` is its own
+      // alias, kept stable across releases where the vendor id behind it moves.
+      defaultModel: 'flux',
+      modelEnv: 'G4F_IMAGE_MODEL',
+      // No `edit` is declared, and that is a decision rather than an omission.
+      // A service that declares no edit shape is stepped past for an edit, which
+      // is the honest answer here: gpt4free's media adapters can edit on some
+      // backends and not others, and a declared edit that silently drew something
+      // new instead would be a fresh picture presented as a change to yours.
+    },
+  },
 };
 
 // Companion variable names derive from the key variable: NARA_API_KEY pairs
@@ -1336,6 +1487,21 @@ function withAccount(provider, url) {
 }
 
 function providerIsConfigured(provider) {
+  // An explicit off switch, for every provider and not just the keyless ones.
+  // A keyless provider is the case that made it necessary: it needs no variable
+  // to activate, so there was no variable to remove to deactivate it, and an
+  // always-on service on a shared address is a liability rather than a gift --
+  // its rate limit is measured against this host's egress IP, so every visitor
+  // spends the same allowance. <STEM>_DISABLED=1 is the way out.
+  if (/^(1|true|yes|on)$/i.test(String(process.env[providerEnvName(provider.envVar, '_DISABLED')] || '').trim())) return false;
+  // A keyless provider answers with no credential at all: an officially free
+  // tier reached on the operator's own IP rather than a key. It is configured
+  // the moment this build ships, and that is deliberate rather than a
+  // convenience -- a free model behind a key is the one that runs out, and a
+  // variable that has to be set is the one that is missing on a fresh deploy.
+  // It leads the checks below because it is the single case where "nothing is
+  // set" and "nothing is configured" are different answers.
+  if (provider.keyless) return true;
   // A provider whose URLs name an account is not configured without one: the
   // token alone has nowhere to go.
   if (provider.accountEnv && !providerAccount(provider)) return false;
@@ -1350,8 +1516,11 @@ function providerIsConfigured(provider) {
 // Providers whose documented base URL stops short of the OpenAI path. The
 // OmniRoute gateway accepts "http://host:port" and serves
 // /v1/... underneath it, so the version segment is added when it is missing
-// rather than making every operator remember to type it.
-const V1_APPENDED_PROVIDERS = new Set(['omniroute']);
+// rather than making every operator remember to type it. gpt4free is the same
+// shape for the same reason: its Interference API is served under /v1 on a
+// server that boots on a bare host and port, and "add the version segment" is a
+// step nobody remembers on the deploy where it matters.
+const V1_APPENDED_PROVIDERS = new Set(['omniroute', 'g4f']);
 
 function normalizeProviderBaseUrl(id, raw) {
   const base = String(raw || '').replace(/\/+$/, '');
@@ -1837,6 +2006,26 @@ async function discoverImageModel(req, id) {
 function imageStoreFor(id) {
   const declared = LLM_PROVIDERS[id];
   if (!declared) return null;
+  // A keyless provider declares how it draws, or names a model, or it does not
+  // draw at all.
+  //
+  // The store synthesised further down is what makes "every key draws" true: an
+  // operator who set a key expects that key to be able to draw, and naming one
+  // more variable finishes the job. A keyless provider has no such operator and
+  // no such key -- it is a free chat tier this build enrolled by itself -- so
+  // enrolling it as a *drawing* service too would spend a shared per-IP
+  // allowance on pictures nobody asked it for, on every deployment, with no
+  // action to point at. Naming <PROVIDER>_IMAGE_MODEL turns it into one, and
+  // then it is a decision like every other.
+  //
+  // Kilo is the case this exists for. Its catalogue really does publish image
+  // ids -- google/gemini-3.1-flash-image, openai/gpt-5.4-image-2, five more --
+  // and every one of them is isFree=false on a keyless account that can only
+  // spend the free pool, so discovery would have enrolled it as a drawer whose
+  // every answer is 402. It also keeps the catalogue read off the report route:
+  // this guard is above the discovery call, so the image report does not go and
+  // fetch two more catalogues on every page load it never used to touch.
+  if (declared.keyless && !declared.image && !String(process.env[providerEnvName(declared.envVar, '_IMAGE_MODEL')] || '').trim()) return null;
   // A model read from the provider's own catalogue rides on the store, so every
   // reader of "which model would this service draw with" -- the order, the
   // report, the draw -- answers with the same one.
