@@ -6698,7 +6698,11 @@
                     // answer in hand and simply stopped short. One more call,
                     // tools withheld, usually produces it -- and reporting an
                     // empty reply instead wastes everything already paid for.
-                    if (blank && !nudged) {
+                    // A reply that is all thinking and no answer is the same
+                    // stop-short, whether the model ran out of room or forgot
+                    // to write the answer; it gets the same single nudge.
+                    const thoughtOnly = !blank && !extractMessageText(message);
+                    if ((blank || thoughtOnly) && !nudged) {
                         nudged = true;
                         convo.push(toConversationMessage(message));
                         convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });

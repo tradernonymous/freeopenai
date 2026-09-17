@@ -142,6 +142,31 @@ test('the default image URL carries the account id', async () => {
   }
 });
 
+test('a chat asks Workers AI for a real output limit, and passes the client\'s own through', async () => {
+  const up = await upstreamOf((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] }));
+  });
+  process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+  process.env.CLOUDFLARE_ACCOUNT_ID = ACCOUNT;
+  process.env.CLOUDFLARE_BASE_URL = up.url;
+  try {
+    await withApp(async (base) => {
+      const ask = (extra) => fetch(base + '/api/llm/chat?provider=cloudflare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: '@cf/qwen/qwq-32b', messages: [{ role: 'user', content: 'hi' }], ...extra }),
+      });
+      assert.equal((await ask({})).status, 200);
+      assert.equal(JSON.parse(up.seen[0].body).max_tokens, 4096, 'the 256-token default would cut a thinking model off');
+      assert.equal((await ask({ max_tokens: 800 })).status, 200);
+      assert.equal(JSON.parse(up.seen[1].body).max_tokens, 800);
+    });
+  } finally {
+    await new Promise((r) => up.server.close(r));
+  }
+});
+
 test("Cloudflare's {errors:[{message}]} envelope is what the user reads", async () => {
   const up = await upstreamOf((req, res) => {
     res.writeHead(403, { 'Content-Type': 'application/json' });

@@ -1242,6 +1242,9 @@ const LLM_PROVIDERS = {
     label: 'Cloudflare Workers AI',
     baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1',
     envVar: 'CLOUDFLARE_API_TOKEN',
+    // Workers AI answers with at most 256 tokens unless asked for more; a
+    // thinking model never gets past its thinking in that.
+    defaultMaxTokens: 4096,
     freeTier: {
       all: true,
       limits: { neuronsPerDay: 10000, scope: 'account' },
@@ -1686,7 +1689,9 @@ const LLM_PROVIDERS = {
 // override, sending every request to a host named after the token. A variable
 // with neither suffix still gets a sibling rather than itself.
 function providerEnvName(envVar, suffix) {
-  const stem = envVar.replace(/_(API_KEY|TOKEN)$/, '');
+  // CLOUDFLARE_API_TOKEN documents CLOUDFLARE_MODELS and CLOUDFLARE_BASE_URL,
+  // so the whole _API_TOKEN tail goes, not just _TOKEN.
+  const stem = envVar.replace(/_(API_KEY|API_TOKEN|TOKEN)$/, '');
   return stem === envVar ? envVar + suffix : stem + suffix;
 }
 
@@ -4080,11 +4085,21 @@ function llmChat(req, res) {
       return sendJson(res, 400, { error: 'model and messages are required' });
     }
     if (provider.chatShape === 'text-query') return llmChatTextQuery(req, res, id, provider, body);
+    // An output limit only where the provider's own default is too small to
+    // hold an answer: Workers AI stops at 256 tokens unless told otherwise,
+    // which a reasoning model spends entirely on thinking, so the reply that
+    // reached the page was a cut-off thought and no answer. Elsewhere the
+    // provider's default stands, since a limit above a model's ceiling is an
+    // error on some of them.
+    const maxTokens = typeof body.max_tokens === 'number' && body.max_tokens > 0
+      ? Math.floor(body.max_tokens)
+      : (provider.defaultMaxTokens || 0);
     const upstreamBody = JSON.stringify({
       model: body.model,
       messages: body.messages,
       ...(body.tools ? { tools: body.tools } : {}),
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+      ...(maxTokens ? { max_tokens: maxTokens } : {}),
       ...(body.stream ? { stream: true } : {}),
     });
     const headers = providerAuthHeaders(provider, req);

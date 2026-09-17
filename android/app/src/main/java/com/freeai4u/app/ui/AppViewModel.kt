@@ -800,7 +800,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     break
                 }
                 if (error == null && content.isEmpty() && calls.isEmpty()) {
-                    chat = base.copy(messages = base.messages + draft("The model sent an empty reply. Try again or pick another model."))
+                    // A reply that is all thinking and no answer keeps its thinking
+                    // on screen, and says what happened instead of "empty".
+                    val why = if (reasoning.isNotEmpty()) "The model thought but did not write an answer (its output limit may be too small). Say \"continue\" to ask again." else "The model sent an empty reply. Try again or pick another model."
+                    chat = base.copy(messages = base.messages + ChatMessage("assistant", why, reasoning.toString(), started, error = true, model = chat.model))
                     break
                 }
                 val assistant = draft(error).copy(toolCalls = if (error == null) calls else emptyList())
