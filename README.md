@@ -1,91 +1,104 @@
 <p align="center">
-  <img src="docs/readme/hero.svg" alt="FreeAi4U. Free access to OpenAI models, no key required." width="100%">
+  <img src="docs/readme/hero-3d.svg" alt="FreeAI4U. Free AI chat, images and agents. One login. Keys stay on the server." width="100%">
 </p>
 
 <p align="center">
-  <b>Free AI chat, images and agents — web app + Android app — on official free tiers.</b><br>
-  Puter, Cloudflare Workers AI, NVIDIA, OpenRouter free models and more, behind your own login.
+  <a href="#-quick-start"><img src="docs/readme/btn-quickstart.svg" alt="Quick start" height="48"></a>
+  <a href="docs/deploy.md"><img src="docs/readme/btn-deploy.svg" alt="Deploy" height="48"></a>
+  <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="docs/readme/btn-apk.svg" alt="Get the APK" height="48"></a>
+  <a href="#-docs"><img src="docs/readme/btn-docs.svg" alt="Docs" height="48"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/Puter.js-v2-6C5CE7?style=for-the-badge" alt="Puter.js v2">
-  <img src="https://img.shields.io/badge/tests-986%20passing-22c55e?style=for-the-badge" alt="986 tests passing">
-  <img src="https://img.shields.io/badge/Android-app-3FB950?style=for-the-badge&logo=android&logoColor=white" alt="Android app">
-  <img src="https://img.shields.io/badge/license-MIT-0ea5e9?style=for-the-badge" alt="MIT">
+  <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/ci.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/android.yml/badge.svg?branch=main" alt="Android build"></a>
+  <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="https://img.shields.io/github/release-date/tradernonymous/freeopenai?label=APK&logo=android&color=3fb950" alt="APK"></a>
+  <img src="https://img.shields.io/badge/tests-987%20passing-3fb950" alt="987 tests passing">
+  <img src="https://img.shields.io/badge/node-22%2B-3fb950?logo=node.js&logoColor=white" alt="Node 22+">
+  <img src="https://img.shields.io/badge/license-MIT-3fb950" alt="MIT">
 </p>
 
-<p align="center">
-  <a href="#quickstart"><img src="https://img.shields.io/badge/🚀%20Quick%20start-run%20it%20locally-0b1030?style=flat-square&labelColor=22d3ee" alt="Quick start"></a>
-  &nbsp;
-  <a href="#deploy"><img src="https://img.shields.io/badge/☁️%20Deploy-Railway%20in%203%20steps-0b1030?style=flat-square&labelColor=8b5cf6" alt="Deploy"></a>
-  &nbsp;
-  <a href="docs/android.md"><img src="https://img.shields.io/badge/📲%20Android-install%20the%20app-0b1030?style=flat-square&labelColor=f472b6" alt="Android app"></a>
-</p>
+## ✨ What you get
 
-<br>
-
-## What it is
-
-- 💬 **Chat** with free models from Puter, Cloudflare Workers AI, NVIDIA, OpenRouter (`:free`), Nara and OmniRoute — streamed, Markdown, code blocks, web search built in.
-- 🧩 **Chat / Plan / Build modes** with skills, a task list, a workspace, GitHub tools and an optional server command runner.
-- 🖼️ **Images** from free services first (Cloudflare FLUX), Puter only when you switch it on.
-- 📲 **Android app** with a ChatGPT-style UI, voice mode, Plan/Build agent and encrypted local chats.
-- 🔐 **Your own login** (up to three accounts); keys stay on the server, never in the browser or the APK.
-
-<a name="quickstart"></a>
+| 💬 **Chat** | 🧩 **Plan · Build** | 🖼️ **Images** |
+| :-- | :-- | :-- |
+| Free models: Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute. Web search built in. | Task lists, skills, workspace, GitHub tools, optional commands. | Free FLUX first. Puter only when you switch it on. |
+| 📲 **Android** | 🔐 **Your login** | ☁️ **One deploy** |
+| ChatGPT-style app. Voice mode. Encrypted chats. | Up to 3 accounts. Keys never reach the browser. | Push to `main`. Railway ships it. |
 
 ## 🚀 Quick start
 
 ```bash
 git clone https://github.com/tradernonymous/freeopenai.git
-cd freeopenai
-npm install
-npm start          # → http://localhost:3000
+cd freeopenai && npm install && npm start   # → http://localhost:3000
 ```
+
+<details>
+<summary><b>Run the checks</b></summary>
 
 ```bash
-npm test           # node --test
-npm run lint       # eslint
-npm run smoke      # clean-profile Chrome smoke check (Node 22+)
+npm test        # node --test
+npm run lint    # eslint
+npm run smoke   # clean-profile Chrome check (Node 22+)
 ```
 
-Nothing is required to start. Add provider keys and a login in `.env` or your host's variables — see [Configuration](docs/configuration.md).
+</details>
+
+> [!TIP]
+> Nothing is required to start. Add keys and a login later — see [Configuration](docs/configuration.md).
 
 ## ☁️ Deploy
 
-1. Push the repo to GitHub.
-2. In Railway: **New Project → Deploy from GitHub repo**.
-3. Set `AUTH_USER_1`, `AUTH_PASS_1`, `SESSION_SECRET` and the provider keys you have.
+1. Push to GitHub.
+2. Railway → **New Project → Deploy from GitHub repo**.
+3. Set `AUTH_USER_1`, `AUTH_PASS_1`, `SESSION_SECRET` and your provider keys.
 
-Check the deploy is current: `curl -s https://<project>.up.railway.app/api/health` — `commit` should match `git rev-parse main`. More in [Deploy](docs/deploy.md).
+<details>
+<summary><b>Is my deploy current?</b></summary>
+
+```bash
+curl -s https://<project>.up.railway.app/api/health
+```
+
+`commit` must match `git rev-parse main`. `uptimeSeconds` resets on every deploy. More in [Deploy](docs/deploy.md).
+
+</details>
 
 ## 📲 Android app
 
-On the phone open **[the apk-latest release](https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest)**, tap `freeai4u.apk`, install, sign in once. The app offers updates by itself. Details in [The Android app](docs/android.md).
+1. On the phone, open **[apk-latest](https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest)**.
+2. Tap `freeai4u.apk` → **Install**.
+3. Sign in once. Updates are offered in the app.
 
-<a name="contents"></a>
+> [!NOTE]
+> Puter sign-in inside apps needs a Puter username and password. Google sign-in is blocked in app browsers.
+
+## 🧭 How it fits
+
+```mermaid
+flowchart LR
+  W[Web app] --> S
+  A[Android app] --> S
+  S[server.js<br/>login · keys] --> C[Cloudflare]
+  S --> N[NVIDIA]
+  S --> O[OpenRouter free]
+  S --> R[Nara · OmniRoute]
+  W -. your account .-> P[Puter]
+```
 
 ## 📚 Docs
 
-| Page | What is in it |
-| --- | --- |
-| [Features and models](docs/features.md) | Everything the web app does, and the models it lists |
-| [Using the app](docs/usage.md) | Everyday actions, appearance, using it on a phone |
-| [Configuration](docs/configuration.md) | Every environment variable |
-| [Deploy](docs/deploy.md) | Railway and the health check |
-| [Modes, skills and tools](docs/modes-and-tools.md) | Chat/Plan/Build, skills, GitHub, workspace, commands, tasks |
-| [OmniRoute](docs/omniroute.md) | Hundreds of providers through one self-hosted gateway |
-| [Image providers](docs/providers.md) | Which service draws, retries, provider quirks |
-| [The Android app](docs/android.md) | Install, features, privacy, signing |
-| [Architecture](docs/architecture.md) | How the pieces fit |
+| | | |
+| :-- | :-- | :-- |
+| 📖 [Features](docs/features.md) | ⚙️ [Configuration](docs/configuration.md) | 🧩 [Modes & tools](docs/modes-and-tools.md) |
+| ⌨️ [Using the app](docs/usage.md) | ☁️ [Deploy](docs/deploy.md) | 🖼️ [Image providers](docs/providers.md) |
+| 📲 [Android app](docs/android.md) | 🔀 [OmniRoute](docs/omniroute.md) | 🏗️ [Architecture](docs/architecture.md) |
 
-<a name="disclaimer"></a>
+<details>
+<summary><b>⚠️ Disclaimer</b></summary>
 
-## ⚠️ Disclaimer
+Unofficial client, not affiliated with OpenAI, Puter or any provider. Each provider's own terms and limits apply; Puter usage bills your own Puter account. Web chats live in your browser (`localStorage` and IndexedDB); Android chats live encrypted on the phone. Clearing either loses them — there is no server copy.
 
-FreeAi4U is an unofficial client — it is not affiliated with OpenAI or Puter. Usage is billed to your own Puter account under Puter's terms, not this project's. Conversations are stored only in your browser — the text in `localStorage` (the last 50, each capped at 200 messages) and the pictures themselves in an IndexedDB index beside them. Clearing site data or switching browsers loses them; there is no server-side copy to restore from.
+</details>
 
-<p align="center">
-  <sub>MIT licensed · Built on <a href="https://puter.com">Puter.js</a> · <a href="#quickstart">Back to top ↑</a></sub>
-</p>
+<p align="center"><sub>MIT · <a href="#-quick-start">Back to top ↑</a></sub></p>

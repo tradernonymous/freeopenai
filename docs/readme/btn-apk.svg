@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="209" height="48" viewBox="0 0 209 48" role="img" aria-label="Get the APK">
+  <title>Get the APK</title>
+  <style>
+    @keyframes shine { 0% { transform: translateX(-120px); } 60%,100% { transform: translateX(249px); } }
+    .shine { animation: shine 3.6s ease-in-out infinite; }
+    text { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; }
+  </style>
+  <defs><clipPath id="c"><rect width="209" height="48" rx="12"/></clipPath></defs>
+  <g clip-path="url(#c)">
+    <rect width="209" height="48" rx="12" fill="#161b22"/>
+    <rect class="shine" x="0" y="0" width="60" height="48" fill="#ffffff" opacity=".06" transform="skewX(-20)"/>
+  </g>
+  <rect x=".5" y=".5" width="208" height="47" rx="11.5" fill="none" stroke="#30363d"/>
+  <g transform="translate(18,12)"><path d="M6 10h12v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2zM7 9a5 5 0 0 1 10 0zM8 4l1.5 2.5M16 4l-1.5 2.5" fill="none" stroke="#e6edf3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="52" y="30.5" font-size="17" font-weight="600" fill="#e6edf3">Get the APK</text>
+</svg>

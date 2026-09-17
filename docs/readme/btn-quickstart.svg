@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="209" height="48" viewBox="0 0 209 48" role="img" aria-label="Quick start">
+  <title>Quick start</title>
+  <style>
+    @keyframes shine { 0% { transform: translateX(-120px); } 60%,100% { transform: translateX(249px); } }
+    .shine { animation: shine 3.6s ease-in-out infinite; }
+    text { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; }
+  </style>
+  <defs><clipPath id="c"><rect width="209" height="48" rx="12"/></clipPath></defs>
+  <g clip-path="url(#c)">
+    <rect width="209" height="48" rx="12" fill="#3fb950"/>
+    <rect class="shine" x="0" y="0" width="60" height="48" fill="#ffffff" opacity=".18" transform="skewX(-20)"/>
+  </g>
+  <rect x=".5" y=".5" width="208" height="47" rx="11.5" fill="none" stroke="#3fb950"/>
+  <g transform="translate(18,12)"><path d="M14 3c4 1 7 4 8 8l-5 5-6-6 3-7z M9 12l-4 1 2 2 M13 16l-1 4-2-2 M16 7.5a1.5 1.5 0 1 0 0.01 0" fill="none" stroke="#04260f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="52" y="30.5" font-size="17" font-weight="600" fill="#04260f">Quick start</text>
+</svg>

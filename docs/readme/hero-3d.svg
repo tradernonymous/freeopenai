@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-label="FreeAI4U. Free AI chat, images and agents. Web and Android.">
+  <title>FreeAI4U</title>
+  <style>
+    @keyframes float { 0%,100% { transform: translate(0,0); } 50% { transform: translate(0,-12px); } }
+    @keyframes orbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: .9; } }
+    @keyframes rise { 0% { transform: translateY(18px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+    .cube { animation: float 4.5s ease-in-out infinite; }
+    .cube2 { animation: float 5.5s ease-in-out -1.5s infinite; }
+    .cube3 { animation: float 6s ease-in-out -3s infinite; }
+    .orbit { transform-origin: 900px 205px; animation: orbit 18s linear infinite; }
+    .dot { animation: pulse 2.4s ease-in-out infinite; }
+    .t1 { animation: rise .8s ease-out both; }
+    .t2 { animation: rise .8s ease-out .15s both; }
+    .t3 { animation: rise .8s ease-out .3s both; }
+    text { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; }
+  </style>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07130c"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3fb950" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#3fb950" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#3fb950" stroke-opacity=".07"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="400" rx="24" fill="url(#bg)"/>
+  <rect width="1200" height="400" rx="24" fill="url(#grid)"/>
+  <rect x=".5" y=".5" width="1199" height="399" rx="24" fill="none" stroke="#1f3a2a"/>
+  <circle cx="900" cy="205" r="210" fill="url(#glow)"/>
+
+  <g class="t1">
+    <text x="72" y="118" font-size="16" letter-spacing="3" fill="#3fb950" font-weight="600">WEB · ANDROID · FREE TIERS</text>
+  </g>
+  <g class="t2">
+    <text x="68" y="206" font-size="88" font-weight="800" fill="#f0f6fc">FreeAI4U</text>
+  </g>
+  <g class="t3">
+    <text x="72" y="258" font-size="26" fill="#9da7b3">Free AI chat, images and agents.</text>
+    <text x="72" y="296" font-size="26" fill="#9da7b3">One login. Keys stay on the server.</text>
+  </g>
+
+  <g class="orbit">
+    <ellipse cx="900" cy="205" rx="190" ry="190" fill="none" stroke="#3fb950" stroke-opacity=".35" stroke-dasharray="4 10" stroke-width="2"/>
+    <circle class="dot" cx="1090" cy="205" r="7" fill="#3fb950"/>
+    <circle class="dot" cx="710" cy="205" r="5" fill="#58a6ff"/>
+    <circle class="dot" cx="900" cy="15" r="5" fill="#d2a8ff"/>
+  </g>
+
+  <g class="cube" transform="translate(0,0)">
+    <polygon points="900,110 980,154 900,198 820,154" fill="#3fb950"/>
+    <polygon points="820,154 900,198 900,296 820,252" fill="#238636"/>
+    <polygon points="980,154 900,198 900,296 980,252" fill="#1a5c2a"/>
+    <path d="M872 150 L900 136 L928 150" stroke="#07130c" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="900" cy="166" r="6" fill="#07130c"/>
+  </g>
+  <g class="cube2">
+    <polygon points="1040,262 1070,278 1040,294 1010,278" fill="#58a6ff"/>
+    <polygon points="1010,278 1040,294 1040,330 1010,314" fill="#1f6feb"/>
+    <polygon points="1070,278 1040,294 1040,330 1070,314" fill="#174a9c"/>
+  </g>
+  <g class="cube3">
+    <polygon points="760,74 786,88 760,102 734,88" fill="#d2a8ff"/>
+    <polygon points="734,88 760,102 760,134 734,120" fill="#8957e5"/>
+    <polygon points="786,88 760,102 760,134 786,120" fill="#5e3aa8"/>
+  </g>
+</svg>
