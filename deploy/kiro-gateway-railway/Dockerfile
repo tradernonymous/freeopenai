@@ -34,6 +34,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && mkdir -p /data/kiro \
     && chown -R kiro:kiro /app /data/kiro
 
+# The entrypoint is ours (fingerprint reconciliation of the pasted token vs
+# the rotated one on the volume); the upstream clone knows nothing of it, so
+# it must be copied in explicitly -- the omission that left the image
+# pointing at a path that did not exist and failed every deploy.
+COPY kiro-entrypoint.sh /app/deploy/kiro-entrypoint.sh
+RUN chmod +x /app/deploy/kiro-entrypoint.sh
+
 # Account system ON: rotated tokens persist into credentials.json on the
 # volume instead of dying inside process memory at the next restart.
 ENV ACCOUNT_SYSTEM=true \
