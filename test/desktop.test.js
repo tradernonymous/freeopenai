@@ -98,6 +98,29 @@ test('a message box receives the text through the environment, never the command
   assert.equal(call.env.FREEAI4U_MESSAGE, 'Server "x"; rm -rf');
 });
 
+test('a newer launcher is announced, and a bad or unreachable manifest says nothing', async () => {
+  assert.equal(desktop.isNewerVersion('1.2.10', '1.2.9'), true);
+  assert.equal(desktop.isNewerVersion('1.1', '1.0.9'), true);
+  assert.equal(desktop.isNewerVersion('1.0.0', '1.0.0'), false);
+  assert.equal(desktop.isNewerVersion('0.9.9', '1.0.0'), false);
+  assert.equal(desktop.isNewerVersion('next', '1.0.0'), false, 'an unparseable version is never newer');
+
+  const good = '{"version":"1.4.0","url":"https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/FreeAI4U-Desktop.exe"}';
+  assert.equal(desktop.parseDesktopUpdate(good).version, '1.4.0');
+  // A file from the internet: the only link it may offer is a GitHub one.
+  assert.equal(desktop.parseDesktopUpdate('{"version":"9.0.0","url":"https://evil.example/x.exe"}'), null);
+  assert.equal(desktop.parseDesktopUpdate('{"version":"9.0.0","url":"file:///C:/x.exe"}'), null);
+  assert.equal(desktop.parseDesktopUpdate('{"version":"not-a-version","url":"https://github.com/a/b"}'), null);
+  assert.equal(desktop.parseDesktopUpdate('{broken'), null);
+
+  const ok = async () => ({ ok: true, text: async () => good });
+  assert.match(await desktop.updateNotice(ok, '1.0.0'), /1\.4\.0 is out/);
+  assert.equal(await desktop.updateNotice(ok, '1.4.0'), '', 'the version you have is not news');
+  assert.equal(await desktop.updateNotice(async () => ({ ok: false }), '1.0.0'), '');
+  assert.equal(await desktop.updateNotice(async () => { throw new Error('offline'); }, '1.0.0'), '',
+    'an update check can never stop the app from opening');
+});
+
 test('the exe is switched to a windowed app without a console', () => {
   const pe = Buffer.alloc(512);
   pe.write('MZ', 0, 'latin1');

@@ -10,6 +10,8 @@
 
 Optional: right-click the exe → **Pin to taskbar**.
 
+The app itself lives on the server, so it is always current and there is nothing to update. The launcher is the exception: when a newer one is published, it says so **after** your window has opened, with the link — never before, so a slow or unreachable GitHub costs you nothing.
+
 ## What you get
 
 - **Chat · Plan · Build** switch above the message box.

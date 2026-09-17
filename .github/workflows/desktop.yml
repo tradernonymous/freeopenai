@@ -60,6 +60,15 @@ jobs:
           if ($reported -ne $expected) { throw "The exe reported '$reported', expected '$expected'" }
           $hash = (Get-FileHash .\FreeAI4U-Desktop.exe -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path FreeAI4U-Desktop.exe.sha256 -Value "$hash  FreeAI4U-Desktop.exe" -NoNewline
+          # What the launcher reads to know a newer one exists. Written from
+          # the version the exe itself just reported, so the two cannot differ.
+          $manifest = [ordered]@{
+            version = $reported
+            url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/desktop-latest/FreeAI4U-Desktop.exe"
+            notes = "Build from $($env:GITHUB_SHA.Substring(0,7))"
+            sha256 = $hash
+          }
+          Set-Content -Path version.json -Value ($manifest | ConvertTo-Json -Compress) -Encoding utf8
           Write-Output "FreeAI4U-Desktop.exe $reported sha256 $hash"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -67,6 +76,7 @@ jobs:
           path: |
             desktop/FreeAI4U-Desktop.exe
             desktop/FreeAI4U-Desktop.exe.sha256
+            desktop/version.json
           retention-days: 30
 
   # Publishes what the build produced. Only this job can write, and it runs no
@@ -92,4 +102,4 @@ jobs:
           else
             gh release create desktop-latest --repo "$GITHUB_REPOSITORY" --title "FreeAI4U Desktop for Windows (latest build)" --notes "$NOTES"
           fi
-          gh release upload desktop-latest desktop/FreeAI4U-Desktop.exe desktop/FreeAI4U-Desktop.exe.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload desktop-latest desktop/FreeAI4U-Desktop.exe desktop/FreeAI4U-Desktop.exe.sha256 desktop/version.json --repo "$GITHUB_REPOSITORY" --clobber

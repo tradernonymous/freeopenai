@@ -18,6 +18,12 @@ const { spawn } = require('child_process');
 const VERSION = '1.0.0';
 const DEFAULT_SERVER = 'https://freeopenai-production.up.railway.app';
 const HEALTH_TIMEOUT_MS = 12000;
+// Where a newer exe announces itself: version.json beside the download in the
+// rolling desktop-latest release, the same shape the Android app reads. The
+// app itself lives on the server and is always current; this is only about
+// the launcher, so the check is quiet, short, and never blocks the window.
+const UPDATE_URL = 'https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/version.json';
+const UPDATE_TIMEOUT_MS = 6000;
 
 const HELP = [
   'FreeAI4U Desktop ' + VERSION,
@@ -150,6 +156,66 @@ async function checkHealth(server, fetchImpl, timeoutMs = HEALTH_TIMEOUT_MS) {
   }
 }
 
+/** "1.2.10" against "1.2.9": each part compared as a number, missing parts as
+ * zero, anything unparseable as not newer. */
+function isNewerVersion(candidate, current) {
+  const parts = (value) => String(value == null ? '' : value).trim().split('.').map((n) => Number.parseInt(n, 10));
+  const a = parts(candidate);
+  const b = parts(current);
+  if (!a.length || a.some((n) => !Number.isFinite(n))) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const left = Number.isFinite(a[i]) ? a[i] : 0;
+    const right = Number.isFinite(b[i]) ? b[i] : 0;
+    if (left !== right) return left > right;
+  }
+  return false;
+}
+
+/** version.json read into { version, url }, or null. The download link has to
+ * be an https github.com address: this is a file from the internet, and the
+ * only thing done with it is showing it to the user. */
+function parseDesktopUpdate(body) {
+  let data = null;
+  try {
+    data = JSON.parse(String(body || ''));
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== 'object') return null;
+  const version = String(data.version || data.versionName || '').trim();
+  const url = String(data.url || '').trim();
+  if (!/^\d+(\.\d+)*$/.test(version)) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com') return null;
+  return { version, url: parsed.href };
+}
+
+/** The message to show when a newer launcher exists, or '' when there is
+ * nothing to say. Never throws: an update check must not be able to stop the
+ * app from opening. */
+async function updateNotice(fetchImpl, current = VERSION, url = UPDATE_URL, timeoutMs = UPDATE_TIMEOUT_MS) {
+  const get = fetchImpl || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await get(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    if (!res || !res.ok) return '';
+    const info = parseDesktopUpdate(await res.text());
+    if (!info || !isNewerVersion(info.version, current)) return '';
+    return 'FreeAI4U Desktop ' + info.version + ' is out (you have ' + current + ').\n\n' +
+      'Download it from:\n' + info.url + '\n\nYour chats and sign-in are unaffected.';
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // A Windows message box. The text travels in an environment variable, never
 // inside the script, so nothing in it can become PowerShell code.
 function messageBoxCommand(text, title) {
@@ -233,6 +299,13 @@ async function main(argv) {
   }
   const opened = openWindow(appUrl(choice.server), paths, process.env);
   log(paths, 'opened with ' + opened);
+  // After the window, never before: a slow or unreachable GitHub must cost the
+  // user nothing, and an update is news rather than a gate.
+  const notice = await updateNotice();
+  if (notice) {
+    log(paths, 'update available');
+    await showMessage(notice);
+  }
   return 0;
 }
 
@@ -250,6 +323,10 @@ module.exports = {
   appUrl,
   launchArgs,
   checkHealth,
+  isNewerVersion,
+  parseDesktopUpdate,
+  updateNotice,
+  UPDATE_URL,
   messageBoxCommand,
   main,
 };
