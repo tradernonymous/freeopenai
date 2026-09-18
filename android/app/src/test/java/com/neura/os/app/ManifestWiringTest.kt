@@ -96,14 +96,17 @@ class ManifestWiringTest {
             val intentFilters = el.getElementsByTagName("intent-filter")
             for (j in 0 until intentFilters.length) {
                 val filter = intentFilters.item(j) as org.w3c.dom.Element
+                // MAIN is an <action>; LAUNCHER is a <category>. Checking one
+                // list for both is how this check once matched nothing.
                 val actions = filter.getElementsByTagName("action")
+                val categories = filter.getElementsByTagName("category")
                 var isMain = false
                 var isLauncher = false
                 for (k in 0 until actions.length) {
-                    when ((actions.item(k) as org.w3c.dom.Element).getAttribute("android:name")) {
-                        "android.intent.action.MAIN" -> isMain = true
-                        "android.intent.category.LAUNCHER" -> isLauncher = true
-                    }
+                    if ((actions.item(k) as org.w3c.dom.Element).getAttribute("android:name") == "android.intent.action.MAIN") isMain = true
+                }
+                for (k in 0 until categories.length) {
+                    if ((categories.item(k) as org.w3c.dom.Element).getAttribute("android:name") == "android.intent.category.LAUNCHER") isLauncher = true
                 }
                 if (!(isMain && isLauncher)) continue
                 val raw = el.getAttribute("android:name")
