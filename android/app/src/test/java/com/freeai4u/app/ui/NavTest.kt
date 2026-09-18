@@ -70,12 +70,16 @@ class NavTest {
     }
 
     @Test fun `switchedToChat clears only chat's own stack`() {
-        val mixed = NavState().pushed(Screen.Tools).pushed(Screen.Personas).pushed(Screen.Builds)
-        val chat = mixed.switchedToChat()
-        assertEquals(Tab.Chat, chat.currentTab)
-        assertNull(chat.screen)
+        val toolsDrilled = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
+        // A screen pushed after switching to chat lands on chat's own stack,
+        // not on the tab it came from.
+        val onChatWithBuilds = toolsDrilled.switchedToChat().pushed(Screen.Builds)
+        assertEquals(Screen.Builds, onChatWithBuilds.screen)
+        val backToChat = onChatWithBuilds.switchedToChat()
+        assertEquals(Tab.Chat, backToChat.currentTab)
+        assertNull(backToChat.screen)
         // Tools' drilled-in state must survive -- switching to chat is not a full reset.
-        val backOnTools = chat.pushed(Screen.Tools)
+        val backOnTools = backToChat.pushed(Screen.Tools)
         assertEquals(Screen.Personas, backOnTools.screen)
     }
 
