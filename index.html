@@ -304,6 +304,14 @@
         .history-item:hover { background: var(--surface-2); color: var(--text); }
         .history-item.active { background: var(--accent-bg); color: var(--accent); border-color: var(--border); }
         .history-item .history-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .history-item .history-share { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 4px; flex-shrink: 0; }
+        .history-item .history-share:hover { color: var(--accent); }
+        .memory-add-row { display: flex; gap: 6px; margin: 8px 0 10px; }
+        .memory-add-row input { flex: 1; min-width: 0; }
+        .memory-fact-row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; background: var(--surface-2); }
+        .memory-fact-text { flex: 1; min-width: 0; font-size: 12.5px; overflow-wrap: anywhere; }
+        .memory-fact-delete { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; flex-shrink: 0; }
+        .memory-fact-delete:hover { color: var(--danger); }
         .history-item .history-delete {
             background: none; border: none; color: var(--text-muted);
             cursor: pointer; padding: 0 2px; line-height: 1; font-size: 14px;
@@ -2531,6 +2539,7 @@
                             <button class="session-tab" type="button" id="sessionTabSkills" aria-pressed="true" onclick="showSessionTab('skills')">Skills</button>
                             <button class="session-tab" type="button" id="sessionTabTasks" aria-pressed="false" onclick="showSessionTab('tasks')">Plan</button>
                             <button class="session-tab" type="button" id="sessionTabImage" aria-pressed="false" onclick="showSessionTab('image')">Image</button>
+                            <button class="session-tab" type="button" id="sessionTabMemory" aria-pressed="false" onclick="showSessionTab('memory')">Memory</button>
                         </div>
 
                         <section class="session-section active" id="sessionSectionSkills" aria-label="Skills for this chat">
@@ -2582,6 +2591,23 @@
                                 <div class="image-provider-list" id="chatProviderList"><div class="image-provider-report-empty">Open this tab to see configured chat services.</div></div>
                                 <h4 class="session-subhead image-provider-subhead">Image services</h4>
                                 <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-empty">Open this tab to see which configured services can draw and what each one needs.</div></div>
+                            </div>
+                        </section>
+
+                        <section class="session-section" id="sessionSectionMemory" aria-label="What is remembered across chats">
+                            <div class="session-switch">
+                                <label for="memoryModeSwitch">Remember in this chat</label>
+                                <input type="checkbox" id="memoryModeSwitch" checked onchange="setMemoryForChat(this.checked)">
+                            </div>
+                            <p class="session-hint">Facts saved here are offered to every chat with this switch on. Saved facts ride as context on the live request — they are never written into the stored transcript.</p>
+                            <h4 class="session-subhead"><span>Saved</span><span class="todo-count" id="memoryCount">empty</span></h4>
+                            <div class="memory-list" id="memoryList" aria-live="polite"><div class="image-provider-report-empty">Nothing saved yet. When the model learns something worth keeping, it saves it here — or you can add one.</div></div>
+                            <div class="memory-add-row">
+                                <input type="text" id="memoryAddInput" placeholder="Add a fact yourself…" aria-label="New memory fact" maxlength="300" autocomplete="off">
+                                <button type="button" class="icon-btn-text" onclick="addMemoryFactFromInput()">Add</button>
+                            </div>
+                            <div class="todo-foot">
+                                <button type="button" class="danger" onclick="clearAllMemoryFacts()" title="Remove every saved fact">Forget all</button>
                             </div>
                         </section>
                     </aside>
@@ -2862,6 +2888,24 @@
         </div>
     </main>
 
+    <div class="modal-overlay" id="shareOverlay" onclick="closeShareModal();">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle" onclick="event.stopPropagation();">
+            <div class="modal-header">
+                <h3 id="shareTitle">Share this chat</h3>
+            </div>
+            <div class="modal-body">
+                <p style="margin: 0 0 10px;" id="shareStatus">Making a read-only link…</p>
+                <p style="margin: 0 0 12px;"><input type="text" id="shareLinkBox" class="model-dropdown-search" style="width: 100%;" readonly aria-label="Share link" onclick="this.select()"></p>
+                <p style="margin: 0; font-size: 12px; color: var(--text-muted);">Anyone with the link can read this conversation — it is frozen at publish time. Revoke the link below to take it down.</p>
+            </div>
+            <div class="github-browser-row" style="padding: 0 20px 20px;">
+                <button class="icon-btn-text" id="shareCopyBtn" onclick="copyShareLink()">Copy link</button>
+                <button class="icon-btn-text danger" id="shareRevokeBtn" onclick="revokeShareLink()">Revoke link</button>
+                <button class="icon-btn-text" onclick="closeShareModal();">Done</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="githubConfirmOverlay">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="githubConfirmTitle" onclick="event.stopPropagation();">
             <div class="modal-header">
@@ -3093,6 +3137,14 @@
         let serverRunReason = '';
         let serverWorkspaceFiles = [];
 
+        // Saved memory lives here, with the other per-session state, because
+        // the init block reads it long before the bottom-of-page section that
+        // manages the Memory tab runs.
+        let memoryFacts = [];
+        let memoryEnabledByChat = new Set();
+        const MEMORY_ENABLED_KEY = 'freeopenaiMemoryChats';
+        try { memoryEnabledByChat = new Set(JSON.parse(localStorage.getItem(MEMORY_ENABLED_KEY) || '[]')); } catch { /* a broken list reads as none */ }
+
         // The workspace is a flat map of path -> text, kept in this browser. It
         // is deliberately not the server's disk: the deployment is shared and
         // its container is rebuilt on every push, so files kept there would be
@@ -3131,7 +3183,7 @@
         // it on a section nobody chose.
         const SESSION_HIDDEN_KEY = 'freeopenaiSessionHidden';
         const SESSION_TAB_KEY = 'freeopenaiSessionTab';
-        const SESSION_TABS = ['skills', 'tasks', 'image'];
+        const SESSION_TABS = ['skills', 'tasks', 'image', 'memory'];
         let sessionTab = SESSION_TABS[0];
 
         // The artifact canvas: whether it is open, and the HTML block selected
@@ -4079,6 +4131,8 @@
         restoreCanvas();
         watchPanelFloor();
         renderSkillRail();
+        loadMemoryFacts();
+        syncMemorySwitch();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
         document.getElementById('routingCheck').checked = routingMode === 'auto';
         designLoadTemplates();
@@ -5565,6 +5619,7 @@
                 renderSkillMenuOptions();
                 updateSessionSummary();
                 if (typeof toggleCanvas === 'function') toggleCanvas(false, false);
+                if (sessionTab === 'memory') loadMemoryFacts();
             }
             if (!persist) return;
             try {
@@ -6707,7 +6762,11 @@
         // turn, after everything a provider is able to cache.
         function buildConversation(outgoing, activeSkills = null) {
             const skills = activeSkills && activeSkills.length ? renderSkillsPrompt(activeSkills) : '';
-            const turnContext = [renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
+            // Memory rides with the volatile context on the live turn, after
+            // everything a provider caches, so the system line stays identical
+            // and a saved fact never enters the stored history.
+            const memory = memoryOnForChat() ? memoryPromptFor(memoryFacts) : '';
+            const turnContext = [memory, renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
             const system = [SYSTEM_PROMPT, modePrompt(selectedMode), workspacePrompt(useServerWorkspace())].filter(Boolean).join('\n\n');
             return [
                 { role: 'system', content: system },
@@ -6768,6 +6827,7 @@
             if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
             if (isTaskTool(name)) return runTaskTool(name, args);
             if (isUseSkillTool(name)) return runUseSkillTool(args);
+            if (name === MEMORY_TOOL.function.name) return runMemoryTool(args);
             return Promise.resolve('Error: unknown tool ' + name);
         }
 
@@ -7683,6 +7743,10 @@
                     // Only when this server actually runs them. The refusal below
                     // is still there for a server that changes its mind mid-session.
                     if (serverRunReady) offered.push(...RUN_TOOLS);
+                    // Remembering is offered whenever the chat has it on (the
+                    // default): the model only writes a fact it was given or
+                    // asked to keep, and the Memory tab is where it is undone.
+                    if (memoryOnForChat()) offered.push(MEMORY_TOOL);
                     let tools = toolsForMode(selectedMode, offered);
                     // Skills ride along: whatever this chat pinned, plus what the
                     // router picks when auto-skills are on and the mode allows it.
@@ -10966,6 +11030,18 @@
                 });
                 row.appendChild(pin);
 
+                const share = document.createElement('button');
+                share.type = 'button';
+                share.className = 'history-share';
+                share.textContent = '↗';
+                share.title = 'Share this chat as a read-only link';
+                share.setAttribute('aria-label', 'Share chat: ' + (convo.title || 'New chat'));
+                share.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openShareModal(convo.id);
+                });
+                row.appendChild(share);
+
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'history-delete';
@@ -11059,6 +11135,7 @@
             renderTaskList();
             workspaceFiles = loadWorkspaceFiles();
             renderWorkspaceFiles();
+            syncMemorySwitch();
             if (isNarrowScreen()) toggleHistory(false, false);
         }
 
@@ -11464,6 +11541,218 @@
         // dead zone then. That is not theoretical: it threw "Cannot access
         // 'statusResetTimer' before initialization" out of initializeApp and
         // stopped the rest of the boot with it.
+        // -----------------------------------------------------------------
+        // Read-only share links.
+
+        // Downscale one data: URL for a share payload. The picture in a stored
+        // chat can be megabytes; a reader's link does not need the original
+        // pixels. (The factory keeps the browser machinery injectable.)
+        const shareImageDataUrl = shareImageDataUrlFactory({
+            makeCanvas: (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; },
+            loadImage: (src) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; }),
+        });
+
+        // Build a share payload: every stored image id is read back and
+        // compacted to a data: URL first, then the whitelisted transcript is
+        // assembled by the shared helper. Null means the conversation is too
+        // large to publish.
+        async function buildSharePayloadFor(convo) {
+            const withImages = [];
+            for (const m of convo.messages || []) {
+                if (!m || (m.type !== 'user' && m.type !== 'bot')) continue;
+                const images = [];
+                for (const im of Array.isArray(m.images) ? m.images : []) {
+                    const src = im && (typeof im.url === 'string' && im.url.startsWith('data:') ? im.url : im.id ? imageUrlById.get(String(im.id)) : '') || '';
+                    if (!src) continue;
+                    images.push(await shareImageDataUrl(src));
+                }
+                withImages.push({ ...m, images: images.filter(Boolean) });
+            }
+            return sharePayloadOf(withImages, convo.title);
+        }
+
+        let shareActiveId = null;
+        let shareActiveLink = '';
+
+        async function openShareModal(convoId) {
+            const convo = conversations.find((c) => c.id === convoId);
+            if (!convo) return;
+            const overlay = document.getElementById('shareOverlay');
+            const status = document.getElementById('shareStatus');
+            const box = document.getElementById('shareLinkBox');
+            shareActiveId = null;
+            shareActiveLink = '';
+            box.value = '';
+            status.textContent = 'Making a read-only link…';
+            overlay.classList.add('open');
+            try {
+                const payload = await buildSharePayloadFor(convo);
+                if (!payload) {
+                    status.textContent = 'This conversation is too large to share.';
+                    return;
+                }
+                const res = await fetch('/api/share', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.id) {
+                    status.textContent = data.error || 'Sharing failed — try again in a moment.';
+                    return;
+                }
+                shareActiveId = data.id;
+                shareActiveLink = location.origin + (data.url || ('/s/' + data.id));
+                box.value = shareActiveLink;
+                status.textContent = 'Read-only link ready:';
+            } catch (err) {
+                status.textContent = 'Sharing failed — the server did not answer.';
+            }
+        }
+
+        function closeShareModal() {
+            document.getElementById('shareOverlay').classList.remove('open');
+        }
+
+        function copyShareLink() {
+            if (shareActiveLink) copyText(shareActiveLink, document.getElementById('shareCopyBtn'));
+        }
+
+        async function revokeShareLink() {
+            if (!shareActiveId) return;
+            try {
+                await fetch('/api/share/' + encodeURIComponent(shareActiveId), { method: 'DELETE' });
+            } catch { /* a failed revoke still closes the modal; the link dies with the server session anyway */ }
+            document.getElementById('shareStatus').textContent = 'Link revoked. Nobody can open it now.';
+            document.getElementById('shareLinkBox').value = '';
+            shareActiveId = null;
+            shareActiveLink = '';
+        }
+
+        // -----------------------------------------------------------------
+        // Saved memory: small facts offered to every chat that opts in. The
+        // state itself is declared with the other session state near the top
+        // of the page; this is the tab's behavior.
+
+        // Keep the switch honest with the conversation actually on screen.
+        function syncMemorySwitch() {
+            const sw = document.getElementById('memoryModeSwitch');
+            if (sw) sw.checked = memoryOnForChat();
+        }
+
+        function memoryOnForChat() {
+            const id = activeConversationId;
+            if (!id) return true;
+            // Default on, remembered per chat: the same conversation keeps its
+            // choice across reloads.
+            return !memoryEnabledByChat.has('off:' + id);
+        }
+
+        function setMemoryForChat(on) {
+            const id = activeConversationId;
+            if (!id) return;
+            if (on) memoryEnabledByChat.delete('off:' + id);
+            else memoryEnabledByChat.add('off:' + id);
+            try { localStorage.setItem(MEMORY_ENABLED_KEY, JSON.stringify([...memoryEnabledByChat])); } catch { /* a refused preference costs nothing */ }
+            showStatus('info', on ? 'Memory offered to this chat' : 'Memory off for this chat');
+        }
+
+        function renderMemoryList() {
+            const list = document.getElementById('memoryList');
+            const count = document.getElementById('memoryCount');
+            if (!list) return;
+            list.innerHTML = '';
+            if (count) count.textContent = memoryFacts.length ? memoryFacts.length + ' saved' : 'empty';
+            if (!memoryFacts.length) {
+                const empty = document.createElement('div');
+                empty.className = 'image-provider-report-empty';
+                empty.textContent = 'Nothing saved yet. When the model learns something worth keeping, it saves it here — or you can add one below.';
+                list.appendChild(empty);
+                return;
+            }
+            for (const fact of memoryFacts) {
+                const row = document.createElement('div');
+                row.className = 'memory-fact-row';
+                const text = document.createElement('span');
+                text.className = 'memory-fact-text';
+                text.textContent = fact.text;
+                row.appendChild(text);
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'memory-fact-delete';
+                del.textContent = '\u00d7';
+                del.title = 'Forget this';
+                del.setAttribute('aria-label', 'Forget: ' + fact.text);
+                del.addEventListener('click', () => deleteMemoryFact(fact.text));
+                row.appendChild(del);
+                list.appendChild(row);
+            }
+        }
+
+        async function loadMemoryFacts() {
+            try {
+                const res = await fetch('/api/memory');
+                const data = await res.json().catch(() => ({}));
+                memoryFacts = Array.isArray(data.facts) ? data.facts : [];
+            } catch {
+                memoryFacts = [];
+            }
+            renderMemoryList();
+        }
+
+        async function upsertMemoryFact(text, replace) {
+            const trimmed = String(text || '').trim().slice(0, 300);
+            if (!trimmed) return;
+            try {
+                const res = await fetch('/api/memory', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: trimmed, replace: !!replace }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (Array.isArray(data.facts)) {
+                    memoryFacts = data.facts;
+                    renderMemoryList();
+                }
+            } catch { /* the fact stays unsaved; the transcript is untouched */ }
+        }
+
+        function addMemoryFactFromInput() {
+            const input = document.getElementById('memoryAddInput');
+            if (!input || !input.value.trim()) return;
+            upsertMemoryFact(input.value.trim(), false);
+            input.value = '';
+        }
+
+        async function deleteMemoryFact(text) {
+            try {
+                const res = await fetch('/api/memory', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (Array.isArray(data.facts)) {
+                    memoryFacts = data.facts;
+                    renderMemoryList();
+                }
+            } catch { /* the row stays until a refresh succeeds */ }
+        }
+
+        async function clearAllMemoryFacts() {
+            try {
+                const res = await fetch('/api/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const data = await res.json().catch(() => ({}));
+                memoryFacts = Array.isArray(data.facts) ? data.facts : [];
+                renderMemoryList();
+            } catch { /* nothing was destroyed */ }
+        }
+
+        // The tool the model calls to remember something. Runs client-side:
+        // the fact lands in the same store the Memory tab reads, and the
+        // acknowledgement tells the model what it saved.
+        function runMemoryTool(args) {
+            const text = String((args && args.text) || '').trim().slice(0, 300);
+            if (!text) return Promise.resolve('Error: text is required.');
+            return upsertMemoryFact(text, true).then(() => 'Saved to memory: "' + text + '". It will be offered to future chats that have memory on. The user can remove it in Session → Memory.');
+        }
+
         function showStatus(type, msg, holdMs = 2500) {
             const failed = type === 'error';
             statusDot.className = 'status-dot' + (failed ? ' error' : '');

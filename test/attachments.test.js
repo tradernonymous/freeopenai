@@ -92,6 +92,9 @@ function harness() {
     fileInput: { accept: 'unset', click() { calls.picked.push(this.accept); } },
     URL: { createObjectURL: () => 'blob:stub' },
     console: { error() {} },
+    // The voice kind routes straight to the voice panel, which these tests do
+    // not open; the dependency guard still needs the name to resolve.
+    triggerVoiceMode: () => {},
   };
   return { calls, deps, ...loadFromIndex(NAMES, deps) };
 }

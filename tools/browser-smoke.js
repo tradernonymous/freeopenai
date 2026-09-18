@@ -1075,7 +1075,7 @@ async function main() {
     if (!behavior.send.inputCleared || !behavior.send.userEcho || !behavior.send.botReply || !behavior.send.transcriptShows) {
       throw new Error('the composer did not complete a send: ' + JSON.stringify(behavior.send));
     }
-    if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
+    if (!behavior.attachment.open || behavior.attachment.options !== 4) throw new Error('attachment menu smoke check failed');
     if (!behavior.gallery.stored || !behavior.gallery.kept || behavior.gallery.inline || !behavior.gallery.rendered) {
       throw new Error('generated image did not survive into the Gallery as stored bytes: ' + JSON.stringify(behavior.gallery));
     }

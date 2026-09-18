@@ -2040,6 +2040,153 @@ async function llmTts(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Shareable read-only conversation links.
+//
+// A share is the conversation at publish time, frozen: the signed-in owner PUTs
+// the transcript to /api/share, gets a random id back, and /s/<id> serves a
+// static reader page to anyone with the link -- no login, like /api/health.
+// The store is in-memory and capped, because this deployment keeps chats
+// client-side by design; a restart drops the shares, and a stale link reads as
+// expired rather than as a broken promise.
+const SHARE_MAX_CONVERSATIONS = 200;
+const SHARE_BODY_MAX_CHARS = 400000;
+const shareStore = new Map();
+
+function readShareBody(req, res, cb) {
+  let size = 0;
+  let dead = false;
+  const chunks = [];
+  req.on('data', (chunk) => {
+    if (dead) return;
+    size += chunk.length;
+    if (size > SHARE_BODY_MAX_CHARS + 64 * 1024) {
+      // Answer with a reason -- not a dropped connection -- and ignore every
+      // event after this: the callback must never fire twice.
+      dead = true;
+      chunks.length = 0;
+      sendJson(res, 413, { error: 'Conversation too large to share' });
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (dead) return;
+    try {
+      cb(null, JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+    } catch (err) {
+      cb(err);
+    }
+  });
+  req.on('error', () => {
+    if (!dead) cb(new Error('Request failed'));
+  });
+}
+
+function handleSharePublish(req, res) {
+  readShareBody(req, res, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const messages = Array.isArray(body && body.messages) ? body.messages : null;
+    if (!messages || !messages.length) return sendJson(res, 400, { error: 'Nothing to share — the conversation is empty' });
+    const entry = {
+      title: String(body.title || '').trim().slice(0, 200) || 'Shared chat',
+      messages,
+      createdAt: Date.now(),
+    };
+    const id = crypto.randomBytes(16).toString('hex');
+    if (shareStore.size >= SHARE_MAX_CONVERSATIONS) {
+      // Same oldest-first eviction every capped store here uses.
+      const oldest = shareStore.keys().next().value;
+      shareStore.delete(oldest);
+    }
+    shareStore.set(id, entry);
+    sendJson(res, 200, { id, url: '/s/' + id });
+  });
+}
+
+function handleShareRevoke(req, res) {
+  const id = req.url.slice('/api/share/'.length).split('?')[0];
+  if (!shareStore.has(id)) return sendJson(res, 404, { error: 'No share with that link' });
+  shareStore.delete(id);
+  sendJson(res, 200, { ok: true });
+}
+
+function handleShareData(req, res) {
+  const id = req.url.slice('/api/share/'.length).split('?')[0];
+  const entry = id && shareStore.get(id);
+  if (!entry) return sendJson(res, 404, { error: 'No share with that link' });
+  sendJson(res, 200, entry, { 'Cache-Control': 'no-store' });
+}
+
+function handleShareRead(req, res) {
+  const id = req.url.slice('/s/'.length).split('?')[0];
+  const entry = id && shareStore.get(id);
+  if (!entry) {
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><meta charset="utf-8"><title>Link expired</title><p>This shared chat has expired or was revoked.</p><p><a href="/">Open the app</a></p>');
+    return;
+  }
+  fs.readFile(path.join(rootDir, 'share.html'), (err, html) => {
+    if (err) return sendJson(res, 500, { error: 'Share reader missing' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(html);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Saved memory: small facts the user asked to keep across chats.
+//
+// The transcript stays client-side, so this endpoint is a tiny clipboard for
+// the facts the model wrote through its save_memory tool. Scoped per signed-in
+// user (or 'anon' with the gate off), capped, and validated field by field.
+const MEMORY_MAX_FACTS = 200;
+const memoryStore = new Map();
+
+function memoryKey(req) {
+  const user = currentAppUser(req);
+  return user ? 'u:' + user : 'anon';
+}
+
+function handleMemoryList(req, res) {
+  const list = memoryStore.get(memoryKey(req)) || [];
+  sendJson(res, 200, { facts: list });
+}
+
+function handleMemoryUpsert(req, res) {
+  readJsonBody(req, 8192, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const text = String((body && body.text) || '').trim().slice(0, 300);
+    if (!text) return sendJson(res, 400, { error: 'text is required' });
+    const key = memoryKey(req);
+    let list = memoryStore.get(key) || [];
+    if (body.replace) {
+      list = list.filter((f) => f.text !== text);
+    } else if (list.some((f) => f.text === text)) {
+      return sendJson(res, 200, { facts: list });
+    } else if (list.length >= MEMORY_MAX_FACTS) {
+      return sendJson(res, 400, { error: 'Memory is full — remove something first' });
+    }
+    list.unshift({ text, addedAt: Date.now() });
+    memoryStore.set(key, list);
+    sendJson(res, 200, { facts: list });
+  });
+}
+
+function handleMemoryDelete(req, res) {
+  readJsonBody(req, 8192, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const key = memoryKey(req);
+    const list = memoryStore.get(key) || [];
+    if (body.all) {
+      memoryStore.set(key, []);
+      return sendJson(res, 200, { facts: [] });
+    }
+    const text = String((body && body.text) || '').trim();
+    memoryStore.set(key, list.filter((f) => f.text !== text));
+    sendJson(res, 200, { facts: memoryStore.get(key) });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Image generation, for every provider that sells it.
 //
 // This route used to be Nara-only, which meant an operator with an OpenRouter,
@@ -5250,7 +5397,18 @@ function createRequestHandler(root) {
       return;
     }
 
-    if (!PUBLIC_PATHS.has(urlPath) && !isAuthenticated(req)) {
+    // A share reader is meant to be opened by anyone holding the link, the
+    // same reasoning that puts /api/health on PUBLIC_PATHS. Only the read side
+    // is exempt: the /s/<id> reader shell and the GET that feeds it. Publishing
+    // (PUT) and revoking (DELETE) stay behind the sign-in below.
+    const isShareRead = (urlPath === '/s' || urlPath.startsWith('/s/'))
+      || (urlPath.startsWith('/api/share/') && req.method === 'GET');
+    // The reader page is served for any /s/<id>, so its script resolves for an
+    // anonymous visitor too: chatlib.js is required by share.html to render the
+    // transcript the way the app wrote it. It carries no secrets -- it ships to
+    // every signed-in browser anyway.
+    const isShareAsset = urlPath === '/chatlib.js';
+    if (!PUBLIC_PATHS.has(urlPath) && !isShareRead && !isShareAsset && !isAuthenticated(req)) {
       if (urlPath.startsWith('/api/')) {
         sendJson(res, 401, { error: 'Not signed in' });
         return;
@@ -5267,6 +5425,15 @@ function createRequestHandler(root) {
 
     if (urlPath === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
     if (urlPath === '/api/session' && req.method === 'GET') return sessionStatus(req, res);
+    if (urlPath === '/api/share' && req.method === 'PUT') return handleSharePublish(req, res);
+    if (urlPath.startsWith('/api/share/') && req.method === 'DELETE') return handleShareRevoke(req, res);
+    if (urlPath === '/s' || urlPath.startsWith('/s/')) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
+      }
+      return handleShareRead(req, res);
+    }
     if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
@@ -5305,6 +5472,10 @@ function createRequestHandler(root) {
     if (urlPath === '/api/push/register' && req.method === 'POST') return handlePushRegister(req, res);
     if (urlPath === '/api/push/unregister' && req.method === 'POST') return handlePushUnregister(req, res);
     if (urlPath === '/api/tts' && req.method === 'POST') return llmTts(req, res);
+    if (urlPath === '/api/memory' && req.method === 'GET') return handleMemoryList(req, res);
+    if (urlPath === '/api/memory' && req.method === 'PUT') return handleMemoryUpsert(req, res);
+    if (urlPath === '/api/memory' && req.method === 'DELETE') return handleMemoryDelete(req, res);
+    if (urlPath.startsWith('/api/share/') && req.method === 'GET') return handleShareData(req, res);
 
     // --- Design tab: systematic graphic design workspace ---
     if (urlPath === '/api/design/templates' && req.method === 'GET') return designTemplates(req, res);

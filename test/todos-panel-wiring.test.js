@@ -184,7 +184,7 @@ function harness({
     },
     SESSION_HIDDEN_KEY: 'freeopenaiSessionHidden',
     SESSION_TAB_KEY: 'freeopenaiSessionTab',
-    SESSION_TABS: ['skills', 'tasks', 'image'],
+    SESSION_TABS: ['skills', 'tasks', 'image', 'memory'],
     sessionTab: 'skills',
     // The page-scope names the summary reads. None is written by the panel, so
     // a test can set the world and read what the panel says about it.
@@ -197,6 +197,8 @@ function harness({
     skillSearch: { value: '' },
     ensureSkillsLoaded: () => Promise.resolve(catalogue),
     loadImageProviderReport: () => {},
+    // The Memory section refreshes itself when it opens; a seam here.
+    loadMemoryFacts: () => {},
     // The picker's own renderers are covered by the skills tests; here they are
     // a seam, so the panel's job -- showing one section at a time -- is what is
     // measured.

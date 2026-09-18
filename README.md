@@ -37,6 +37,8 @@
 
 | | |
 | :-- | :-- |
+| **Share a chat** | Every chat gets a ↗ button: publish a frozen, read-only link anyone can open — no account needed to read — and revoke it whenever. |
+| **Memory** | The model saves small facts (Session → Memory shows them); every chat offers them as context, and you can switch it off per chat or forget anything. |
 | **Android real tabs** | Chat, Images, Tools, Skills, Library and Settings are peer destinations now — switching back resumes exactly where you left each one. |
 | **Android offline queue** | A reply that failed because the connection dropped retries itself the moment you're back online, instead of sitting on a dead error. |
 | **Android empty states act** | "No builds yet" starts a plan; an empty skill list refreshes — one tap instead of a dead end. |

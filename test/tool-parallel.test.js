@@ -163,6 +163,10 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
     // Same again for the task tools, which added their own branch.
     isTaskTool: (n) => n.startsWith('task_'),
     runTaskTool: async () => 'task',
+    // The memory tool's branch, covered the same way: this file never calls
+    // it, but the loop's dependency guard needs the dispatch to resolve.
+    MEMORY_TOOL: { function: { name: 'save_memory' } },
+    runMemoryTool: async () => 'remembered',
     // The real rule and the real nudge, not stubs: the loop arms its
     // "you still have todos open" check off this pair, and a stub would let the
     // test pass while the shipped pairing did nothing.

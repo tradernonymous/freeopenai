@@ -5182,10 +5182,105 @@ function parseAppLink(hash) {
   return text ? { action: 'share', text } : null;
 }
 
+// Turns the visible transcript into the payload a share publishes. Messages
+// are whitelisted field by field -- a hostile or buggy transcript cannot carry
+// script, ids or storage keys to a reader -- and every image becomes a compact
+// data: URL, because a share link has to work on a browser that never stored
+// the bytes. Oversized conversations are refused: a link is for reading a
+// chat, not for smuggling a database through a URL the server has to serve.
+const MAX_SHARE_MESSAGES = 400;
+const MAX_SHARE_CHARS = 400000;
+const SHARE_IMAGE_MAX_EDGE = 768;
+
+function sharePayloadOf(messages, title) {
+  const source = Array.isArray(messages) ? messages.slice(0, MAX_SHARE_MESSAGES) : [];
+  const out = [];
+  let spent = 0;
+  for (const message of source) {
+    if (!message || (message.type !== 'user' && message.type !== 'bot')) continue;
+    const content = String(message.content == null ? '' : message.content).trim();
+    const images = [];
+    for (const im of Array.isArray(message.images) ? message.images : []) {
+      const url = im && typeof im.url === 'string' && im.url.startsWith('data:') ? im.url : '';
+      if (!url) continue;
+      if (spent + url.length > MAX_SHARE_CHARS) return null;
+      spent += url.length;
+      images.push(url);
+    }
+    if (!content && !images.length) continue;
+    if (spent + content.length > MAX_SHARE_CHARS) return null;
+    spent += content.length;
+    out.push({ type: message.type, content, ...(images.length ? { images } : {}) });
+  }
+  if (!out.length) return null;
+  return {
+    title: String(title || '').trim().slice(0, 200) || 'Shared chat',
+    messages: out,
+  };
+}
+
+// Downscale one data: URL for a share payload. The picture in a stored chat
+// can be megabytes; a reader's link does not need the original pixels.
+// (Browser-side only -- the page passes the helper its own canvas machinery.)
+function shareImageDataUrlFactory(deps) {
+  const { makeCanvas, loadImage } = deps;
+  return function shareImageDataUrl(dataUrl) {
+    return loadImage(dataUrl)
+      .then((img) => {
+        const edge = Math.max(img.width, img.height);
+        if (!edge || edge <= SHARE_IMAGE_MAX_EDGE) return dataUrl;
+        const scale = SHARE_IMAGE_MAX_EDGE / edge;
+        const canvas = makeCanvas(Math.round(img.width * scale), Math.round(img.height * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.82);
+      })
+      .catch(() => '');
+  };
+}
+
+// The memory block, in the same shape as renderSkillsPrompt: written into the
+// live user turn as context the model may use, never into the stored history.
+// Empty when nothing is saved or the chat opted out, so a provider caching the
+// system message is never disturbed by it.
+function memoryPromptFor(facts) {
+  const list = (Array.isArray(facts) ? facts : [])
+    .map((f) => String(f && f.text).trim())
+    .filter(Boolean)
+    .slice(0, 24);
+  if (!list.length) return '';
+  return 'Things the user asked you to remember (use where relevant; they may be stale):\n'
+    + list.map((text) => '- ' + text.replace(/[\\\n]/g, ' ').slice(0, 300)).join('\n');
+}
+
+// One tool the model can call to add a fact. Deletion and editing stay human
+// work on purpose: the page's Memory tab is where a fact is corrected, because
+// the reader knows when a remembered thing has gone stale.
+const MEMORY_TOOL = {
+  type: 'function',
+  function: {
+    name: 'save_memory',
+    description: 'Save a small, durable fact about the user or their preferences for future chats (e.g. "prefers Python", "is building a game in Godot"). Only when they share one or ask you to remember. Not for secrets, passwords, or temporary context.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The fact in a few words, as it should be recalled later.' },
+      },
+      required: ['text'],
+    },
+  },
+};
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     parseAppLink,
     MAX_SHARED_TEXT_CHARS,
+    MAX_SHARE_MESSAGES,
+    MAX_SHARE_CHARS,
+    SHARE_IMAGE_MAX_EDGE,
+    sharePayloadOf,
+    shareImageDataUrlFactory,
+    memoryPromptFor,
+    MEMORY_TOOL,
     TRANSCRIPT_BOTTOM_SLACK_PX,
     transcriptAtBottom,
     TRANSCRIPT_JUMP_SOURCES,

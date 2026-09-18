@@ -48,6 +48,10 @@ function harness({ graph = newTaskGraph() } = {}) {
     compactChatHistory: () => [],
     messages: [],
     selectedMode: 'build',
+    // Memory rides the same turn context; these tests keep it switched off.
+    memoryOnForChat: () => false,
+    memoryFacts: [],
+    memoryPromptFor: () => '',
   };
   const loaded = loadFromIndex(NAMES, deps);
   return {
