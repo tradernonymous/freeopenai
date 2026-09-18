@@ -327,7 +327,7 @@
         .palette-item.selected { background: var(--accent-bg); color: var(--accent); }
         .palette-item .k { margin-left: auto; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
         .history-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); }
-        .history-scrim, .session-scrim { display: none; }
+        .history-scrim, .session-scrim, .canvas-scrim { display: none; }
 
         /* The session surface: the one panel this app opens over the chat.
 
@@ -447,6 +447,54 @@
         .session-subhead .todo-count { margin-left: auto; font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 500; }
         .session-panel .model-dropdown-search { margin: 0 8px 6px; }
         .session-panel .model-dropdown-list { overflow: visible; padding: 0 8px; }
+
+        /* The canvas surface mirrors the session surface -- same floating
+           panel, same out-of-the-way rule, same small-screen treatment. It is
+           kept mutually exclusive with the session panel in JS (opening one
+           closes the other), so the two never fight for the same corner. */
+        .canvas-pane {
+            position: absolute; z-index: 24;
+            top: calc(var(--bar-h) + 10px);
+            bottom: var(--panel-floor, 10px);
+            right: 10px; width: 320px; margin: 0;
+            display: flex; flex-direction: column;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--r-lg);
+            background: var(--glass);
+            backdrop-filter: blur(18px) saturate(1.6);
+            -webkit-backdrop-filter: blur(18px) saturate(1.6);
+            box-shadow: var(--lift-lg), 0 16px 40px rgba(0, 0, 0, .35);
+            overflow: hidden;
+            transition: transform 200ms cubic-bezier(.4, 0, .2, 1), opacity 160ms ease;
+        }
+        .chat-shell.canvas-hidden .canvas-pane {
+            opacity: 0; pointer-events: none;
+            transform: translateX(calc(100% + 20px));
+        }
+        .canvas-controls {
+            display: flex; gap: 6px; align-items: center;
+            padding: 8px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .canvas-select {
+            flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+            border: 1px solid var(--border); border-radius: var(--r-sm);
+            background: var(--surface); color: var(--text);
+            font: inherit; font-size: 12px; outline: none;
+        }
+        .canvas-select:focus-visible { outline: none; box-shadow: var(--glow); }
+        .canvas-open-btn {
+            height: 30px; padding: 0 12px; flex-shrink: 0;
+            border: 1px solid var(--accent); border-radius: var(--r-sm);
+            background: var(--accent-bg); color: var(--accent);
+            font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .canvas-open-btn:hover { background: var(--accent); color: var(--surface); }
+        .canvas-frame-wrap { flex: 1; min-height: 0; display: flex; background: #fff; }
+        .canvas-frame { flex: 1; border: 0; width: 100%; height: 100%; }
+        .canvas-foot {
+            padding: 7px 12px; border-top: 1px solid var(--border);
+            font-size: 10.5px; line-height: 1.5; color: var(--text-muted); flex-shrink: 0;
+        }
         /* The section is the one scroll region. Neither list keeps a scrollbar of
            its own: two nested scrollers inside 300px is a maze, and the inner one
            would be the only part dragging the mouse could reach. */
@@ -984,6 +1032,22 @@
             transition: var(--transition);
         }
         .code-preview-btn:hover { color: var(--text); border-color: var(--accent); }
+        /* Artifact canvas chip: sends the same HTML to the persistent pane
+           instead of the one-shot modal. Left of Preview, whose left of Copy. */
+        .code-canvas-btn {
+            position: absolute;
+            top: 6px;
+            right: 126px;
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: var(--ctl-r);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .code-canvas-btn:hover { color: var(--accent); border-color: var(--accent); }
         /* Sandboxed HTML stage: a white canvas like Claude's artifacts. */
         .html-preview-frame { width: 100%; height: 60vh; border: none; border-radius: var(--r-sm); background: #ffffff; }
         /* Diagram chip for mermaid blocks, and the drawing surface. */
@@ -1968,6 +2032,24 @@
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.session-hidden .session-scrim { opacity: 0; pointer-events: none; }
+            /* The canvas takes the same flush treatment from the right edge,
+               under the session panel so the two never stack. */
+            .canvas-pane {
+                position: absolute; top: 0; bottom: 0; right: 0; z-index: 38;
+                width: 84%; max-width: 320px; margin: 0;
+                border-radius: 0; border-width: 0 0 0 1px;
+                box-shadow: 0 0 40px rgba(0, 0, 0, .5);
+                transform: translateX(0); transition: transform 180ms ease;
+            }
+            .chat-shell.canvas-hidden .canvas-pane {
+                width: 84%; opacity: 1; transform: translateX(102%);
+                border-left-color: var(--border);
+            }
+            .canvas-scrim {
+                display: block; position: absolute; inset: 0; z-index: 37;
+                background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
+            }
+            .chat-shell.canvas-hidden .canvas-scrim { opacity: 0; pointer-events: none; }
             /* A phone row is a finger target, so it grows and the delete button
                stops being hover-only -- there is no hover to reveal it with.
                The reveal itself lives in the (hover: none) block below, since
@@ -2207,6 +2289,8 @@
             .chat-shell.history-hidden .history-sidebar { width: 34%; max-width: 300px; }
             .session-panel,
             .chat-shell.session-hidden .session-panel { width: 34%; max-width: 300px; }
+            .canvas-pane,
+            .chat-shell.canvas-hidden .canvas-pane { width: 34%; max-width: 300px; }
         }
 
         /* One row again, for a landscape phone wide enough to hold it.
@@ -2491,6 +2575,33 @@
                                 <div class="image-provider-list" id="imageProviderList"><div class="image-provider-report-empty">Open this tab to see which configured services can draw and what each one needs.</div></div>
                             </div>
                         </section>
+                    </aside>
+
+                    <!-- The canvas surface: whatever HTML/JS/React the model
+                         wrote, shown running. It sits over the chat like the
+                         session panel, because the same rule applies -- a
+                         floating pane costs the conversation nothing, and its
+                         content is whatever block was last picked. The frame
+                         is sandboxed the same way the tap-to-preview one is:
+                         allow-scripts, no same-origin, an opaque origin with
+                         no parent DOM, no cookies and no storage. -->
+                    <div class="canvas-scrim" id="canvasScrim" aria-hidden="true" onclick="toggleCanvas(false)"></div>
+                    <aside class="canvas-pane" id="canvasPane" role="complementary" aria-label="Artifacts — a live preview of the HTML blocks in this chat" aria-hidden="true" inert>
+                        <div class="rail-head">
+                            <span>Artifacts</span>
+                            <span class="rail-count" id="canvasCount">no blocks yet</span>
+                            <button class="icon-btn" type="button" onclick="toggleCanvas(false)" aria-label="Close the canvas" title="Close">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                            </button>
+                        </div>
+                        <div class="canvas-controls">
+                            <select id="canvasSelect" class="canvas-select" aria-label="Open an artifact from this chat"></select>
+                            <button type="button" class="canvas-open-btn" id="canvasOpenBtn" onclick="openSelectedCanvasBlock()">Open</button>
+                        </div>
+                        <div class="canvas-frame-wrap">
+                            <iframe class="canvas-frame" id="canvasFrame" sandbox="allow-scripts" title="Sandboxed artifact preview"></iframe>
+                        </div>
+                        <div class="canvas-foot">Runs in an opaque-origin sandbox — no page access, no storage.</div>
                     </aside>
                 </div>
             </div>
@@ -3013,6 +3124,13 @@
         const SESSION_TAB_KEY = 'freeopenaiSessionTab';
         const SESSION_TABS = ['skills', 'tasks', 'image'];
         let sessionTab = SESSION_TABS[0];
+
+        // The artifact canvas: whether it is open, and the HTML block selected
+        // in it. Both live with the app rather than the chat -- a pane stays
+        // where the reader left it while they move between conversations.
+        const CANVAS_HIDDEN_KEY = 'freeopenaiCanvasHidden';
+        let canvasBlocks = [];
+        let canvasIndex = -1;
 
         // Whether the reasoning summary is shown at all. On by default, because
         // seeing what a reasoning model is doing is the reason to use one; off is
@@ -3949,6 +4067,7 @@
         renderWorkspaceFiles();
         renderTaskList();
         restoreSessionPanel();
+        restoreCanvas();
         watchPanelFloor();
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
@@ -5430,11 +5549,13 @@
             // Opening has to draw the section it opens on. The lists are kept up
             // to date as the chat moves, but the picker is fetched on demand,
             // and a pop-up showing whatever was in the DOM two chats ago is
-            // worse than one showing nothing.
+            // worse than one showing nothing. Opening also closes the canvas:
+            // the two right-hand panes cannot share a corner.
             if (!hidden) {
                 showSessionTab(sessionTab, false);
                 renderSkillMenuOptions();
                 updateSessionSummary();
+                if (typeof toggleCanvas === 'function') toggleCanvas(false, false);
             }
             if (!persist) return;
             try {
@@ -9343,7 +9464,8 @@
                 // An HTML block can show itself: the preview runs the snippet
                 // in an opaque-origin frame (sandbox without same-origin), so
                 // page script reaches neither this document nor its storage,
-                // and it only ever runs on an explicit tap.
+                // and it only ever runs on an explicit tap. The Canvas button
+                // sends the same code to the persistent pane instead.
                 if (pre.dataset && pre.dataset.lang === 'html') {
                     const view = document.createElement('button');
                     view.type = 'button';
@@ -9355,6 +9477,13 @@
                         openHtmlPreview(code ? code.textContent : pre.textContent);
                     });
                     pre.appendChild(view);
+                    const canvas = document.createElement('button');
+                    canvas.type = 'button';
+                    canvas.className = 'code-canvas-btn';
+                    canvas.textContent = 'Canvas';
+                    canvas.setAttribute('aria-label', 'Open this HTML in the canvas');
+                    canvas.addEventListener('click', () => openCanvasForBlock(pre));
+                    pre.appendChild(canvas);
                 }
                 // A mermaid block can draw itself on tap. Rendering stays
                 // click-to-run (never on arrival), behind the diagram-type
@@ -9393,6 +9522,10 @@
                 });
                 pre.appendChild(btn);
             });
+            // A completed HTML block just landed on screen. Keep the canvas
+            // picker honest: blocks are only in the DOM once their closing
+            // fence arrives, so this runs once per block, never mid-stream.
+            if (textEl.querySelector('pre[data-lang="html"]')) collectCanvasBlocks();
         }
 
         // A sandboxed stage for HTML blocks: the frame carries sandbox without
@@ -9438,6 +9571,184 @@
         function closeHtmlPreview() {
             const overlay = document.getElementById('htmlPreviewOverlay');
             if (overlay && typeof overlay.remove === 'function') overlay.remove();
+        }
+
+        // The canvas: a persistent preview pane for the HTML/JS/React blocks in
+        // this chat, instead of a one-at-a-time modal. The frame gets the same
+        // opaque-origin sandbox as the tap preview (allow-scripts, never
+        // same-origin), and it is only ever populated from "Open"/"Canvas"
+        // taps and from HTML blocks that are already on screen.
+        const CANVAS_REACT_MARKER = '<!-- canvas react -->';
+
+        // Build the document a block runs in. Plain blocks are wrapped in a
+        // bare shell so a fragment renders; a block that opens with the react
+        // marker gets React + Babel so JSX actually runs. Script tags are
+        // written as split strings so this page's own <script> never closes
+        // early on the string content.
+        function artifactDocument(code) {
+            const text = String(code || '');
+            const trimmed = text.replace(/^\s+/, '');
+            if (trimmed.indexOf(CANVAS_REACT_MARKER) === 0) {
+                const body = trimmed.slice(CANVAS_REACT_MARKER.length);
+                return '<!doctype html><html><head><meta charset="utf-8">'
+                    + '<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><' + '/script>'
+                    + '<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><' + '/script>'
+                    + '<script src="https://unpkg.com/@babel/standalone/babel.min.js"><' + '/script>'
+                    + '</head><body><div id="root"></div><script type="text/babel">'
+                    + body
+                    + '<' + '/script></body></html>';
+            }
+            const fullPage = /^<!doctype/i.test(trimmed) || /^<html/i.test(trimmed) || /^<head/i.test(trimmed) || /^<body/i.test(trimmed);
+            if (fullPage) return trimmed;
+            return '<!doctype html><html><head><meta charset="utf-8"></head><body>' + trimmed + '</body></html>';
+        }
+
+        function renderCanvasArtifact(code) {
+            const frame = document.getElementById('canvasFrame');
+            if (!frame) return;
+            frame.srcdoc = artifactDocument(code);
+        }
+
+        function canvasShell() {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            return shell && typeof shell.classList.contains === 'function' ? shell : null;
+        }
+
+        // force true shows, false hides, undefined toggles. persist false is
+        // for restoring a stored choice or cross-panel closing.
+        function toggleCanvas(force, persist = true) {
+            const shell = canvasShell();
+            if (!shell) return;
+            const hidden = force === undefined ? !shell.classList.contains('canvas-hidden') : !force;
+            shell.classList.toggle('canvas-hidden', hidden);
+            const panel = document.getElementById('canvasPane');
+            const scrim = document.getElementById('canvasScrim');
+            if (panel) {
+                panel.setAttribute('aria-hidden', String(hidden));
+                if (typeof panel.toggleAttribute === 'function') panel.toggleAttribute('inert', hidden);
+                else if (hidden) panel.setAttribute('inert', '');
+                else if (typeof panel.removeAttribute === 'function') panel.removeAttribute('inert');
+            }
+            if (scrim) scrim.setAttribute('aria-hidden', String(hidden));
+            // The two right-hand panes cannot share a corner: opening one
+            // closes the other, so the session work never sits under the
+            // artifact being read.
+            if (!hidden && typeof toggleSessionPanel === 'function') toggleSessionPanel(false, false);
+            // Opening draws what is in the picker -- no fetch, it is all
+            // already on screen, whichever block was last selected.
+            if (!hidden) renderCanvasPicker();
+            if (!persist) return;
+            try {
+                localStorage.setItem(CANVAS_HIDDEN_KEY, hidden ? '1' : '');
+            } catch {
+                // A browser refusing storage shouldn't break the toggle itself.
+            }
+        }
+
+        function restoreCanvas() {
+            let stored = null;
+            try {
+                stored = localStorage.getItem(CANVAS_HIDDEN_KEY);
+            } catch {
+                stored = null;
+            }
+            // Closed by default, same reasoning as the session panel: it opens
+            // when there is something to look at, not on load.
+            const hidden = stored === null || stored === undefined ? true : stored === '1';
+            toggleCanvas(!hidden, false);
+        }
+
+        // Rebuild the picker from the HTML blocks currently on screen. Runs on
+        // every message re-render (so streaming blocks join as they complete)
+        // and when the canvas opens. A block only exists once its closing
+        // fence is on screen, so this is always whole-block work.
+        function collectCanvasBlocks() {
+            const hadBlocks = canvasBlocks.length > 0;
+            // Advance to the newest block only when the reader is following
+            // the tail -- the pane was empty, or the last block they had open
+            // is the newest again. An explicit pick of an older block stays
+            // put when a newer one arrives.
+            const wasFollowing = !hadBlocks || canvasIndex === canvasBlocks.length - 1;
+            canvasBlocks = [];
+            const pres = chatMessages.querySelectorAll('.message .message-text pre[data-lang="html"]');
+            pres.forEach((pre) => {
+                const codeEl = pre.querySelector('code');
+                const code = codeEl ? codeEl.textContent : pre.textContent;
+                if (canvasBlocks.some((b) => b.code === code)) return;
+                const first = String(code || '').replace(/\s+/g, ' ').trim().slice(0, 42);
+                canvasBlocks.push({ code, label: 'HTML — ' + (first || 'empty block') });
+            });
+            if (!canvasBlocks.length) canvasIndex = -1;
+            else if (wasFollowing || canvasIndex < 0) canvasIndex = canvasBlocks.length - 1;
+            renderCanvasPicker();
+        }
+
+        function renderCanvasPicker() {
+            const select = document.getElementById('canvasSelect');
+            const count = document.getElementById('canvasCount');
+            if (!select) return;
+            select.innerHTML = '';
+            if (!canvasBlocks.length) {
+                if (count) count.textContent = 'no blocks yet';
+                const opt = document.createElement('option');
+                opt.textContent = 'No HTML blocks in this chat yet';
+                opt.disabled = true;
+                select.appendChild(opt);
+            } else {
+                if (count) count.textContent = canvasBlocks.length + (canvasBlocks.length === 1 ? ' block' : ' blocks');
+                canvasBlocks.forEach((block, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.textContent = block.label;
+                    select.appendChild(opt);
+                });
+                select.value = String(canvasIndex);
+            }
+            // Closed, the pane is a cost without a viewer: keep the options in
+            // sync, but only render the frame once there is something looking
+            // at it.
+            const shell = canvasShell();
+            if (!(shell && shell.classList.contains('canvas-hidden'))) updateCanvasFrame();
+        }
+
+        function selectCanvasBlock(index) {
+            if (!canvasBlocks.length) { canvasIndex = -1; return; }
+            canvasIndex = Math.max(0, Math.min(index, canvasBlocks.length - 1));
+            const select = document.getElementById('canvasSelect');
+            if (select) select.value = String(canvasIndex);
+            updateCanvasFrame();
+        }
+
+        function openSelectedCanvasBlock() {
+            const select = document.getElementById('canvasSelect');
+            if (!select || select.value === '') return;
+            selectCanvasBlock(Number(select.value));
+        }
+
+        function updateCanvasFrame() {
+            const block = canvasBlocks.length ? canvasBlocks[canvasIndex] : null;
+            const frame = document.getElementById('canvasFrame');
+            const select = document.getElementById('canvasSelect');
+            if (frame) {
+                frame.title = block ? block.label : 'Sandboxed artifact preview';
+                renderCanvasArtifact(block ? block.code : '');
+            }
+            if (select && canvasBlocks.length) select.value = String(canvasIndex);
+        }
+
+        // The Canvas button on a block: register the block and open the pane on
+        // it. The block is a live copy of whatever is on screen.
+        function openCanvasForBlock(pre) {
+            const codeEl = pre.querySelector('code');
+            const code = codeEl ? codeEl.textContent : pre.textContent;
+            const hit = canvasBlocks.findIndex((b) => b.code === code);
+            const index = hit === -1 ? canvasBlocks.length : hit;
+            if (hit === -1) {
+                const first = String(code || '').replace(/\s+/g, ' ').trim().slice(0, 42);
+                canvasBlocks.push({ code, label: 'HTML — ' + (first || 'empty block') });
+            }
+            selectCanvasBlock(index);
+            toggleCanvas(true);
         }
 
         // Diagrams, still behind a tap. Mermaid is vendored (vendor/mermaid,
@@ -9587,7 +9898,7 @@
             return part.reasoning || '';
         }
 
-        function buildMessageActions(retryText, isImageRetry, attachmentLost) {
+        function buildMessageActions(retryText, isImageRetry, attachmentLost, forkIndex) {
             const bar = document.createElement('div');
             bar.className = 'message-actions';
 
@@ -9599,6 +9910,21 @@
             copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
             copyBtn.addEventListener('click', () => copyText(copyBtn.closest('.message').dataset.rawContent || '', copyBtn));
             bar.appendChild(copyBtn);
+
+            // Forking starts here: a new chat keeps everything through the
+            // message this button sits under, so an alternate continuation
+            // begins exactly where the reader decided the source thread left
+            // the useful path.
+            if (Number.isInteger(forkIndex)) {
+                const forkBtn = document.createElement('button');
+                forkBtn.className = 'msg-action-btn';
+                forkBtn.type = 'button';
+                forkBtn.title = 'Fork from here';
+                forkBtn.setAttribute('aria-label', 'Fork the conversation from this message');
+                forkBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v6"/><path d="M6 12h6a3 3 0 0 0 3-3v-1"/></svg>';
+                forkBtn.addEventListener('click', () => forkConversationFrom(forkIndex));
+                bar.appendChild(forkBtn);
+            }
 
             if (retryText) {
                 const retryBtn = document.createElement('button');
@@ -9661,6 +9987,31 @@
             copyText(conversationToMarkdown(messages, convo && convo.title), button);
         }
 
+        // Forking splits this thread at the message the reader clicked: the new
+        // chat keeps everything through it and stops there, becoming the
+        // starting point for an alternate continuation. The original stays
+        // untouched -- nothing is deleted, only branched.
+        function forkConversationFrom(index) {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            if (!convo) return;
+            const fork = forkConversation(convo, index, newConversationId(), Date.now());
+            conversations = upsertConversation(conversations, fork);
+            activeConversationId = fork.id;
+            messages = fork.messages;
+            usageCount = 0;
+            updateUsageDisplay();
+            // A fork is a fresh session pointing at the kept plan; the workspace
+            // of the thread it branched from stays where it was.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
+            renderActiveConversation();
+            writeConversations();
+            if (isNarrowScreen()) toggleHistory(false, false);
+            showStatus('success', 'Forked — continuing from here in a new chat');
+        }
+
         function createBotBubble() {
             if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
             const el = document.createElement('div');
@@ -9676,7 +10027,7 @@
         function finalizeMessage(el, content, retryText, attachmentLost, reasoning) {
             setMessageContent(el, content);
             setReasoningContent(el, reasoning);
-            el.appendChild(buildMessageActions(retryText, false, attachmentLost));
+            el.appendChild(buildMessageActions(retryText, false, attachmentLost, messages.length));
             messages.push({ type: 'bot', content, reasoning: reasoning || undefined, timestamp: Date.now() });
             persistMessages();
             scrollTranscript('follow');
@@ -9718,16 +10069,16 @@
             if (opts.reasoning) setReasoningContent(el, opts.reasoning);
 
             if (type === 'bot') {
-                el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost));
+                el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost, messages.length));
             } else if (type === 'user') {
                 // Copy only -- retrying your own message is what the composer
                 // is for, and a second button here would just be noise.
-                el.appendChild(buildMessageActions(null, false, false));
+                el.appendChild(buildMessageActions(null, false, false, messages.length));
             } else if (opts.retryText) {
                 // A turn that stopped part-way never produced a reply to put a
                 // button under, so its notice carries one: continuing is the
                 // whole point of what was kept.
-                el.appendChild(buildMessageActions(opts.retryText, false, false));
+                el.appendChild(buildMessageActions(opts.retryText, false, false, messages.length));
             }
 
             // Your own message is the one arrival allowed to move you: you sent
@@ -10660,6 +11011,9 @@
             syncActiveSkillsFromConversation();
             syncDismissedSuggestionsFromConversation();
             if (messages.length) renderSavedMessages();
+            // The canvas picker follows the transcript: a chat with no HTML
+            // blocks must not keep the previous chat's list behind stale.
+            collectCanvasBlocks();
             if (typeof requestAnimationFrame === 'function') {
                 requestAnimationFrame(() => chatMessages.classList.remove('no-anim'));
             } else {

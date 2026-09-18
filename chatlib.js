@@ -3567,6 +3567,36 @@ function upsertConversation(list, convo) {
   return sortConversations([...rest, convo]).slice(0, MAX_CONVERSATIONS);
 }
 
+// A fork is a new conversation that keeps everything through the message the
+// reader pointed at and drops the rest -- the starting point for an alternate
+// continuation, never a copy of the whole thread. The truncated slice keeps
+// images and attachments alongside the text because both live on the message
+// objects themselves. The caller hands over the new id and timestamp so this
+// stays free of any storage or page state.
+function forkConversation(convo, upToIndex, id, now) {
+  const source = Array.isArray(convo && convo.messages) ? convo.messages : [];
+  const cut = Number.isInteger(upToIndex) && upToIndex >= 0
+    ? Math.min(upToIndex, source.length - 1)
+    : source.length - 1;
+  const messages = cut < 0 ? [] : source.slice(0, cut + 1);
+  const fork = {
+    id,
+    title: deriveChatTitle(messages),
+    messages,
+    updatedAt: now,
+  };
+  // The chat's session follows: what it pinned or refused is why someone might
+  // branch from here at all, and dropping it would make the fork resume with
+  // neither the skills nor the standing image setting the source had.
+  if (convo && typeof convo === 'object') {
+    if (Array.isArray(convo.skills)) fork.skills = convo.skills.slice();
+    if (Array.isArray(convo.skillsDismissed)) fork.skillsDismissed = convo.skillsDismissed.slice();
+    if (convo.forkedFrom) fork.forkedFrom = convo.forkedFrom;
+    else fork.forkedFrom = convo.id;
+  }
+  return fork;
+}
+
 // Chats were a single "puterChatMessages" array before this existed. Carry
 // them into the list as one conversation instead of dropping them.
 function migrateLegacyMessages(legacyMessages, id, now) {
@@ -5411,6 +5441,7 @@ if (typeof module !== 'undefined' && module.exports) {
     newConversation,
     sortConversations,
     upsertConversation,
+    forkConversation,
     migrateLegacyMessages,
     parseSseChunk,
     selectAllowedModels,

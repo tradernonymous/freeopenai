@@ -8,6 +8,7 @@ const {
   sortConversations,
   upsertConversation,
   migrateLegacyMessages,
+  forkConversation,
 } = require('../chatlib.js');
 
 test('a chat is titled by the first thing the user said', () => {
@@ -129,4 +130,78 @@ test('the title is optional and blank messages are skipped', () => {
 test('code fences survive the round trip intact', () => {
   const md = conversationToMarkdown([{ type: 'bot', content: '```js\nconst x = 1;\n```' }]);
   assert.ok(md.includes('```js\nconst x = 1;\n```'));
+});
+
+test('fork keeps the messages through the cut point and drops the rest', () => {
+  const convo = {
+    id: 'c1',
+    title: 'original',
+    updatedAt: 1,
+    messages: [
+      { type: 'user', content: 'q1' },
+      { type: 'bot', content: 'a1' },
+      { type: 'user', content: 'q2' },
+      { type: 'bot', content: 'a2' },
+    ],
+  };
+  const fork = forkConversation(convo, 1, 'fork-1', 99);
+  assert.equal(fork.id, 'fork-1');
+  assert.equal(fork.updatedAt, 99);
+  assert.deepEqual(fork.messages.map((m) => m.content), ['q1', 'a1']);
+  assert.equal(fork.title, 'q1');
+  assert.equal(fork.forkedFrom, 'c1');
+});
+
+test('fork at the tail is the whole chat, marked as branched', () => {
+  const convo = {
+    id: 'c1',
+    updatedAt: 1,
+    messages: [{ type: 'user', content: 'only question' }],
+  };
+  const fork = forkConversation(convo, 0, 'f', 2);
+  assert.equal(fork.messages.length, 1);
+  assert.equal(fork.forkedFrom, 'c1');
+});
+
+test('fork clamps an out-of-range cut instead of erroring', () => {
+  const convo = {
+    id: 'c1',
+    updatedAt: 1,
+    messages: [{ type: 'user', content: 'a' }, { type: 'bot', content: 'b' }],
+  };
+  // Negative and oversized cuts behave like "fork the tail".
+  assert.equal(forkConversation(convo, -1, 'f1', 2).messages.length, 2);
+  assert.equal(forkConversation(convo, 99, 'f2', 2).messages.length, 2);
+  // Forking a message-index that is not a whole number falls back to the tail.
+  assert.equal(forkConversation(convo, 1.5, 'f3', 2).messages.length, 2);
+});
+
+test('fork of an empty chat is an empty chat that still records its source', () => {
+  const fork = forkConversation({ id: 'c1', messages: [], updatedAt: 1 }, 0, 'f', 2);
+  assert.equal(fork.messages.length, 0);
+  assert.equal(fork.forkedFrom, 'c1');
+  // The title falls back to the library default, not a crash.
+  assert.ok(fork.title);
+});
+
+test('fork carries the source skills, dismissals, and retained forkedFrom', () => {
+  const convo = {
+    id: 'c1',
+    forkedFrom: 'c0',
+    messages: [{ type: 'user', content: 'hi' }],
+    skills: ['web-search', 'fetch'],
+    skillsDismissed: ['dithee'],
+  };
+  const fork = forkConversation(convo, 0, 'f', 2);
+  assert.deepEqual(fork.skills, ['web-search', 'fetch']);
+  assert.deepEqual(fork.skillsDismissed, ['dithee']);
+  // A chat that is itself a fork keeps the original lineage, not the copy.
+  assert.equal(fork.forkedFrom, 'c0');
+  // The copies are not aliases of the source arrays.
+  assert.notEqual(fork.skills, convo.skills);
+});
+
+test('fork of a malformed conversation degrades to an empty chat', () => {
+  assert.equal(forkConversation(null, 0, 'f', 1).messages.length, 0);
+  assert.equal(forkConversation({ id: 'x' }, 0, 'f', 1).messages.length, 0);
 });

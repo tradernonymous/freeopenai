@@ -202,6 +202,7 @@ function harness({
     // measured.
     renderSkillMenuOptions: () => {},
     filterSkillOptions: () => {},
+    toggleCanvas: () => {},
     saveTaskGraph: () => saved.push(JSON.parse(JSON.stringify(deps.taskGraph))),
     showStatus: (kind, text) => statuses.push(kind + ': ' + text),
     shell: shell || stubShell(),
@@ -485,7 +486,7 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
   assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
   assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
-  assert.match(HTML, /restoreSessionPanel\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
+  assert.match(HTML, /restoreSessionPanel\(\);\s*restoreCanvas\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
   assert.match(panel, /background: var\(--glass\)/);
   assert.match(panel, /backdrop-filter: blur\(18px\)/, 'the pop-up has to be glass');
   assert.match(panel, /-webkit-backdrop-filter: blur\(18px\)/, 'or Safari gets an opaque slab');

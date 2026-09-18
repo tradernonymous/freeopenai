@@ -33,6 +33,12 @@ function runSetMessageContent(content, langs) {
   const textEl = {
     innerHTML: '',
     querySelectorAll(sel) { return sel === 'pre' ? pres : []; },
+    // setMessageContent checks whether a completed HTML block is on screen to
+    // resync the canvas picker; the html block counts as such a block.
+    querySelector(sel) {
+      if (sel === 'pre[data-lang="html"]') return langs.includes('html') ? pres.find((p) => p.dataset && p.dataset.lang === 'html') || {} : null;
+      return null;
+    },
   };
   const el = {
     dataset: {},
@@ -45,6 +51,10 @@ function runSetMessageContent(content, langs) {
     // their own tests -- here they are only collaborators that must exist.
     openHtmlPreview: () => {},
     renderDiagram: () => {},
+    // The Canvas button and picker resync are page wiring with their own
+    // tests; for the renderer they are collaborators that must exist.
+    openCanvasForBlock: () => {},
+    collectCanvasBlocks: () => {},
     document: { createElement: (tag) => makeNode(tag) },
   };
   assertScannerCanRead(['setMessageContent']);
@@ -73,13 +83,15 @@ test('a fenced block without a language gets only the Copy button', () => {
   assert.equal(run.appended[0].textContent, 'Copy');
 });
 
-test('an HTML block gets a Preview button; other languages do not', () => {
+test('an HTML block gets a Preview and a Canvas button; other languages do not', () => {
   const html = runSetMessageContent('```html\n<b>hi</b>\n```', ['html']);
   const labels = html.appended.map((node) => node.textContent);
   assert.ok(labels.includes('Preview'), 'the HTML block has no way to show itself');
+  assert.ok(labels.includes('Canvas'), 'the HTML block has no way to reach the canvas');
   assert.ok(labels.includes('Copy'));
   const js = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
   assert.ok(!js.appended.map((node) => node.textContent).includes('Preview'), 'a JS block cannot run here, so it must not offer to');
+  assert.ok(!js.appended.map((node) => node.textContent).includes('Canvas'), 'a JS block cannot run here, so it must not offer the canvas');
 });
 
 test('a mermaid block gets a Diagram button; other languages do not', () => {
