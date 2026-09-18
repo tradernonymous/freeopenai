@@ -12,6 +12,18 @@
 #     200 (a fresh paste) -> install it, saving the rotated token Kiro hands
 #     back, so the paste's freshness is captured at the only moment it exists.
 #   * probe inconclusive (network, 5xx) -> keep the file; never clobber on doubt.
+#
+# Before any of that: a startup backoff. main.py refreshes the token once at
+# boot with no retry of its own (kiro/auth.py's _refresh_token_kiro_desktop
+# is one bare httpx call), so a real 429 from Kiro's refresh endpoint fails
+# the whole startup -- and Railway's default restart-on-crash policy retries
+# almost immediately, which re-triggers the same rate limit before it has
+# any chance to clear, forever. That loop, not a dead token, is what a
+# crash-loop referencing the same account over and over usually is. The
+# backoff below is the fix: track how recently this container last tried to
+# boot, on the volume so it survives the restart, and if it's trying again
+# too soon, sleep first -- longer each consecutive fast restart -- so the
+# rate-limit window actually gets a chance to reset before the next attempt.
 set -eu
 
 DATA_DIR="${KIRO_DATA_DIR:-/data/kiro}"
@@ -20,6 +32,41 @@ PROBE_URL="${KIRO_REFRESH_PROBE_URL:-https://prod.us-east-1.auth.desktop.kiro.de
 fp() { printf '%s' "$1" | sha256sum | cut -c1-12; }
 
 mkdir -p "$DATA_DIR"
+
+# --- Startup backoff: throttle a rapid crash-restart cycle -----------------
+
+BOOT_TS_FILE="$DATA_DIR/last_boot_attempt"
+BOOT_COUNT_FILE="$DATA_DIR/fast_restart_count"
+NOW=$(date +%s)
+LAST=0
+[ -f "$BOOT_TS_FILE" ] && LAST=$(cat "$BOOT_TS_FILE" 2>/dev/null) || true
+case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+COUNT=0
+[ -f "$BOOT_COUNT_FILE" ] && COUNT=$(cat "$BOOT_COUNT_FILE" 2>/dev/null) || true
+case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+
+ELAPSED=$((NOW - LAST))
+if [ "$LAST" -gt 0 ] && [ "$ELAPSED" -lt 120 ]; then
+    COUNT=$((COUNT + 1))
+else
+    COUNT=0
+fi
+echo "$NOW" > "$BOOT_TS_FILE"
+echo "$COUNT" > "$BOOT_COUNT_FILE"
+
+if [ "$COUNT" -gt 0 ]; then
+    case "$COUNT" in
+        1) DELAY=15 ;;
+        2) DELAY=30 ;;
+        3) DELAY=60 ;;
+        4) DELAY=120 ;;
+        *) DELAY=300 ;;
+    esac
+    echo "[entrypoint] restarted $COUNT time(s) within the last 2 minutes -- backing off ${DELAY}s before trying again (most often Kiro's refresh endpoint rate-limiting rapid restarts, not a dead token)."
+    sleep "$DELAY"
+fi
+
+# --- Credential reconciliation ----------------------------------------------
 
 CLEAN=""
 if [ -n "${REFRESH_TOKEN:-}" ]; then
@@ -127,6 +174,9 @@ except Exception:
                 ;;
             401|403)
                 echo "[entrypoint] env token is dead (Kiro rejected it) -> keeping stored credentials."
+                ;;
+            429)
+                echo "[entrypoint] probe was rate-limited (429) -> keeping stored credentials; this is not a sign the token is dead."
                 ;;
             *)
                 echo "[entrypoint] probe inconclusive (status=${PROBE_STATUS:-none}) -> keeping stored credentials (safe default)."

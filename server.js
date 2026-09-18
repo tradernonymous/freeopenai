@@ -1466,7 +1466,7 @@ const LLM_PROVIDERS = {
   // one, and no slot should inherit behaviour the others must not grow.
   custom2: {
     label: 'CLIProxyAPI',
-    note: 'Slot 2 of 3. Point CUSTOM2_BASE_URL at a second gateway — e.g. CLIProxyAPI wrapping your free Gemini CLI / Claude Code / Codex / Grok logins (deploy/cliproxy-railway).',
+    note: 'Slot 2 of 3. Point CUSTOM2_BASE_URL (https://…/v1) at a second gateway — e.g. CLIProxyAPI wrapping your free Gemini CLI / Claude Code / Codex / Grok logins (deploy/cliproxy-railway). Leaving off /v1 makes every model and chat request 404.',
     baseUrl: '',
     envVar: 'CUSTOM2_API_KEY',
     needsKey: false,
@@ -1474,7 +1474,7 @@ const LLM_PROVIDERS = {
   },
   custom3: {
     label: 'Kiro Gateway',
-    note: 'Slot 3 of 3. Point CUSTOM3_BASE_URL at a third gateway — e.g. Kiro Gateway with free-tier Claude Sonnet 4.5, DeepSeek-V3.2 and GLM-5 (deploy/kiro-gateway-railway).',
+    note: 'Slot 3 of 3. Point CUSTOM3_BASE_URL (https://…/v1) at a third gateway — e.g. Kiro Gateway with free-tier Claude Sonnet 4.5, DeepSeek-V3.2 and GLM-5 (deploy/kiro-gateway-railway). Leaving off /v1 makes every model and chat request 404.',
     baseUrl: '',
     envVar: 'CUSTOM3_API_KEY',
     needsKey: false,
