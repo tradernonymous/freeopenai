@@ -71,7 +71,7 @@ import com.freeai4u.app.ui.BuildScreen
 import com.freeai4u.app.ui.BuildsScreen
 import com.freeai4u.app.ui.CommandInfoDialog
 import com.freeai4u.app.ui.FreeAITheme
-import com.freeai4u.app.ui.KnowledgesScreen
+import com.freeai4u.app.ui.LibraryScreen
 import com.freeai4u.app.ui.SkillsScreen
 import com.freeai4u.app.ui.ImageViewer
 import com.freeai4u.app.ui.ImageStudioScreen
@@ -250,7 +250,7 @@ class NativeActivity : ComponentActivity(), Platform {
                                             Screen.Personas -> PersonasScreen(vm)
                                             Screen.Prompts -> PromptsScreen(vm)
                                             Screen.Skills -> SkillsScreen(vm)
-                                            Screen.Knowledges -> Page("Knowledges", vm) { KnowledgesScreen(vm) }
+                                            Screen.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
                                             Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
                                             Screen.Build -> BuildScreen(vm)
                                             is Screen.Detail -> Unit

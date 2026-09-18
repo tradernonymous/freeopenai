@@ -226,7 +226,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
-        DrawerRow(Icons.Filled.AutoAwesome, "Knowledges") { vm.push(Screen.Knowledges); close() }
+        DrawerRow(Icons.Filled.AutoAwesome, "Library") { vm.push(Screen.Knowledges); close() }
         DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {

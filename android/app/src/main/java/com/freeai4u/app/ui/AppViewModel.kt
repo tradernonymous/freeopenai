@@ -685,7 +685,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         when (name) {
             "help" -> commandInfo = renderCommandsHelp()
             "skills" -> commandInfo = if (chat.skills.isEmpty()) {
-                "No skills pinned to this chat.\n\nType / and a skill name, or open Knowledges → Skills."
+                "No skills pinned to this chat.\n\nType / and a skill name, or open Library → Skills."
             } else {
                 "Pinned to this chat:\n\n" + chat.skills.joinToString("\n") { "- $it" }
             }
@@ -734,7 +734,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         append('\n')
         append("- Models loaded: ").append(models.size).append(" provider(s)\n")
         append("- Skills installed: ").append(skills.size)
-        if (skills.isEmpty()) append(" — open Knowledges → Skills to load")
+        if (skills.isEmpty()) append(" — open Library → Skills to load")
         append('\n')
         append("- Mode: ").append(modeLabel(chat.mode)).append('\n')
         append("- Pinned skills: ").append(if (chat.skills.isEmpty()) "none" else chat.skills.joinToString(", ")).append('\n')

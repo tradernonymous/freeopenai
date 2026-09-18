@@ -310,6 +310,22 @@ fun filterConversations(all: List<Conversation>, query: String): List<Conversati
     }.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.updatedAt })
 }
 
+/** One row in the Library screen's cross-cutting search -- a persona, a
+ * prompt or a skill, whichever [kind] names -- so one search box can reach
+ * into all three instead of making the user pick a hub first. */
+data class LibraryEntry(val kind: String, val id: String, val title: String, val subtitle: String)
+
+/** Library entries matching a search, a title that starts with it ranked
+ * ahead of one that merely contains it. Empty query returns everything,
+ * unranked (the caller's own order stands). */
+fun rankLibrary(entries: List<LibraryEntry>, query: String): List<LibraryEntry> {
+    val needle = query.trim().lowercase()
+    if (needle.isEmpty()) return entries
+    return entries
+        .filter { it.title.lowercase().contains(needle) || it.subtitle.lowercase().contains(needle) }
+        .sortedByDescending { it.title.lowercase().startsWith(needle) }
+}
+
 /** A conversation as Markdown, for sharing and saving. Failed replies are
  * left out: they are the app talking, not the exchange. */
 fun conversationMarkdown(conversation: Conversation, personaName: String, now: Long = System.currentTimeMillis()): String {

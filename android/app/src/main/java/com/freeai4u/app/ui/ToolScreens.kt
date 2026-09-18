@@ -78,7 +78,6 @@ import androidx.compose.ui.unit.sp
 import com.freeai4u.app.data.GeneratedImage
 import com.freeai4u.app.data.IMAGE_GENERATE_MODELS
 import com.freeai4u.app.data.IMAGE_SIZES
-import com.freeai4u.app.data.CHAT_COMMANDS
 import com.freeai4u.app.data.Persona
 import com.freeai4u.app.data.PromptTemplate
 import com.freeai4u.app.data.Skill
@@ -301,6 +300,18 @@ private val PLAN_TEMPLATES = listOf(
     Prefill(emoji = "🔍", label = "Plan a code review", personaId = "coder", prompt = "Make a plan to review the latest changes for bugs and cleanups: ", mode = "plan"),
 )
 
+// Seeded starting points for the light, in-chat coding Build mode still does
+// today (no filesystem, no shell -- see data/Agent.kt); a future on-device
+// Build mode would read from the same list.
+private val CODING_TEMPLATES = listOf(
+    Prefill(emoji = "⚛️", label = "React component", personaId = "coder", prompt = "Write a React component that "),
+    Prefill(emoji = "🌐", label = "REST endpoint", personaId = "coder", prompt = "Write a REST API endpoint that "),
+    Prefill(emoji = "🗄️", label = "SQL query", personaId = "coder", prompt = "Write a SQL query that "),
+    Prefill(emoji = "🐳", label = "Dockerfile", personaId = "coder", prompt = "Write a Dockerfile for "),
+    Prefill(emoji = "🧪", label = "Unit test", personaId = "coder", prompt = "Write unit tests for "),
+    Prefill(emoji = "⚙️", label = "CI workflow", personaId = "coder", prompt = "Write a GitHub Actions workflow that "),
+)
+
 @Composable
 fun ToolsScreen(vm: AppViewModel) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -312,10 +323,10 @@ fun ToolsScreen(vm: AppViewModel) {
         items(PLAN_TEMPLATES) { tool ->
             ToolCard(tool.emoji, tool.label, null) { vm.newChat(tool.personaId, tool.prompt, tool.mode) }
         }
-        item { SectionTitle("Library") }
-        item { ToolCard("🧩", "Knowledges", "Skills, personas, prompts and gallery") { vm.push(Screen.Knowledges) } }
-        item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
-        item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
+        item { SectionTitle("Coding templates") }
+        items(CODING_TEMPLATES) { tool ->
+            ToolCard(tool.emoji, tool.label, null) { vm.newChat(tool.personaId, tool.prompt) }
+        }
         item { SectionTitle("Server") }
         item {
             val waiting = vm.builds.waitingCount
@@ -326,12 +337,12 @@ fun ToolsScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+fun SectionTitle(text: String) {
     Text(text, color = Palette.green, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
 }
 
 @Composable
-private fun ToolCard(emoji: String, title: String, subtitle: String?, onClick: () -> Unit) {
+fun ToolCard(emoji: String, title: String, subtitle: String?, onClick: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
         modifier = Modifier.fillMaxWidth().pressScale(0.97f).clickable(onClick = onClick),
@@ -598,30 +609,7 @@ fun PromptsScreen(vm: AppViewModel) {
     }
 }
 
-// --- Knowledges ---------------------------------------------------------------------
-
-/** The hub the drawer opens: everything that teaches a chat something, in one
- * place, the way the web app groups Skills, Personas, Prompts and the gallery. */
-@Composable
-fun KnowledgesScreen(vm: AppViewModel) {
-    LaunchedEffect(Unit) { vm.loadSkills() }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Knowledges") }
-        item { ToolCard("🧩", "Skills", "${vm.skills.size} installed · pin with /skill") { vm.push(Screen.Skills) } }
-        item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
-        item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
-        item { ToolCard("🖼️", "Gallery", "${vm.library.images.size} image(s)") { vm.push(Screen.Images) } }
-        item { SectionTitle("Commands") }
-        CHAT_COMMANDS.forEach { command ->
-            item(key = command.name) {
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(command.usage, color = Palette.green, fontSize = 14.sp)
-                    Text(command.desc, color = Palette.muted, fontSize = 12.sp)
-                }
-            }
-        }
-    }
-}
+// --- Skills -------------------------------------------------------------------------
 
 /** The installed skill catalogue. "Use" starts a chat with the skill pinned. */
 @OptIn(ExperimentalMaterial3Api::class)
