@@ -822,6 +822,7 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
  * that duplicated the drawer: everything about the chat you're actually in,
  * one tap away instead of buried across three different sheets. */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SessionSheet(vm: AppViewModel, chat: Conversation, onPickModel: () -> Unit, onClose: () -> Unit) {
     val persona = personaFor(vm.library, chat.personaId)
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Palette.surface) {
