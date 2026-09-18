@@ -181,3 +181,27 @@ test('the reader shell exists on disk and only reads', async () => {
   assert.match(html, /renderMarkdownLite/);
   assert.match(html, /noindex/);
 });
+
+test('the Forget-all button really asks the server to forget, not just the DOM', async () => {
+  // The page once sent an empty body here, which the server read as
+  // "delete nothing" -- a silent no-op the API-level test above could not
+  // see, because it built the request itself. This one drives the shipped
+  // button instead.
+  const { loadFromIndex } = require('./helpers/index-html.js');
+  const calls = [];
+  const deps = {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return { json: async () => ({ facts: [] }) };
+    },
+    memoryFacts: [{ text: 'old fact' }],
+    renderMemoryList: () => {},
+  };
+  const loaded = loadFromIndex(['clearAllMemoryFacts'], deps);
+  await loaded.clearAllMemoryFacts();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/memory');
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.equal(calls[0].init.body, '{"all":true}');
+  assert.deepEqual(deps.memoryFacts, [], 'and the page forgets what the server confirmed');
+});

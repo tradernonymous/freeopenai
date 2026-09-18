@@ -11573,8 +11573,10 @@
 
         let shareActiveId = null;
         let shareActiveLink = '';
+        let sharePublishing = false;
 
         async function openShareModal(convoId) {
+            if (sharePublishing) return; // a second click waits for the first publish, not a second link
             const convo = conversations.find((c) => c.id === convoId);
             if (!convo) return;
             const overlay = document.getElementById('shareOverlay');
@@ -11585,10 +11587,17 @@
             box.value = '';
             status.textContent = 'Making a read-only link…';
             overlay.classList.add('open');
+            sharePublishing = true;
             try {
                 const payload = await buildSharePayloadFor(convo);
                 if (!payload) {
-                    status.textContent = 'This conversation is too large to share.';
+                    // Two different dead ends, two different sentences: a chat
+                    // with nothing shareable is not a size problem.
+                    const shareable = (convo.messages || []).some((m) => m && (m.type === 'user' || m.type === 'bot')
+                        && ((String(m.content || '').trim()) || (Array.isArray(m.images) && m.images.length)));
+                    status.textContent = shareable
+                        ? 'This conversation is too large to share.'
+                        : 'Nothing to share yet — send a message first.';
                     return;
                 }
                 const res = await fetch('/api/share', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -11603,6 +11612,8 @@
                 status.textContent = 'Read-only link ready:';
             } catch (err) {
                 status.textContent = 'Sharing failed — the server did not answer.';
+            } finally {
+                sharePublishing = false;
             }
         }
 
@@ -11737,7 +11748,7 @@
 
         async function clearAllMemoryFacts() {
             try {
-                const res = await fetch('/api/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const res = await fetch('/api/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) });
                 const data = await res.json().catch(() => ({}));
                 memoryFacts = Array.isArray(data.facts) ? data.facts : [];
                 renderMemoryList();
@@ -11801,6 +11812,7 @@
             if (overlay === helpOverlay) return closeHelp;
             if (overlay === drawerOverlay) return closeDrawer;
             if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
+            if (overlay && overlay.id === 'shareOverlay') return closeShareModal;
             if (overlay && overlay.id === 'imageConfirmOverlay') return () => closeImageConfirm(false);
             if (overlay && overlay.id === 'imageEditOverlay') return closeImageEdit;
             return closeImageLightbox;
