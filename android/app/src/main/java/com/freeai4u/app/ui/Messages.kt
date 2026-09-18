@@ -67,7 +67,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -159,12 +158,13 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
 @Composable
 fun UserBubble(message: ChatMessage, onEdit: () -> Unit, onCopy: () -> Unit, onSelect: () -> Unit = {}) {
     var menu by remember { mutableStateOf(false) }
+    val haptics = rememberHaptics()
     Row(Modifier.fillMaxWidth().enterUp(), horizontalArrangement = Arrangement.End) {
         Box {
             Surface(
                 color = Palette.surfaceHigh,
                 shape = RoundedCornerShape(22.dp),
-                modifier = Modifier.widthIn(max = 300.dp).combinedClickable(onClick = {}, onLongClick = { menu = true }),
+                modifier = Modifier.widthIn(max = 300.dp).combinedClickable(onClick = {}, onLongClick = { haptics(HapticFeedbackType.LongPress); menu = true }),
             ) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (message.images.isNotEmpty()) {
@@ -233,7 +233,7 @@ fun AssistantTurn(
 private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform, onRegenerate: () -> Unit, onBranch: () -> Unit) {
     var copied by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     LaunchedEffect(copied) {
         if (copied) {
             delay(1800)
@@ -244,7 +244,7 @@ private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform,
         SmallAction(if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy, if (copied) "Copied" else "Copy") {
             platform.copy(turn.text)
             copied = true
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            haptics(HapticFeedbackType.LongPress)
         }
         SmallAction(Icons.AutoMirrored.Filled.VolumeUp, "Read aloud") { platform.speak(turn.text) }
         if (isLast) SmallAction(Icons.Filled.Refresh, "Regenerate", onRegenerate)

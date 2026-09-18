@@ -36,12 +36,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 // Motion used across the app. Durations stay short (120-400 ms) so the app
 // feels alive without making anyone wait for an animation.
+
+/** One place to trigger a tap: `haptics(HapticFeedbackType.LongPress)` instead
+ * of reading LocalHapticFeedback.current at every call site. */
+@Composable
+fun rememberHaptics(): (HapticFeedbackType) -> Unit {
+    val haptics = LocalHapticFeedback.current
+    return remember(haptics) { { type: HapticFeedbackType -> haptics.performHapticFeedback(type) } }
+}
 
 /** Shrinks slightly while pressed and springs back: tactile buttons. */
 fun Modifier.pressScale(pressed: Float = 0.92f): Modifier = composed {

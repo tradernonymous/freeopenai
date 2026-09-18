@@ -67,7 +67,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -87,16 +86,9 @@ import com.freeai4u.app.data.buildStatusLabel
 // a pulsing ring on the active one); approvals are cards that name exactly what
 // will change, as deepseek-harness-mobile's approval sheet does.
 
-private val Amber = Color(0xFFE3B341)
-private val AmberTint = Color(0x24E3B341)
-private val Violet = Color(0xFFA371F7)
-private val VioletTint = Color(0x29A371F7)
-private val GreenTint = Color(0x243FB950)
-private val RedTint = Color(0x24F85149)
-
 private fun statusColor(status: String): Color = when (status) {
-    "queued", "running" -> Violet
-    "awaiting_approval", "awaiting_input" -> Amber
+    "queued", "running" -> Palette.violet
+    "awaiting_approval", "awaiting_input" -> Palette.amber
     "done" -> Palette.green
     "failed", "cancelled", "expired" -> Palette.red
     else -> Palette.muted
@@ -144,17 +136,19 @@ fun BuildsScreen(vm: AppViewModel) {
             list == null && listError == null -> item {
                 Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
-            list == null -> item { NoticeCard(listError ?: "", Palette.red, RedTint) }
-            !list.enabled -> item { NoticeCard(list.reason.ifEmpty { "Builds are off on this server." }, Palette.red, RedTint) }
+            list == null -> item { NoticeCard(listError ?: "", Palette.red, Palette.redTint) }
+            !list.enabled -> item { NoticeCard(list.reason.ifEmpty { "Builds are off on this server." }, Palette.red, Palette.redTint) }
             else -> {
                 if (!list.runEnabled) {
-                    item { NoticeCard("Commands are off on the server (WORKSPACE_RUN=1 turns them on), so a build can write files but not run tests.", Amber, AmberTint) }
+                    item { NoticeCard("Commands are off on the server (WORKSPACE_RUN=1 turns them on), so a build can write files but not run tests.", Palette.amber, Palette.amberTint) }
                 }
                 if (list.sessions.isEmpty()) {
                     item {
                         EmptyState(
                             "No builds yet",
                             "Switch to Plan mode, ask for a plan, then tap \"Build remotely\" under the reply. Builds started on the web app show up here too.",
+                            actionLabel = "Start a plan",
+                            onAction = { vm.newChat(mode = "plan") },
                         )
                     }
                 }
@@ -278,8 +272,8 @@ private fun BuildBody(builds: RemoteBuilds, session: BuildSession, modifier: Mod
                 )
             }
         }
-        if (builds.connection.isNotEmpty()) item { NoticeCard(builds.connection, Amber, AmberTint) }
-        builds.error?.let { error -> item { NoticeCard(error, Palette.red, RedTint) } }
+        if (builds.connection.isNotEmpty()) item { NoticeCard(builds.connection, Palette.amber, Palette.amberTint) }
+        builds.error?.let { error -> item { NoticeCard(error, Palette.red, Palette.redTint) } }
         item { StepTicker(session.steps) }
         session.pending?.let { pending ->
             item(key = "pending-" + pending.requestId) {
@@ -293,8 +287,8 @@ private fun BuildBody(builds: RemoteBuilds, session: BuildSession, modifier: Mod
         items(builds.timeline, key = { "e" + it.seq }) { event -> TimelineItem(event) }
         if (session.finished && builds.timeline.none { it is BuildEvent.Done || it is BuildEvent.Failed }) {
             item {
-                if (session.status == "done") ResultCard(session.summary.ifEmpty { "Build finished." }, Palette.green, GreenTint)
-                else ResultCard(session.error.ifEmpty { buildStatusLabel(session.status) }, Palette.red, RedTint)
+                if (session.status == "done") ResultCard(session.summary.ifEmpty { "Build finished." }, Palette.green, Palette.greenTint)
+                else ResultCard(session.error.ifEmpty { buildStatusLabel(session.status) }, Palette.red, Palette.redTint)
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
@@ -312,7 +306,7 @@ private fun StepTicker(steps: List<BuildStep>) {
             val look = when (step.status) {
                 "done" -> StepLook(Palette.green, Palette.green, "✓", Color(0xFF04260F))
                 "failed" -> StepLook(Palette.red, Palette.red, "!", Color.White)
-                "in_progress" -> StepLook(VioletTint, Violet.copy(alpha = ring), "${index + 1}", Violet)
+                "in_progress" -> StepLook(Palette.violetTint, Palette.violet.copy(alpha = ring), "${index + 1}", Palette.violet)
                 "skipped" -> StepLook(Color.Transparent, Palette.outline, "–", Palette.muted)
                 else -> StepLook(Color.Transparent, Palette.outline, "${index + 1}", Palette.muted)
             }
@@ -344,13 +338,13 @@ private fun StepTicker(steps: List<BuildStep>) {
 @Composable
 private fun ApprovalCard(pending: BuildPending, busy: Boolean, onApprove: () -> Unit, onReject: (String) -> Unit) {
     var reason by rememberSaveable(pending.requestId) { mutableStateOf("") }
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     Surface(
-        color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Amber),
+        color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Palette.amber),
         modifier = Modifier.fillMaxWidth().enterUp(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Needs your approval", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Needs your approval", color = Palette.amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(pending.summary.ifEmpty { pending.tool }, style = MaterialTheme.typography.titleSmall)
             CodeBlock(pending.tool.replace('_', ' '), pending.preview)
             OutlinedTextField(
@@ -361,7 +355,7 @@ private fun ApprovalCard(pending: BuildPending, busy: Boolean, onApprove: () -> 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        haptics(HapticFeedbackType.LongPress)
                         onApprove()
                     },
                     enabled = !busy,
@@ -383,11 +377,11 @@ private fun ApprovalCard(pending: BuildPending, busy: Boolean, onApprove: () -> 
 private fun QuestionCard(pending: BuildPending, busy: Boolean, onAnswer: (String) -> Unit) {
     var answer by rememberSaveable(pending.requestId) { mutableStateOf("") }
     Surface(
-        color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Amber),
+        color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Palette.amber),
         modifier = Modifier.fillMaxWidth().enterUp(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("The build agent asks", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("The build agent asks", color = Palette.amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             SelectionContainer { Text(pending.question, style = MaterialTheme.typography.bodyLarge) }
             OutlinedTextField(answer, { answer = it }, placeholder = { Text("Your answer") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
             Button({ onAnswer(answer) }, enabled = !busy && answer.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
@@ -415,8 +409,8 @@ private fun TimelineItem(event: BuildEvent) {
             },
             color = Palette.muted, fontSize = 13.sp,
         )
-        is BuildEvent.Done -> ResultCard(event.summary.ifEmpty { "Build finished." }, Palette.green, GreenTint)
-        is BuildEvent.Failed -> ResultCard(event.error.ifEmpty { buildStatusLabel(event.status) }, Palette.red, RedTint)
+        is BuildEvent.Done -> ResultCard(event.summary.ifEmpty { "Build finished." }, Palette.green, Palette.greenTint)
+        is BuildEvent.Failed -> ResultCard(event.error.ifEmpty { buildStatusLabel(event.status) }, Palette.red, Palette.redTint)
         else -> Unit
     }
 }
@@ -455,8 +449,8 @@ private fun CodeBlock(title: String, text: String) {
                             else -> Palette.text
                         }
                         val lineBackground = when {
-                            line.startsWith("+") -> GreenTint
-                            line.startsWith("-") -> RedTint
+                            line.startsWith("+") -> Palette.greenTint
+                            line.startsWith("-") -> Palette.redTint
                             else -> Color.Transparent
                         }
                         Text(
@@ -479,13 +473,13 @@ private fun CodeBlock(title: String, text: String) {
 @Composable
 fun BuildRemotelyChip(onClick: () -> Unit) {
     Surface(
-        color = VioletTint, shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Violet.copy(alpha = 0.6f)),
+        color = Palette.violetTint, shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Palette.violet.copy(alpha = 0.6f)),
         modifier = Modifier.heightIn(min = 48.dp).pressScale(0.95f).clickable(onClickLabel = "Build this plan on the server", onClick = onClick),
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Construction, null, tint = Violet, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Construction, null, tint = Palette.violet, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Build remotely", color = Violet, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text("Build remotely", color = Palette.violet, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

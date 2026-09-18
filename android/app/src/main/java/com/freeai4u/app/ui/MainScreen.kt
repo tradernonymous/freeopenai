@@ -113,7 +113,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -197,6 +196,7 @@ fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, close: () -> Unit) {
+    val haptics = rememberHaptics()
     var query by rememberSaveable { mutableStateOf("") }
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<Conversation?>(null) }
@@ -243,7 +243,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp))
                                 .background(if (selected) Palette.surfaceHigh else Palette.surface)
-                                .combinedClickable(onClick = { vm.openChat(item.id); close() }, onLongClick = { menuFor = item.id })
+                                .combinedClickable(onClick = { vm.openChat(item.id); close() }, onLongClick = { haptics(HapticFeedbackType.LongPress); menuFor = item.id })
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -401,14 +401,12 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
 
 fun shortModel(model: String): String = model.substringAfterLast('/').removePrefix("@cf/").removeSuffix(":free")
 
-private data class Suggestion(val icon: ImageVector, val label: String, val prompt: String, val mode: String = "chat", val image: Boolean = false)
-
 private val SUGGESTIONS = listOf(
-    Suggestion(Icons.Filled.PaletteIcon, "Create image", "", image = true),
-    Suggestion(Icons.Filled.AutoAwesome, "Brainstorm", "Brainstorm 10 ideas for "),
-    Suggestion(Icons.Filled.Checklist, "Make a plan", "Plan how to ", mode = "plan"),
-    Suggestion(Icons.Filled.EditNote, "Summarize", "Summarize this:\n\n"),
-    Suggestion(Icons.Filled.Language, "Research", "Research the latest on "),
+    Prefill(icon = Icons.Filled.PaletteIcon, label = "Create image", prompt = "", image = true),
+    Prefill(icon = Icons.Filled.AutoAwesome, label = "Brainstorm", prompt = "Brainstorm 10 ideas for "),
+    Prefill(icon = Icons.Filled.Checklist, label = "Make a plan", prompt = "Plan how to ", mode = "plan"),
+    Prefill(icon = Icons.Filled.EditNote, label = "Summarize", prompt = "Summarize this:\n\n"),
+    Prefill(icon = Icons.Filled.Language, label = "Research", prompt = "Research the latest on "),
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -434,7 +432,7 @@ private fun Home(vm: AppViewModel, chat: Conversation) {
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(suggestion.icon, null, tint = Palette.green, modifier = Modifier.size(18.dp))
+                    suggestion.icon?.let { Icon(it, null, tint = Palette.green, modifier = Modifier.size(18.dp)) }
                     Spacer(Modifier.width(8.dp))
                     Text(suggestion.label, color = Palette.text, fontSize = 14.sp)
                 }
@@ -519,7 +517,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
         }
     }
     var plusSheet by remember { mutableStateOf(false) }
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     LaunchedEffect(Unit) { vm.loadSkills() }
     val suggestions = matchPrompts(text, allPrompts(vm.library))
     val slashRows = slashSuggestions(text, vm.skills.map { it.name })
@@ -613,7 +611,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                             Modifier.padding(4.dp).size(40.dp).pressScale(0.85f).clip(CircleShape)
                                 .background(if (state == 0) Palette.surfaceHigh else Palette.text)
                                 .clickable {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    haptics(HapticFeedbackType.TextHandleMove)
                                     when (state) {
                                         // The Send button becomes Stop the instant a reply starts, so a
                                         // double-tap on Send would cancel what it just sent.

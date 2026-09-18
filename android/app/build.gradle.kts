@@ -126,6 +126,10 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.material3.adaptive.navigation.suite)
+    implementation(libs.compose.ui.tooling.preview)
+    // The preview renderer itself, not just its annotations -- debug-only,
+    // like leakcanary below, so @Preview costs nothing in the release build.
+    debugImplementation(libs.compose.ui.tooling)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     // Firebase Messaging pulls in an old transitive androidx.fragment that

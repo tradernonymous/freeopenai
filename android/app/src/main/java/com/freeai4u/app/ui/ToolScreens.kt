@@ -279,15 +279,13 @@ private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modif
 
 // --- Tools ------------------------------------------------------------------------
 
-private data class QuickTool(val emoji: String, val title: String, val personaId: String, val prompt: String, val mode: String = "chat")
-
 private val QUICK_TOOLS = listOf(
-    QuickTool("🌐", "Translate", "translator", ""),
-    QuickTool("🔗", "Summarize link", "summarizer", "Read and summarize this page: "),
-    QuickTool("✅", "Fix grammar", "writer", "Fix the grammar and spelling, keep my tone:\n\n"),
-    QuickTool("💻", "Explain code", "coder", "Explain this code step by step:\n\n"),
-    QuickTool("✍️", "Rewrite", "writer", "Rewrite this to be clearer and more engaging:\n\n"),
-    QuickTool("📧", "Reply", "writer", "Write a polite, short reply to this message:\n\n"),
+    Prefill(emoji = "🌐", label = "Translate", personaId = "translator", prompt = ""),
+    Prefill(emoji = "🔗", label = "Summarize link", personaId = "summarizer", prompt = "Read and summarize this page: "),
+    Prefill(emoji = "✅", label = "Fix grammar", personaId = "writer", prompt = "Fix the grammar and spelling, keep my tone:\n\n"),
+    Prefill(emoji = "💻", label = "Explain code", personaId = "coder", prompt = "Explain this code step by step:\n\n"),
+    Prefill(emoji = "✍️", label = "Rewrite", personaId = "writer", prompt = "Rewrite this to be clearer and more engaging:\n\n"),
+    Prefill(emoji = "📧", label = "Reply", personaId = "writer", prompt = "Write a polite, short reply to this message:\n\n"),
 )
 
 // Plan mode answers with a step-by-step plan rather than touching any file
@@ -296,11 +294,11 @@ private val QUICK_TOOLS = listOf(
 // the built-in "Make a plan" prompt template already uses, rather than
 // phrasing like a command Plan mode was never going to carry out itself.
 private val PLAN_TEMPLATES = listOf(
-    QuickTool("🐛", "Plan a bug fix", "coder", "Make a plan to fix this bug: ", mode = "plan"),
-    QuickTool("➕", "Plan a feature", "coder", "Make a plan to add this feature: ", mode = "plan"),
-    QuickTool("🧪", "Plan test coverage", "coder", "Make a plan to add tests for: ", mode = "plan"),
-    QuickTool("🧹", "Plan a refactor", "coder", "Make a plan to refactor this, same behavior: ", mode = "plan"),
-    QuickTool("🔍", "Plan a code review", "coder", "Make a plan to review the latest changes for bugs and cleanups: ", mode = "plan"),
+    Prefill(emoji = "🐛", label = "Plan a bug fix", personaId = "coder", prompt = "Make a plan to fix this bug: ", mode = "plan"),
+    Prefill(emoji = "➕", label = "Plan a feature", personaId = "coder", prompt = "Make a plan to add this feature: ", mode = "plan"),
+    Prefill(emoji = "🧪", label = "Plan test coverage", personaId = "coder", prompt = "Make a plan to add tests for: ", mode = "plan"),
+    Prefill(emoji = "🧹", label = "Plan a refactor", personaId = "coder", prompt = "Make a plan to refactor this, same behavior: ", mode = "plan"),
+    Prefill(emoji = "🔍", label = "Plan a code review", personaId = "coder", prompt = "Make a plan to review the latest changes for bugs and cleanups: ", mode = "plan"),
 )
 
 @Composable
@@ -308,11 +306,11 @@ fun ToolsScreen(vm: AppViewModel) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Quick tools") }
         items(QUICK_TOOLS) { tool ->
-            ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt) }
+            ToolCard(tool.emoji, tool.label, null) { vm.newChat(tool.personaId, tool.prompt) }
         }
         item { SectionTitle("Plan templates") }
         items(PLAN_TEMPLATES) { tool ->
-            ToolCard(tool.emoji, tool.title, null) { vm.newChat(tool.personaId, tool.prompt, tool.mode) }
+            ToolCard(tool.emoji, tool.label, null) { vm.newChat(tool.personaId, tool.prompt, tool.mode) }
         }
         item { SectionTitle("Library") }
         item { ToolCard("🧩", "Knowledges", "Skills, personas, prompts and gallery") { vm.push(Screen.Knowledges) } }
@@ -324,7 +322,6 @@ fun ToolsScreen(vm: AppViewModel) {
             ToolCard("🛠️", "Builds", if (waiting > 0) "$waiting waiting for your approval" else "Plans carried out on the server") { vm.openBuilds() }
         }
         item { StatusCard(vm) }
-        item { SectionTitle("More") }
     }
 }
 
@@ -496,16 +493,15 @@ fun PersonasScreen(vm: AppViewModel) {
     ) { padding ->
         LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(allPersonas(vm.library), key = { it.id }) { persona ->
-                Card(colors = CardDefaults.cardColors(containerColor = Palette.surface), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(persona.emoji, fontSize = 24.sp)
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(persona.name + if (persona.builtIn) "  · built-in" else "")
-                            Text(persona.systemPrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
-                        }
+                LibraryRow(
+                    leading = { Text(persona.emoji, fontSize = 24.sp) },
+                    actions = {
                         TextButton({ vm.newChat(persona.id) }) { Text("Chat") }
                         if (!persona.builtIn) TextButton({ editing = persona }) { Text("Edit") }
-                    }
+                    },
+                ) {
+                    Text(persona.name + if (persona.builtIn) "  · built-in" else "")
+                    Text(persona.systemPrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
                 }
             }
         }
@@ -561,15 +557,14 @@ fun PromptsScreen(vm: AppViewModel) {
     ) { padding ->
         LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(allPrompts(vm.library), key = { it.id }) { prompt ->
-                Card(colors = CardDefaults.cardColors(containerColor = Palette.surface), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("/" + prompt.title, color = Palette.green)
-                            Text(prompt.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
-                        }
+                LibraryRow(
+                    actions = {
                         TextButton({ vm.newChat(draft = prompt.text) }) { Text("Use") }
                         if (!prompt.builtIn) TextButton({ editing = prompt }) { Text("Edit") }
-                    }
+                    },
+                ) {
+                    Text("/" + prompt.title, color = Palette.green)
+                    Text(prompt.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
                 }
             }
         }
@@ -647,23 +642,25 @@ fun SkillsScreen(vm: AppViewModel) {
         },
     ) { padding ->
         if (vm.skills.isEmpty()) {
-            Column(Modifier.padding(padding).fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("No skills installed.", color = Palette.text)
-                Text("The server loads skills from its configured GitHub sources. Tap Refresh above, or check the server in Tools → Status.", color = Palette.muted, fontSize = 13.sp)
-            }
+            EmptyState(
+                "No skills installed",
+                "The server loads skills from its configured GitHub sources. Check the server in Tools → Status.",
+                modifier = Modifier.padding(padding),
+                actionLabel = "Refresh",
+                onAction = { vm.loadSkills(force = true) },
+            )
         } else {
             LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(vm.skills.distinctBy { it.source + "/" + it.name }, key = { it.source + "/" + it.name }) { skill ->
-                    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface), modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(skill.name + if (skill.userOnly) "  · user only" else "")
-                                Text(skill.description, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
-                                Text(skill.source, color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                    LibraryRow(
+                        actions = {
                             TextButton({ open = skill; vm.loadSkillInstructions(skill.name) }) { Text("View") }
                             TextButton({ vm.newChatWithSkill(skill.name) }) { Text("Use") }
-                        }
+                        },
+                    ) {
+                        Text(skill.name + if (skill.userOnly) "  · user only" else "")
+                        Text(skill.description, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
+                        Text(skill.source, color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

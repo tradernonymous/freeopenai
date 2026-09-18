@@ -23,6 +23,13 @@ object Palette {
     val red = Color(0xFFF85149)
     val userBubble = Color(0xFF1F3A2A)
     val code = Color(0xFF0B0F14)
+    // Build status accents: amber for "needs you", violet for a running step.
+    val amber = Color(0xFFE3B341)
+    val amberTint = Color(0x24E3B341)
+    val violet = Color(0xFFA371F7)
+    val violetTint = Color(0x29A371F7)
+    val greenTint = Color(0x243FB950)
+    val redTint = Color(0x24F85149)
 }
 
 private val scheme = darkColorScheme(
