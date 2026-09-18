@@ -223,7 +223,7 @@ fun AssistantTurn(
             turn.error -> ErrorCard(turn.text, onRetry = if (isLast) onRegenerate else null)
             turn.text.isNotEmpty() -> MarkdownText(turn.text) { platform.copy(it) }
         }
-        // Universal File Generation: detect files in agent output and show download bar
+        // File Generation: detect files in agent output and show download bar
         if (turn.text.isNotEmpty() && !streaming) {
             val detectedFiles = remember(turn.text) { com.neura.os.app.data.FileGenerator.detectFiles(turn.text) }
             if (detectedFiles.isNotEmpty()) {
@@ -231,30 +231,15 @@ fun AssistantTurn(
                     files = detectedFiles,
                     onSave = { file ->
                         vm.runOnIo {
-                            val path = com.neura.os.app.data.FileGenerator.saveToDownloads(platform as? android.content.Context ?: return@runOnIo, file)
-                            vm.runOnMain {
-                                if (path != null) platform.copy("Saved to Downloads/NeuraOS/")
-                            }
+                            val ctx = platform as? android.content.Context ?: return@runOnIo
+                            val path = com.neura.os.app.data.FileGenerator.saveToDownloads(ctx, file)
+                            vm.runOnMain { if (path != null) platform.copy("Saved to Downloads/NeuraOS/") }
                         }
                     },
                     onShare = { file ->
                         vm.runOnIo {
                             val ctx = platform as? android.content.Context ?: return@runOnIo
-                            val cachePath = com.neura.os.app.data.FileGenerator.saveToCache(ctx, file)
-                            if (cachePath != null) {
-                                val cacheFile = java.io.File(cachePath)
-                                val uri = androidx.core.content.FileProvider.getUriForFile(
-                                    ctx, ctx.packageName + ".files", cacheFile
-                                )
-                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
-                                    .setType(file.mimeType)
-                                    .putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                vm.runOnMain {
-                                    ctx.startActivity(android.content.Intent.createChooser(intent, file.displayName)
-                                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-                                }
-                            }
+                            com.neura.os.app.Exporter.share(ctx, file.name, file.mimeType, file.content)
                         }
                     },
                 )

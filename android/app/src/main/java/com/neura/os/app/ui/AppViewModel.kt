@@ -2,7 +2,6 @@ package com.neura.os.app.ui
 
 import android.app.Application
 import com.neura.os.app.data.ImageIntelligence
-import com.neura.os.app.data.DescriptorCache
 import com.neura.os.app.data.FileGenerator
 import android.os.Bundle
 import android.os.Handler
@@ -1435,8 +1434,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val describedImages = mutableListOf<String>()
         val descriptions = mutableListOf<String>()
         for (imageUrl in lastUser.images) {
-            val hash = ImageIntelligence.imageHash(imageUrl)
-            val cached = DescriptorCache.get(hash)
+            val hash = imageUrl.hashCode().toString(16)
+            val cached = ImageIntelligence.getCached(hash)
             if (cached != null) {
                 descriptions.add(cached)
                 describedImages.add(imageUrl)
@@ -1452,7 +1451,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 )
             } catch (e: Exception) { null }
             if (desc != null) {
-                DescriptorCache.put(hash, desc)
+                ImageIntelligence.putCached(hash, desc)
                 descriptions.add(desc)
             }
             describedImages.add(imageUrl)

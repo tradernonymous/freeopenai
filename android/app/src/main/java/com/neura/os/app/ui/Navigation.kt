@@ -20,7 +20,6 @@ import kotlinx.serialization.Serializable
     @Serializable data object Builds : Route
     @Serializable data object Build : Route
     @Serializable data class Detail(val kind: String, val id: String) : Route
-    @Serializable data class FilePreview(val name: String) : Route
     @Serializable data object Automation : Route
 }
 
@@ -41,7 +40,6 @@ fun Route.screenKey(): String = when (this) {
     Route.Build -> "build"
     Route.Automation -> "automation"
     is Route.Detail -> "detail:$kind:$id"
-    is Route.FilePreview -> "filepreview:$name"
 }
 
 fun screenFromKey(key: String): Route? = when {
@@ -57,7 +55,6 @@ fun screenFromKey(key: String): Route? = when {
     key == "automation" -> Route.Automation
     key.startsWith("detail:") -> key.removePrefix("detail:").split(":", limit = 2)
         .takeIf { it.size == 2 }?.let { (kind, id) -> Route.Detail(kind, id) }
-    key.startsWith("filepreview:") -> Route.FilePreview(key.removePrefix("filepreview:"))
     else -> null
 }
 

@@ -63,7 +63,6 @@ import com.neura.os.app.data.parseLocalDateTime
 import com.neura.os.app.ui.AppViewModel
 import com.neura.os.app.ui.BuildScreen
 import com.neura.os.app.ui.AutomationScreen
-import com.neura.os.app.ui.FilePreviewScreen
 import com.neura.os.app.ui.BuildsScreen
 import com.neura.os.app.ui.CommandInfoDialog
 import com.neura.os.app.ui.NeuraTheme
@@ -237,40 +236,6 @@ class NativeActivity : ComponentActivity(), Platform {
                                         Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
                                         Route.Build -> BuildScreen(vm)
                                         Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
-                                        is Route.FilePreview -> {
-                                            val files = remember(screen.name) {
-                                                com.neura.os.app.data.FileGenerator.detectFiles(screen.name)
-                                            }
-                                            if (files.isNotEmpty()) {
-                                                FilePreviewScreen(
-                                                    file = files.first(),
-                                                    onBack = { vm.back() },
-                                                    onSave = { file ->
-                                                        vm.runOnIo {
-                                                            val path = com.neura.os.app.data.FileGenerator.saveToDownloads(this@NativeActivity, file)
-                                                            vm.runOnMain { toast(if (path != null) "Saved" else "Save failed") }
-                                                        }
-                                                    },
-                                                    onShare = { file ->
-                                                        vm.runOnIo {
-                                                            val cachePath = com.neura.os.app.data.FileGenerator.saveToCache(this@NativeActivity, file)
-                                                            if (cachePath != null) {
-                                                                val cacheFile = java.io.File(cachePath)
-                                                                val uri = androidx.core.content.FileProvider.getUriForFile(
-                                                                    this@NativeActivity, packageName + ".files", cacheFile
-                                                                )
-                                                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
-                                                                    .setType(file.mimeType)
-                                                                    .putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                                                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                                vm.runOnMain { startActivity(android.content.Intent.createChooser(intent, file.displayName)) }
-                                                            }
-                                                        }
-                                                    },
-                                                )
-                                            }
-                                        }
-                                        is Route.Detail -> Unit
                                     }
                                 }
                             }

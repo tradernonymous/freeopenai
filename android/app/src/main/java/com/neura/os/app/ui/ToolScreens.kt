@@ -1,7 +1,6 @@
 package com.neura.os.app.ui
 
 import android.graphics.BitmapFactory
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -141,19 +140,11 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
     val size = imageSizeById(sizeId)
 
     // Prompt history for re-use
-    var promptHistory by remember { mutableStateOf(listOf<com.neura.os.app.ui.PromptHistoryEntry>()) }
     // Before/after comparison state
-    var comparing by remember { mutableStateOf(false) }
     // Batch generation progress
-    var batchTotal by remember { mutableIntStateOf(0) }
-    var batchCurrent by remember { mutableIntStateOf(0) }
 
     Column(Modifier.fillMaxSize()) {
         // Batch progress indicator
-        BatchProgressIndicator(
-            current = batchCurrent,
-            total = batchTotal,
-            onCancel = { batchTotal = 0; batchCurrent = 0 },
         )
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(
@@ -283,20 +274,6 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
         )
     }
     // Before/After comparison overlay
-    if (comparing) {
-        var originalBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-        var editedBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-        LaunchedEffect(viewing?.id) {
-            viewing?.let { image ->
-                vm.loadBitmap(image.id) { _, decoded -> editedBitmap = decoded }
-            }
-        }
-        BeforeAfterComparison(
-            original = originalBitmap,
-            edited = editedBitmap,
-            onDismiss = { comparing = false },
-        )
-    }
 }
 
 

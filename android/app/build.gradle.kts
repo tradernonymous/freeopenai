@@ -155,5 +155,4 @@ dependencies {
     // Navigation 3 serialization for type-safe routes.
     implementation(libs.androidx.serialization.json)
     // Coil for image loading in the image studio.
-    implementation(libs.coil.compose)
 }

@@ -66,7 +66,7 @@ object ImageIntelligence {
 
         // Try providers in order
         return tryPuterDescribe(base64Data, mime, serverUrl)
-            ?: tryNvidiaDescribe(base64Data, mime, apiKey)
+            
             ?: tryOcrDescribe(base64Data, mime)
             ?: fallbackDescription(base64Data, mime)
     }
@@ -75,12 +75,6 @@ object ImageIntelligence {
      * Returns a cache key for the image (hash of the base64 data),
      * so repeated sends of the same image don't re-describe it.
      */
-    fun imageHash(imageDataUrl: String): String {
-        val (_, data) = parseDataUrl(imageDataUrl) ?: return ""
-        val digest = MessageDigest.getInstance("SHA-256")
-        val hash = digest.digest(data.toByteArray())
-        return hash.take(16).joinToString("") { "%02x".format(it) }
-    }
 
     // --- Provider attempts ---------------------------------------------------
 
@@ -119,57 +113,6 @@ object ImageIntelligence {
         }
     }
 
-    private fun tryNvidiaDescribe(base64Data: String, mime: String, apiKey: String?): String? {
-        if (apiKey.isNullOrEmpty()) return null
-        return try {
-            val url = URL("https://integrate.api.nvidia.com/v1/chat/completions")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 15000
-            conn.readTimeout = 30000
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Authorization", "Bearer $apiKey")
-            conn.setRequestProperty("Accept", "application/json")
-
-            val messages = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("content", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("type", "text")
-                            put("text", "Describe this image in detail for someone who cannot see it. " +
-                                "Include all visible text (OCR), colors, layout, UI elements, and context.")
-                        })
-                        put(JSONObject().apply {
-                            put("type", "image_url")
-                            put("image_url", JSONObject().apply {
-                                put("url", "data:$mime;base64,$base64Data")
-                            })
-                        })
-                    })
-                })
-            }
-
-            val body = JSONObject().apply {
-                put("model", "nvidia/llava-1.5-7b-hf")
-                put("messages", messages)
-                put("max_tokens", 1024)
-            }
-            conn.outputStream.bufferedWriter().use { it.write(body.toString()) }
-
-            if (conn.responseCode in 200..299) {
-                val response = conn.inputStream.bufferedReader().use { it.readText() }
-                JSONObject(response)
-                    .optJSONArray("choices")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("message")
-                    ?.optString("content", null)
-            } else null
-        } catch (e: Exception) {
-            null
-        }
-    }
 
     /**
      * Local OCR fallback using Android's built-in text recognition.
@@ -300,7 +243,10 @@ object ImageIntelligence {
 /**
  * Manages a cache of image descriptors so the same image isn't described twice.
  */
-object DescriptorCache {
+    fun getCached(key: String): String? = DescriptorCache.get(key)
+    fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
+
+private object DescriptorCache {
     private const val MAX_ENTRIES = 100
     private val cache = LinkedHashMap<String, String>(MAX_ENTRIES, 0.75f, true)
 
