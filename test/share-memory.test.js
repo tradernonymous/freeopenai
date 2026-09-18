@@ -8,10 +8,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
+const os = require('os');
 const fs = require('fs');
 const path = require('path');
 
-const { createRequestHandler } = require('../server.js');
+const server = require('../server.js');
+const { createRequestHandler } = server;
 const { sharePayloadOf, shareImageDataUrlFactory, memoryPromptFor, MEMORY_TOOL } = require('../chatlib.js');
 
 async function withApp(run) {
@@ -180,6 +182,83 @@ test('the reader shell exists on disk and only reads', async () => {
   assert.match(html, /fetch\('\/api\/share\/'/);
   assert.match(html, /renderMarkdownLite/);
   assert.match(html, /noindex/);
+});
+
+test('a file-backed share store reloads the same links after a restart', async () => {
+  // The whole point of SHARE_STORE_PATH: publish, hold the process still
+  // (flush), "reboot" (wipe the map, re-read the file), and the link opens
+  // with its conversation intact.
+  const storePath = path.join(os.tmpdir(), 'freeopenai-share-test-' + process.pid + '.json');
+  const realEnv = process.env.SHARE_STORE_PATH;
+  process.env.SHARE_STORE_PATH = storePath;
+  const server = require('../server.js');
+  try {
+    await withApp(async (base) => {
+      const put = await fetch(base + '/api/share', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Survives', messages: [{ type: 'user', content: 'still here' }] }),
+      });
+      const { id } = await put.json();
+      await server.flushShareStoreNow();
+      assert.ok(fs.existsSync(storePath), 'the flush wrote the file');
+
+      server.shareStoreRestartForTest();
+      const data = await fetch(base + '/api/share/' + id);
+      assert.equal(data.status, 200);
+      const entry = await data.json();
+      assert.equal(entry.title, 'Survives');
+      assert.equal(entry.messages[0].content, 'still here');
+    });
+  } finally {
+    if (realEnv === undefined) delete process.env.SHARE_STORE_PATH; else process.env.SHARE_STORE_PATH = realEnv;
+    fs.rmSync(storePath, { force: true });
+    fs.rmSync(storePath + '.tmp', { force: true });
+  }
+});
+
+test('a file-backed store also caps by bytes, evicting the oldest first', async () => {
+  const storePath = path.join(os.tmpdir(), 'freeopenai-share-cap-test-' + process.pid + '.json');
+  const realEnv = process.env.SHARE_STORE_PATH;
+  const realCap = process.env.SHARE_STORE_MAX_BYTES;
+  // The cap floor is one oversized share plus slack, so the content has to
+  // carry real weight: six ~150KB shares overshoot the 600KB budget (with
+  // room to spare over the ~518KB floor), and the eviction walks from the
+  // oldest until the payload fits again.
+  process.env.SHARE_STORE_PATH = storePath;
+  process.env.SHARE_STORE_MAX_BYTES = String(600 * 1024);
+  const server = require('../server.js');
+  const ids = [];
+  try {
+    await withApp(async (base) => {
+      for (let i = 0; i < 6; i++) {
+        const res = await fetch(base + '/api/share', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'c' + i, messages: [{ type: 'user', content: 'x'.repeat(150000) }] }),
+        });
+        ids.push((await res.json()).id);
+      }
+      await server.flushShareStoreNow();
+      const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+      assert.ok(JSON.stringify(onDisk).length <= 600 * 1024, 'the file respects the budget');
+      assert.ok(!onDisk[ids[0]], 'the oldest share was evicted');
+      assert.ok(onDisk[ids[5]], 'the newest share survived');
+    });
+  } finally {
+    if (realEnv === undefined) delete process.env.SHARE_STORE_PATH; else process.env.SHARE_STORE_PATH = realEnv;
+    if (realCap === undefined) delete process.env.SHARE_STORE_MAX_BYTES; else process.env.SHARE_STORE_MAX_BYTES = realCap;
+    fs.rmSync(storePath, { force: true });
+    fs.rmSync(storePath + '.tmp', { force: true });
+  }
+});
+
+test('the store stays memory-only unless a path is configured', () => {
+  const had = process.env.SHARE_STORE_PATH;
+  delete process.env.SHARE_STORE_PATH;
+  try {
+    assert.equal(server.shareStoreOnDisk(), false, 'default deployment: no file, same behavior as before');
+  } finally {
+    if (had !== undefined) process.env.SHARE_STORE_PATH = had;
+  }
 });
 
 test('the Forget-all button really asks the server to forget, not just the DOM', async () => {

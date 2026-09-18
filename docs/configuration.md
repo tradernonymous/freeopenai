@@ -13,6 +13,8 @@ Nothing to configure to get running — no API key, no `.env` file. Everything b
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the static server listens on |
+| `SHARE_STORE_PATH` | *(unset)* | Where shared-chat links persist. Unset, the share store is memory-only and a restart expires every link. Set it to a file path inside a persistent volume (Railway: mount a volume, e.g. `/data/shares.json`) and links survive redeploys — the file is loaded at boot and written through a debounced atomic rename. |
+| `SHARE_STORE_MAX_BYTES` | `2097152` | Byte budget for the share file when `SHARE_STORE_PATH` is set (64KB–64MB). The oldest share is dropped until the payload fits; one oversized share is always keepable, so the floor is its size plus slack. |
 | `PROVIDER_TIMEOUT_CHAT_MS` | `55000` | Total budget per chat request, streaming or not. |
 | `PROVIDER_TIMEOUT_HEADERS_MS` | `25000` | Per-attempt deadline for upstream response headers on streams. |
 | `PROVIDER_STALL_MS` | `60000` | Aborts a stream quiet longer than this, with a stall message instead of silence. |

@@ -2045,12 +2045,108 @@ async function llmTts(req, res) {
 // A share is the conversation at publish time, frozen: the signed-in owner PUTs
 // the transcript to /api/share, gets a random id back, and /s/<id> serves a
 // static reader page to anyone with the link -- no login, like /api/health.
-// The store is in-memory and capped, because this deployment keeps chats
-// client-side by design; a restart drops the shares, and a stale link reads as
-// expired rather than as a broken promise.
+//
+// The store is capped both by count and, when a file is configured, by bytes.
+// By default it lives in memory only: this deployment keeps chats client-side
+// by design, and a restart dropping shares reads as an expired link rather
+// than as a broken promise. Setting SHARE_STORE_PATH points the same store at
+// a JSON file -- loaded at boot, written through a debounced tmp-file rename
+// -- so links survive a redeploy, which is what a Railway volume mounts as.
 const SHARE_MAX_CONVERSATIONS = 200;
 const SHARE_BODY_MAX_CHARS = 400000;
+// Both read through functions rather than frozen constants: the value is
+// process.env at require time on a real boot, and a test flips the env before
+// driving the same code paths. The cap floor is one oversized share plus
+// slack, so the byte budget can never make every share unkeepable.
+function shareStorePath() {
+  return String(process.env.SHARE_STORE_PATH || '').trim();
+}
+
+function shareStoreMaxBytes() {
+  return Math.min(Math.max(parseInt(process.env.SHARE_STORE_MAX_BYTES, 10) || 2 * 1024 * 1024, SHARE_BODY_MAX_CHARS + 128 * 1024), 64 * 1024 * 1024);
+}
+const SHARE_STORE_FLUSH_MS = 2000;
 const shareStore = new Map();
+let shareStoreDirty = false;
+let shareStoreTimer = null;
+let shareStoreWriting = false;
+
+function loadShareStore() {
+  if (!shareStorePath()) return;
+  let raw;
+  try {
+    raw = fs.readFileSync(shareStorePath(), 'utf8');
+  } catch {
+    return; // first boot, or a volume not mounted yet: start empty
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    for (const [id, entry] of Object.entries(parsed)) {
+      // Same field-by-field read the publish route does: a hand-edited or
+      // half-written file contributes only rows that look like shares.
+      if (!/^[a-f0-9]{32}$/i.test(id)) continue;
+      if (!entry || !Array.isArray(entry.messages) || !entry.messages.length) continue;
+      shareStore.set(id, {
+        title: String(entry.title || '').trim().slice(0, 200) || 'Shared chat',
+        messages: entry.messages,
+        createdAt: Number(entry.createdAt) || 0,
+      });
+    }
+  } catch {
+    // A corrupt file reads as no shares rather than as a crash at boot.
+  }
+}
+
+// One writer at a time; the tmp-file rename is the atomic step, so a crash
+// mid-write leaves the previous file intact.
+function flushShareStore() {
+  if (!shareStorePath() || !shareStoreDirty || shareStoreWriting) return Promise.resolve();
+  shareStoreWriting = true;
+  shareStoreDirty = false;
+  const payload = JSON.stringify(Object.fromEntries(shareStore));
+  const tmp = shareStorePath() + '.tmp';
+  return new Promise((resolve) => {
+    fs.writeFile(tmp, payload, 'utf8', (writeErr) => {
+      if (writeErr) {
+        shareStoreWriting = false;
+        shareStoreDirty = true; // the next change retries; a read-only disk just means memory-only shares
+        resolve();
+        return;
+      }
+      fs.rename(tmp, shareStorePath(), (renameErr) => {
+        shareStoreWriting = false;
+        if (renameErr) shareStoreDirty = true;
+        else if (shareStoreDirty) flushShareStore(); // changed while writing
+        resolve();
+      });
+    });
+  });
+}
+
+function scheduleShareFlush() {
+  if (!shareStorePath()) return;
+  shareStoreDirty = true;
+  if (shareStoreTimer) return;
+  shareStoreTimer = setTimeout(() => {
+    shareStoreTimer = null;
+    flushShareStore();
+  }, SHARE_STORE_FLUSH_MS);
+  if (typeof shareStoreTimer.unref === 'function') shareStoreTimer.unref();
+}
+
+// Count first, then bytes when a file backs the store: the oldest share goes
+// until the payload fits. Without a file the count alone is the contract.
+function evictSharesToCap() {
+  let overflow = shareStore.size - SHARE_MAX_CONVERSATIONS;
+  for (let i = 0; i < overflow; i++) shareStore.delete(shareStore.keys().next().value);
+  if (!shareStorePath()) return;
+  while (shareStore.size && JSON.stringify(Object.fromEntries(shareStore)).length > shareStoreMaxBytes()) {
+    shareStore.delete(shareStore.keys().next().value);
+  }
+}
+
+loadShareStore();
 
 function readShareBody(req, res, cb) {
   let size = 0;
@@ -2093,12 +2189,9 @@ function handleSharePublish(req, res) {
       createdAt: Date.now(),
     };
     const id = crypto.randomBytes(16).toString('hex');
-    if (shareStore.size >= SHARE_MAX_CONVERSATIONS) {
-      // Same oldest-first eviction every capped store here uses.
-      const oldest = shareStore.keys().next().value;
-      shareStore.delete(oldest);
-    }
     shareStore.set(id, entry);
+    evictSharesToCap();
+    scheduleShareFlush();
     sendJson(res, 200, { id, url: '/s/' + id });
   });
 }
@@ -2107,6 +2200,7 @@ function handleShareRevoke(req, res) {
   const id = req.url.slice('/api/share/'.length).split('?')[0];
   if (!shareStore.has(id)) return sendJson(res, 404, { error: 'No share with that link' });
   shareStore.delete(id);
+  scheduleShareFlush();
   sendJson(res, 200, { ok: true });
 }
 
@@ -5579,4 +5673,19 @@ module.exports = {
   normalizeWiki,
   normalizeWikiFull,
   isPrivateIp,
+  // Share-store seams: the file lifecycle runs at require time and on a
+  // debounce, so a test drives these directly -- flush settles the write,
+  // restart is what a reboot does.
+  flushShareStoreNow: () => {
+    if (shareStoreTimer) { clearTimeout(shareStoreTimer); shareStoreTimer = null; }
+    shareStoreDirty = true;
+    return flushShareStore();
+  },
+  shareStoreRestartForTest: () => {
+    shareStore.clear();
+    shareStoreDirty = false;
+    if (shareStoreTimer) { clearTimeout(shareStoreTimer); shareStoreTimer = null; }
+    loadShareStore();
+  },
+  shareStoreOnDisk: () => !!shareStorePath(),
 };
