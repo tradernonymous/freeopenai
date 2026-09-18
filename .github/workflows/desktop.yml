@@ -33,7 +33,7 @@ jobs:
         run: npm run tauri:build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload EXE
+      - name: Upload Installer (NSIS)
         uses: actions/upload-artifact@v4
         with:
           name: FreeAI4U-Desktop-Installer
@@ -42,7 +42,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FreeAI4U-Desktop-Portable
-          path: desktop/src-tauri/target/release/bundle/portable/*.exe
+          path: desktop/src-tauri/target/release/freeai4u-desktop.exe
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +61,7 @@ jobs:
           name: FreeAI4U Desktop for Windows (latest build)
           files: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/portable/*.exe
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/freeai4u-desktop.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
