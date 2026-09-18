@@ -1286,6 +1286,16 @@ const LLM_PROVIDERS = {
       ],
     },
   },
+  // Google Gemini on the free tier, through the v1beta/openai compatibility
+  // endpoint: plain OpenAI chat and a model list on GEMINI_API_KEY from
+  // aistudio.google.com (no card, daily free quota). No image block: image
+  // models are not available on the Gemini API free tier, so there is
+  // nothing honest to declare for drawing.
+  gemini: {
+    label: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    envVar: 'GEMINI_API_KEY',
+  },
   // Cloudflare Workers AI: an official free allowance on every Cloudflare
   // account (10,000 Neurons a day, no card), used with an API token the
   // account owner creates from the "Workers AI" template. Nothing here is
