@@ -110,7 +110,7 @@ object ImageIntelligence {
                 obj.optString("description", null)
                     ?: obj.optString("text", null)
                     ?: obj.optJSONObject("choices")
-                        ?.optJSONArray("0")
+                        ?.optJSONArray(0)
                         ?.optJSONObject("message")
                         ?.optString("content", null)
             } else null

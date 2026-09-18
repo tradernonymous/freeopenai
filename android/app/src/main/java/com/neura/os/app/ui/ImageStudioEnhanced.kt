@@ -111,19 +111,19 @@ fun BeforeAfterComparison(
             )
         }
 
-        // Slider divider line
+        // Slider divider line — positioned using fraction of available width
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = with(density) { (sliderPosition * size.width).toDp().coerceAtLeast(0.dp) }),
+                .fillMaxSize(),
         ) {
-            // Divider line
+            // Divider line at slider position
             Box(
                 modifier = Modifier
+                    .fillMaxHeight()
                     .width(2.dp)
-                    .height(with(density) { size.height.toDp() })
                     .background(Palette.green)
-                    .align(Alignment.Center),
+                    .align(Alignment.CenterStart)
+                    .graphicsLayer { translationX = sliderPosition * size.width - 1 },
             )
             // Handle
             Box(

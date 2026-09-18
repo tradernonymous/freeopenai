@@ -62,6 +62,8 @@ import com.neura.os.app.data.PhoneAction
 import com.neura.os.app.data.parseLocalDateTime
 import com.neura.os.app.ui.AppViewModel
 import com.neura.os.app.ui.BuildScreen
+import com.neura.os.app.ui.AutomationScreen
+import com.neura.os.app.ui.FilePreviewScreen
 import com.neura.os.app.ui.BuildsScreen
 import com.neura.os.app.ui.CommandInfoDialog
 import com.neura.os.app.ui.NeuraTheme
