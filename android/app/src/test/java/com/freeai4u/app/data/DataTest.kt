@@ -211,9 +211,9 @@ class DataTest {
         assertEquals(SlashMatch.Chain(listOf("review", "caveman")), resolveSlash("/review /caveman extra words", skills))
         val many = listOf("a", "b", "c", "d", "e")
         assertEquals(
+            "a chat can pin more than a few skills at once",
             SlashMatch.Chain(listOf("a", "b", "c", "d", "e")),
             resolveSlash("/a /b /c /d /e", many),
-            "a chat can pin more than a few skills at once",
         )
         assertNull("a path is a message", resolveSlash("/etc/hosts is broken", skills))
         assertNull("unknown slash word is a message", resolveSlash("/shrug", skills))
