@@ -45,6 +45,20 @@ test('the shell checks the WebView2 runtime before opening a window', () => {
   assert.ok(!mainRs.includes('tauri_plugin_updater'), 'the updater plugin is gone from the shell too');
 });
 
+test('tauri.conf.json: plugins ship no config maps (the window-state startup panic)', () => {
+  const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));
+  assert.equal(conf.plugins, undefined,
+    'window-state/store reject config maps; `{}` under plugins panics every launch');
+});
+
+test('main.rs: release is windowed (no console flash) and never expect()s at boot', () => {
+  const main = read('src-tauri', 'src', 'main.rs');
+  assert.match(main, /windows_subsystem\s*=\s*"windows"/,
+    'the release exe must not open a console window');
+  assert.ok(!/\.expect\(/.test(main),
+    'a boot failure must become a dialog + crash log, never a silent death');
+});
+
 test('versions agree across package.json, tauri.conf.json and Cargo.toml', () => {
   const pkg = JSON.parse(read('package.json'));
   const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));

@@ -1,12 +1,9 @@
 // FreeAI4U Desktop shell (Tauri 2).
 //
-// The webview needs the WebView2 runtime. The NSIS installer installs it via
-// the downloadBootstrapper, but a portable exe, a stripped-down machine or an
-// offline install can still end up without it -- and a missing runtime shows
-// up as a blank window that closes silently, with nothing in any log. So the
-// shell checks the registry keys the loader uses before building the window:
-// if the runtime is missing, the user gets a real message box with the fix
-// instead of a ghost window.
+// Release builds carry windows_subsystem="windows": a GUI app must never
+// open a console window (the "black terminal flash" on launch).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -133,5 +130,20 @@ fn main() {
             _ => {}
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| fatal_error(&e.to_string()));
+}
+
+/// Any boot failure (a bad plugin config, a missing runtime) becomes a dialog
+/// plus a crash-log entry. A GUI must never die silently: the user's report
+/// of "flashes then nothing" is exactly what this replaces.
+fn fatal_error(msg: &str) {
+    log_crash(&format!("FATAL: {}", msg));
+    let _ = rfd::MessageDialog::new()
+        .set_title("FreeAI4U Desktop")
+        .set_level(rfd::MessageLevel::Error)
+        .set_description(&format!(
+            "FreeAI4U failed to start: {}\n\nA note was appended to C:/Users/Public/freeai4u-crash.log -- include it if you report this.",
+            msg
+        ))
+        .show();
 }
