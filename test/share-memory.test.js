@@ -394,11 +394,33 @@ test('memory facts flow through the module, and clear-all sends the contract bod
   assert.deepEqual(calls[0].init.body, '{"all":true}', 'the contract body, not an empty one');
   await h.mod.upsertFact('  prefers Python  ', false);
   assert.deepEqual(h.mod.factsList().map((f) => f.text), ['prefers Python'], 'trimmed and stored');
+  const saved = await h.mod.upsertFact('another fact', false);
+  assert.equal(saved.ok, true, 'a successful save says so');
   const ack = await h.mod.memoryTool({ text: 'ships on Friday' });
   assert.match(ack, /Saved to memory: \"ships on Friday\"/);
   assert.equal(await h.mod.memoryTool({ text: '   ' }), 'Error: text is required.');
   await h.mod.clearAllFacts();
   assert.deepEqual(h.mod.factsList(), []);
+});
+
+test('a refused save is reported, to the page and to the model', async () => {
+  // The server caps facts ("Memory is full — remove something first"). A
+  // module that swallowed that sentence would leave the Add button silent
+  // and would tell the model "Saved to memory" about a save that failed --
+  // a lie the model would then repeat to the user.
+  const h = memoryHarness({
+    fetchJson: async () => ({ ok: false, status: 400, data: { error: 'Memory is full — remove something first' } }),
+  });
+  const refused = await h.mod.upsertFact('one more fact', false);
+  assert.deepEqual(refused, { ok: false, error: 'Memory is full — remove something first' });
+  assert.deepEqual(h.mod.factsList(), [], 'a refused save stores nothing');
+  const ack = await h.mod.memoryTool({ text: 'one more fact' });
+  assert.match(ack, /^Error: Memory is full/);
+  assert.match(ack, /was not saved/);
+  const dead = await h.mod.upsertFact('x', false);
+  const h2 = memoryHarness({ fetchJson: async () => { throw new Error('down'); } });
+  const offline = await h2.mod.upsertFact('x', false);
+  assert.deepEqual(offline, { ok: false, error: 'The server did not answer' }, 'a network failure says so too');
 });
 
 test('per-chat opt-out persists, and an opted-out chat records no use', async () => {

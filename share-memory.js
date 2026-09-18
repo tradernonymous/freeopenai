@@ -81,9 +81,14 @@
       return facts;
     }
 
+    // Saves one fact. The result is the outcome, not a shrug: `{ok:true}`
+    // with the fresh list, or `{ok:false, error}` carrying the server's own
+    // sentence ("Memory is full — remove something first") so the Add button
+    // and the model can both say what actually happened instead of quietly
+    // dropping the fact.
     async function upsertFact(text, replace) {
       const trimmed = String(text || '').trim().slice(0, MAX_FACT_CHARS);
-      if (!trimmed) return null;
+      if (!trimmed) return { ok: false, error: 'Nothing to save' };
       try {
         const { ok, data } = await fetchJson('/api/memory', {
           method: 'PUT',
@@ -93,10 +98,12 @@
         if (ok && Array.isArray(data.facts)) {
           facts = data.facts;
           if (onFacts) onFacts();
-          return facts;
+          return { ok: true, facts };
         }
-      } catch { /* the fact stays unsaved; the transcript is untouched */ }
-      return null;
+        return { ok: false, error: (data && data.error) || 'Could not save that' };
+      } catch {
+        return { ok: false, error: 'The server did not answer' };
+      }
     }
 
     async function deleteFact(text) {
@@ -133,12 +140,15 @@
     }
 
     // The tool the model calls to remember something. The acknowledgement
-    // tells the model what it saved and where a person can undo it.
+    // tells the model what it saved -- or truthfully that it did not: a
+    // refused save reported as "Saved" would come back out of the model's
+    // mouth as a lie.
     function memoryTool(args) {
       const text = String((args && args.text) || '').trim().slice(0, MAX_FACT_CHARS);
       if (!text) return Promise.resolve('Error: text is required.');
-      return upsertFact(text, true).then(() =>
-        'Saved to memory: "' + text + '". It will be offered to future chats that have memory on. The user can remove it in Session → Memory.');
+      return upsertFact(text, true).then((r) => r.ok
+        ? 'Saved to memory: "' + text + '". It will be offered to future chats that have memory on. The user can remove it in Session → Memory.'
+        : 'Error: ' + r.error + ' The fact was not saved.');
     }
 
     // ---- marking replies that drew on memory ----

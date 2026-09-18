@@ -11719,7 +11719,8 @@
         }
 
         async function upsertMemoryFact(text, replace) {
-            await shareMemory.upsertFact(text, replace);
+            const result = await shareMemory.upsertFact(text, replace);
+            if (!result.ok) showStatus('error', result.error || 'Could not save that');
         }
 
         function addMemoryFactFromInput() {
