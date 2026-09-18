@@ -15,12 +15,16 @@ interface SidebarProps {
   onToggleFiles: () => void;
   onToggleTerminal: () => void;
   onToggleSessions: () => void;
+  onToggleBuilds: () => void;
+  onToggleKnowledge: () => void;
   showFiles: boolean;
   showTerminal: boolean;
   showSessions: boolean;
+  showBuilds: boolean;
+  showKnowledge: boolean;
 }
 
-export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTerminal, onToggleSessions, showFiles, showTerminal, showSessions }: SidebarProps) {
+export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTerminal, onToggleSessions, onToggleBuilds, onToggleKnowledge, showFiles, showTerminal, showSessions, showBuilds, showKnowledge }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -63,6 +67,23 @@ export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTer
         >
           <span className="sidebar-icon">🕒</span>
           <span className="sidebar-label">History</span>
+        </button>
+        <div className="sidebar-divider" />
+        <button
+          className={`sidebar-btn ${showBuilds ? 'active' : ''}`}
+          onClick={onToggleBuilds}
+          title="Builds panel"
+        >
+          <span className="sidebar-icon">🛠</span>
+          <span className="sidebar-label">Builds</span>
+        </button>
+        <button
+          className={`sidebar-btn ${showKnowledge ? 'active' : ''}`}
+          onClick={onToggleKnowledge}
+          title="Knowledge panel"
+        >
+          <span className="sidebar-icon">📚</span>
+          <span className="sidebar-label">Knowledge</span>
         </button>
       </nav>
       <div className="sidebar-footer">
