@@ -304,6 +304,7 @@ class NativeActivity : ComponentActivity(), Platform {
         // Covers the window between the network returning and this activity
         // resuming, when a killed process never had a callback to fire.
         vm.drainOutbox()
+        vm.resumeTick++
     }
 
     /** A chat left waiting on a connectivity failure (see AppViewModel.outbox)
@@ -610,6 +611,16 @@ class NativeActivity : ComponentActivity(), Platform {
 
     override fun checkUpdates() = checkForUpdate(manual = true)
 
+    override fun deviceControlEnabled(): Boolean = DeviceControlService.instance != null
+
+    override fun openAccessibilitySettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: ActivityNotFoundException) {
+            toast("No accessibility settings on this phone.")
+        }
+    }
+
     override fun appLockOn(): Boolean = vm.store.appLock
 
     override fun setAppLock(on: Boolean, onResult: (Boolean) -> Unit) {
@@ -691,6 +702,10 @@ class NativeActivity : ComponentActivity(), Platform {
                 copy(action.text)
                 null
             }
+            "tap_text", "scroll_until" -> {
+                runDeviceAction(action)
+                null
+            }
             else -> null
         }
         if (intent == null) return
@@ -701,6 +716,30 @@ class NativeActivity : ComponentActivity(), Platform {
         } catch (e: SecurityException) {
             toast("Android blocked that action.")
         }
+    }
+
+    /** tap_text/scroll_until act on whatever app has focus when they run --
+     * and the instant this button is tapped, that's FreeAI4U itself, not
+     * whatever app the action is meant to reach. moveTaskToBack gives the
+     * OS a moment to restore the app that was open before the user
+     * switched here to tap Approve, and the delay before acting gives that
+     * transition time to finish; both are best-effort, since Android
+     * doesn't guarantee either one lands before the tap tries to run. Runs
+     * on a background thread -- scroll_until also pauses between attempts
+     * -- so none of this blocks the UI. A null instance means the person
+     * has not turned Device control on in Settings, or turned it off. */
+    private fun runDeviceAction(action: PhoneAction) {
+        val service = DeviceControlService.instance
+        if (service == null) {
+            toast("Turn on Device control in Settings to use this.")
+            return
+        }
+        moveTaskToBack(true)
+        Thread {
+            Thread.sleep(500)
+            val result = if (action.kind == "tap_text") service.tapText(action.targetLabel) else service.scrollUntil(action.targetLabel, action.maxScrolls)
+            result.exceptionOrNull()?.message?.let { message -> runOnUiThread { toast(message) } }
+        }.start()
     }
 
     /** A reply that finished while the app was in the background. */

@@ -36,6 +36,15 @@ class AgentTest {
     }
 
     @Test
+    fun everyMode_offersPhoneActionsAndDeviceSnapshot() {
+        for (mode in listOf("chat", "plan", "build")) {
+            assertTrue("$mode should offer phone_action", names(mode).contains("phone_action"))
+            assertTrue("$mode should offer device_snapshot", names(mode).contains("device_snapshot"))
+        }
+        assertNull("device_snapshot is not a local tool -- AppViewModel.runTool owns it", runLocalTool(chat("chat"), call("device_snapshot", "{}")))
+    }
+
+    @Test
     fun systemPrompt_carriesPersonaInstructionsModeAndDate() {
         val prompt = systemPrompt("Be a pirate.", "I am a nurse.", "plan", now = 0)
         assertTrue(prompt.startsWith("Be a pirate."))
@@ -149,6 +158,27 @@ class AgentTest {
         val event = parsePhoneAction("{\"kind\":\"event\",\"title\":\"Dentist\",\"start\":\"2026-09-20T15:00\"}").first!!
         assertEquals(event, phoneActionFromJson(event.toJson()))
         assertTrue(parsePhoneAction("{\"kind\":\"timer\",\"seconds\":90}").second.contains("Start timer 1m 30s"))
+    }
+
+    @Test
+    fun deviceActions_validateTapAndScroll() {
+        val tap = parsePhoneAction("{\"kind\":\"tap_text\",\"label\":\"Send\"}").first
+        assertEquals("Tap \"Send\" on screen", tap!!.label())
+        assertEquals(tap, phoneActionFromJson(tap.toJson()))
+        assertNull("tap_text needs a label", parsePhoneAction("{\"kind\":\"tap_text\"}").first)
+
+        val scroll = parsePhoneAction("{\"kind\":\"scroll_until\",\"label\":\"Settings\"}").first
+        assertEquals("scroll_until defaults to 5 when maxScrolls is omitted", 5, scroll!!.maxScrolls)
+        assertEquals("Scroll to \"Settings\"", scroll.label())
+        assertNull("scroll_until needs a label", parsePhoneAction("{\"kind\":\"scroll_until\",\"maxScrolls\":3}").first)
+        assertNull("maxScrolls out of 1-10 is rejected", parsePhoneAction("{\"kind\":\"scroll_until\",\"label\":\"x\",\"maxScrolls\":20}").first)
+        assertNotNull(parsePhoneAction("{\"kind\":\"scroll_until\",\"label\":\"x\",\"maxScrolls\":1}").first)
+
+        // A tampered label must fail the same way a tampered title already does --
+        // the fingerprint has to cover every field that changes what the ticket does.
+        val ticket = sealAction(tap, now = 1_000, ttlMs = 60_000)
+        val tampered = ActionTicket(tap.copy(targetLabel = "Delete account"), ticket.fingerprint, ticket.expiresAt)
+        assertNull("a changed label fails closed", openAction(tampered, now = 30_000))
     }
 
     @Test

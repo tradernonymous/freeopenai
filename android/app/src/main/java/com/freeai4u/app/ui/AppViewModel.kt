@@ -166,6 +166,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** One-shot messages for a snackbar. */
     var notice by mutableStateOf<String?>(null)
 
+    /** Bumped from NativeActivity.onResume, so a composable can key a
+     * LaunchedEffect on it to re-check something Android controls outside
+     * the app -- like whether Device control's accessibility service is on
+     * -- the moment the person comes back from Settings. */
+    var resumeTick by mutableStateOf(0)
+
     /** Chats owed a reply that a connectivity failure kept from arriving.
      * Drained by [drainOutbox], which NativeActivity calls from its own
      * ConnectivityManager callback when the network comes back, and again
@@ -1089,6 +1095,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val ticket = action?.let { sealAction(it, now) }
                 chat.copy(messages = chat.messages + result(message, action = ticket?.toJson() ?: ""))
             }
+            "device_snapshot" -> chat.copy(
+                messages = chat.messages + result(
+                    com.freeai4u.app.DeviceControlService.instance?.snapshot()
+                        ?: "Error: Device control is off. Ask the user to turn it on in Settings.",
+                ),
+            )
             else -> chat.copy(messages = chat.messages + result("Error: unknown tool ${call.name}."))
         }
     }

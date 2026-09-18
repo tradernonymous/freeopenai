@@ -162,6 +162,11 @@ interface Platform {
     fun appLockOn(): Boolean
     fun setAppLock(on: Boolean, onResult: (Boolean) -> Unit)
     fun copyCrashLog(): Boolean
+    /** Whether the phone actually has Device control's accessibility
+     * service running right now -- Android only ever turns this on when
+     * the person does it by hand in Settings, never the app itself. */
+    fun deviceControlEnabled(): Boolean
+    fun openAccessibilitySettings()
 }
 
 @Composable

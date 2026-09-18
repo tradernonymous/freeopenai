@@ -424,6 +424,14 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SettingRow("Retries", vm.limits?.let { it.maxAttempts.toString() + " × " + it.baseDelayMs + "ms" } ?: "—") { vm.loadLimits() }
         SectionTitle("Security")
         SettingSwitch("App lock", "Fingerprint or screen lock", lockOn) { wanted -> platform.setAppLock(wanted) { lockOn = it } }
+        SectionTitle("Device control")
+        var deviceControlOn by remember { mutableStateOf(platform.deviceControlEnabled()) }
+        LaunchedEffect(vm.resumeTick) { deviceControlOn = platform.deviceControlEnabled() }
+        SettingRow(if (deviceControlOn) "On" else "Off", "Turn on in Android Settings") { platform.openAccessibilitySettings() }
+        Text(
+            "Lets a chat you approve tap or scroll things on screen by their label -- only ever after you tap Approve on that one action. Off by default; this opens Android's own Settings to turn it on or off.",
+            color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp),
+        )
         SectionTitle("Data")
         SettingRow("Delete all chats", null, danger = true) { confirmClear = true }
         SectionTitle("App")

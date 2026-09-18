@@ -41,4 +41,6 @@
     <string name="puter_social_title">Use your Puter username instead</string>
     <string name="puter_social_message">Google, Apple and Microsoft block their sign-in buttons inside apps, so they cannot finish here. In this window, sign in to Puter with your Puter username (or email) and password. If your Puter account only has Google sign-in: open puter.com in Chrome, sign in with Google, then set a password under Settings, Account. The app server models (NVIDIA, OpenRouter and others) work without Puter.</string>
     <string name="process_text_label">Ask FreeAI4U</string>
+    <string name="device_control_label">FreeAI4U device control</string>
+    <string name="device_control_description">Lets a chat you approve read what\'s on screen and tap or scroll things by their label, only after you tap Approve on that specific action in the chat. Off by default; turn it off here any time.</string>
 </resources>

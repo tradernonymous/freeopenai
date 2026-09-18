@@ -29,7 +29,7 @@ const val MAX_TOOL_STEPS_PER_TURN = 12
 // Declared before the tool schemas below, which read them while the file's
 // top-level values initialise in order.
 val TASK_STATUSES = listOf("todo", "doing", "done", "blocked")
-val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "open_url", "share", "copy")
+val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "open_url", "share", "copy", "tap_text", "scroll_until")
 
 fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "Plan"
@@ -103,9 +103,23 @@ private val TASK_UPDATE = tool(
     listOf("id", "status"),
 )
 private val GENERATE_IMAGE = tool("generate_image", "Draw a picture from a detailed prompt; it is shown in the chat.", JSONObject().put("prompt", prop("string", "Detailed image prompt: subject, style, lighting.")), listOf("prompt"))
+private val DEVICE_SNAPSHOT = tool(
+    "device_snapshot",
+    "Read what's on screen right now as labelled elements (buttons, scrollable areas, text) -- never a screenshot. " +
+        "Needs Device control turned on in Settings. This reads whatever app has focus at the moment you call it, " +
+        "which in an ordinary chat turn is almost always this app's own screen, not another app the user was just " +
+        "in -- it is most reliable for helping the user navigate FreeAI4U itself. Read this before proposing " +
+        "tap_text or scroll_until so the label you pick actually matches something there.",
+    JSONObject(), emptyList(),
+)
 private val PHONE_ACTION = tool(
     "phone_action",
-    "Propose an action on the user's phone. It appears as a button the user taps; nothing happens without that tap.",
+    "Propose an action on the user's phone. It appears as a button the user taps; nothing happens without that tap. " +
+        "tap_text and scroll_until need the Device control accessibility service turned on in Settings, and the " +
+        "button still asks before either one runs; they act on whatever app has focus the instant the user taps " +
+        "Approve, which this app tries to hand back to whatever was open before by backgrounding itself first -- " +
+        "best-effort, since Android does not guarantee the timing, so they are most reliable for the screen " +
+        "already open in FreeAI4U itself.",
     JSONObject()
         .put("kind", JSONObject().put("type", "string").put("enum", JSONArray(ACTION_KINDS)))
         .put("title", prop("string", "Label, alarm name, event title or email subject."))
@@ -119,7 +133,9 @@ private val PHONE_ACTION = tool(
         .put("seconds", prop("integer", "Length for timer."))
         .put("start", prop("string", "Event start, ISO 8601 local, e.g. 2026-09-20T15:00."))
         .put("end", prop("string", "Event end, ISO 8601 local."))
-        .put("location", prop("string", "Event location.")),
+        .put("location", prop("string", "Event location."))
+        .put("label", prop("string", "For tap_text/scroll_until: the on-screen text to find, e.g. \"Send\" or \"Settings\"."))
+        .put("maxScrolls", prop("integer", "For scroll_until: how many times to scroll looking for label (1-10).")),
     listOf("kind"),
 )
 private val FILE_LIST = tool("file_list", "List every file in this chat's workspace, with its size.", JSONObject(), emptyList())
@@ -136,14 +152,15 @@ private val FILE_PATCH = tool(
 )
 
 /** Which tools a mode offers. Chat researches and draws; Plan also records
- * tasks; Build also edits its own sandboxed files. Phone actions are offered
- * everywhere because each one waits for the user's tap before anything
- * happens. */
+ * tasks; Build also edits its own sandboxed files. Phone actions and
+ * device_snapshot are offered everywhere: the snapshot only reads (like
+ * file_read), and every phone action, tap_text/scroll_until included,
+ * waits for the user's tap before anything happens. */
 fun toolsForMode(mode: String): JSONArray {
     val list = when (mode) {
-        "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION)
-        "build" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION, FILE_LIST, FILE_READ, FILE_WRITE, FILE_PATCH)
-        else -> listOf(WEB_SEARCH, WEB_FETCH, GENERATE_IMAGE, PHONE_ACTION)
+        "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION, DEVICE_SNAPSHOT)
+        "build" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION, DEVICE_SNAPSHOT, FILE_LIST, FILE_READ, FILE_WRITE, FILE_PATCH)
+        else -> listOf(WEB_SEARCH, WEB_FETCH, GENERATE_IMAGE, PHONE_ACTION, DEVICE_SNAPSHOT)
     }
     return JSONArray().also { array -> list.forEach { array.put(JSONObject(it.toString())) } }
 }
@@ -264,11 +281,17 @@ data class PhoneAction(
     val start: String = "",
     val end: String = "",
     val location: String = "",
+    /** The on-screen text tap_text/scroll_until look for. Named targetLabel,
+     * not label, so it cannot collide with the label() function below. */
+    val targetLabel: String = "",
+    /** scroll_until's cap on how many times it scrolls before giving up. */
+    val maxScrolls: Int = -1,
 ) {
     fun toJson(): String = JSONObject()
         .put("kind", kind).put("title", title).put("text", text).put("url", url).put("query", query)
         .put("number", number).put("email", email).put("hour", hour).put("minute", minute).put("seconds", seconds)
-        .put("start", start).put("end", end).put("location", location).toString()
+        .put("start", start).put("end", end).put("location", location).put("label", targetLabel).put("maxScrolls", maxScrolls)
+        .toString()
 
     /** A short button label, e.g. "Set alarm 07:30". */
     fun label(): String = when (kind) {
@@ -281,6 +304,8 @@ data class PhoneAction(
         "open_url" -> "Open " + url.removePrefix("https://").take(40)
         "share" -> "Share text"
         "copy" -> "Copy text"
+        "tap_text" -> "Tap \"$targetLabel\" on screen"
+        "scroll_until" -> "Scroll to \"$targetLabel\""
         else -> kind
     }
 }
@@ -311,6 +336,8 @@ fun parsePhoneAction(raw: String): Pair<PhoneAction?, String> {
         start = args.optString("start", "").trim(),
         end = args.optString("end", "").trim(),
         location = args.optString("location", "").take(200),
+        targetLabel = args.optString("label", "").trim().take(80),
+        maxScrolls = args.optInt("maxScrolls", 5),
     )
     val problem = when (kind) {
         "alarm" -> if (action.hour !in 0..23 || action.minute !in 0..59) "hour 0-23 and minute 0-59 are required" else null
@@ -321,6 +348,8 @@ fun parsePhoneAction(raw: String): Pair<PhoneAction?, String> {
         "email" -> if (!action.email.contains('@')) "a recipient email is required" else null
         "open_url" -> if (!action.url.startsWith("https://") || action.url.length > 2000) "an https:// url is required" else null
         "share", "copy" -> if (action.text.isBlank()) "text is required" else null
+        "tap_text" -> if (action.targetLabel.isBlank()) "label is required" else null
+        "scroll_until" -> if (action.targetLabel.isBlank()) "label is required" else if (action.maxScrolls !in 1..10) "maxScrolls 1-10 is required" else null
         else -> null
     }
     return if (problem != null) null to "Error: $problem." else action to "Shown to the user as a button: \"${action.label()}\". It runs only if they tap it."
@@ -347,7 +376,7 @@ fun actionFingerprint(action: PhoneAction): String = MessageDigest.getInstance("
         listOf(
             action.kind, action.title, action.text, action.url, action.query, action.number, action.email,
             action.hour.toString(), action.minute.toString(), action.seconds.toString(),
-            action.start, action.end, action.location,
+            action.start, action.end, action.location, action.targetLabel, action.maxScrolls.toString(),
         ).joinToString("\u0000").toByteArray(Charsets.UTF_8)
     )
     .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
@@ -365,7 +394,7 @@ fun actionTicketFromJson(json: String): ActionTicket? = try {
         obj.optString("kind", ""), obj.optString("title", ""), obj.optString("text", ""), obj.optString("url", ""),
         obj.optString("query", ""), obj.optString("number", ""), obj.optString("email", ""), obj.optInt("hour", -1),
         obj.optInt("minute", -1), obj.optInt("seconds", -1), obj.optString("start", ""), obj.optString("end", ""),
-        obj.optString("location", ""),
+        obj.optString("location", ""), obj.optString("label", ""), obj.optInt("maxScrolls", -1),
     )
     val fingerprint = obj.optString("fingerprint", "")
     val expiresAt = obj.optLong("expiresAt", 0L)
@@ -381,7 +410,7 @@ fun phoneActionFromJson(json: String): PhoneAction? = try {
         obj.optString("kind", ""), obj.optString("title", ""), obj.optString("text", ""), obj.optString("url", ""),
         obj.optString("query", ""), obj.optString("number", ""), obj.optString("email", ""), obj.optInt("hour", -1),
         obj.optInt("minute", -1), obj.optInt("seconds", -1), obj.optString("start", ""), obj.optString("end", ""),
-        obj.optString("location", ""),
+        obj.optString("location", ""), obj.optString("label", ""), obj.optInt("maxScrolls", -1),
     ).takeIf { it.kind in ACTION_KINDS }
 } catch (e: Exception) {
     null

@@ -42,6 +42,10 @@
 | **Android empty states act** | "No builds yet" starts a plan; an empty skill list refreshes — one tap instead of a dead end. |
 | **Android Library** | Skills, personas and prompts search as one destination now, instead of two overlapping hubs. |
 | **Android Build mode** | Build now edits this chat's own files on the phone — proposed changes wait in a review sheet until you tap Apply. |
+| **Android Compare** | A toggle beside the composer asks a second model the same question and shows both replies side by side. |
+| **Android swipe gestures** | Swipe a build change to approve or reject it, swipe a chat left to archive it, pull down on Builds to refresh. |
+| **Android tablet layout** | On a wide screen, the Build screen pins the pending decision beside the timeline instead of scrolling past it. |
+| **Android device control** | Off by default; turned on in Settings, it lets a chat tap or scroll something on screen by its label — always with a tap to approve first. |
 | **Text tool calls run** | A tool call a model writes as text gets executed, not printed. |
 | **`plan_actions`** | One model call plans the whole sequence; execution is deterministic. |
 | **`/makeskill`** | Turn the job you just finished into a skill you can call again. |

@@ -26,11 +26,25 @@ class RatchetTest {
         }
     }
 
-    @Test fun `manifest has not grown a device-control permission yet`() {
+    // P9 (device control) is the one deliberate, visible exception to this
+    // file's whole premise: DeviceControlService is a real
+    // BIND_ACCESSIBILITY_SERVICE, added on purpose, not a side effect of an
+    // earlier phase. The two tests below replace the single "nothing has
+    // grown yet" assertion this class had before P9: one still forbids
+    // every permission P9 did NOT ask for (a floating overlay, bypassing
+    // package visibility, broad storage access), the other confirms the one
+    // permission it does add is scoped to that one service.
+    @Test fun `manifest still forbids every device-control permission P9 did not ask for`() {
         val text = read("src/main/AndroidManifest.xml")
-        for (banned in listOf("SYSTEM_ALERT_WINDOW", "BIND_ACCESSIBILITY_SERVICE", "QUERY_ALL_PACKAGES", "MANAGE_EXTERNAL_STORAGE")) {
-            assertFalse("$banned is P9's to add, deliberately and visibly -- not a side effect of an earlier phase", text.contains(banned))
+        for (banned in listOf("SYSTEM_ALERT_WINDOW", "QUERY_ALL_PACKAGES", "MANAGE_EXTERNAL_STORAGE")) {
+            assertFalse("$banned was never part of the plan for P9", text.contains(banned))
         }
+    }
+
+    @Test fun `the one device-control permission P9 adds is scoped to DeviceControlService`() {
+        val text = read("src/main/AndroidManifest.xml")
+        assertTrue("P9 adds exactly one BIND_ACCESSIBILITY_SERVICE", text.contains("android.permission.BIND_ACCESSIBILITY_SERVICE"))
+        assertTrue("it must guard DeviceControlService, not some other component", text.contains(".DeviceControlService"))
     }
 
     @Test fun `workspace itself is also free of filesystem or android import`() {

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately narrow: no canPerformGestures (no raw coordinate taps, only
+  performAction on a node the accessibility tree already names), no
+  retrieval of window content beyond what canRetrieveWindowContent allows
+  for reading, and no accessibilityEventTypes beyond what's needed to know
+  a window changed. This is the whole capability surface data/Agent.kt's
+  tap_text and scroll_until actions get.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/device_control_description"
+    android:notificationTimeout="100" />

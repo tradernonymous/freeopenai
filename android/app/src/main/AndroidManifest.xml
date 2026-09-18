@@ -26,6 +26,16 @@
   - FcmService (push for a build waiting on your approval) is declared
     unconditionally but does nothing unless the build was compiled with a
     real Firebase project's google-services.json; see app/build.gradle.kts.
+  - DeviceControlService (data/Agent.kt's tap_text/scroll_until phone
+    actions) is a BIND_ACCESSIBILITY_SERVICE, declared here deliberately and
+    visibly -- see RatchetTest for why it's the one exception to this app's
+    "no device-control permission" rule everywhere else. It is off by
+    default: Android will not enable it until the person turns it on by
+    hand in Settings > Accessibility, and even then every action still
+    waits for a tap in the chat before it runs anything (see
+    data/Agent.kt's ActionTicket). It never draws over other apps
+    (no SYSTEM_ALERT_WINDOW) and reads the accessibility tree, never a
+    screenshot.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -129,6 +139,23 @@
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
+        </service>
+        <!-- Off until the person turns it on in Settings > Accessibility.
+             Only the system can bind it (BIND_ACCESSIBILITY_SERVICE); it
+             reads the accessibility tree and taps/scrolls elements by their
+             label, never a screenshot or a raw coordinate, and only after a
+             tap in the chat approves the specific action (data/Agent.kt). -->
+        <service
+            android:name=".DeviceControlService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="@string/device_control_label">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/device_control_service_config" />
         </service>
     </application>
 </manifest>
