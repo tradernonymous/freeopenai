@@ -1264,6 +1264,28 @@ const LLM_PROVIDERS = {
       'llama-3.1-8b-instant',
     ],
   },
+  // OpenAI on a key of your own: chat from the live catalogue, plus the
+  // image models no free service carries. gpt-image-1 draws (square,
+  // landscape and portrait) and edits through multipart file parts on the
+  // images/edits endpoint; OPENAI_IMAGE_MODEL pins a different drawing
+  // model the way NARA_IMAGE_MODEL does for Nara. The key is billed, so
+  // this provider stays out of the picker until it is set.
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    envVar: 'OPENAI_API_KEY',
+    image: {
+      shape: 'openai-images',
+      modelEnv: 'OPENAI_IMAGE_MODEL',
+      defaultModel: 'gpt-image-1',
+      edit: 'multipart',
+      sizes: [
+        { label: 'Square (1:1)', value: '1024x1024' },
+        { label: 'Landscape (3:2)', value: '1536x1024' },
+        { label: 'Portrait (2:3)', value: '1024x1536' },
+      ],
+    },
+  },
   // Cloudflare Workers AI: an official free allowance on every Cloudflare
   // account (10,000 Neurons a day, no card), used with an API token the
   // account owner creates from the "Workers AI" template. Nothing here is
