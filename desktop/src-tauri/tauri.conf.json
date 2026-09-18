@@ -9,6 +9,7 @@
     "active": true,
     "targets": "nsis",
     "icon": [
+      "icons/icon.png",
       "icons/icon.ico"
     ],
     "longDescription": "FreeAI4U Desktop — native Windows app for FreeAI4U",
