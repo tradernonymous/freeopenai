@@ -103,7 +103,7 @@ class NavTest {
     @Test fun `screenKey round trips through screenFromKey for every screen`() {
         val screens = listOf(
             Route.Images, Route.Tools, Route.Settings, Route.Personas, Route.Prompts,
-            Route.Skills, Route.Knowledges, Route.Builds, Screen.Build,
+            Route.Skills, Route.Knowledges, Route.Builds, Route.Build,
             Route.Detail("persona", "abc-123"),
         )
         for (screen in screens) {
