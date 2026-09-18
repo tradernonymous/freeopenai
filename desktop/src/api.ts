@@ -1,53 +1,236 @@
-const API_BASE = (window as any).__TAURI__ ? '' : window.location.origin;
+// The FreeAI4U engine client. Everything here talks to the FreeAI4U server
+// (Railway by default): the same routes the web app and the Android app use,
+// so the desktop is a third front end on one backend.
+//
+// The server base is a setting, not a constant: it lives in localStorage under
+// freeai4u.server and is edited in Settings. https only, except localhost --
+// the same rule the launcher enforced.
 
-async function request(path: string, opts: RequestInit = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-    ...opts,
-  });
+const SERVER_KEY = 'freeai4u.server';
+export const DEFAULT_SERVER = 'https://freeopenai-production.up.railway.app';
+
+export function normalizeServer(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(String(raw || '').trim());
+  } catch {
+    return null;
+  }
+  if (url.username || url.password) return null;
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol === 'https:') return url.origin;
+  if (url.protocol === 'http:' && local) return url.origin;
+  return null;
+}
+
+export function getServer(): string {
+  try {
+    const saved = localStorage.getItem(SERVER_KEY);
+    if (saved) {
+      const ok = normalizeServer(saved);
+      if (ok) return ok;
+    }
+  } catch { /* no localStorage: the default stands */ }
+  return DEFAULT_SERVER;
+}
+
+export function setServer(raw: string): string | null {
+  const ok = normalizeServer(raw);
+  if (!ok) return null;
+  try { localStorage.setItem(SERVER_KEY, ok); } catch { /* best effort */ }
+  return ok;
+}
+
+function base(): string {
+  return getServer();
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function request(path: string, opts: RequestInit = {}): Promise<any> {
+  let res: Response;
+  try {
+    res = await fetch(`${base()}${path}`, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      ...opts,
+    });
+  } catch (err) {
+    throw new ApiError(0, `Could not reach ${base()} — check your connection or the server address in Settings.`);
+  }
   if (res.status === 401) {
     window.dispatchEvent(new CustomEvent('auth-required'));
-    throw new Error('Unauthorized');
+    throw new ApiError(401, 'Sign-in required');
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || `HTTP ${res.status}`);
+    let message = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data && typeof data.error === 'string') message = data.error;
+    } catch { /* a body that is not JSON says nothing more */ }
+    throw new ApiError(res.status, message);
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
+// ---- streaming chat -------------------------------------------------------
+// POST /api/llm/chat?provider=<id> with stream:true. The server relays the
+// upstream SSE body one chunk at a time; tokens already delivered are kept
+// when the stream fails mid-way (the server says so with a final SSE error).
+
+export interface StreamFrame {
+  content?: string;
+  model?: string;
+  done?: boolean;
+}
+
+export async function streamChat(
+  provider: string,
+  body: { model: string; messages: Array<{ role: string; content: any }>; stream?: boolean },
+  onFrame: (frame: StreamFrame) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${base()}/api/llm/chat?provider=${encodeURIComponent(provider)}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, stream: true }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    throw new ApiError(0, `Could not reach ${base()}`);
+  }
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data && typeof data.error === 'string') message = data.error;
+    } catch { /* keep the status line */ }
+    throw new ApiError(res.status, message);
+  }
+  const type = String(res.headers.get('content-type') || '');
+  if (!type.includes('text/event-stream') || !res.body) {
+    // A provider answered without a stream: read it whole, still one frame.
+    const data = await res.json().catch(() => null);
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content) {
+      onFrame({ content, done: true });
+      return;
+    }
+    throw new ApiError(res.status, (data && data.error) || 'The provider sent no readable reply.');
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let failure: string | null = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).replace(/\r$/, '');
+      buffer = buffer.slice(idx + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+      if (payload === '[DONE]') {
+        onFrame({ done: true });
+        continue;
+      }
+      try {
+        const frame = JSON.parse(payload);
+        if (frame && frame.error) {
+          failure = typeof frame.error === 'string' ? frame.error : (frame.error.message || 'Stream failed');
+          continue;
+        }
+        const delta = frame?.choices?.[0]?.delta;
+        const content = delta && typeof delta.content === 'string' ? delta.content : undefined;
+        if (content) onFrame({ content, model: frame?.model });
+      } catch { /* a frame that is not JSON says nothing */ }
+    }
+  }
+  if (failure) throw new ApiError(502, failure);
+}
+
+// ---- the rest of the engine ----------------------------------------------
+
 export const api = {
+  // engine health + auth
   health: () => request('/api/health'),
   session: () => request('/api/session'),
+  login: (username: string, password: string) => request('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  logout: () => request('/api/logout', { method: 'POST' }),
+
+  // providers + models (models are per provider: ?provider=<id>)
   providers: () => request('/api/llm/providers'),
-  models: () => request('/api/llm/models'),
+  models: (provider: string) => request(`/api/llm/models?provider=${encodeURIComponent(provider)}`),
   limits: () => request('/api/llm/limits'),
-  chat: (body: any) => request('/api/llm/chat', { method: 'POST', body: JSON.stringify(body) }),
+
+  // chat helpers
   skills: () => request('/api/skills'),
+  skillContent: (name: string) => request(`/api/skills/content?name=${encodeURIComponent(name)}`),
   websearch: (q: string) => request(`/api/llm/websearch?q=${encodeURIComponent(q)}`),
-  fetch: (url: string) => request(`/api/llm/fetch?url=${encodeURIComponent(url)}`),
+  fetchUrl: (url: string) => request(`/api/llm/fetch?url=${encodeURIComponent(url)}`),
 
-  buildSessions: () => request('/api/build/sessions'),
-  buildRun: (body: any) => request('/api/build/sessions', { method: 'POST', body: JSON.stringify(body) }),
-  buildStatus: (id: string) => request(`/api/build/sessions/${id}`),
+  // builds: a build is created with the plan text; watch it over SSE; answer
+  // approvals and questions through /input; stop it with /cancel.
+  buildList: () => request('/api/build/sessions'),
+  buildRun: (body: { plan: string; repo?: string; chatId?: string }) =>
+    request('/api/build/sessions', { method: 'POST', body: JSON.stringify(body) }),
+  buildGet: (id: string) => request(`/api/build/sessions/${encodeURIComponent(id)}`),
+  buildInput: (id: string, body: { requestId: string; decision?: 'approve' | 'reject'; text?: string }) =>
+    request(`/api/build/sessions/${encodeURIComponent(id)}/input`, { method: 'POST', body: JSON.stringify(body) }),
+  buildCancel: (id: string) => request(`/api/build/sessions/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  buildEvents: (id: string) => `${base()}/api/build/sessions/${encodeURIComponent(id)}/events`,
 
+  // images
+  imageProviders: () => request('/api/llm/images/providers'),
+  imageGenerate: (body: { prompt: string; model?: string; size?: string }) =>
+    request('/api/llm/images/generations', { method: 'POST', body: JSON.stringify(body) }),
+
+  // design
   designTemplates: () => request('/api/design/templates'),
   designProjects: () => request('/api/design/projects'),
   designCreateProject: (body: any) => request('/api/design/projects', { method: 'POST', body: JSON.stringify(body) }),
-  designGetProject: (id: string) => request(`/api/design/projects/${id}`),
-  designUpdateProject: (id: string, body: any) => request(`/api/design/projects/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
-  designDeleteProject: (id: string) => request(`/api/design/projects/${id}`, { method: 'DELETE' }),
+  designGetProject: (id: string) => request(`/api/design/projects/${encodeURIComponent(id)}`),
+  designUpdateProject: (id: string, body: any) => request(`/api/design/projects/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  designDeleteProject: (id: string) => request(`/api/design/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   designGenerate: (body: any) => request('/api/design/generate', { method: 'POST', body: JSON.stringify(body) }),
   designExport: (body: any) => request('/api/design/export', { method: 'POST', body: JSON.stringify(body) }),
   designBrand: () => request('/api/design/brand'),
   designSaveBrand: (body: any) => request('/api/design/brand', { method: 'POST', body: JSON.stringify(body) }),
 
-  githubRepos: () => request('/api/github/repos'),
-  workspaceFiles: () => request('/api/workspace/files'),
-  workspaceRun: (body: any) => request('/api/workspace/run', { method: 'POST', body: JSON.stringify(body) }),
+  // memory
+  memory: () => request('/api/memory'),
+  memoryForget: (id: string) => request('/api/memory', { method: 'DELETE', body: JSON.stringify({ id }) }),
 
-  imageProviders: () => request('/api/llm/images/providers'),
-  imageGenerate: (body: any) => request('/api/llm/images/generations', { method: 'POST', body: JSON.stringify(body) }),
+  // workspace (Build runs commands here; WORKSPACE_RUN gates it server-side)
+  workspaceFiles: () => request('/api/workspace/files'),
+  workspaceRun: (command: string, path?: string) =>
+    request('/api/workspace/run', { method: 'POST', body: JSON.stringify({ command, ...(path ? { path } : {}) }) }),
+  workspaceRead: (path: string) => request(`/api/workspace/read?path=${encodeURIComponent(path)}`),
+
+  // github tools (OAuth account connected on the server)
+  githubRepos: () => request('/api/github/repos'),
+  githubStatus: () => request('/api/github/status'),
 };
+
+/** One image URL (or data URL) out of a generations response, or null. */
+export function imageUrlFrom(data: any): string | null {
+  const first = Array.isArray(data?.data) ? data.data[0] : null;
+  if (!first) return null;
+  if (typeof first.url === 'string' && first.url) return first.url;
+  if (typeof first.b64_json === 'string' && first.b64_json) return 'data:image/png;base64,' + first.b64_json;
+  return null;
+}

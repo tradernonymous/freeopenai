@@ -17,7 +17,7 @@ export default function Terminal() {
     setInput('');
     setHistory((prev) => [...prev, { cmd, out: 'Running…' }]);
     try {
-      const res = await api.workspaceRun({ command: cmd, path: cwd });
+      const res = await api.workspaceRun(cmd, cwd === '.' ? undefined : cwd);
       setHistory((prev) => prev.map((h) => (h.cmd === cmd && h.out === 'Running…' ? { cmd, out: (res as any)?.output || 'ok' } : h)));
     } catch (e) {
         setHistory((prev) => prev.map((h) => (h.cmd === cmd && h.out === 'Running…' ? { cmd, out: `Error: ${(e as Error).message}` } : h)));

@@ -1,6 +1,6 @@
 module.exports = [
   {
-    ignores: ['node_modules/**', 'index.html', '.worktrees/**'],
+    ignores: ['node_modules/**', 'index.html', '.worktrees/**', 'desktop/dist/**', 'desktop/src-tauri/target/**', 'desktop/src-tauri/gen/**'],
   },
   {
     files: ['**/*.js'],

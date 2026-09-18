@@ -12,25 +12,25 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "longDescription": "FreeAI4U Desktop — the free AI coding agent for Windows. Chat, plan, build, and design with local-first privacy.",
+    "longDescription": "FreeAI4U Desktop — the free AI desktop: chat, images and builds on free models.",
     "shortDescription": "FreeAI4U Desktop",
     "category": "productivity",
     "fileAssociations": [],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
     }
   },
   "productName": "FreeAI4U Desktop",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "com.freeai4u.desktop",
   "plugins": {
     "window-state": {},
-    "store": {},
-    "updater": {
-      "active": true
-    }
+    "store": {}
   },
   "app": {
     "windows": [

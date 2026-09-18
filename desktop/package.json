@@ -1,7 +1,7 @@
 {
   "name": "freeai4u-desktop",
-  "version": "2.0.0",
-  "description": "FreeAI4U Desktop — native Windows app",
+  "version": "2.1.0",
+  "description": "FreeAI4U Desktop — native Windows app on the freeai4u engine",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

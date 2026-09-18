@@ -1,7 +1,0 @@
-{
-  "main": "freeai4u-desktop.js",
-  "output": "sea-prep.blob",
-  "disableExperimentalSEAWarning": true,
-  "useCodeCache": false,
-  "useSnapshot": false
-}

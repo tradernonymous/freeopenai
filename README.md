@@ -107,13 +107,13 @@ curl -s https://<project>.up.railway.app/api/health
 
 ## 🖥️ Desktop app (Windows)
 
-**Download:** [FreeAI4U.Desktop_2.0.0_x64-setup.exe](https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/FreeAI4U.Desktop_2.0.0_x64-setup.exe)
+**Download:** [desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)
 
-1. Download the `.exe` from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
-2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**.
-3. Sign in once. Shortcuts: `Alt+1/2/3` modes · `Ctrl+Shift+B` Builds. More in [Desktop](docs/desktop.md).
+1. Download the installer from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
+2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**. The installer sets up the WebView2 runtime automatically if the machine lacks it.
+3. Sign in once if the engine asks. `Alt+1…6` switches screens. More in [Desktop](docs/desktop.md).
 
-> **Note:** The desktop app is a native Tauri 2 shell with its own sidebar, menus, and system tray. It loads the FreeAI4U web app in a native window with Railway as the backend.
+> **Note:** A native Tauri 2 + React app with its own sidebar and tray. Streaming chat, image generation, live build approvals and skills — all on the freeai4u engine, with the keys staying on the server.
 
 ## 🛠️ Remote builds
 

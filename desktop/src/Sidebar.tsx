@@ -2,8 +2,10 @@ import { useState } from 'react';
 
 const NAV_ITEMS = [
   { id: 'chat', label: 'Chat', icon: '💬' },
+  { id: 'images', label: 'Images', icon: '🖼' },
+  { id: 'build', label: 'Builds', icon: '🛠' },
   { id: 'design', label: 'Design', icon: '🎨' },
-  { id: 'build', label: 'Build', icon: '🛠' },
+  { id: 'library', label: 'Library', icon: '📚' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ] as const;
 
@@ -25,6 +27,14 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTerminal, onToggleSessions, onToggleBuilds, onToggleKnowledge, showFiles, showTerminal, showSessions, showBuilds, showKnowledge }: SidebarProps) {
+  const [hint, setHint] = useState('');
+
+  const press = (fn: () => void, what: string) => {
+    fn();
+    setHint(what);
+    setTimeout(() => setHint(''), 4000);
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -47,15 +57,15 @@ export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTer
         <button
           className={`sidebar-btn ${showFiles ? 'active' : ''}`}
           onClick={onToggleFiles}
-          title="Workspace"
+          title="Server workspace files"
         >
           <span className="sidebar-icon">📂</span>
           <span className="sidebar-label">Workspace</span>
         </button>
         <button
           className={`sidebar-btn ${showTerminal ? 'active' : ''}`}
-          onClick={onToggleTerminal}
-          title="Terminal"
+          onClick={() => press(onToggleTerminal, 'Runs commands on the engine (needs WORKSPACE_RUN=1 on the server).')}
+          title="Engine terminal"
         >
           <span className="sidebar-icon">⌨️</span>
           <span className="sidebar-label">Terminal</span>
@@ -63,7 +73,7 @@ export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTer
         <button
           className={`sidebar-btn ${showSessions ? 'active' : ''}`}
           onClick={onToggleSessions}
-          title="History"
+          title="Chat history"
         >
           <span className="sidebar-icon">🕒</span>
           <span className="sidebar-label">History</span>
@@ -82,12 +92,13 @@ export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTer
           onClick={onToggleKnowledge}
           title="Knowledge panel"
         >
-          <span className="sidebar-icon">📚</span>
-          <span className="sidebar-label">Knowledge</span>
+          <span className="sidebar-icon">✨</span>
+          <span className="sidebar-label">Skills</span>
         </button>
       </nav>
+      {hint && <div className="sidebar-hint">{hint}</div>}
       <div className="sidebar-footer">
-        <div className="sidebar-version">v2.0.0</div>
+        <div className="sidebar-version">v2.1.0</div>
       </div>
     </aside>
   );

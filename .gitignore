@@ -4,9 +4,9 @@ npm-debug.log*
 *.log
 
 # Desktop app build outputs (built and published by CI)
-desktop/sea-prep.blob
-desktop/FreeAI4U-Desktop.exe
-desktop/FreeAI4U-Desktop.exe.sha256
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -28,6 +28,8 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm install
+      - name: Desktop tests (config + engine wiring)
+        run: node --test test/desktop.test.js
       - name: Build Tauri app
         working-directory: desktop
         run: npm run tauri:build
