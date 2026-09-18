@@ -213,11 +213,15 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 Switch(vm.puterImages, { vm.puterImages = it }, Modifier.padding(start = 6.dp).scale(0.8f))
             }
         }
-        // Prompt history
+        if (vm.library.images.isEmpty()) {
+            EmptyState("No images yet", "Saved encrypted on this phone.")
+        } else {
+            LazyVerticalGrid(GridCells.Fixed(2), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(vm.library.images, key = { it.id }) { image ->
+                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).clickable { viewing = image }.enterUp())
+                }
             }
         }
-    }
-    viewing?.let { image ->
         var bytes by remember(image.id) { mutableStateOf<ByteArray?>(null) }
         LaunchedEffect(image.id) { vm.loadImage(image.id) { bytes = it } }
         val name = "neuraos-" + image.id.take(8) + if (image.mime.contains("png")) ".png" else ".jpg"
