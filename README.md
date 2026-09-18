@@ -26,7 +26,7 @@
 | :-- | :-- | :-- |
 | Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, no key at all**. Web search built in. | One switch. **Build edits files on the server, runs tests and git** — you approve every change. Skills, tasks, GitHub tools. | Search, read, edit, run, commit on your server. Approve from any device. |
 | 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
-| **Chat · Plan toggle**, skill chips, Puter models, remote builds with approvals. Reopens where you left off. | One `.exe`. Builds panel beside the chat, and it says when a newer one is out. | Free FLUX first. Puter only when you switch it on. |
+| Real tabs — **Chat · Images · Tools · Skills · Library · Settings** — each keeping its own place. Chat · Plan toggle, Puter models, remote builds with approvals. A dropped connection retries the reply on its own once you're back online. | One `.exe`. Builds panel beside the chat, and it says when a newer one is out. | Free FLUX first. Puter only when you switch it on. |
 
 **Free models only, limits on the row.** The picker shows what a free tier allows — `free · 2/min · per IP · shared` — and Settings → Chat hides metered rows. A rate-limited provider is waited on only as long as the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the work moves to another provider, so a task pauses instead of stopping. See [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
 
@@ -37,6 +37,8 @@
 
 | | |
 | :-- | :-- |
+| **Android real tabs** | Chat, Images, Tools, Skills, Library and Settings are peer destinations now — switching back resumes exactly where you left each one. |
+| **Android offline queue** | A reply that failed because the connection dropped retries itself the moment you're back online, instead of sitting on a dead error. |
 | **Text tool calls run** | A tool call a model writes as text gets executed, not printed. |
 | **`plan_actions`** | One model call plans the whole sequence; execution is deterministic. |
 | **`/makeskill`** | Turn the job you just finished into a skill you can call again. |
