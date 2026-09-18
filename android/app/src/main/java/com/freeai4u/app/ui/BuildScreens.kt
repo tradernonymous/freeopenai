@@ -13,10 +13,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -257,8 +259,40 @@ fun BuildScreen(vm: AppViewModel) {
     }
 }
 
+// A tablet-width window (>=700dp, Material's medium-window-class territory)
+// pins the pending decision beside the timeline instead of burying it in the
+// same scrolling list -- the one thing on this screen you must not lose
+// sight of while reading what already happened. Anything narrower keeps the
+// single scrolling column exactly as before; BuildTimelinePane's own content
+// never changes, only whether the pending card rides inside it or beside it.
 @Composable
 private fun BuildBody(builds: RemoteBuilds, session: BuildSession, modifier: Modifier) {
+    val pending = session.pending
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        if (maxWidth >= 700.dp && pending != null) {
+            Row(Modifier.fillMaxSize()) {
+                BuildTimelinePane(builds, session, Modifier.weight(1f), includePending = false)
+                Box(Modifier.width(360.dp).fillMaxHeight().padding(16.dp), contentAlignment = Alignment.TopStart) {
+                    PendingCard(builds, pending)
+                }
+            }
+        } else {
+            BuildTimelinePane(builds, session, Modifier.fillMaxSize(), includePending = true)
+        }
+    }
+}
+
+@Composable
+private fun PendingCard(builds: RemoteBuilds, pending: BuildPending) {
+    if (pending.kind == "question") {
+        QuestionCard(pending, builds.actionBusy) { builds.answer(null, it) }
+    } else {
+        ApprovalCard(pending, builds.actionBusy, onApprove = { builds.answer("approve", "") }, onReject = { builds.answer("reject", it) })
+    }
+}
+
+@Composable
+private fun BuildTimelinePane(builds: RemoteBuilds, session: BuildSession, modifier: Modifier, includePending: Boolean) {
     val state = rememberLazyListState()
     val timelineSize = builds.timeline.size
     LaunchedEffect(timelineSize) {
@@ -270,7 +304,7 @@ private fun BuildBody(builds: RemoteBuilds, session: BuildSession, modifier: Mod
         state = state,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier,
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -285,14 +319,8 @@ private fun BuildBody(builds: RemoteBuilds, session: BuildSession, modifier: Mod
         if (builds.connection.isNotEmpty()) item { NoticeCard(builds.connection, Palette.amber, Palette.amberTint) }
         builds.error?.let { error -> item { NoticeCard(error, Palette.red, Palette.redTint) } }
         item { StepTicker(session.steps) }
-        session.pending?.let { pending ->
-            item(key = "pending-" + pending.requestId) {
-                if (pending.kind == "question") {
-                    QuestionCard(pending, builds.actionBusy) { builds.answer(null, it) }
-                } else {
-                    ApprovalCard(pending, builds.actionBusy, onApprove = { builds.answer("approve", "") }, onReject = { builds.answer("reject", it) })
-                }
-            }
+        if (includePending) {
+            session.pending?.let { pending -> item(key = "pending-" + pending.requestId) { PendingCard(builds, pending) } }
         }
         items(builds.timeline, key = { "e" + it.seq }) { event -> TimelineItem(event) }
         if (session.finished && builds.timeline.none { it is BuildEvent.Done || it is BuildEvent.Failed }) {
