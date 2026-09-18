@@ -1455,31 +1455,6 @@ const LLM_PROVIDERS = {
     needsKey: false,
     needsBaseUrl: true,
   },
-  // The second and third generic slots exist because one is not enough once a
-  // deployment runs several self-hosted gateways at once -- FreeGPT4 on the
-  // first, a CLIProxyAPI wrapping agent-CLI logins beside a Kiro Gateway on
-  // these, or any pairing of OpenAI-compatible services. They are the custom
-  // slot's twins in every behaviour that matters: each activates on its URL
-  // alone with the key optional, serves the gateway's whole catalogue, and
-  // narrows through CUSTOMn_MODELS. Deliberately flat copies rather than an
-  // abstraction over the three: flat entries read faster than a parameterised
-  // one, and no slot should inherit behaviour the others must not grow.
-  custom2: {
-    label: 'CLIProxyAPI',
-    note: 'Slot 2 of 3. Point CUSTOM2_BASE_URL (https://…/v1) at a second gateway — e.g. CLIProxyAPI wrapping your free Gemini CLI / Claude Code / Codex / Grok logins (deploy/cliproxy-railway). Leaving off /v1 makes every model and chat request 404.',
-    baseUrl: '',
-    envVar: 'CUSTOM2_API_KEY',
-    needsKey: false,
-    needsBaseUrl: true,
-  },
-  custom3: {
-    label: 'Kiro Gateway',
-    note: 'Slot 3 of 3. Point CUSTOM3_BASE_URL (https://…/v1) at a third gateway — e.g. Kiro Gateway with free-tier Claude Sonnet 4.5, DeepSeek-V3.2 and GLM-5 (deploy/kiro-gateway-railway). Leaving off /v1 makes every model and chat request 404.',
-    baseUrl: '',
-    envVar: 'CUSTOM3_API_KEY',
-    needsKey: false,
-    needsBaseUrl: true,
-  },
   freegpt4: {
     label: 'FreeGPT4',
     // A self-hosted Free-GPT4-WEB-API gateway: plain-text answers over
@@ -4699,8 +4674,6 @@ const BUILD_MODEL_PREFERENCE = [
   ['openrouter', ''],
   ['nara', ''],
   ['custom', ''],
-  ['custom2', ''],
-  ['custom3', ''],
 ];
 
 function providerModelIds(models) {

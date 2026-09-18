@@ -16,22 +16,17 @@ do anything.**
 | **Cloudflare Workers AI** | Free image generation (FLUX.1 schnell), plus chat | Set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
 | **OVHcloud images** | Free image generation, no key | Set `OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10` |
 | **gpt4free** | Free image generation + a second chat pool | Deploy the service — see below |
-| **CLIProxyAPI** (slot) | Your own free agent-CLI logins: Gemini 3.1 Pro, GPT-5.6 series, Claude, Grok 4.5 | Deploy `deploy/cliproxy-railway/`, log accounts in via its web panel |
-| **Kiro Gateway** (slot) | Free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5, Qwen3-Coder | Deploy `deploy/kiro-gateway-railway/` + paste one refresh token |
 
-## 1 · The three gateway slots
+## 1 · The custom gateway slot
 
-The app has three generic OpenAI-compatible slots — `custom`, `custom2`,
-`custom3` — so several self-hosted gateways can run beside each other:
+The app has one generic OpenAI-compatible slot for a self-hosted gateway:
 
 | Slot | Variable | First choice for |
 | --- | --- | --- |
-| Custom endpoint | `CUSTOM_BASE_URL` (+ `CUSTOM_API_KEY`) | FreeGPT4-WEB-API, Ollama, any OpenAI-shaped service |
-| CLIProxyAPI | `CUSTOM2_BASE_URL` (+ `CUSTOM2_API_KEY`) | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) — your free Gemini CLI / Claude Code / Codex / Grok logins as one API (`deploy/cliproxy-railway/`) |
-| Kiro Gateway | `CUSTOM3_BASE_URL` (+ `CUSTOM3_API_KEY`) | [Kiro Gateway](https://github.com/jwadow/kiro-gateway) — free-tier Claude Sonnet 4.5, DeepSeek-V3.2, GLM-5 (`deploy/kiro-gateway-railway/`) |
+| Custom endpoint | `CUSTOM_BASE_URL` (+ `CUSTOM_API_KEY`) | FreeGPT4-WEB-API, Ollama, llama.cpp, vLLM, or any OpenAI-shaped service |
 
-Each slot activates on its URL alone; the key is optional and only sent when
-set. All three can be filled at once, and each keeps its own model list.
+It activates on its URL alone; the key is optional and only sent when set,
+and `CUSTOM_MODELS` pins the picker to a comma-separated subset.
 
 ## 2 · The two providers that need nothing
 
