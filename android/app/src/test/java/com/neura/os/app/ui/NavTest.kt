@@ -13,33 +13,33 @@ class NavTest {
     }
 
     @Test fun `pushing a tab root switches tabs`() {
-        val state = NavState().pushed(Screen.Tools)
+        val state = NavState().pushed(Route.Tools)
         assertEquals(Tab.Tools, state.currentTab)
-        assertEquals(Screen.Tools, state.screen)
+        assertEquals(Route.Tools, state.screen)
     }
 
     @Test fun `pushing a non-root screen stacks on top of the current tab`() {
-        val state = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
+        val state = NavState().pushed(Route.Tools).pushed(Route.Personas)
         assertEquals(Tab.Tools, state.currentTab)
-        assertEquals(Screen.Personas, state.screen)
+        assertEquals(Route.Personas, state.screen)
     }
 
     @Test fun `pushing the same screen twice does not duplicate`() {
-        val once = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
-        val twice = once.pushed(Screen.Personas)
+        val once = NavState().pushed(Route.Tools).pushed(Route.Personas)
+        val twice = once.pushed(Route.Personas)
         assertEquals(once, twice)
     }
 
     @Test fun `back pops within a tab before leaving it`() {
-        val deep = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
+        val deep = NavState().pushed(Route.Tools).pushed(Route.Personas)
         val popped = deep.poppedOrNull()
         assertTrue(popped != null)
         assertEquals(Tab.Tools, popped!!.currentTab)
-        assertEquals(Screen.Tools, popped.screen)
+        assertEquals(Route.Tools, popped.screen)
     }
 
     @Test fun `back from a tab root returns to chat`() {
-        val atRoot = NavState().pushed(Screen.Tools)
+        val atRoot = NavState().pushed(Route.Tools)
         val popped = atRoot.poppedOrNull()
         assertTrue(popped != null)
         assertEquals(Tab.Chat, popped!!.currentTab)
@@ -51,9 +51,9 @@ class NavTest {
     }
 
     @Test fun `back pops a stray screen pushed while already on chat`() {
-        val stray = NavState().pushed(Screen.Builds)
+        val stray = NavState().pushed(Route.Builds)
         assertEquals(Tab.Chat, stray.currentTab)
-        assertEquals(Screen.Builds, stray.screen)
+        assertEquals(Route.Builds, stray.screen)
         val popped = stray.poppedOrNull()
         assertTrue(popped != null)
         assertEquals(Tab.Chat, popped!!.currentTab)
@@ -61,50 +61,50 @@ class NavTest {
     }
 
     @Test fun `switching tabs preserves each tab's own stack`() {
-        val toolsDrilled = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
-        val onImages = toolsDrilled.pushed(Screen.Images)
+        val toolsDrilled = NavState().pushed(Route.Tools).pushed(Route.Personas)
+        val onImages = toolsDrilled.pushed(Route.Images)
         assertEquals(Tab.Images, onImages.currentTab)
-        val backOnTools = onImages.pushed(Screen.Tools)
+        val backOnTools = onImages.pushed(Route.Tools)
         assertEquals(Tab.Tools, backOnTools.currentTab)
-        assertEquals(Screen.Personas, backOnTools.screen)
+        assertEquals(Route.Personas, backOnTools.screen)
     }
 
     @Test fun `switchedToChat clears only chat's own stack`() {
-        val toolsDrilled = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
+        val toolsDrilled = NavState().pushed(Route.Tools).pushed(Route.Personas)
         // A screen pushed after switching to chat lands on chat's own stack,
         // not on the tab it came from.
-        val onChatWithBuilds = toolsDrilled.switchedToChat().pushed(Screen.Builds)
-        assertEquals(Screen.Builds, onChatWithBuilds.screen)
+        val onChatWithBuilds = toolsDrilled.switchedToChat().pushed(Route.Builds)
+        assertEquals(Route.Builds, onChatWithBuilds.screen)
         val backToChat = onChatWithBuilds.switchedToChat()
         assertEquals(Tab.Chat, backToChat.currentTab)
         assertNull(backToChat.screen)
         // Tools' drilled-in state must survive -- switching to chat is not a full reset.
-        val backOnTools = backToChat.pushed(Screen.Tools)
-        assertEquals(Screen.Personas, backOnTools.screen)
+        val backOnTools = backToChat.pushed(Route.Tools)
+        assertEquals(Route.Personas, backOnTools.screen)
     }
 
     @Test fun `reset discards a tab's drilled-in state`() {
-        val drilled = NavState().pushed(Screen.Tools).pushed(Screen.Personas)
+        val drilled = NavState().pushed(Route.Tools).pushed(Route.Personas)
         val reset = drilled.reset(Tab.Settings)
         assertEquals(Tab.Settings, reset.currentTab)
-        assertEquals(Screen.Settings, reset.screen)
+        assertEquals(Route.Settings, reset.screen)
         // The tab we reset was Settings, not Tools -- Tools' stack is untouched.
-        val backOnTools = reset.pushed(Screen.Tools)
-        assertEquals(Screen.Personas, backOnTools.screen)
+        val backOnTools = reset.pushed(Route.Tools)
+        assertEquals(Route.Personas, backOnTools.screen)
     }
 
     @Test fun `selectedTab on chat switches without clearing its stack`() {
-        val withStray = NavState().pushed(Screen.Builds)
+        val withStray = NavState().pushed(Route.Builds)
         val selected = withStray.selectedTab(Tab.Chat)
         assertEquals(Tab.Chat, selected.currentTab)
-        assertEquals(Screen.Builds, selected.screen)
+        assertEquals(Route.Builds, selected.screen)
     }
 
     @Test fun `screenKey round trips through screenFromKey for every screen`() {
         val screens = listOf(
-            Screen.Images, Screen.Tools, Screen.Settings, Screen.Personas, Screen.Prompts,
-            Screen.Skills, Screen.Knowledges, Screen.Builds, Screen.Build,
-            Screen.Detail("persona", "abc-123"),
+            Route.Images, Route.Tools, Route.Settings, Route.Personas, Route.Prompts,
+            Route.Skills, Route.Knowledges, Route.Builds, Screen.Build,
+            Route.Detail("persona", "abc-123"),
         )
         for (screen in screens) {
             assertEquals(screen, screenFromKey(screen.screenKey()))
