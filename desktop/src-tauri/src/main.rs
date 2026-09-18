@@ -14,6 +14,7 @@ use tauri::{
 };
 use std::fs::OpenOptions;
 use std::io::Write;
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
 const CRASH_LOG: &str = "C:/Users/Public/freeai4u-crash.log";
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -32,7 +33,7 @@ fn webview2_version() -> Option<String> {
         r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
         r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
     ];
-    let hives = [winreg::HKEY_CURRENT_USER, winreg::HKEY_LOCAL_MACHINE];
+    let hives = [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE];
     for hive in hives {
         for key in keys {
             if let Ok(hk) = winreg::RegKey::predef(hive).open_subkey(key) {
