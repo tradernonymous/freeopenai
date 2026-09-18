@@ -1,6 +1,5 @@
 package com.neura.os.app.ui
 import com.neura.os.BuildConfig
-import com.neura.os.BuildConfig
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

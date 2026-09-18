@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.neura.os.app.data.DeviceControlService
 
 /**
  * Device Automation screen — PhoneClaw-style automation.

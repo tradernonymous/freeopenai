@@ -121,40 +121,34 @@ private fun MarkdownViewer(file: FileGenerator.GeneratedFile) {
             .padding(16.dp),
     ) {
         for (line in text.lines()) {
-            when {
-                line.startsWith("# ") -> Text(
-                    text = line.removePrefix("# "),
-                    color = Palette.text,
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                )
-                line.startsWith("## ") -> Text(
-                    text = line.removePrefix("## "),
-                    color = Palette.text,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
-                line.startsWith("### ") -> Text(
-                    text = line.removePrefix("### "),
-                    color = Palette.text,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-                line.startsWith("```") -> { /* code fence marker, skip */ }
-                line.startsWith("- ") -> Text(
-                    text = "• ${line.removePrefix("- ")}",
-                    color = Palette.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(start = 16.dp, vertical = 2.dp),
-                )
-                line.isBlank() -> Box(Modifier.padding(4.dp))
-                else -> Text(
-                    text = line,
-                    color = Palette.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(vertical = 1.dp),
-                )
+            val style = when {
+                line.startsWith("# ") && !line.startsWith("## ") -> MaterialTheme.typography.headlineSmall
+                line.startsWith("## ") && !line.startsWith("### ") -> MaterialTheme.typography.titleMedium
+                line.startsWith("### ") -> MaterialTheme.typography.titleSmall
+                else -> MaterialTheme.typography.bodyMedium
             }
+            val verticalPadding = when {
+                line.startsWith("# ") -> 8.dp
+                line.startsWith("## ") -> 6.dp
+                line.startsWith("### ") -> 4.dp
+                line.isBlank() -> 4.dp
+                else -> 1.dp
+            }
+            val displayText = when {
+                line.startsWith("```") -> continue
+                line.isBlank() -> continue
+                line.startsWith("- ") -> "• ${line.removePrefix("- ")}"
+                else -> line
+            }
+            Text(
+                text = displayText,
+                color = Palette.text,
+                style = style,
+                modifier = Modifier.padding(
+                    start = if (line.startsWith("- ")) 16.dp else 0.dp,
+                    vertical = verticalPadding,
+                ),
+            )
         }
     }
 }
