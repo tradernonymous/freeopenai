@@ -1,4 +1,4 @@
-// FreeAI4U hub: the Chat | Plan | Build switch, the Builds panel (remote build
+// NeuraOS hub: the Chat | Plan | Build switch, the Builds panel (remote build
 // sessions with live steps and per-change approvals) and the Knowledges hub
 // (skills, tools per mode, commands).
 //
@@ -215,7 +215,7 @@
     };
     tabs.append(tabButtons.builds, tabButtons.knowledges);
     body = el('div', { class: 'hub-body', role: 'tabpanel', tabindex: '-1' });
-    const sheet = el('aside', { class: 'hub-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'FreeAI4U hub' },
+    const sheet = el('aside', { class: 'hub-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'NeuraOS hub' },
       el('div', { class: 'hub-head' },
         tabs,
         el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Close', title: 'Close (Esc)', icon: 'close', onclick: close })),
@@ -374,7 +374,7 @@
       submit.disabled = true;
       submit.textContent = 'Starting…';
       try {
-        const chatId = root.FreeAI4UPage && typeof root.FreeAI4UPage.chatId === 'function' ? String(root.FreeAI4UPage.chatId() || '') : '';
+        const chatId = root.NeuraOSPage && typeof root.NeuraOSPage.chatId === 'function' ? String(root.NeuraOSPage.chatId() || '') : '';
         const created = await api(API, { method: 'POST', body: { plan: plan.value, repo: repo.value.trim() || undefined, branch: branch.value.trim() || undefined, chatId } });
         state.draft = { plan: '', repo: '', branch: '' };
         status('success', 'Build started');
@@ -764,9 +764,9 @@
   }
 
   function renderTools(container) {
-    const groups = root.FreeAI4UPage && root.FreeAI4UPage.toolGroups;
-    const byMode = root.FreeAI4UPage && root.FreeAI4UPage.modeToolGroups;
-    const writes = (root.FreeAI4UPage && root.FreeAI4UPage.writeToolGroups) || [];
+    const groups = root.NeuraOSPage && root.NeuraOSPage.toolGroups;
+    const byMode = root.NeuraOSPage && root.NeuraOSPage.modeToolGroups;
+    const writes = (root.NeuraOSPage && root.NeuraOSPage.writeToolGroups) || [];
     const nodes = [];
     if (groups && byMode) {
       const modes = ['chat', 'plan', 'build'];
@@ -801,7 +801,7 @@
   }
 
   function renderCommands(container) {
-    const commands = (root.FreeAI4UPage && root.FreeAI4UPage.chatCommands) || [];
+    const commands = (root.NeuraOSPage && root.NeuraOSPage.chatCommands) || [];
     container.replaceChildren(
       el('p', { class: 'hub-sub', text: 'Type these in the message box. Tap one to put it there.' }),
       el('div', { class: 'hub-cards' }, ...commands.map((c) => el('button', { class: 'hub-card hub-kcard', type: 'button', onclick: () => { insertIntoComposer('/' + c.name + ' '); close(); } },
@@ -830,12 +830,12 @@
   // --- Page hooks ---
 
   function pageModes() {
-    const modes = root.FreeAI4UPage && root.FreeAI4UPage.modes;
+    const modes = root.NeuraOSPage && root.NeuraOSPage.modes;
     return Array.isArray(modes) && modes.length ? modes : [{ id: 'chat', label: 'Chat' }, { id: 'plan', label: 'Plan' }, { id: 'build', label: 'Build' }];
   }
 
   function setMode(id) {
-    if (root.FreeAI4UPage && typeof root.FreeAI4UPage.setMode === 'function') root.FreeAI4UPage.setMode(id);
+    if (root.NeuraOSPage && typeof root.NeuraOSPage.setMode === 'function') root.NeuraOSPage.setMode(id);
   }
 
   function mountModeSegment() {
@@ -859,7 +859,7 @@
     });
     chip.parentNode.insertBefore(segment, chip);
     document.body.classList.add('has-mode-segment');
-    syncMode(root.FreeAI4UPage && typeof root.FreeAI4UPage.mode === 'function' ? root.FreeAI4UPage.mode() : 'chat');
+    syncMode(root.NeuraOSPage && typeof root.NeuraOSPage.mode === 'function' ? root.NeuraOSPage.mode() : 'chat');
   }
 
   function syncMode(mode) {
@@ -947,7 +947,7 @@
     startPolling();
   }
 
-  root.FreeAI4UHub = {
+  root.NeuraOSHub = {
     open,
     close,
     syncMode,

@@ -11,10 +11,10 @@ test('the chat has a restrained futuristic ambient layer', () => {
   assert.match(html, /\.chat-card::before[\s\S]*?edge-scan/);
   assert.match(html, /\.composer:focus-within[\s\S]*?composer-flow/);
   assert.match(html, /id="commandState"[^>]*aria-live="polite"/);
-  assert.match(html, /class="brand-name">FreeAi4U<\/span>/);
+  assert.match(html, /class="brand-name">NeuraOS<\/span>/);
   assert.match(html, /\.chat-bar-title \.brand-name \{ display: none; \}/);
   assert.match(html, /command-state\.js/);
-  assert.match(html, /function updateCommandState\([\s\S]*?FreeOpenAICommandState\.commandStateOf/);
+  assert.match(html, /function updateCommandState\([\s\S]*?NeuraOSCommandState\.commandStateOf/);
   assert.match(html, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration: \.001ms/);
 });
 

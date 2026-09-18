@@ -102,7 +102,7 @@ function harness({ provider = 'openrouter', models = [], vision = null, answer =
   const calls = { model: [], notes: [] };
   const deps = {
     // The shipped rules, and the shipped routing module.
-    FreeOpenAIProviderRouting: routing,
+    NeuraOSProviderRouting: routing,
     isVisionCapable,
     acceptsImages,
     PUTER_PROVIDER,

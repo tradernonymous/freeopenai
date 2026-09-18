@@ -12,7 +12,7 @@
 // dependencies either way.
 (function attachToolCallText(root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.FreeOpenAIToolCallText = factory();
+  else root.NeuraOSToolCallText = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function toolCallTextFactory() {
   const TOOL_CALL_SHAPES = [
     '<tool_call>{"name": "...", "arguments": {...}}</tool_call>',

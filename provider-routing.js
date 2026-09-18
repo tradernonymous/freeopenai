@@ -2,7 +2,7 @@
 
 (function attachProviderRouting(root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.FreeOpenAIProviderRouting = factory();
+  else root.NeuraOSProviderRouting = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function providerRoutingFactory() {
   const ROUTING_MODES = ['off', 'auto'];
   const PUTER_PROVIDER = 'puter';

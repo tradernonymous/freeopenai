@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>FreeAi4U | Chat</title>
+    <title>NeuraOS | Chat</title>
     <script src="https://js.puter.com/v2/"></script>
     <script src="tool-call-text.js"></script>
     <script src="chatlib.js"></script>
@@ -1091,7 +1091,7 @@
         .img-shimmer span { font-size: 13px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; }
         @keyframes shimmer-wave { from { background-position: 180% 0; } to { background-position: -80% 0; } }
 
-        /* FreeOpenAI's "forge": what an image generation looks like while there
+        /* NeuraOS's forge": what an image generation looks like while there
            is nothing honest to report about it.
 
            The overlay it replaces counted seconds up to a fifty-five-second
@@ -2356,7 +2356,7 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M3 6h18"/><path d="M3 18h18"/></svg>
                             </button>
                             <span class="dot"></span>
-                            <span class="brand-name">FreeAi4U</span>
+                            <span class="brand-name">NeuraOS</span>
                             <span class="command-state" id="commandState" data-state="ready" aria-live="polite">READY</span>
                         </div>
                         <div class="chat-bar-actions">
@@ -3025,7 +3025,7 @@
     <div class="modal-overlay drawer-overlay" id="drawerOverlay" onclick="closeDrawer();">
         <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Menu" onclick="event.stopPropagation();">
             <div class="drawer-header">
-                <span class="drawer-title">FreeAi4U</span>
+                <span class="drawer-title">NeuraOS</span>
                 <button class="modal-close" type="button" onclick="closeDrawer();" aria-label="Close menu">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -3273,9 +3273,9 @@
         function updateCommandState() {
             const state = document.getElementById('commandState');
             if (!state) return;
-            const value = FreeOpenAICommandState.commandStateOf({ isTyping, imageMode, selectedMode });
+            const value = NeuraOSCommandState.commandStateOf({ isTyping, imageMode, selectedMode });
             state.dataset.state = value;
-            state.textContent = FreeOpenAICommandState.commandStateLabel(value);
+            state.textContent = NeuraOSCommandState.commandStateLabel(value);
             state.title = value === 'draw' ? 'Next message will be read as image work' : value === 'running' ? 'A response is being generated' : value === 'ready' ? 'Chat ready' : value.toUpperCase() + ' mode';
         }
 
@@ -3288,7 +3288,7 @@
             label.textContent = meta.label;
             chip.title = meta.desc;
             updateCommandState();
-            if (window.FreeAI4UHub) window.FreeAI4UHub.syncMode(selectedMode);
+            if (window.NeuraOSHub) window.NeuraOSHub.syncMode(selectedMode);
         }
 
         function cycleMode() {
@@ -3314,7 +3314,7 @@
 
         // What hub.js may read and do. Top-level consts from chatlib.js are not
         // properties of window, so they are handed over here explicitly.
-        window.FreeAI4UPage = {
+        window.NeuraOSPage = {
             modes: MODES,
             toolGroups: TOOL_GROUPS,
             modeToolGroups: MODE_TOOL_GROUPS,
@@ -3949,8 +3949,8 @@
         // The browser module is the state owner. The old local variables and
         // branches below remain as a compatibility fallback for a cached page
         // or a test harness that only loads chatlib.js.
-        const transcriptController = typeof FreeOpenAITranscript !== 'undefined'
-            ? FreeOpenAITranscript.createTranscriptController({
+        const transcriptController = typeof NeuraOSTranscript !== 'undefined'
+            ? NeuraOSTranscript.createTranscriptController({
                 element: chatMessages,
                 pill: document.getElementById('scrollBottom'),
                 windowRef: window,
@@ -8703,7 +8703,7 @@
             // Puter's catalogue is the built-in list, so there is nothing beyond it
             // to offer; a server provider's whole catalogue is what was just read.
             const list = selectedProvider === PUTER_PROVIDER ? routableModels() : providerVision;
-            return FreeOpenAIProviderRouting.cheapestVisionModel(list, { acceptsImages: sees });
+            return NeuraOSProviderRouting.cheapestVisionModel(list, { acceptsImages: sees });
         }
 
         function appendImageCheckNote(el, check, fixWith) {
@@ -10043,7 +10043,7 @@
                 bar.appendChild(retryBtn);
             }
 
-            if (window.FreeAI4UHub) window.FreeAI4UHub.decorateActions(bar);
+            if (window.NeuraOSHub) window.NeuraOSHub.decorateActions(bar);
 
             return bar;
         }

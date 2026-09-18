@@ -3,12 +3,9 @@ package com.neura.os.app.data
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
-import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
 
 /**
  * Universal Image Vision — makes every model "see" images.
@@ -18,13 +15,8 @@ import java.security.MessageDigest
  * is injected as context into the prompt, so the text-only model can reason
  * about the image without ever seeing pixels.
  *
- * Flow:
- *   1. Check if the selected model supports native vision
- *   2. If yes → pass image directly as base64 (existing behavior)
- *   3. If no → auto-describe via VisionDescriptor → inject description
- *
  * Fallback chain:
- *   Puter vision → NVIDIA vision → ML Kit OCR → manual description
+ *   Puter vision → local color/brightness analysis → manual description
  */
 object ImageIntelligence {
 
@@ -57,7 +49,6 @@ object ImageIntelligence {
     fun describeForModel(
         imageDataUrl: String,
         modelId: String,
-        apiKey: String? = null,
         serverUrl: String = "",
     ): String? {
         if (modelSupportsVision(modelId)) return null
@@ -66,15 +57,9 @@ object ImageIntelligence {
 
         // Try providers in order
         return tryPuterDescribe(base64Data, mime, serverUrl)
-            
             ?: tryOcrDescribe(base64Data, mime)
             ?: fallbackDescription(base64Data, mime)
     }
-
-    /**
-     * Returns a cache key for the image (hash of the base64 data),
-     * so repeated sends of the same image don't re-describe it.
-     */
 
     // --- Provider attempts ---------------------------------------------------
 
@@ -242,29 +227,15 @@ object ImageIntelligence {
     fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
 }
 
-/**
- * Manages a cache of image descriptors so the same image isn't described twice.
- */
-
 private object DescriptorCache {
-    private const val MAX_ENTRIES = 100
-    private val cache = LinkedHashMap<String, String>(MAX_ENTRIES, 0.75f, true)
+    private const val MAX = 100
+    private val cache = LinkedHashMap<String, String>(MAX, 0.75f, true)
 
-    /** Get a cached description, or null. */
-    fun get(imageHash: String): String? = synchronized(cache) { cache[imageHash] }
-
-    /** Store a description. */
-    fun put(imageHash: String, description: String) {
+    fun get(key: String): String? = synchronized(cache) { cache[key] }
+    fun put(key: String, value: String) {
         synchronized(cache) {
-            if (cache.size >= MAX_ENTRIES) {
-                val eldest = cache.keys.first()
-                cache.remove(eldest)
-            }
-            cache[imageHash] = description
+            if (cache.size >= MAX) cache.remove(cache.keys.first())
+            cache[key] = value
         }
     }
-
-    fun clear() = synchronized(cache) { cache.clear() }
-    fun getCached(key: String): String? = DescriptorCache.get(key)
-    fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
 }

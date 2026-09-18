@@ -115,7 +115,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     var nav by mutableStateOf(NavState())
         private set
-    val screen: Screen? get() = nav.screen
+    val screen: Route? get() = nav.screen
     val currentTab: Tab get() = nav.currentTab
     val canGoBack: Boolean get() = nav.screen != null
     /** The chat on screen. A fresh one exists from the moment it is opened but
@@ -300,7 +300,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     // --- Navigation --------------------------------------------------------
 
-    fun push(screen: Screen) { nav = nav.pushed(screen) }
+    fun push(target: Route) { nav = nav.pushed(target) }
 
     fun selectTab(tab: Tab) { nav = nav.selectedTab(tab) }
 
@@ -1446,7 +1446,6 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 ImageIntelligence.describeForModel(
                     imageDataUrl = imageUrl,
                     modelId = chat.model,
-                    apiKey = null,
                     serverUrl = serverUrl,
                 )
             } catch (e: Exception) { null }

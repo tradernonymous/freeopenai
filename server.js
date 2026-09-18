@@ -1145,7 +1145,7 @@ const LLM_PROVIDERS = {
     // paid models through.
     freeOnly: process.env.OPENROUTER_FREE_ONLY !== '0',
     // Optional attribution headers OpenRouter documents for its leaderboards.
-    headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'FreeAi4U' }),
+    headers: (req) => ({ 'HTTP-Referer': requestOrigin(req), 'X-Title': 'NeuraOS' }),
     // The dedicated Image API (launched 2026-06-23): 30+ models behind one
     // OpenAI-shaped endpoint, and the same key that chats here draws here.
     //
@@ -1845,7 +1845,7 @@ async function fetchText(url, acceptHtml = true) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'FreeAi4U/1.0 (+https://github.com/tradernonymous/freeopenai)',
+        'User-Agent': 'NeuraOS/1.0 (+https://github.com/tradernonymous/freeopenai)',
         Accept: acceptHtml ? 'text/html,*/*' : 'application/json',
       },
     });
@@ -5109,7 +5109,7 @@ function buildRequestContext(req, repo) {
 // commands that mention git get it; every other command sees nothing.
 function gitRunEnv(git) {
   if (!git || !git.token) return {};
-  const login = String(git.login || 'freeai4u').replace(/[^A-Za-z0-9-]/g, '') || 'freeai4u';
+  const login = String(git.login || 'neuraos').replace(/[^A-Za-z0-9-]/g, '') || 'freeai4u';
   const pairs = [
     ['url.https://x-access-token:' + git.token + '@github.com/.insteadOf', 'https://github.com/'],
     ['user.name', login],
@@ -5174,7 +5174,7 @@ async function readPublicPage(raw) {
       const res = await fetch(current.href, {
         redirect: 'manual',
         signal: controller.signal,
-        headers: { 'User-Agent': 'FreeAi4U/1.0 (+https://github.com/tradernonymous/freeopenai)', Accept: 'text/html,*/*' },
+        headers: { 'User-Agent': 'NeuraOS/1.0 (+https://github.com/tradernonymous/freeopenai)', Accept: 'text/html,*/*' },
       });
       const location = res.headers.get('location');
       if (res.status >= 300 && res.status < 400 && location) {

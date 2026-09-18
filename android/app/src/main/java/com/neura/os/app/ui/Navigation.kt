@@ -23,9 +23,6 @@ import kotlinx.serialization.Serializable
     @Serializable data object Automation : Route
 }
 
-/** Legacy alias so existing call sites compile during migration. */
-typealias Screen = Route
-
 /** A key that survives process death, unlike [Route.toString] -- adding a
  * new [Route] case can never silently change another case's saved name. */
 fun Route.screenKey(): String = when (this) {

@@ -2,7 +2,7 @@
 
 (function attachTranscriptModule(root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.FreeOpenAITranscript = factory();
+  else root.NeuraOSTranscript = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function transcriptFactory() {
   const TRANSCRIPT_BOTTOM_SLACK_PX = 120;
   const TRANSCRIPT_JUMP_SOURCES = ['own-message', 'user-request'];

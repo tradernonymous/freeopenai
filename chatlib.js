@@ -3312,7 +3312,7 @@ function extractToolCalls(message) {
 // prose about a tool the model does not have stays prose.
 const TOOL_CALL_TEXT = (typeof module !== 'undefined' && module.exports)
   ? require('./tool-call-text')
-  : (typeof globalThis !== 'undefined' && globalThis.FreeOpenAIToolCallText) || null;
+  : (typeof globalThis !== 'undefined' && globalThis.NeuraOSToolCallText) || null;
 
 function textToolCalls(message, tools) {
   if (!TOOL_CALL_TEXT) return [];
@@ -4334,8 +4334,10 @@ function usableChatModels(models, limit = 60) {
       contextLength: m.contextLength,
       supportedParameters: m.supportedParameters,
       free: isFreeModel(m),
-      // A free row the catalogue never priced. Only used for the label.
-      assumed: !hasPublishedPrice(m),
+      // A free row the catalogue never priced, and that no declaration covers.
+      // Only used for the label: "free (assumed)" says whose assumption it is,
+      // while a row a provider declared free does not need the caveat.
+      assumed: !hasPublishedPrice(m) && m.free !== true,
       // The free tier's limits, in words, when the server declared them.
       limits: m.limits,
       // How long this server has watched that model take, when it has.

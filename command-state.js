@@ -2,7 +2,7 @@
 
 (function attachCommandState(root, factory) {
   if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.FreeOpenAICommandState = factory();
+  else root.NeuraOSCommandState = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function commandStateFactory() {
   const COMMAND_STATES = ['ready', 'plan', 'build', 'draw', 'running'];
 
