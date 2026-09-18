@@ -73,33 +73,33 @@ jobs:
         if: env.HAS_KEYSTORE == 'true'
         run: |
           gradle :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/freeai4u.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/neuraos.apk"
       - name: Build the debug APK (no signing key configured)
         if: env.HAS_KEYSTORE != 'true'
         run: |
           gradle :app:assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/freeai4u.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/neuraos.apk"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: freeai4u-apk
-          path: ${{ runner.temp }}/freeai4u.apk
+          name: neuraos-apk
+          path: ${{ runner.temp }}/neuraos.apk
           retention-days: 30
       - name: Publish to the rolling apk-latest release
         if: env.HAS_KEYSTORE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="FreeAI4U Android app, build $APK_VERSION_CODE (from $GITHUB_SHA). Every push to main that touches android/ replaces freeai4u.apk here; install it over the previous build, it keeps its data."
+          NOTES="NeuraOS Android app, build $APK_VERSION_CODE (from $GITHUB_SHA). Every push to main that touches android/ replaces neuraos.apk here; install it over the previous build, it keeps its data."
           if gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit apk-latest --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
           else
-            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "FreeAI4U Android app (latest build)" --notes "$NOTES"
+            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
           fi
           # What the installed app reads to offer the next build (see
           # MainActivity.checkForUpdate). The link is the stable asset URL.
-          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/freeai4u.apk","notes":"Build %s from %s"}\n' \
+          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/neuraos.apk","notes":"Build %s from %s"}\n' \
             "$APK_VERSION_CODE" "$APK_VERSION_CODE" "$GITHUB_REPOSITORY" "$APK_VERSION_CODE" "${GITHUB_SHA:0:7}" > "$RUNNER_TEMP/version.json"
           # APK first, manifest second: a phone never sees a version that is
           # not downloadable yet.
-          gh release upload apk-latest "$RUNNER_TEMP/freeai4u.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload apk-latest "$RUNNER_TEMP/neuraos.apk" --repo "$GITHUB_REPOSITORY" --clobber
           gh release upload apk-latest "$RUNNER_TEMP/version.json" --repo "$GITHUB_REPOSITORY" --clobber

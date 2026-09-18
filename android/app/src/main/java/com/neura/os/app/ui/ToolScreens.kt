@@ -1,6 +1,7 @@
 package com.neura.os.app.ui
 
 import android.graphics.BitmapFactory
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -139,7 +140,21 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
     LaunchedEffect(editing) { if (model !in models) model = models.first() }
     val size = imageSizeById(sizeId)
 
+    // Prompt history for re-use
+    var promptHistory by remember { mutableStateOf(listOf<com.neura.os.app.ui.PromptHistoryEntry>()) }
+    // Before/after comparison state
+    var comparing by remember { mutableStateOf(false) }
+    // Batch generation progress
+    var batchTotal by remember { mutableIntStateOf(0) }
+    var batchCurrent by remember { mutableIntStateOf(0) }
+
     Column(Modifier.fillMaxSize()) {
+        // Batch progress indicator
+        BatchProgressIndicator(
+            current = batchCurrent,
+            total = batchTotal,
+            onCancel = { batchTotal = 0; batchCurrent = 0 },
+        )
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(
                 prompt, { prompt = it },
@@ -208,6 +223,12 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 Switch(vm.puterImages, { vm.puterImages = it }, Modifier.padding(start = 6.dp).scale(0.8f))
             }
         }
+        // Prompt history
+        PromptHistoryPanel(
+            history = promptHistory,
+            onReuse = { reusePrompt -> prompt = reusePrompt },
+            onDelete = { idx -> promptHistory = promptHistory.toMutableList().apply { removeAt(idx) } },
+        )
         if (vm.library.images.isEmpty()) {
             EmptyState("No images yet", "Saved encrypted on this phone.")
         } else {
@@ -259,6 +280,21 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 }
             },
             confirmButton = { TextButton({ viewing = null }) { Text("Close") } },
+        )
+    }
+    // Before/After comparison overlay
+    if (comparing) {
+        var originalBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+        var editedBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+        LaunchedEffect(viewing?.id) {
+            viewing?.let { image ->
+                vm.loadBitmap(image.id) { _, decoded -> editedBitmap = decoded }
+            }
+        }
+        BeforeAfterComparison(
+            original = originalBitmap,
+            edited = editedBitmap,
+            onDismiss = { comparing = false },
         )
     }
 }
