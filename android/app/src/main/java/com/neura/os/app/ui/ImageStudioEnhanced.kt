@@ -1,4 +1,5 @@
 package com.neura.os.app.ui
+import androidx.compose.foundation.layout.fillMaxHeight
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background

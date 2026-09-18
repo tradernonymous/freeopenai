@@ -270,7 +270,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             if (parts.size != 2) return@forEach
             val tab = Tab.entries.firstOrNull { it.name == parts[0] } ?: return@forEach
             val screen = screenFromKey(parts[1]) ?: return@forEach
-            if (screen == Screen.Build) {
+            if (screen == Route.Build) {
                 if (buildId == null || !signedIn) return@forEach
                 builds.open(buildId)
             }
@@ -284,7 +284,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     fun openBuild(id: String) {
         builds.open(id)
-        push(Screen.Build)
+        push(Route.Build)
     }
 
     /** Hands [plan] (a Plan-mode reply) to the server and opens the build. */
@@ -294,7 +294,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         builds.start(
             currentChatId ?: "",
             plan,
-            onStarted = { push(Screen.Build) },
+            onStarted = { push(Route.Build) },
             onFailed = { message -> notice = "Build not started: $message" },
         )
     }
