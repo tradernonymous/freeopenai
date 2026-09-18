@@ -26,12 +26,8 @@
   "version": "2.0.0",
   "identifier": "com.freeai4u.desktop",
   "plugins": {
-    "window-state": {
-      "all": true
-    },
-    "store": {
-      "all": true
-    },
+    "window-state": {},
+    "store": {},
     "updater": {
       "active": true
     }
