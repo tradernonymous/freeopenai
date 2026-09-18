@@ -12,10 +12,9 @@ const VIEWS = {
 export default function App() {
   const [active, setActive] = useState('chat');
 
-  const handleNavigate = (view) => {
+  const handleNavigate = (view: string) => {
     setActive(view);
     const url = VIEWS[view] || VIEWS.chat;
-    // Use hash-based navigation within the webview
     window.location.hash = view;
   };
 

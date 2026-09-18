@@ -7,7 +7,7 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
-export default function Sidebar({ active, onNavigate }) {
+export default function Sidebar({ active, onNavigate }: { active: string; onNavigate: (id: string) => void }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
