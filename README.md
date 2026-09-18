@@ -39,6 +39,7 @@
 | :-- | :-- |
 | **Android real tabs** | Chat, Images, Tools, Skills, Library and Settings are peer destinations now — switching back resumes exactly where you left each one. |
 | **Android offline queue** | A reply that failed because the connection dropped retries itself the moment you're back online, instead of sitting on a dead error. |
+| **Android empty states act** | "No builds yet" starts a plan; an empty skill list refreshes — one tap instead of a dead end. |
 | **Text tool calls run** | A tool call a model writes as text gets executed, not printed. |
 | **`plan_actions`** | One model call plans the whole sequence; execution is deterministic. |
 | **`/makeskill`** | Turn the job you just finished into a skill you can call again. |
