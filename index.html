@@ -1209,6 +1209,9 @@
         .gallery-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
         .gallery-tile figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 8px; font-size: 11px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.75)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .gallery-expired { aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 12px; font-size: 12px; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: var(--r); }
+        /* Design tab: systematic graphic design workspace. */
+        #viewDesign .settings-row { flex-wrap: wrap; }
+        #designCanvas { font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
         /* Tab strip for pinned + active chats, desktop-session style. */
         .chat-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px 0; flex-shrink: 0; }
         .chat-tabs[hidden] { display: none; }
@@ -2685,6 +2688,57 @@
                     <div class="gallery-grid" id="galleryGrid"></div>
                 </div>
             </div>
+
+            <div class="view" id="viewDesign">
+                <div class="chat-bar">
+                    <div class="chat-bar-title"><span>Design</span></div>
+                    <div class="chat-bar-actions">
+                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span class="signed-in-dot"></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-body">
+                    <div class="settings-row">
+                        <div>
+                            <strong>New project</strong>
+                            <p class="settings-hint">Pick a template, name the project, and describe the output.</p>
+                        </div>
+                    </div>
+                    <div class="settings-row settings-row-column">
+                        <input type="text" id="designProjectName" placeholder="Project name" aria-label="Project name">
+                        <select id="designTemplateSelect" aria-label="Template">
+                            <option value="">Loading templates…</option>
+                        </select>
+                        <textarea id="designPrompt" placeholder="Describe what you want to create…" rows="3" aria-label="Design prompt"></textarea>
+                        <button class="icon-btn-text" type="button" onclick="designCreateProject()">Create project</button>
+                    </div>
+                    <h3 class="settings-section-title">Projects</h3>
+                    <div class="settings-row settings-row-column">
+                        <div class="workspace-list" id="designProjectList" aria-label="Design projects">
+                            <p class="settings-hint" id="designEmpty">No projects yet.</p>
+                        </div>
+                    </div>
+                    <div id="designEditor" hidden>
+                        <h3 class="settings-section-title" id="designEditorTitle">Project</h3>
+                        <div class="settings-row settings-row-column">
+                            <textarea id="designCanvas" placeholder="Canvas JSON or HTML will appear here…" rows="8" aria-label="Canvas"></textarea>
+                            <div class="github-browser-row">
+                                <button class="icon-btn-text" type="button" onclick="designGenerate()">Generate</button>
+                                <select id="designExportFormat" aria-label="Export format">
+                                    <option value="html">HTML</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="png">PNG</option>
+                                    <option value="svg">SVG</option>
+                                </select>
+                                <button class="icon-btn-text" type="button" onclick="designExport()">Export</button>
+                                <button class="icon-btn-text danger" type="button" onclick="designCloseEditor()">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -2823,6 +2877,10 @@
                 <button class="drawer-nav-btn" type="button" data-view="gallery" onclick="switchViewFromDrawer('gallery')">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                     Gallery
+                </button>
+                <button class="drawer-nav-btn" type="button" data-view="design" onclick="switchViewFromDrawer('design')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+                    Design
                 </button>
                 <button class="drawer-nav-btn" type="button" onclick="toggleThemeMenu(event)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
@@ -3880,6 +3938,7 @@
             models: document.getElementById('viewModels'),
             settings: document.getElementById('viewSettings'),
             gallery: document.getElementById('viewGallery'),
+            design: document.getElementById('viewDesign'),
         };
 
         // Initialize
@@ -3894,6 +3953,7 @@
         renderSkillRail();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
         document.getElementById('routingCheck').checked = routingMode === 'auto';
+        designLoadTemplates();
         applyAppLink();
         window.addEventListener('hashchange', applyAppLink);
 
@@ -3970,6 +4030,19 @@
 
         // The dropdown shows the current provider's catalogue: the curated Puter
         // list, or whatever the direct provider actually offers.
+        // Which model the picker should hold when the free-only setting is on and
+        // the wanted one is not free: the first row it is actually showing, so the
+        // composer can never name a model the list has no entry for. Pure, and
+        // tested, because "the selection is not in the list" is a state the rest of
+        // the page only half-handles.
+        function pickVisibleModel(rows, wanted) {
+            const list = Array.isArray(rows) ? rows : [];
+            if (!list.length) return wanted;
+            const shown = freeModelsOnly ? freeRowsOnly(list).rows : list;
+            if (!shown.length || shown.some((m) => m.id === wanted)) return wanted;
+            return shown[0].id;
+        }
+
         // Every surface reads its rows from here -- the dropdown, the card grid
         // and the default-model select -- which is why the free-only filter
         // belongs at this one place rather than in each of them.
@@ -4158,6 +4231,10 @@
                 renderServerWorkspaceFiles();
             }
             if (name === 'gallery') renderGallery();
+            if (name === 'design') {
+                designLoadTemplates();
+                designListProjects();
+            }
         }
 
         function switchViewFromDrawer(name) {
@@ -6030,13 +6107,11 @@
             } catch { /* a health read that fails changes nothing */ }
         }
 
-        function healthDayKey() {
-            return new Date().toISOString().slice(0, 10);
-        }
-
-        // Said once a day per provider per reason. A warning that repeats on every
-        // message is one the user learns to scroll past, and the point is the line
-        // that arrives *before* the allowance runs out rather than after.
+        // Said once per distinct message, because the two states it reports move
+        // on their own: a cooldown ticks down and a daily count only climbs, so
+        // repeating a line the user has already read is noise, while a line whose
+        // numbers have changed is news. The point of it is to arrive *before* the
+        // allowance or the cooldown costs a turn, not after.
         async function noteProviderHealth() {
             await refreshProviderHealth();
             const info = providerInfo[selectedProvider];
@@ -6049,11 +6124,10 @@
             if (tier && tier.cap && typeof tier.share === 'number' && tier.share >= 0.8) {
                 notes.push(providerLabel(selectedProvider) + ': about ' + tier.callsToday + ' of ' + tier.cap + ' free calls used today' + (tier.text ? ' (' + tier.text + ')' : '') + '.');
             }
-            if (!notes.length) return;
-            const key = selectedProvider + ':' + healthDayKey() + ':' + notes.join(' ');
-            if (providerHealthNotesShown.has(key)) return;
-            providerHealthNotesShown.add(key);
-            addMessage('system', notes.join(' '));
+            const text = notes.join(' ');
+            if (!text || providerHealthNotesShown.has(text)) return;
+            providerHealthNotesShown.add(text);
+            addMessage('system', text);
         }
 
         // The provider's own words, short enough to sit inside a sentence.
@@ -6229,6 +6303,14 @@
                 // providerModels is already sorted free-and-capable first, so
                 // the head of the list is the sensible default.
                 selectedModel = providerModels.some((m) => m.id === remembered) ? remembered : providerModels[0].id;
+                // A remembered model that the free-only filter hides would leave
+                // the composer naming a model with no row to reselect it from, so
+                // the choice moves to the first row the picker is actually showing.
+                const visible = pickVisibleModel(providerModels, selectedModel);
+                if (visible !== selectedModel) {
+                    showStatus('info', 'Switched to ' + visible + ' — the model this provider last used is not on its free tier');
+                    selectedModel = visible;
+                }
             } catch (err) {
                 providerModels = [];
                 providerVision = [];
@@ -10820,14 +10902,176 @@
                 img.src = it.url;
                 img.alt = it.prompt;
                 img.loading = 'lazy';
-                // The tile carries the focus ring rather than the picture inside
-                // it: the ring belongs on the border the reader sees.
                 makeImageOpener(fig, it.url, it.prompt);
                 const cap = document.createElement('figcaption');
                 cap.textContent = it.prompt;
                 fig.appendChild(img);
                 fig.appendChild(cap);
                 grid.appendChild(fig);
+            });
+        }
+
+        let designCurrentProjectId = null;
+
+        async function designApi(path, opts = {}) {
+            const res = await fetch('/api/design' + path, {
+                headers: { 'Content-Type': 'application/json' },
+                ...opts,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: 'Request failed' }));
+                throw new Error(err.error || 'Design request failed');
+            }
+            return res.json();
+        }
+
+        async function designLoadTemplates() {
+            const select = document.getElementById('designTemplateSelect');
+            if (!select) return;
+            try {
+                const templates = await designApi('/templates');
+                select.innerHTML = '';
+                templates.forEach((t) => {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.label + ' (' + t.width + 'x' + t.height + ' ' + t.unit + ')';
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                select.innerHTML = '<option value="">Failed to load templates</option>';
+            }
+        }
+
+        async function designListProjects() {
+            const list = document.getElementById('designProjectList');
+            const empty = document.getElementById('designEmpty');
+            if (!list) return;
+            try {
+                const projects = await designApi('/projects');
+                list.innerHTML = '';
+                if (empty) empty.hidden = projects.length > 0;
+                projects.forEach((p) => {
+                    const row = document.createElement('div');
+                    row.className = 'todo-row';
+                    row.style.display = 'flex';
+                    row.style.alignItems = 'center';
+                    row.style.justifyContent = 'space-between';
+                    row.style.gap = '8px';
+                    const name = document.createElement('strong');
+                    name.textContent = p.name;
+                    name.style.fontSize = '13px';
+                    const meta = document.createElement('span');
+                    meta.textContent = p.template ? p.template : 'draft';
+                    meta.style.fontSize = '11px';
+                    meta.style.color = 'var(--text-muted)';
+                    const actions = document.createElement('div');
+                    actions.style.display = 'flex';
+                    actions.style.gap = '6px';
+                    actions.style.flexShrink = '0';
+                    const openBtn = document.createElement('button');
+                    openBtn.className = 'icon-btn-text';
+                    openBtn.textContent = 'Open';
+                    openBtn.onclick = () => designOpenProject(p.id);
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'icon-btn-text danger';
+                    delBtn.textContent = 'Delete';
+                    delBtn.onclick = async () => {
+                        await designApi('/projects/' + p.id, { method: 'DELETE' });
+                        designListProjects();
+                    };
+                    actions.appendChild(openBtn);
+                    actions.appendChild(delBtn);
+                    row.appendChild(name);
+                    row.appendChild(meta);
+                    row.appendChild(actions);
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                if (empty) {
+                    empty.hidden = false;
+                    empty.textContent = 'Failed to load projects.';
+                }
+            }
+        }
+
+        async function designCreateProject() {
+            const nameEl = document.getElementById('designProjectName');
+            const templateEl = document.getElementById('designTemplateSelect');
+            const promptEl = document.getElementById('designPrompt');
+            const name = (nameEl && nameEl.value || '').trim();
+            const template = (templateEl && templateEl.value || '').trim();
+            const prompt = (promptEl && promptEl.value || '').trim();
+            if (!name) {
+                showStatus('error', 'Project name is required');
+                return;
+            }
+            const project = await designApi('/projects', {
+                method: 'POST',
+                body: JSON.stringify({ name, template, prompt }),
+            });
+            if (nameEl) nameEl.value = '';
+            if (promptEl) promptEl.value = '';
+            showStatus('ready', 'Project created');
+            designListProjects();
+            designOpenProject(project.id);
+        }
+
+        async function designOpenProject(id) {
+            designCurrentProjectId = id;
+            const project = await designApi('/projects/' + id);
+            const editor = document.getElementById('designEditor');
+            const title = document.getElementById('designEditorTitle');
+            const canvas = document.getElementById('designCanvas');
+            if (title) title.textContent = project.name || 'Project';
+            if (canvas) canvas.value = project.canvas ? JSON.stringify(project.canvas, null, 2) : '';
+            if (editor) editor.hidden = false;
+            switchView('design');
+        }
+
+        async function designGenerate() {
+            if (!designCurrentProjectId) return;
+            const promptEl = document.getElementById('designPrompt');
+            const prompt = (promptEl && promptEl.value || '').trim();
+            if (!prompt) {
+                showStatus('error', 'Enter a prompt before generating');
+                return;
+            }
+            const res = await designApi('/generate', {
+                method: 'POST',
+                body: JSON.stringify({ projectId: designCurrentProjectId, prompt }),
+            });
+            showStatus('ready', res.message || 'Queued');
+        }
+
+        async function designExport() {
+            if (!designCurrentProjectId) return;
+            const formatEl = document.getElementById('designExportFormat');
+            const format = (formatEl && formatEl.value || 'html').trim();
+            const res = await designApi('/export', {
+                method: 'POST',
+                body: JSON.stringify({ projectId: designCurrentProjectId, format }),
+            });
+            showStatus('ready', 'Export queued: ' + format);
+        }
+
+        function designCloseEditor() {
+            designCurrentProjectId = null;
+            const editor = document.getElementById('designEditor');
+            if (editor) editor.hidden = true;
+        }
+
+        async function designSaveCurrent() {
+            if (!designCurrentProjectId) return;
+            const canvasEl = document.getElementById('designCanvas');
+            let canvas = {};
+            try {
+                canvas = canvasEl && canvasEl.value ? JSON.parse(canvasEl.value) : {};
+            } catch {
+                canvas = { raw: canvasEl && canvasEl.value || '' };
+            }
+            await designApi('/projects/' + designCurrentProjectId, {
+                method: 'PUT',
+                body: JSON.stringify({ canvas }),
             });
         }
 

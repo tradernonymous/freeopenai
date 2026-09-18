@@ -117,13 +117,12 @@ function ledgerFor(providerId) {
   let entry = providerLedger.get(key);
   if (!entry) {
     entry = {
-      attempts: 0,
-      failures: 0,
       lastStatus: 0,
       lastAt: 0,
       latencyMs: null,
-      lastQuotaAt: 0,
       lastRetryAfterMs: null,
+      // One entry per model this process has actually called, so it is bounded
+      // by the provider's catalogue rather than by traffic.
       modelMs: new Map(),
       calls: 0,
       day: '',
@@ -143,26 +142,22 @@ function foldLatency(previous, ms) {
 function recordProviderAttempt(providerId, outcome = {}) {
   const entry = ledgerFor(providerId);
   const ms = Number(outcome.ms);
-  const status = Number(outcome.status) || 0;
   const day = utcDayKey();
   if (entry.day !== day) {
     entry.day = day;
     entry.calls = 0;
   }
-  entry.attempts += 1;
-  // The unit a free tier's daily cap is written in. Counted when the call is
-  // made rather than when it succeeds, because a rate-limited attempt spent
-  // the provider's time either way.
+  // The unit a free tier's daily cap is written in, counted when the call is
+  // made rather than when it succeeds: a rate-limited attempt spent the
+  // provider's time either way.
   entry.calls += 1;
-  entry.lastStatus = status;
+  entry.lastStatus = Number(outcome.status) || 0;
   entry.lastAt = Date.now();
-  if (outcome.ok === false) entry.failures += 1;
   if (Number.isFinite(ms) && ms > 0) {
     entry.latencyMs = foldLatency(entry.latencyMs, ms);
     const model = typeof outcome.model === 'string' ? outcome.model : '';
     if (model) entry.modelMs.set(model, foldLatency(entry.modelMs.get(model), ms));
   }
-  if (outcome.quota) entry.lastQuotaAt = entry.lastAt;
   const retryAfterMs = Number(outcome.retryAfterMs);
   if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) entry.lastRetryAfterMs = retryAfterMs;
 }
@@ -176,18 +171,16 @@ function providerLedgerSnapshot(providerId) {
   // rather than the number it stopped at.
   const day = utcDayKey();
   const callsToday = entry && entry.day === day ? entry.calls : 0;
+  // Only what a caller reads: the last answer, how long it took, how long the
+  // provider asked to be left alone, and today's count against its free tier.
   return {
-    attempts: entry ? entry.attempts : 0,
-    failures: entry ? entry.failures : 0,
     lastStatus: entry ? entry.lastStatus : 0,
     lastAt: entry ? entry.lastAt : 0,
     latencyMs: entry ? entry.latencyMs : null,
     cooldownMs,
     cooling: cooldownMs > 0,
-    lastQuotaAt: entry ? entry.lastQuotaAt : 0,
     lastRetryAfterMs: entry ? entry.lastRetryAfterMs : null,
     callsToday,
-    day,
   };
 }
 
@@ -237,6 +230,19 @@ async function retryProviderRequest(providerId, attempt, meta = {}) {
   let result;
   for (let tryNum = 0; tryNum < maxAttempts; tryNum += 1) {
     const wait = providerCooldownRemaining(providerId);
+    // A provider that asked to be left alone for longer than this call may wait
+    // is the same stall as a Retry-After we declined, so it gets the same answer:
+    // the refusal goes back with the reason in it and the client moves the turn
+    // on. Sleeping it here would hold the turn on a wait nothing is waiting for.
+    if (wait > budget) {
+      const label = (LLM_PROVIDERS[providerId] && LLM_PROVIDERS[providerId].label) || providerId;
+      return {
+        ok: false,
+        status: 429,
+        retryAfterMs: wait,
+        data: { error: { message: `${label} is cooling down for another ${Math.ceil(wait / 1000)}s after a rate limit` } },
+      };
+    }
     if (wait > 0) {
       await sleep(wait);
       waitedMs += wait;
@@ -250,7 +256,7 @@ async function retryProviderRequest(providerId, attempt, meta = {}) {
       // same budget again. A genuine connection failure, though, is worth
       // probing up to the cap before the caller reports the real error.
       if (err.name === 'AbortError') throw err;
-      recordProviderAttempt(providerId, { ms: Date.now() - startedAt, status: 0, ok: false, model: meta.model });
+      recordProviderAttempt(providerId, { ms: Date.now() - startedAt, status: 0, model: meta.model });
       const delay = Math.min(retryBackoffMs(tryNum), 30000);
       markProviderCooldown(providerId, delay + retryBaseDelayMs());
       if (tryNum >= maxAttempts - 1) throw err;
@@ -271,9 +277,7 @@ async function retryProviderRequest(providerId, attempt, meta = {}) {
     recordProviderAttempt(providerId, {
       ms: Date.now() - startedAt,
       status,
-      ok: result.ok !== false && status < 400,
       model: meta.model,
-      quota: !!(result && (result.__quotaExhausted || isQuotaExhausted(packetErrorMessage(result)))),
       retryAfterMs:
         result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
           ? parseRetryAfterMs(result.headers)
@@ -3335,7 +3339,7 @@ async function llmModels(req, res) {
           ' (Leave it unset to use the list this build ships with.)',
       });
     }
-    return sendJson(res, 200, annotateCatalogueRows(id, provider, ids));
+    return sendJson(res, 200, catalogueRowsForClient(id, provider, ids));
   }
   const ttl = modelsCacheTtlMs();
   const cached = modelCache.get(id);
@@ -3343,7 +3347,7 @@ async function llmModels(req, res) {
     // Annotated per request rather than cached: the free-tier label is settled,
     // but the observed latency behind a row moves, and a cached number would be
     // stale exactly when it is being used to choose.
-    return sendJson(res, 200, annotateCatalogueRows(id, provider, cached.models));
+    return sendJson(res, 200, catalogueRowsForClient(id, provider, cached.models));
   }
   try {
     const result = await fetchCatalogue(req, provider);
@@ -3359,7 +3363,7 @@ async function llmModels(req, res) {
         const pinned = provider.models.map((id) => ({ id })).filter((m) => m && m.id);
         if (pinned.length) {
           modelCache.set(id, { fetchedAt: Date.now(), models: pinned });
-          return sendJson(res, 200, annotateCatalogueRows(id, provider, pinned));
+          return sendJson(res, 200, catalogueRowsForClient(id, provider, pinned));
         }
       }
       // Name the paths that were read. A gateway that answered nothing on its
@@ -3437,7 +3441,7 @@ async function llmModels(req, res) {
     // nothing, and an empty list would outlive the upstream hiccup that
     // caused it, pinning "no models" for the cache's whole lifetime.
     if (listed.length) modelCache.set(id, { fetchedAt: Date.now(), models: listed });
-    sendJson(res, 200, annotateCatalogueRows(id, provider, applyFreeOnlyGate(provider, listed)));
+    sendJson(res, 200, catalogueRowsForClient(id, provider, listed));
   } catch (err) {
     sendJson(res, 502, { error: err.message });
   }
@@ -3679,7 +3683,12 @@ function freeTierLimitText(tier) {
   if (limits.requestsPerDay) parts.push(Number(limits.requestsPerDay).toLocaleString('en-US') + '/day');
   if (limits.requestsPerMinute) parts.push(limits.requestsPerMinute + '/min');
   if (limits.neuronsPerDay) parts.push(Number(limits.neuronsPerDay).toLocaleString('en-US') + ' neurons/day');
-  if (limits.scope === 'ip') parts.push('per IP');
+  // A tier with no published numbers still has a scope, and saying so beats an
+  // empty label: "metered per IP" is the whole reason Kilo's pool is shared by
+  // every visitor behind one address.
+  if (limits.scope === 'ip') parts.push(parts.length ? 'per IP' : 'metered per IP');
+  else if (limits.scope === 'account' && !parts.length) parts.push('metered per account');
+  else if (!parts.length) parts.push('metered');
   if (limits.shared) parts.push('shared');
   return parts.join(' · ');
 }
@@ -3739,21 +3748,16 @@ function annotateCatalogueRows(providerId, provider, rows) {
   });
 }
 
-// FREE_MODELS_ONLY=1 answers the API consumer rather than the page: it is the
-// same free-only rule the picker applies, applied at the source. It is off by
-// default because a provider the operator is paying for is not a mistake, and
-// the page has its own switch for the person who wants the short list.
-function freeOnlyGateEnabled() {
-  return String(process.env.FREE_MODELS_ONLY || '') === '1';
-}
-
-function applyFreeOnlyGate(provider, listed) {
-  if (!freeOnlyGateEnabled()) return listed;
-  const free = listed.filter((m) => modelIsFreeOnProvider(provider, m));
-  // Never gate a picker down to nothing. A provider whose whole catalogue
-  // reads as paid is either a paid provider or a catalogue this build cannot
-  // read, and an empty list says "no models", which is untrue in both cases.
-  return free.length ? free : listed;
+// The rows a response should carry: annotated with what the provider's free tier
+// covers, and -- when FREE_MODELS_ONLY=1 asks for it -- filtered to those rows at
+// the source, for a consumer that is not this page. The filter itself is
+// chatlib's freeRowsOnly, the same function the picker calls, so "free only" and
+// its "never filter down to nothing" rule exist once rather than twice. The
+// variable is off by default: a provider the operator pays for is not a mistake.
+function catalogueRowsForClient(providerId, provider, listed) {
+  const rows = annotateCatalogueRows(providerId, provider, listed);
+  if (String(process.env.FREE_MODELS_ONLY || '') !== '1') return rows;
+  return freeRowsOnly(rows).rows;
 }
 
 // What the page needs to say about a provider's free tier without repeating the
@@ -3777,15 +3781,25 @@ function freeTierReport(providerId, provider) {
   };
 }
 
-// A host's own edge answers 502/503/504 when its router cannot reach the
-// container at all, and that is usually over by the next request: a deploy
-// finishing, a process restarting, one request the router could not place. One
-// quick second attempt is the difference between a picker that works after a
-// hiccup and one that reports a failure whose only remedy is a page reload.
-// Only a *fast* refusal is retried -- a slow one is an outage, and a second
-// attempt against a gateway that is already struggling just doubles the wait.
+// A catalogue is read from a path this app chose for itself, and that path is
+// the most version-sensitive thing in this file: OmniRoute's deduplicating
+// `?prefix=alias` was verified against 0.7.x while upstream is past 3.8.x.
+//
+// Two failures follow from that, and one loop covers both. A gateway that no
+// longer knows a parameter answers 404; one whose own edge dislikes the request
+// answers a gateway error -- the same 502 a host's router sends when it cannot
+// place a request at all, which is usually over by the next one. So the
+// configured path is tried, a gateway error that came back *quickly* gets one
+// more attempt at that same path (a slow one is an outage, and asking again just
+// doubles the wait), and anything except a complaint about the key moves on to
+// the plain path, which is what rules the query string out.
+//
+// A 401 or 403 stops there on purpose: a key is wrong on every path, so it does
+// not pay for a second request. Only the catalogue is ever read twice -- a chat
+// turn has nowhere else to go.
 const CATALOGUE_RETRY_STATUSES = new Set([502, 503, 504]);
 const CATALOGUE_RETRY_BUDGET_MS = 8000;
+const CATALOGUE_FAST_FAILURE_MS = 2000;
 
 // Read at call time so a test can shrink it, like every other wait in here.
 function catalogueRetryDelayMs() {
@@ -3793,42 +3807,50 @@ function catalogueRetryDelayMs() {
   return Number.isFinite(n) && n >= 0 ? n : 600;
 }
 
-async function providerFetchBriefly(req, provider, path, budgetMs = 0) {
-  const first = await providerFetch(req, provider, path, {}, budgetMs);
-  if (!CATALOGUE_RETRY_STATUSES.has(first.status)) return first;
-  await sleep(catalogueRetryDelayMs() + Math.floor(Math.random() * 400));
-  const second = await providerFetch(
-    req,
-    provider,
-    path,
-    {},
-    Math.min(budgetMs > 0 ? budgetMs : providerTimeoutMs().models, CATALOGUE_RETRY_BUDGET_MS),
-  );
-  // The first answer is what would have been reported anyway, so a second
-  // failure reports that one rather than a status the first attempt never saw.
-  return second.ok ? second : first;
+// Whether another path could plausibly answer where this one did not. A key
+// complaint cannot be fixed by a different path, and neither can a rate limit.
+function cataloguePathIsSuspect(result) {
+  if (result.ok) return true; // a 200 that carried nothing readable is a shape problem
+  return result.status === 404 || result.status >= 500;
 }
 
 async function fetchCatalogue(req, provider, budgetMs = 0) {
   const declared = provider.modelsPath || '/models';
-  const first = await providerFetchBriefly(req, provider, declared, budgetMs);
+  const paths = declared === '/models' ? [declared] : [declared, '/models'];
   const usable = (result) => result.ok && catalogueRows(result.data).length;
-  if (usable(first)) return { ...first, path: declared };
-  // Version drift has more than one signature, and a 502 is one of them: a
-  // gateway that does not know a parameter answers 404, while one whose own
-  // edge rejects the query string answers a gateway error. From here the two
-  // are the same fact -- the query string is a suspect and the plain path is
-  // one request away from ruling it out. Only the catalogue pays for that
-  // second request; a chat turn never falls back.
-  // 401/403 stay out on purpose: those are about the key, and no other path
-  // makes a key correct.
-  const drift = !first.ok ? first.status === 404 || first.status >= 500 : true;
-  // Nothing to fall back to when the declared path is already the plain one.
-  if (!drift || declared === '/models') return { ...first, path: declared };    const second = await providerFetchBriefly(req, provider, '/models', budgetMs);
-  if (usable(second)) return { ...second, path: '/models', fallbackUsed: true };
-  // Neither path answered. Report the one that was configured for it, since
-  // that is the one whose parameter the operator would change.
-  return { ...first, path: declared, fallbackUsed: true };
+  let first = null;
+  // Whether the second path was actually read, which is what the failure message
+  // reports: a 401 that stopped at the first path must not claim both were tried.
+  let triedOther = false;
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = paths[index];
+    if (index > 0) triedOther = true;
+    const startedAt = Date.now();
+    let result = await providerFetch(req, provider, path, {}, budgetMs);
+    if (CATALOGUE_RETRY_STATUSES.has(result.status) && Date.now() - startedAt < CATALOGUE_FAST_FAILURE_MS) {
+      await sleep(catalogueRetryDelayMs() + Math.floor(Math.random() * 400));
+      const second = await providerFetch(
+        req,
+        provider,
+        path,
+        {},
+        Math.min(budgetMs > 0 ? budgetMs : providerTimeoutMs().models, CATALOGUE_RETRY_BUDGET_MS),
+      );
+      // The first answer is the one worth reporting if both failed: it is what
+      // the configured path said, and it is not a status this attempt invented.
+      if (second.ok) result = second;
+    }
+    if (usable(result)) return { ...result, path, fallbackUsed: index > 0 };
+    if (index === 0) first = result;
+    if (!cataloguePathIsSuspect(result)) break;
+  }
+  // Neither path answered. Report the configured one, since that is whose
+  // parameter the operator would change, and say both were read.
+  return {
+    ...(first || { ok: false, status: 502, data: { error: { message: 'no catalogue' } } }),
+    path: declared,
+    fallbackUsed: triedOther,
+  };
 }
 
 // A gateway can publish one model twice: once under an alias namespace and once
@@ -4938,8 +4960,183 @@ function createBuildStore(root) {
   });
 }
 
+// --- Design tab: systematic graphic design workspace ---
+// In-memory store for design projects and brand profiles.
+// A real deploy would back this with SQLite or the GitHub tools;
+// this is the working prototype layer for the Design tab.
+const designProjects = new Map();
+const designBrandProfiles = new Map();
+
+const DESIGN_TEMPLATES = [
+  { id: 'a4-document', label: 'A4 Document', category: 'document', width: 210, height: 297, unit: 'mm', description: 'Print-ready A4 document with title page, TOC, body pages, and export to PDF/PPTX.' },
+  { id: 'social-post', label: 'Social Media Post', category: 'social', width: 1080, height: 1080, unit: 'px', description: 'Square post optimized for Twitter/LinkedIn/Instagram with brand palette and typography.' },
+  { id: 'web-landing', label: 'Web Landing Page', category: 'web', width: 1440, height: 900, unit: 'px', description: 'Responsive landing page prototype with hero, features, and CTA sections.' },
+  { id: 'deck', label: 'Presentation Deck', category: 'deck', width: 1280, height: 720, unit: 'px', description: '16:9 slide deck with title, bullet, image, and divider layouts; exports to PPTX/PDF.' },
+  { id: 'infographic', label: 'Infographic', category: 'infographic', width: 1200, height: 1800, unit: 'px', description: 'Vertical infographic with timeline, stats, and icon flow; exports to PNG/SVG/PDF.' },
+];
+
+function designTemplates(req, res) {
+  sendJson(res, 200, DESIGN_TEMPLATES);
+}
+
+function designListProjects(req, res) {
+  const user = currentAppUser(req);
+  const list = [];
+  for (const [id, project] of designProjects) {
+    if (!user || project.owner === user) list.push({ id, ...project });
+  }
+  sendJson(res, 200, list);
+}
+
+function designCreateProject(req, res) {
+  readJsonBody(req, 512 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const name = String((body && body.name) || '').trim();
+    const template = String((body && body.template) || '').trim();
+    const prompt = String((body && body.prompt) || '').trim();
+    if (!name) return sendJson(res, 400, { error: 'name is required' });
+    const id = crypto.randomBytes(6).toString('hex');
+    const project = {
+      id,
+      name,
+      template,
+      prompt,
+      owner: currentAppUser(req),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      canvas: {},
+      brand: null,
+      status: 'draft',
+    };
+    designProjects.set(id, project);
+    sendJson(res, 200, { id, ...project });
+  });
+}
+
+function designGetProject(req, res) {
+  const url = new URL(req.url, 'http://x');
+  const id = url.pathname.split('/').pop();
+  const project = id ? designProjects.get(id) : null;
+  if (!project) return sendJson(res, 404, { error: 'Project not found' });
+  sendJson(res, 200, project);
+}
+
+function designUpdateProject(req, res) {
+  readJsonBody(req, 512 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const url = new URL(req.url, 'http://x');
+    const id = url.pathname.split('/').pop();
+    const project = designProjects.get(id);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const allowed = ['name', 'template', 'prompt', 'canvas', 'brand', 'status'];
+    let changed = false;
+    for (const key of allowed) {
+      if (body && Object.prototype.hasOwnProperty.call(body, key)) {
+        project[key] = body[key];
+        changed = true;
+      }
+    }
+    if (changed) project.updatedAt = Date.now();
+    sendJson(res, 200, project);
+  });
+}
+
+function designDeleteProject(req, res) {
+  const url = new URL(req.url, 'http://x');
+  const id = url.pathname.split('/').pop();
+  if (!designProjects.has(id)) return sendJson(res, 404, { error: 'Project not found' });
+  designProjects.delete(id);
+  sendJson(res, 200, { ok: true });
+}
+
+function designGenerate(req, res) {
+  readJsonBody(req, 512 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const projectId = String((body && body.projectId) || '').trim();
+    const prompt = String((body && body.prompt) || '').trim();
+    const provider = String((body && body.provider) || '').trim();
+    const model = String((body && body.model) || '').trim();
+    const project = designProjects.get(projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    project.prompt = prompt;
+    project.status = 'generating';
+    project.updatedAt = Date.now();
+    // Placeholder: hand the request back to the caller as a token.
+    // A real implementation would call an image/design model here
+    // and write the resulting HTML/canvas JSON into project.canvas.
+    sendJson(res, 200, {
+      projectId,
+      status: 'queued',
+      message: 'Design generation is queued. Connect a design-capable provider to render the canvas.',
+      prompt,
+      provider: provider || 'auto',
+      model: model || 'auto',
+    });
+  });
+}
+
+function designExport(req, res) {
+  readJsonBody(req, 512 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const projectId = String((body && body.projectId) || '').trim();
+    const format = String((body && body.format) || 'html').trim().toLowerCase();
+    const project = designProjects.get(projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const allowed = ['html', 'pdf', 'pptx', 'png', 'svg', 'mp4'];
+    if (!allowed.includes(format)) return sendJson(res, 400, { error: 'Unsupported export format. Use: ' + allowed.join(', ') });
+    const exportRecord = {
+      projectId,
+      format,
+      requestedAt: Date.now(),
+      url: '/api/design/export/' + projectId + '/' + format,
+    };
+    project.status = 'export-' + format;
+    project.updatedAt = Date.now();
+    sendJson(res, 200, exportRecord);
+  });
+}
+
+function designBrandProfile(req, res) {
+  const url = new URL(req.url, 'http://x');
+  const projectId = url.searchParams.get('projectId');
+  const key = url.searchParams.get('key');
+  const profile = key ? designBrandProfiles.get(key) : null;
+  if (profile) return sendJson(res, 200, profile);
+  if (projectId) {
+    const project = designProjects.get(projectId);
+    if (project && project.brand) return sendJson(res, 200, project.brand);
+  }
+  sendJson(res, 200, {});
+}
+
+function designSaveBrandProfile(req, res) {
+  readJsonBody(req, 512 * 1024, (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const key = String((body && body.key) || '').trim() || crypto.randomBytes(8).toString('hex');
+    const profile = {
+      key,
+      url: String((body && body.url) || '').trim(),
+      palette: Array.isArray(body && body.palette) ? body.palette.slice(0, 8) : [],
+      fontStack: String((body && body.fontStack) || '').trim(),
+      semanticRoles: body && body.semanticRoles || {},
+      source: String((body && body.source) || '').trim(),
+      updatedAt: Date.now(),
+    };
+    designBrandProfiles.set(key, profile);
+    const projectId = String((body && body.projectId) || '').trim();
+    if (projectId) {
+      const project = designProjects.get(projectId);
+      if (project) {
+        project.brand = profile;
+        project.updatedAt = Date.now();
+      }
+    }
+    sendJson(res, 200, profile);
+  });
+}
+
 function createRequestHandler(root) {
-  const buildStore = createBuildStore(root);
   const buildHelpers = {
     currentUser: currentAppUser,
     gateOn: () => getConfiguredAccounts(process.env).length > 0,
@@ -5018,6 +5215,18 @@ function createRequestHandler(root) {
     if (urlPath === '/api/push/register' && req.method === 'POST') return handlePushRegister(req, res);
     if (urlPath === '/api/push/unregister' && req.method === 'POST') return handlePushUnregister(req, res);
 
+    // --- Design tab: systematic graphic design workspace ---
+    if (urlPath === '/api/design/templates' && req.method === 'GET') return designTemplates(req, res);
+    if (urlPath === '/api/design/projects' && req.method === 'GET') return designListProjects(req, res);
+    if (urlPath === '/api/design/projects' && req.method === 'POST') return designCreateProject(req, res);
+    if (urlPath.startsWith('/api/design/projects/') && req.method === 'GET') return designGetProject(req, res);
+    if (urlPath.startsWith('/api/design/projects/') && req.method === 'PUT') return designUpdateProject(req, res);
+    if (urlPath.startsWith('/api/design/projects/') && req.method === 'DELETE') return designDeleteProject(req, res);
+    if (urlPath === '/api/design/generate' && req.method === 'POST') return designGenerate(req, res);
+    if (urlPath === '/api/design/export' && req.method === 'POST') return designExport(req, res);
+    if (urlPath === '/api/design/brand' && req.method === 'GET') return designBrandProfile(req, res);
+    if (urlPath === '/api/design/brand' && req.method === 'POST') return designSaveBrandProfile(req, res);
+
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' });
       res.end('Method Not Allowed');
@@ -5089,16 +5298,12 @@ module.exports = {
   fetchProviderWithRetry,
   fetchStreamWithRetry,
   clearModelCache,
-  // The ledger is process state, so a test that leaves a provider cooling would
-  // slow every test after it. Same for the retry budget: both are read at call
-  // time and cleared here.
+  // The ledger and the cooldowns are process state, so a test that leaves a
+  // provider cooling would slow every test after it.
   clearProviderLedger: () => {
     providerLedger.clear();
     providerCooldownUntil.clear();
   },
-  providerCooldownUntil,
-  providerLedgerSnapshot,
-  retryBudgetMs,
   clearImageDiscoveryCache,
   imageModelFromCatalogue,
   clearSkillsCache,
