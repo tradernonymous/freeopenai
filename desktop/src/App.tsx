@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Sidebar from './Sidebar';
 import './index.css';
 
-const VIEWS = {
+const VIEWS: Record<string, string> = {
   chat: '/?app=desktop#chat',
   design: '/?app=desktop#design',
   build: '/?app=desktop#build',
@@ -26,7 +26,6 @@ export default function App() {
           id="main-webview"
           src={VIEWS[active]}
           style={{ width: '100%', height: '100%', border: 'none' }}
-          allow="clipboard-read; clipboard-write"
         />
       </main>
     </div>
