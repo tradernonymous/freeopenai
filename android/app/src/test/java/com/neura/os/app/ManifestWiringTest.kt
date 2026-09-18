@@ -32,8 +32,8 @@ class ManifestWiringTest {
     /** The Gradle namespace: what a relative android:name is resolved against. */
     private fun namespace(): String {
         val text = File(moduleDir, "build.gradle.kts").readText()
-        val match = Regex("""namespace\s*=\s*"([^"]+)"""").find(text)
-            ?: fail("namespace not found in build.gradle.kts")
+        val match = Regex("namespace\\s*=\\s*\"([^\"]+)\"").find(text)
+        if (match == null) throw IllegalStateException("namespace not found in build.gradle.kts")
         return match.groupValues[1]
     }
 
