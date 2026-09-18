@@ -539,6 +539,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         replace(chat.copy(pinned = !chat.pinned))
     }
 
+    /** Hides a chat from the drawer's dated sections without deleting it --
+     * it stays in Archived and in search, and can be brought back the same
+     * way it was put away. */
+    fun toggleArchive(id: String) {
+        val chat = conversation(id) ?: return
+        replace(chat.copy(archived = !chat.archived))
+    }
+
     fun delete(id: String) {
         if (streamingId == id) stop()
         conversations.removeAll { it.id == id }

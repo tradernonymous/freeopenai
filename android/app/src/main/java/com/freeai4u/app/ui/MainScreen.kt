@@ -47,6 +47,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
@@ -69,7 +70,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
@@ -90,11 +93,14 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -203,6 +209,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
     var query by rememberSaveable { mutableStateOf("") }
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<Conversation?>(null) }
+    var showArchived by rememberSaveable { mutableStateOf(false) }
     val needle = query.trim().lowercase()
     // Filtering reads every message of every chat, so it is done when the list
     // or the search changes rather than on every recomposition -- during a
@@ -211,6 +218,8 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         vm.conversations.filter { it.messages.isNotEmpty() }
             .filter { chat -> needle.isEmpty() || chat.title.lowercase().contains(needle) || chat.messages.any { it.content.lowercase().contains(needle) } }
     }
+    val activeChats = visible.filter { !it.archived }
+    val archivedChats = visible.filter { it.archived }
     Column(Modifier.fillMaxHeight()) {
         Row(
             Modifier.padding(horizontal = 12.dp, vertical = 12.dp).fillMaxWidth().height(40.dp)
@@ -233,40 +242,38 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
-            if (visible.isEmpty()) {
+            if (activeChats.isEmpty() && archivedChats.isEmpty()) {
                 item { Text(if (needle.isEmpty()) "No chats yet" else "No match", color = Palette.muted, modifier = Modifier.padding(16.dp)) }
             }
-            groupByDate(visible).forEach { (label, chats) ->
+            groupByDate(activeChats).forEach { (label, chats) ->
                 item(key = "h-$label") {
                     Text(label, color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp))
                 }
                 items(chats, key = { it.id }) { item ->
-                    val selected = item.id == currentId
-                    Box {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp))
-                                .background(if (selected) Palette.surfaceHigh else Palette.surface)
-                                .combinedClickable(onClick = { vm.openChat(item.id); close() }, onLongClick = { haptics(HapticFeedbackType.LongPress); menuFor = item.id })
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (vm.streamingId == item.id) {
-                                Box(Modifier.size(8.dp).background(Palette.green, CircleShape))
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            if (item.pinned) Icon(Icons.Filled.PushPin, null, tint = Palette.muted, modifier = Modifier.size(14.dp).padding(end = 4.dp))
-                            Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Palette.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                            if (item.mode != "chat") Text(modeLabel(item.mode), color = Palette.green, fontSize = 11.sp)
-                        }
-                        DropdownMenu(menuFor == item.id, { menuFor = null }) {
-                            DropdownMenuItem({ Text(if (item.pinned) "Unpin" else "Pin") }, { vm.togglePin(item.id); menuFor = null })
-                            DropdownMenuItem({ Text("Rename") }, { renaming = item; menuFor = null })
-                            DropdownMenuItem({ Text("Share") }, {
-                                platform.shareText(item.title, com.freeai4u.app.data.conversationMarkdown(item, personaFor(vm.library, item.personaId).name))
-                                menuFor = null
-                            })
-                            DropdownMenuItem({ Text("Delete", color = Palette.red) }, { vm.delete(item.id); menuFor = null })
-                        }
+                    ChatRow(
+                        vm, platform, item, item.id == currentId, haptics,
+                        menuOpen = menuFor == item.id, onMenuOpenChange = { open -> menuFor = if (open) item.id else null },
+                        onOpen = { vm.openChat(item.id); close() }, onRename = { renaming = item; menuFor = null },
+                    )
+                }
+            }
+            if (archivedChats.isNotEmpty()) {
+                item(key = "archived-toggle") {
+                    Row(
+                        Modifier.fillMaxWidth().clickable { showArchived = !showArchived }.padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Archived (${archivedChats.size})", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Icon(if (showArchived) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                if (showArchived) {
+                    items(archivedChats, key = { it.id }) { item ->
+                        ChatRow(
+                            vm, platform, item, item.id == currentId, haptics,
+                            menuOpen = menuFor == item.id, onMenuOpenChange = { open -> menuFor = if (open) item.id else null },
+                            onOpen = { vm.openChat(item.id); close() }, onRename = { renaming = item; menuFor = null },
+                        )
                     }
                 }
             }
@@ -293,6 +300,70 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             confirmButton = { TextButton({ vm.rename(item.id, title); renaming = null }) { Text("Save") } },
             dismissButton = { TextButton({ renaming = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** One drawer row: tap opens the chat, long-press opens the same menu a
+ * swipe shortcuts for archiving. Only EndToStart (swipe left) is wired --
+ * enabling both directions risks an accidental swipe silently filing a
+ * chat away while scrolling. */
+@Composable
+private fun ChatRow(
+    vm: AppViewModel,
+    platform: Platform,
+    item: Conversation,
+    selected: Boolean,
+    haptics: (HapticFeedbackType) -> Unit,
+    menuOpen: Boolean,
+    onMenuOpenChange: (Boolean) -> Unit,
+    onOpen: () -> Unit,
+    onRename: () -> Unit,
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) vm.toggleArchive(item.id)
+            true
+        },
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                Modifier.fillMaxSize().padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)).background(Palette.surfaceHigh).padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Icon(if (item.archived) Icons.Filled.Unarchive else Icons.Filled.Archive, null, tint = Palette.text)
+            }
+        },
+    ) {
+        Box {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (selected) Palette.surfaceHigh else Palette.surface)
+                    .combinedClickable(onClick = onOpen, onLongClick = { haptics(HapticFeedbackType.LongPress); onMenuOpenChange(true) })
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (vm.streamingId == item.id) {
+                    Box(Modifier.size(8.dp).background(Palette.green, CircleShape))
+                    Spacer(Modifier.width(8.dp))
+                }
+                if (item.pinned) Icon(Icons.Filled.PushPin, null, tint = Palette.muted, modifier = Modifier.size(14.dp).padding(end = 4.dp))
+                Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Palette.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                if (item.mode != "chat") Text(modeLabel(item.mode), color = Palette.green, fontSize = 11.sp)
+            }
+            DropdownMenu(menuOpen, { onMenuOpenChange(false) }) {
+                DropdownMenuItem({ Text(if (item.pinned) "Unpin" else "Pin") }, { vm.togglePin(item.id); onMenuOpenChange(false) })
+                DropdownMenuItem({ Text("Rename") }, { onRename() })
+                DropdownMenuItem({ Text("Share") }, {
+                    platform.shareText(item.title, com.freeai4u.app.data.conversationMarkdown(item, personaFor(vm.library, item.personaId).name))
+                    onMenuOpenChange(false)
+                })
+                DropdownMenuItem({ Text(if (item.archived) "Unarchive" else "Archive") }, { vm.toggleArchive(item.id); onMenuOpenChange(false) })
+                DropdownMenuItem({ Text("Delete", color = Palette.red) }, { vm.delete(item.id); onMenuOpenChange(false) })
+            }
+        }
     }
 }
 

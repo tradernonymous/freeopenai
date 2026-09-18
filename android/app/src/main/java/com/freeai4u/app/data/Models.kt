@@ -66,6 +66,9 @@ data class Conversation(
     val skills: List<String> = emptyList(),
     /** /compact on: send a shorter history without changing what is on screen. */
     val compact: Boolean = false,
+    /** Hidden from the drawer's dated sections until unarchived; still kept
+     * and searchable, unlike delete. */
+    val archived: Boolean = false,
 )
 
 data class Persona(
@@ -146,6 +149,7 @@ fun Conversation.toJson(): JSONObject {
         .put("pendingWrites", JSONArray().also { array -> pendingWrites.forEach { array.put(JSONObject().put("path", it.path).put("content", it.content)) } })
         .put("skills", JSONArray(skills))
         .put("compact", compact)
+        .put("archived", archived)
 }
 
 fun conversationFromJson(text: String): Conversation? = try {
@@ -180,6 +184,7 @@ fun conversationFromJson(text: String): Conversation? = try {
         } ?: emptyList(),
         skills = obj.optJSONArray("skills")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
         compact = obj.optBoolean("compact", false),
+        archived = obj.optBoolean("archived", false),
     )
 } catch (e: Exception) {
     null

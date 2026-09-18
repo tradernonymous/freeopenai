@@ -23,6 +23,13 @@ class DataTest {
     }
 
     @Test
+    fun conversation_roundTripsArchived() {
+        val original = chat(ChatMessage("user", "hi")).copy(archived = true)
+        assertTrue(conversationFromJson(original.toJson().toString())!!.archived)
+        assertFalse(chat(ChatMessage("user", "hi")).toJson().let { conversationFromJson(it.toString()) }!!.archived)
+    }
+
+    @Test
     fun conversation_rejectsJunkAndNonImageAttachments() {
         assertNull(conversationFromJson("not json"))
         assertNull(conversationFromJson("{\"title\":\"no id\"}"))

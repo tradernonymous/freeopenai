@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -50,10 +52,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.semantics.contentDescription
@@ -113,12 +120,14 @@ private fun StatusPill(status: String) {
 
 // --- The list ------------------------------------------------------------------
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BuildsScreen(vm: AppViewModel) {
     val builds = vm.builds
     LaunchedEffect(Unit) { builds.refresh() }
     val list = builds.list
     val listError = builds.listError
+    PullToRefreshBox(isRefreshing = builds.listBusy, onRefresh = { builds.refresh() }) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -155,6 +164,7 @@ fun BuildsScreen(vm: AppViewModel) {
                 items(list.sessions, key = { it.id }) { session -> BuildRow(session) { vm.openBuild(session.id) } }
             }
         }
+    }
     }
 }
 
@@ -339,35 +349,66 @@ private fun StepTicker(steps: List<BuildStep>) {
 private fun ApprovalCard(pending: BuildPending, busy: Boolean, onApprove: () -> Unit, onReject: (String) -> Unit) {
     var reason by rememberSaveable(pending.requestId) { mutableStateOf("") }
     val haptics = rememberHaptics()
-    Surface(
-        color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Palette.amber),
-        modifier = Modifier.fillMaxWidth().enterUp(),
+    // A swipe triggers the same onApprove/onReject the buttons below call, then
+    // always springs back: the card itself only leaves once `pending` actually
+    // clears (server-confirmed), so a swipe never hides a change the approval
+    // failed to land.
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (!busy) {
+                when (value) {
+                    SwipeToDismissBoxValue.StartToEnd -> { haptics(HapticFeedbackType.LongPress); onApprove() }
+                    SwipeToDismissBoxValue.EndToStart -> onReject(reason)
+                    SwipeToDismissBoxValue.Settled -> Unit
+                }
+            }
+            false
+        },
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val approving = dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            Box(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
+                    .background(if (approving) Palette.green else Palette.red)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = if (approving) Alignment.CenterStart else Alignment.CenterEnd,
+            ) {
+                Icon(if (approving) Icons.Filled.CheckCircle else Icons.Filled.Close, null, tint = Palette.background)
+            }
+        },
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Needs your approval", color = Palette.amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text(pending.summary.ifEmpty { pending.tool }, style = MaterialTheme.typography.titleSmall)
-            CodeBlock(pending.tool.replace('_', ' '), pending.preview)
-            OutlinedTextField(
-                reason, { reason = it },
-                placeholder = { Text("Why not? (optional, the agent reads this)") },
-                modifier = Modifier.fillMaxWidth(), maxLines = 3,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(
-                    {
-                        haptics(HapticFeedbackType.LongPress)
-                        onApprove()
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                ) { Text(if (pending.tool == "run_command") "Approve & run" else "Approve") }
-                OutlinedButton(
-                    { onReject(reason) },
-                    enabled = !busy,
-                    border = BorderStroke(1.dp, Palette.red),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.red),
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                ) { Text("Reject") }
+        Surface(
+            color = Palette.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Palette.amber),
+            modifier = Modifier.fillMaxWidth().enterUp(),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Needs your approval", color = Palette.amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(pending.summary.ifEmpty { pending.tool }, style = MaterialTheme.typography.titleSmall)
+                CodeBlock(pending.tool.replace('_', ' '), pending.preview)
+                OutlinedTextField(
+                    reason, { reason = it },
+                    placeholder = { Text("Why not? (optional, the agent reads this)") },
+                    modifier = Modifier.fillMaxWidth(), maxLines = 3,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        {
+                            haptics(HapticFeedbackType.LongPress)
+                            onApprove()
+                        },
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) { Text(if (pending.tool == "run_command") "Approve & run" else "Approve") }
+                    OutlinedButton(
+                        { onReject(reason) },
+                        enabled = !busy,
+                        border = BorderStroke(1.dp, Palette.red),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.red),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) { Text("Reject") }
+                }
             }
         }
     }
