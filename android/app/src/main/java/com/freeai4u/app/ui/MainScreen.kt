@@ -307,6 +307,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
  * swipe shortcuts for archiving. Only EndToStart (swipe left) is wired --
  * enabling both directions risks an accidental swipe silently filing a
  * chat away while scrolling. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ChatRow(
     vm: AppViewModel,
