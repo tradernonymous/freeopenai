@@ -21,10 +21,18 @@ class AgentTest {
     fun modes_offerMoreToolsAsTheyGetMorePowerful() {
         assertFalse("chat keeps no plan", names("chat").contains("task_add"))
         assertTrue(names("plan").contains("task_add"))
-        assertFalse("no write tools ship in the APK", names("plan").contains("file_write"))
-        assertFalse("no file tools ship in the APK", names("chat").contains("file_read"))
-        assertFalse("build is gone", MODES.contains("build"))
+        assertFalse("plan never writes -- only build has files", names("plan").contains("file_write"))
+        assertFalse("chat has no file tools -- only build does", names("chat").contains("file_read"))
+        assertEquals(listOf("chat", "plan", "build"), MODES)
         assertEquals(names("chat"), names("nonsense"))
+    }
+
+    @Test
+    fun noMode_everOffersExecution() {
+        val forbidden = listOf("run_command", "shell", "exec", "process_start", "git_push", "file_delete", "install")
+        for (mode in MODES + "nonsense") {
+            assertTrue("$mode must not offer any of $forbidden", names(mode).none { it in forbidden })
+        }
     }
 
     @Test
@@ -51,10 +59,13 @@ class AgentTest {
     }
 
     @Test
-    fun fileTools_areGoneSoWritesAreRefused() {
-        assertTrue(runLocalTool(chat("plan"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!.output.startsWith("Error"))
-        assertTrue(runLocalTool(chat("chat"), call("file_read", "{\"path\":\"a.md\"}"))!!.output.startsWith("Error"))
+    fun fileTools_onlyWorkInBuildAndOnlyInThisChat() {
+        assertTrue("plan never writes", runLocalTool(chat("plan"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!.output.startsWith("Error"))
+        assertTrue("chat has no file tools", runLocalTool(chat("chat"), call("file_read", "{\"path\":\"a.md\"}"))!!.output.startsWith("Error"))
         assertNull("network tools are not local", runLocalTool(chat("chat"), call("web_search", "{}")))
+        val staged = runLocalTool(chat("build"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!
+        assertFalse(staged.output.startsWith("Error"))
+        assertEquals(listOf(StagedWrite("a.md", "x")), staged.conversation.pendingWrites)
     }
 
     @Test
@@ -65,6 +76,44 @@ class AgentTest {
         assertEquals("plan never writes", ToolApproval.DENY, approvalFor("plan", "file_write"))
         assertEquals("chat cannot plan", ToolApproval.DENY, approvalFor("chat", "task_add"))
         assertEquals("an unknown tool is denied, not run", ToolApproval.DENY, approvalFor("plan", "use_skill"))
+        assertEquals(ToolApproval.CONFIRM, approvalFor("build", "file_write"))
+        assertEquals(ToolApproval.AUTO, approvalFor("build", "file_read"))
+        assertEquals("no mode ever offers execution", ToolApproval.DENY, approvalFor("build", "run_command"))
+    }
+
+    @Test
+    fun fileWrite_stagesWithoutTouchingFilesUntilApproved() {
+        val staged = runLocalTool(chat("build"), call("file_write", "{\"path\":\"a.md\",\"content\":\"x\"}"))!!.conversation
+        assertTrue("nothing commits without a tap", staged.files.isEmpty())
+        assertEquals(1, staged.pendingWrites.size)
+    }
+
+    @Test
+    fun commitWrites_appliesExactlyTheApprovedSubset() {
+        val c = chat("build").copy(pendingWrites = listOf(StagedWrite("keep.md", "yes"), StagedWrite("drop.md", "no")))
+        val committed = commitWrites(c, setOf("keep.md"), now = 0)
+        assertEquals(mapOf("keep.md" to "yes"), committed.files)
+        assertTrue(committed.pendingWrites.isEmpty())
+    }
+
+    @Test
+    fun workspacePaths_areConfinedToTheChat() {
+        val rejected = listOf("../", "/etc/passwd", "a\\b", "a/../../b", "a" + 0.toChar() + "b", "a".repeat(200), "a/b/c/d/e/f")
+        for (path in rejected) assertNull("$path must be rejected", normalizeWorkspacePath(path))
+        assertEquals("b.md", normalizeWorkspacePath("a/../b.md"))
+    }
+
+    @Test
+    fun workspaceQuotas_failClosed() {
+        val fullFiles = (1..WORKSPACE_MAX_FILES).associate { "f$it.md" to "x" }
+        val full = chat("build").copy(files = fullFiles)
+        val overFileCount = runLocalTool(full, call("file_write", "{\"path\":\"one-too-many.md\",\"content\":\"x\"}"))!!
+        assertTrue(overFileCount.output.startsWith("Error"))
+        assertEquals(fullFiles, overFileCount.conversation.files)
+        val tooBig = "x".repeat(WORKSPACE_MAX_FILE_BYTES + 1)
+        val overSize = runLocalTool(chat("build"), call("file_write", JSONObject().put("path", "big.md").put("content", tooBig).toString()))!!
+        assertTrue(overSize.output.startsWith("Error"))
+        assertTrue(overSize.conversation.pendingWrites.isEmpty())
     }
 
     @Test

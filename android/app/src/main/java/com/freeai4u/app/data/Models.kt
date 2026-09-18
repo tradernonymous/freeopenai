@@ -47,12 +47,17 @@ data class Conversation(
     val createdAt: Long,
     val updatedAt: Long,
     val pinned: Boolean = false,
-    /** chat | plan */
+    /** chat | plan | build */
     val mode: String = "chat",
     val tasks: List<TaskItem> = emptyList(),
-    /** The chat's own scratch files, path to text. Kept only so chats saved
-     * by older builds still open; nothing in this build writes them. */
+    /** The chat's own scratch files, path to text -- Build mode's sandboxed
+     * workspace (see data/Workspace.kt). A file_write only ever lands here
+     * once the user approves it; nothing else in the app writes them. */
     val files: Map<String, String> = emptyMap(),
+    /** Writes Build mode staged but the user has not approved yet. Never
+     * read by anything the model's history includes -- only the overlay
+     * (data/Workspace.kt) and the approval screen see these. */
+    val pendingWrites: List<StagedWrite> = emptyList(),
     /** Installed skills pinned to this chat with /skill. */
     val skills: List<String> = emptyList(),
     /** /compact on: send a shorter history without changing what is on screen. */
@@ -132,6 +137,7 @@ fun Conversation.toJson(): JSONObject {
         .put("mode", mode)
         .put("tasks", JSONArray().also { array -> tasks.forEach { array.put(JSONObject().put("id", it.id).put("title", it.title).put("status", it.status).put("detail", it.detail)) } })
         .put("files", JSONObject(files))
+        .put("pendingWrites", JSONArray().also { array -> pendingWrites.forEach { array.put(JSONObject().put("path", it.path).put("content", it.content)) } })
         .put("skills", JSONArray(skills))
         .put("compact", compact)
 }
@@ -158,6 +164,14 @@ fun conversationFromJson(text: String): Conversation? = try {
             }.filter { it.id.isNotEmpty() }
         } ?: emptyList(),
         files = obj.optJSONObject("files")?.let { map -> map.keys().asSequence().associateWith { key -> map.optString(key, "") } } ?: emptyMap(),
+        pendingWrites = obj.optJSONArray("pendingWrites")?.let { list ->
+            (0 until list.length()).mapNotNull { index ->
+                list.optJSONObject(index)?.let {
+                    val path = it.optString("path", "")
+                    if (path.isEmpty()) null else StagedWrite(path, it.optString("content", ""))
+                }
+            }
+        } ?: emptyList(),
         skills = obj.optJSONArray("skills")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
         compact = obj.optBoolean("compact", false),
     )
@@ -185,7 +199,7 @@ data class Library(
     val instructions: String = "",
 )
 
-val MODES = listOf("chat", "plan")
+val MODES = listOf("chat", "plan", "build")
 
 fun Library.toJson(): JSONObject {
     val personaList = JSONArray().also { array -> personas.forEach { array.put(it.toJson()) } }

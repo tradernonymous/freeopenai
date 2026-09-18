@@ -125,6 +125,7 @@ import com.freeai4u.app.data.PhoneAction
 import com.freeai4u.app.data.allPrompts
 import com.freeai4u.app.data.groupByDate
 import com.freeai4u.app.data.matchPrompts
+import com.freeai4u.app.data.MODES
 import com.freeai4u.app.data.modeLabel
 import com.freeai4u.app.data.personaFor
 import com.freeai4u.app.data.slashSuggestions
@@ -320,6 +321,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
     }
     var modelSheet by remember { mutableStateOf(false) }
     var sessionSheet by remember { mutableStateOf(false) }
+    var workspaceSheet by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Int?>(null) }
     val streaming = vm.streamingId == chat.id
     // Keep the screen awake while a reply streams (from Mobile-Harness).
@@ -368,11 +370,20 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                 TaskPanel(chat.tasks)
                 Spacer(Modifier.height(6.dp))
             }
+            if (chat.mode == "build") {
+                BuildModeBanner()
+                Spacer(Modifier.height(6.dp))
+            }
+            if (chat.pendingWrites.isNotEmpty()) {
+                PendingWritesBanner(chat.pendingWrites.size) { workspaceSheet = true }
+                Spacer(Modifier.height(6.dp))
+            }
             Composer(vm, platform, chat, streaming)
         }
     }
     if (modelSheet) ModelSheet(vm, chat) { modelSheet = false }
     if (sessionSheet) SessionSheet(vm, chat, onPickModel = { modelSheet = true }, onClose = { sessionSheet = false })
+    if (workspaceSheet) WorkspaceReviewSheet(vm, chat) { workspaceSheet = false }
     editing?.let { index ->
         val original = chat.messages.getOrNull(index)
         if (original == null) {
@@ -480,7 +491,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
                         vm = vm, platform = platform,
                         onRegenerate = { vm.regenerate(chat.id) },
                         onBranch = { vm.forkAt(chat.id, turn.lastIndex) },
-                        onBuild = if (chat.mode == "plan") ({ vm.startRemoteBuild(turn.text) }) else null,
+                        onBuild = if (chat.mode == "plan" || chat.mode == "build") ({ vm.startRemoteBuild(turn.text) }) else null,
                     )
                 }
             }
@@ -661,6 +672,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 Text("Mode", color = Palette.muted, fontSize = 12.sp)
                 SheetOption(Icons.AutoMirrored.Filled.Chat, "Chat", "Answer and research", chat.mode == "chat") { vm.setMode(chat.id, "chat"); plusSheet = false }
                 SheetOption(Icons.Filled.Checklist, "Plan", "Think first, write a task list", chat.mode == "plan") { vm.setMode(chat.id, "plan"); plusSheet = false }
+                SheetOption(Icons.Filled.Construction, "Build", "Light edits to this chat's own files", chat.mode == "build") { vm.setMode(chat.id, "build"); plusSheet = false }
                 HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -680,13 +692,19 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
 /** Chat or Plan, as two halves of one control: the mode in force is filled in,
  * the other is a tap away. Plan is read-only, so which one is on decides
  * whether a reply can change anything. */
+private fun modeIcon(mode: String): ImageVector = when (mode) {
+    "plan" -> Icons.Filled.Checklist
+    "build" -> Icons.Filled.Construction
+    else -> Icons.AutoMirrored.Filled.Chat
+}
+
 @Composable
 private fun ModeToggle(mode: String, onPick: (String) -> Unit) {
     Row(
         Modifier.clip(RoundedCornerShape(14.dp)).background(Palette.surfaceHigh).padding(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for (option in listOf("chat", "plan")) {
+        for (option in MODES) {
             val on = mode == option
             Row(
                 Modifier.clip(RoundedCornerShape(12.dp))
@@ -696,12 +714,7 @@ private fun ModeToggle(mode: String, onPick: (String) -> Unit) {
                     .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    if (option == "plan") Icons.Filled.Checklist else Icons.AutoMirrored.Filled.Chat,
-                    null,
-                    tint = if (on) Palette.green else Palette.muted,
-                    modifier = Modifier.size(15.dp),
-                )
+                Icon(modeIcon(option), null, tint = if (on) Palette.green else Palette.muted, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(5.dp))
                 Text(modeLabel(option), color = if (on) Palette.text else Palette.muted, fontSize = 13.sp)
             }

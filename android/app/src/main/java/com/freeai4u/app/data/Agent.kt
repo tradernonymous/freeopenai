@@ -7,16 +7,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Chat / Plan for the native app, as pure functions: the mode instructions,
-// which tools each mode offers, the approval each tool call needs, and how the
-// local tools (tasks, phone actions) change a conversation. The network tools
-// (web search, page reading, image generation) run in the view model;
-// everything that can be decided without a phone or a server lives here and is
-// unit-tested.
+// Chat / Plan / Build for the native app, as pure functions: the mode
+// instructions, which tools each mode offers, the approval each tool call
+// needs, and how the local tools (tasks, phone actions, files) change a
+// conversation. The network tools (web search, page reading, image
+// generation) run in the view model; everything that can be decided without
+// a phone or a server lives here and is unit-tested.
 //
-// Build is deliberately not here: the phone only researches and plans. The
-// agreed plan is carried out on the web/desktop app over remote access, so no
-// file-writing or execution tool ships in the APK.
+// Build is light, in-chat editing only: its file tools (see data/Workspace.kt)
+// read and write Conversation.files/pendingWrites, text this chat already
+// owns -- never a real path, a process or a shell. This file has no java.io,
+// no java.nio and no android.* import, checked by RatchetTest as a build-time
+// fact rather than a hope about the prompt: a build tool structurally cannot
+// reach anything outside the chat. Anything bigger still goes to the server
+// over remote access, the way it always has.
 
 const val MAX_TOOL_ROUNDS = 8
 /** The most tool steps one turn may take across every round, so a looping
@@ -29,6 +33,7 @@ val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "op
 
 fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "Plan"
+    "build" -> "Build"
     else -> "Chat"
 }
 
@@ -39,6 +44,13 @@ fun modeInstructions(mode: String): String = when (mode) {
         "Then answer with: a one-line goal, what you found, a numbered step-by-step plan, risks, and open questions.",
         "Record every step with task_add. Keep task titles short.",
         "This phone does not change anything itself: end by telling the user to tap \"Build remotely\" under your reply, which runs the plan on their server and asks them to approve every change.",
+    ).joinToString("\n")
+    "build" -> listOf(
+        "MODE: BUILD. Light, in-chat editing of text this chat owns -- not a real project.",
+        "file_list and file_read see your own edits immediately, staged or already approved.",
+        "file_write and file_patch stage a change; nothing is real until the user taps Approve on it.",
+        "There is no filesystem, no shell and no git here: you cannot run a command, install anything, or touch a path outside this chat.",
+        "The moment the job needs to compile, run, test or deploy something real, say so and tell the user to ask for a plan and tap \"Build remotely\" instead.",
     ).joinToString("\n")
     else -> listOf(
         "MODE: CHAT. Answer directly and concisely.",
@@ -110,13 +122,27 @@ private val PHONE_ACTION = tool(
         .put("location", prop("string", "Event location.")),
     listOf("kind"),
 )
+private val FILE_LIST = tool("file_list", "List every file in this chat's workspace, with its size.", JSONObject(), emptyList())
+private val FILE_READ = tool("file_read", "Read one file from this chat's workspace, including your own unapproved edits to it.", JSONObject().put("path", prop("string", "Relative path, e.g. src/app.js.")), listOf("path"))
+private val FILE_WRITE = tool(
+    "file_write", "Stage a file's full new content in this chat's workspace. Nothing is real until the user approves it.",
+    JSONObject().put("path", prop("string", "Relative path, e.g. src/app.js.")).put("content", prop("string", "The file's complete new content.")),
+    listOf("path", "content"),
+)
+private val FILE_PATCH = tool(
+    "file_patch", "Stage a file's full new content, same as file_write -- named separately for a change framed as editing an existing file rather than writing a new one.",
+    JSONObject().put("path", prop("string", "Relative path, e.g. src/app.js.")).put("content", prop("string", "The file's complete new content after the change.")),
+    listOf("path", "content"),
+)
 
 /** Which tools a mode offers. Chat researches and draws; Plan also records
- * tasks. Phone actions are offered everywhere because each one waits for the
- * user's tap before anything happens. */
+ * tasks; Build also edits its own sandboxed files. Phone actions are offered
+ * everywhere because each one waits for the user's tap before anything
+ * happens. */
 fun toolsForMode(mode: String): JSONArray {
     val list = when (mode) {
         "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION)
+        "build" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION, FILE_LIST, FILE_READ, FILE_WRITE, FILE_PATCH)
         else -> listOf(WEB_SEARCH, WEB_FETCH, GENERATE_IMAGE, PHONE_ACTION)
     }
     return JSONArray().also { array -> list.forEach { array.put(JSONObject(it.toString())) } }
@@ -144,6 +170,10 @@ fun approvalFor(mode: String, name: String): ToolApproval {
     if (!toolAllowed(mode, name)) return ToolApproval.DENY
     return when (name) {
         "phone_action" -> ToolApproval.CONFIRM
+        // Runs immediately like any other local tool (see runLocalTool) --
+        // CONFIRM here describes the write itself, staged and unreal until a
+        // later tap in the workspace review, not a gate on the tool call.
+        "file_write", "file_patch" -> ToolApproval.CONFIRM
         else -> ToolApproval.AUTO
     }
 }
@@ -186,6 +216,34 @@ fun runLocalTool(conversation: Conversation, call: ToolCall): LocalResult? {
             if (status !in TASK_STATUSES) return LocalResult("Error: status must be one of ${TASK_STATUSES.joinToString()}.", conversation)
             if (conversation.tasks.none { it.id == id }) return LocalResult("Error: no task $id. Call task_list.", conversation)
             LocalResult("$id is now $status.", conversation.copy(tasks = conversation.tasks.map { if (it.id == id) it.copy(status = status) else it }))
+        }
+        "file_list" -> {
+            val overlay = workspaceOverlay(conversation.files, conversation.pendingWrites)
+            LocalResult(
+                if (overlay.isEmpty()) "The workspace is empty."
+                else overlay.entries.joinToString("\n") { (path, content) -> "$path (${content.toByteArray(Charsets.UTF_8).size} bytes)" },
+                conversation,
+            )
+        }
+        "file_read" -> {
+            val path = normalizeWorkspacePath(args.optString("path", ""))
+                ?: return LocalResult("Error: not a valid path.", conversation)
+            val overlay = workspaceOverlay(conversation.files, conversation.pendingWrites)
+            val content = overlay[path] ?: return LocalResult("Error: no file at $path. Call file_list.", conversation)
+            LocalResult(content, conversation)
+        }
+        "file_write", "file_patch" -> {
+            val path = normalizeWorkspacePath(args.optString("path", ""))
+                ?: return LocalResult("Error: not a valid path -- relative, no \"..\" above the workspace, at most 4 segments, 120 characters per name.", conversation)
+            val content = args.optString("content", "")
+            if (conversation.pendingWrites.none { it.path == path } && conversation.pendingWrites.size >= WORKSPACE_MAX_PENDING) {
+                return LocalResult("Error: $WORKSPACE_MAX_PENDING changes are already waiting for approval. Ask the user to review them first.", conversation)
+            }
+            if (!workspaceCanStage(conversation.files, conversation.pendingWrites, path, content)) {
+                return LocalResult("Error: that would go over the workspace's limit ($WORKSPACE_MAX_FILES files, ${WORKSPACE_MAX_FILE_BYTES / 1024}KB per file, ${WORKSPACE_MAX_TOTAL_BYTES / 1024}KB total).", conversation)
+            }
+            val staged = conversation.pendingWrites.filter { it.path != path } + StagedWrite(path, content)
+            LocalResult("Staged $path (awaiting the user's approval).", conversation.copy(pendingWrites = staged))
         }
         else -> null
     }

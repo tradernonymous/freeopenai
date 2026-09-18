@@ -635,6 +635,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         replace(chat.copy(mode = mode))
     }
 
+    /** The one moment a staged Build-mode write becomes real: [approvedPaths]
+     * merge into the chat's files, everything else pending is dropped. */
+    fun commitPendingWrites(id: String, approvedPaths: Set<String>) {
+        val chat = conversation(id) ?: return
+        replace(com.freeai4u.app.data.commitWrites(chat, approvedPaths))
+    }
+
     // --- Slash commands ---------------------------------------------------
 
     /** Runs a slash command locally. Returns true when [text] was a command and
@@ -708,8 +715,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             "mode" -> when (args.lowercase()) {
                 "chat" -> { setMode(chat.id, "chat"); notice = "Chat mode." }
                 "plan" -> { setMode(chat.id, "plan"); notice = "Plan mode." }
-                "build" -> notice = "Build runs on the server: ask for a plan in Plan mode, then tap \"Build remotely\" under the reply."
-                else -> notice = "Usage: /mode chat | plan"
+                "build" -> { setMode(chat.id, "build"); notice = "Build mode: light edits to this chat's own files. Ask for a plan and tap \"Build remotely\" for anything bigger." }
+                else -> notice = "Usage: /mode chat | plan | build"
             }
             "clear" -> {
                 newChat()

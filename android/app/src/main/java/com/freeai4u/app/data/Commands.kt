@@ -3,11 +3,9 @@ package com.freeai4u.app.data
 import org.json.JSONArray
 import org.json.JSONObject
 
-// Slash commands and skills, ported from the web app's chatlib.js. The set is
-// the same one the web documents, minus build: this app plans, it does not
-// execute. Matching is deliberately strict -- a line that merely starts with a
-// slash (a path, a date) stays a message rather than becoming a command the
-// user never typed.
+// Slash commands and skills, ported from the web app's chatlib.js. Matching
+// is deliberately strict -- a line that merely starts with a slash (a path, a
+// date) stays a message rather than becoming a command the user never typed.
 
 data class SlashCommand(val name: String, val usage: String, val desc: String)
 
@@ -15,7 +13,7 @@ val CHAT_COMMANDS = listOf(
     SlashCommand("help", "/help", "List these commands"),
     SlashCommand("skill", "/skill <name>  ·  /skill off <name>", "Use an installed skill for the rest of this chat"),
     SlashCommand("skills", "/skills", "Show what this chat is using"),
-    SlashCommand("mode", "/mode chat | plan", "Switch mode"),
+    SlashCommand("mode", "/mode chat | plan | build", "Switch mode"),
     SlashCommand("clear", "/clear", "Start a new chat — this one stays in the sidebar"),
     SlashCommand("compact", "/compact on | off | status", "Reduce sent history for this session without changing the visible chat"),
     SlashCommand("doctor", "/doctor", "Check providers, skills and mode health"),
