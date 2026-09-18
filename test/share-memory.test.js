@@ -284,23 +284,146 @@ test('the store stays memory-only unless a path is configured', () => {
 test('the Forget-all button really asks the server to forget, not just the DOM', async () => {
   // The page once sent an empty body here, which the server read as
   // "delete nothing" -- a silent no-op the API-level test above could not
-  // see, because it built the request itself. This one drives the shipped
-  // button instead.
+  // see, because it built the request itself. The shipped logic now lives in
+  // the ShareMemory module (tested directly below); this one pins that the
+  // page's button still reaches it.
   const { loadFromIndex } = require('./helpers/index-html.js');
-  const calls = [];
+  let cleared = 0;
   const deps = {
-    fetch: async (url, init) => {
-      calls.push({ url, init });
-      return { json: async () => ({ facts: [] }) };
-    },
-    memoryFacts: [{ text: 'old fact' }],
-    renderMemoryList: () => {},
+    shareMemory: { clearAllFacts: async () => { cleared += 1; return []; } },
   };
   const loaded = loadFromIndex(['clearAllMemoryFacts'], deps);
   await loaded.clearAllMemoryFacts();
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, '/api/memory');
-  assert.equal(calls[0].init.method, 'DELETE');
-  assert.equal(calls[0].init.body, '{"all":true}');
-  assert.deepEqual(deps.memoryFacts, [], 'and the page forgets what the server confirmed');
+  assert.equal(cleared, 1, 'the button drives the module, which builds the request');
+});
+
+// ------------------------------------------------------- ShareMemory module
+
+const { create: createShareMemory } = require('../share-memory.js');
+
+function memoryHarness(overrides) {
+  const store = new Map();
+  const calls = [];
+  const deps = {
+    sharePayloadOf: () => ({ title: 't', messages: [{ type: 'user', content: 'hi' }] }),
+    memoryFactsUsedIn: (content, facts) => facts.map((f) => f.text).filter((t) => String(content).includes(t.split(' ')[1] || t)),
+    shareImageDataUrlFactory: () => (src) => Promise.resolve('data:image/jpeg;base64,SMALL|' + src),
+    makeCanvas: () => ({}),
+    loadImage: () => Promise.resolve({}),
+    // One saved fact by default, so use-detection tests have something to find.
+    fetchJson: async (url, init) => {
+      calls.push({ url, init: init || {} });
+      return { ok: true, status: 200, data: { id: 'abc123', url: '/s/abc123', facts: [{ text: 'prefers Python' }] } };
+    },
+    storage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+    },
+    imageUrlById: new Map([['stored-1', 'data:image/png;base64,STORED']]),
+    ...overrides,
+  };
+  return { mod: createShareMemory(deps), deps, calls, store };
+}
+
+test('publish sends the payload and reports the link; a second call while in flight is refused', async () => {
+  let releasePublish;
+  const gate = new Promise((resolve) => { releasePublish = resolve; });
+  const h = memoryHarness({
+    fetchJson: (url, init) => {
+      h.calls.push({ url, init: init || {} });
+      return gate.then(() => ({ ok: true, status: 200, data: { id: 'abc123', url: '/s/abc123' } }));
+    },
+  });
+  const convo = { title: 'My chat', messages: [{ type: 'user', content: 'hello' }] };
+  const first = h.mod.publish(convo);
+  const second = await h.mod.publish(convo);
+  assert.deepEqual(second, { ok: false, reason: 'busy' }, 'a double click waits, never buys a second link');
+  releasePublish();
+  const done = await first;
+  assert.equal(done.ok, true);
+  assert.equal(done.url, '/s/abc123');
+  assert.equal(h.mod.activeShare().id, 'abc123');
+  assert.match(h.calls[0].init.body, /\"messages\"/, 'the payload rides the PUT body');
+});
+
+test('an unshareable conversation says empty, an oversized one says too-large', async () => {
+  const emptyConvo = { title: 'x', messages: [{ type: 'system', content: 'narration' }] };
+  const bigConvo = { title: 'x', messages: [{ type: 'user', content: 'a real message' }] };
+  const h = memoryHarness({ sharePayloadOf: () => null });
+  assert.equal((await h.mod.publish(emptyConvo)).reason, 'empty', 'nothing shareable is not a size problem');
+  assert.equal((await h.mod.publish(bigConvo)).reason, 'too-large');
+});
+
+test('images are read back from the store and compacted for the payload', async () => {
+  const built = [];
+  const h = memoryHarness({
+    sharePayloadOf: (messages, title) => { built.push({ messages, title }); return { title, messages }; },
+  });
+  await h.mod.buildSharePayload({
+    title: 'Pics',
+    messages: [
+      { type: 'user', content: 'q', images: [{ id: 'stored-1' }, { id: 'gone' }] },
+      { type: 'user', content: 'inline', images: [{ url: 'data:image/png;base64,RAW' }] },
+      { type: 'system', content: 'narration' },
+    ],
+  });
+  assert.deepEqual(built[0].messages[0].images, ['data:image/jpeg;base64,SMALL|data:image/png;base64,STORED'],
+    'a stored id is read back through the map; a missing id is dropped');
+  assert.deepEqual(built[0].messages[1].images, ['data:image/jpeg;base64,SMALL|data:image/png;base64,RAW'],
+    'an inline data: URL passes through');
+  assert.equal(built[0].messages.length, 2, 'narration never ships');
+});
+
+test('memory facts flow through the module, and clear-all sends the contract body', async () => {
+  // The module captures its environment at construction, the way the page
+  // builds it -- so the stateful server stand-in has to be in place first.
+  const calls = [];
+  let factStore = [];
+  const h = memoryHarness({
+    fetchJson: async (url, init) => {
+      calls.push({ url, init: init || {} });
+      const body = JSON.parse((init && init.body) || '{}');
+      if (init && init.method === 'PUT' && body.text) {
+        factStore = [{ text: body.text }, ...factStore.filter((f) => f.text !== body.text)];
+      }
+      if (init && init.method === 'DELETE' && body.all) factStore = [];
+      return { ok: true, status: 200, data: { facts: factStore } };
+    },
+  });
+  await h.mod.clearAllFacts();
+  assert.deepEqual(calls[0].init.body, '{"all":true}', 'the contract body, not an empty one');
+  await h.mod.upsertFact('  prefers Python  ', false);
+  assert.deepEqual(h.mod.factsList().map((f) => f.text), ['prefers Python'], 'trimmed and stored');
+  const ack = await h.mod.memoryTool({ text: 'ships on Friday' });
+  assert.match(ack, /Saved to memory: \"ships on Friday\"/);
+  assert.equal(await h.mod.memoryTool({ text: '   ' }), 'Error: text is required.');
+  await h.mod.clearAllFacts();
+  assert.deepEqual(h.mod.factsList(), []);
+});
+
+test('per-chat opt-out persists, and an opted-out chat records no use', async () => {
+  const h = memoryHarness();
+  await h.mod.loadFacts();
+  assert.equal(h.mod.onForChat('c1'), true, 'default on');
+  assert.equal(h.mod.onForChat(''), true, 'no chat yet reads as on');
+  h.mod.setForChat('c1', false);
+  assert.equal(h.mod.onForChat('c1'), false);
+  const fresh = createShareMemory({ ...h.deps });
+  assert.equal(fresh.onForChat('c1'), false, 'the choice survives a reload via storage');
+  assert.deepEqual(h.mod.recordUse('I remember you prefer Python a lot', { convoId: 'c1' }),
+    [], 'an opted-out chat gets no facts and no chips');
+  assert.deepEqual(h.mod.recordUse('I remember you prefer Python a lot', { convoId: 'c2' }),
+    ['prefers Python']);
+});
+
+test('recordUse counts new uses, not redraws', async () => {
+  const h = memoryHarness();
+  await h.mod.loadFacts();
+  const reply = 'You prefer Python, so here is Python code.';
+  h.mod.recordUse(reply, { convoId: 'c1' });
+  h.mod.recordUse(reply, { convoId: 'c1' });
+  const counts = h.mod.useCounts();
+  assert.equal(counts['prefers Python'], 2, 'each completion counts once');
+  h.mod.recordUse(reply, { convoId: 'c1', restoring: true });
+  assert.equal(h.mod.useCounts()['prefers Python'], 2, 'a redraw re-detects but never re-counts');
 });

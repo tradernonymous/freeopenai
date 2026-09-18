@@ -11,6 +11,7 @@
     <script src="tool-call-text.js"></script>
     <script src="chatlib.js"></script>
     <script src="image-store.js"></script>
+    <script src="share-memory.js"></script>
     <script src="provider-routing.js"></script>
     <script src="transcript-controller.js"></script>
     <script src="attachment-helpers.js"></script>
@@ -3144,10 +3145,12 @@
         // Saved memory lives here, with the other per-session state, because
         // the init block reads it long before the bottom-of-page section that
         // manages the Memory tab runs.
-        let memoryFacts = [];
-        let memoryEnabledByChat = new Set();
-        const MEMORY_ENABLED_KEY = 'freeopenaiMemoryChats';
-        try { memoryEnabledByChat = new Set(JSON.parse(localStorage.getItem(MEMORY_ENABLED_KEY) || '[]')); } catch { /* a broken list reads as none */ }
+// Share and memory keep their state in the ShareMemory module (share-memory.js);
+// the page holds only the instance and the DOM half.
+        // True only while a saved transcript is being re-drawn, so restored
+        // replies re-detect their memory chips without counting the redraw as
+        // a new use.
+        let restoringTranscript = false;
 
         // The workspace is a flat map of path -> text, kept in this browser. It
         // is deliberately not the server's disk: the deployment is shared and
@@ -3866,6 +3869,25 @@
         // bottom of this script has run, and a `let` down there would be in its
         // temporal dead zone exactly then.
         let imageUrlById = new Map();
+
+        // One instance of the ShareMemory module: it owns the share link state
+        // and the memory facts, and the page renders whatever it reports. The
+        // module reads the conversation the way the server wrote it -- storage
+        // keys and pure helpers are injected, so the module needs no window.
+        const shareMemory = ShareMemory.create({
+            sharePayloadOf,
+            memoryFactsUsedIn,
+            shareImageDataUrlFactory,
+            makeCanvas: (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; },
+            loadImage: (src) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; }),
+            fetchJson: async (url, init) => {
+                const res = await fetch(url, init);
+                return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+            },
+            storage: localStorage,
+            imageUrlById,
+            onFacts: renderMemoryList,
+        });
         let isTyping = false;
         // A send is a turn the deployment pays for, and the button is not the
         // only way in: Enter, a hero card and a double-click all reach
@@ -6773,7 +6795,7 @@
             // Memory rides with the volatile context on the live turn, after
             // everything a provider caches, so the system line stays identical
             // and a saved fact never enters the stored history.
-            const memory = memoryOnForChat() ? memoryPromptFor(memoryFacts) : '';
+            const memory = shareMemory.onForChat(activeConversationId) ? memoryPromptFor(shareMemory.factsList()) : '';
             const turnContext = [memory, renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
             const system = [SYSTEM_PROMPT, modePrompt(selectedMode), workspacePrompt(useServerWorkspace())].filter(Boolean).join('\n\n');
             return [
@@ -7754,7 +7776,7 @@
                     // Remembering is offered whenever the chat has it on (the
                     // default): the model only writes a fact it was given or
                     // asked to keep, and the Memory tab is where it is undone.
-                    if (memoryOnForChat()) offered.push(MEMORY_TOOL);
+                    if (shareMemory.onForChat(activeConversationId)) offered.push(MEMORY_TOOL);
                     let tools = toolsForMode(selectedMode, offered);
                     // Skills ride along: whatever this chat pinned, plus what the
                     // router picks when auto-skills are on and the mode allows it.
@@ -11557,79 +11579,32 @@
         // 'statusResetTimer' before initialization" out of initializeApp and
         // stopped the rest of the boot with it.
         // -----------------------------------------------------------------
-        // Read-only share links.
-
-        // Downscale one data: URL for a share payload. The picture in a stored
-        // chat can be megabytes; a reader's link does not need the original
-        // pixels. (The factory keeps the browser machinery injectable.)
-        const shareImageDataUrl = shareImageDataUrlFactory({
-            makeCanvas: (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; },
-            loadImage: (src) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; }),
-        });
-
-        // Build a share payload: every stored image id is read back and
-        // compacted to a data: URL first, then the whitelisted transcript is
-        // assembled by the shared helper. Null means the conversation is too
-        // large to publish.
-        async function buildSharePayloadFor(convo) {
-            const withImages = [];
-            for (const m of convo.messages || []) {
-                if (!m || (m.type !== 'user' && m.type !== 'bot')) continue;
-                const images = [];
-                for (const im of Array.isArray(m.images) ? m.images : []) {
-                    const src = im && (typeof im.url === 'string' && im.url.startsWith('data:') ? im.url : im.id ? imageUrlById.get(String(im.id)) : '') || '';
-                    if (!src) continue;
-                    images.push(await shareImageDataUrl(src));
-                }
-                withImages.push({ ...m, images: images.filter(Boolean) });
-            }
-            return sharePayloadOf(withImages, convo.title);
-        }
-
-        let shareActiveId = null;
-        let shareActiveLink = '';
-        let sharePublishing = false;
+        // Read-only share links. The link state and the network live in the
+        // ShareMemory module; these are the modal's hands on it.
 
         async function openShareModal(convoId) {
-            if (sharePublishing) return; // a second click waits for the first publish, not a second link
             const convo = conversations.find((c) => c.id === convoId);
             if (!convo) return;
             const overlay = document.getElementById('shareOverlay');
             const status = document.getElementById('shareStatus');
             const box = document.getElementById('shareLinkBox');
-            shareActiveId = null;
-            shareActiveLink = '';
             box.value = '';
             status.textContent = 'Making a read-only link…';
             overlay.classList.add('open');
-            sharePublishing = true;
-            try {
-                const payload = await buildSharePayloadFor(convo);
-                if (!payload) {
-                    // Two different dead ends, two different sentences: a chat
-                    // with nothing shareable is not a size problem.
-                    const shareable = (convo.messages || []).some((m) => m && (m.type === 'user' || m.type === 'bot')
-                        && ((String(m.content || '').trim()) || (Array.isArray(m.images) && m.images.length)));
-                    status.textContent = shareable
-                        ? 'This conversation is too large to share.'
-                        : 'Nothing to share yet — send a message first.';
-                    return;
-                }
-                const res = await fetch('/api/share', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.id) {
-                    status.textContent = data.error || 'Sharing failed — try again in a moment.';
-                    return;
-                }
-                shareActiveId = data.id;
-                shareActiveLink = location.origin + (data.url || ('/s/' + data.id));
-                box.value = shareActiveLink;
-                status.textContent = 'Read-only link ready:';
-            } catch (err) {
-                status.textContent = 'Sharing failed — the server did not answer.';
-            } finally {
-                sharePublishing = false;
+            const result = await shareMemory.publish(convo);
+            if (!result.ok) {
+                // The module decides what happened; the page decides what to say.
+                status.textContent = {
+                    busy: 'Already making a link…',
+                    empty: 'Nothing to share yet — send a message first.',
+                    'too-large': 'This conversation is too large to share.',
+                    network: 'Sharing failed — the server did not answer.',
+                    server: result.detail || 'Sharing failed — try again in a moment.',
+                }[result.reason] || 'Sharing failed — try again in a moment.';
+                return;
             }
+            box.value = location.origin + result.url;
+            status.textContent = 'Read-only link ready:';
         }
 
         function closeShareModal() {
@@ -11637,18 +11612,17 @@
         }
 
         function copyShareLink() {
-            if (shareActiveLink) copyText(shareActiveLink, document.getElementById('shareCopyBtn'));
+            const { url } = shareMemory.activeShare();
+            if (url) copyText(url, document.getElementById('shareCopyBtn'));
         }
 
         async function revokeShareLink() {
-            if (!shareActiveId) return;
-            try {
-                await fetch('/api/share/' + encodeURIComponent(shareActiveId), { method: 'DELETE' });
-            } catch { /* a failed revoke still closes the modal; the link dies with the server session anyway */ }
-            document.getElementById('shareStatus').textContent = 'Link revoked. Nobody can open it now.';
+            if (!shareMemory.activeShare().id) return;
+            const revoked = await shareMemory.revoke();
+            document.getElementById('shareStatus').textContent = revoked
+                ? 'Link revoked. Nobody can open it now.'
+                : 'Revoke failed — try again in a moment.';
             document.getElementById('shareLinkBox').value = '';
-            shareActiveId = null;
-            shareActiveLink = '';
         }
 
         // -----------------------------------------------------------------
@@ -11660,34 +11634,15 @@
         // Marking the replies that drew on saved memory.
         //
         // The request carries the facts verbatim, so detection is a word
-        // match (chatlib's memoryFactsUsedIn): a reply echoing a fact's own
-        // words gets a chip saying so. Counts live in localStorage keyed by
-        // fact text -- a measure of the mechanism for the Memory tab, not a
-        // proof about any single reply -- and a transcript being re-rendered
-        // from storage re-draws chips without counting again.
-        const MEMORY_USE_KEY = 'freeopenaiMemoryUse';
-        let restoringTranscript = false;
-
-        function memoryUseCounts() {
-            try {
-                const raw = JSON.parse(localStorage.getItem(MEMORY_USE_KEY) || '{}');
-                return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-            } catch { return {}; }
-        }
-
-        function bumpMemoryUseCount(text) {
-            try {
-                const counts = memoryUseCounts();
-                counts[text] = (counts[text] || 0) + 1;
-                localStorage.setItem(MEMORY_USE_KEY, JSON.stringify(counts));
-            } catch { /* a refused counter costs nothing: the chip still shows */ }
-        }
+        // match (chatlib's memoryFactsUsedIn, run inside the module): a reply
+        // echoing a fact's own words gets a chip saying so. Counts live in
+        // localStorage keyed by fact text -- a measure of the mechanism for
+        // the Memory tab, not a proof about any single reply.
 
         function markMemoryUse(el, content) {
-            if (!memoryOnForChat() || !memoryFacts.length || !el) return;
-            const used = memoryFactsUsedIn(content, memoryFacts);
+            if (!el) return;
+            const used = shareMemory.recordUse(content, { convoId: activeConversationId, restoring: restoringTranscript });
             if (!used.length) return;
-            if (!restoringTranscript) used.forEach(bumpMemoryUseCount);
             const chip = document.createElement('div');
             chip.className = 'memory-use-chip';
             chip.setAttribute('aria-label', 'This reply drew on saved memory: ' + used.join('; '));
@@ -11709,27 +11664,16 @@
         // Keep the switch honest with the conversation actually on screen.
         function syncMemorySwitch() {
             const sw = document.getElementById('memoryModeSwitch');
-            if (sw) sw.checked = memoryOnForChat();
-        }
-
-        function memoryOnForChat() {
-            const id = activeConversationId;
-            if (!id) return true;
-            // Default on, remembered per chat: the same conversation keeps its
-            // choice across reloads.
-            return !memoryEnabledByChat.has('off:' + id);
+            if (sw) sw.checked = shareMemory.onForChat(activeConversationId);
         }
 
         function setMemoryForChat(on) {
-            const id = activeConversationId;
-            if (!id) return;
-            if (on) memoryEnabledByChat.delete('off:' + id);
-            else memoryEnabledByChat.add('off:' + id);
-            try { localStorage.setItem(MEMORY_ENABLED_KEY, JSON.stringify([...memoryEnabledByChat])); } catch { /* a refused preference costs nothing */ }
+            shareMemory.setForChat(activeConversationId, on);
             showStatus('info', on ? 'Memory offered to this chat' : 'Memory off for this chat');
         }
 
         function renderMemoryList() {
+            const memoryFacts = shareMemory.factsList();
             const list = document.getElementById('memoryList');
             const count = document.getElementById('memoryCount');
             if (!list) return;
@@ -11742,7 +11686,7 @@
                 list.appendChild(empty);
                 return;
             }
-            const counts = memoryUseCounts();
+            const counts = shareMemory.useCounts();
             for (const fact of memoryFacts) {
                 const row = document.createElement('div');
                 row.className = 'memory-fact-row';
@@ -11770,31 +11714,12 @@
         }
 
         async function loadMemoryFacts() {
-            try {
-                const res = await fetch('/api/memory');
-                const data = await res.json().catch(() => ({}));
-                memoryFacts = Array.isArray(data.facts) ? data.facts : [];
-            } catch {
-                memoryFacts = [];
-            }
+            await shareMemory.loadFacts();
             renderMemoryList();
         }
 
         async function upsertMemoryFact(text, replace) {
-            const trimmed = String(text || '').trim().slice(0, 300);
-            if (!trimmed) return;
-            try {
-                const res = await fetch('/api/memory', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: trimmed, replace: !!replace }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (Array.isArray(data.facts)) {
-                    memoryFacts = data.facts;
-                    renderMemoryList();
-                }
-            } catch { /* the fact stays unsaved; the transcript is untouched */ }
+            await shareMemory.upsertFact(text, replace);
         }
 
         function addMemoryFactFromInput() {
@@ -11805,36 +11730,18 @@
         }
 
         async function deleteMemoryFact(text) {
-            try {
-                const res = await fetch('/api/memory', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (Array.isArray(data.facts)) {
-                    memoryFacts = data.facts;
-                    renderMemoryList();
-                }
-            } catch { /* the row stays until a refresh succeeds */ }
+            await shareMemory.deleteFact(text);
         }
 
         async function clearAllMemoryFacts() {
-            try {
-                const res = await fetch('/api/memory', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) });
-                const data = await res.json().catch(() => ({}));
-                memoryFacts = Array.isArray(data.facts) ? data.facts : [];
-                renderMemoryList();
-            } catch { /* nothing was destroyed */ }
+            await shareMemory.clearAllFacts();
         }
 
         // The tool the model calls to remember something. Runs client-side:
         // the fact lands in the same store the Memory tab reads, and the
         // acknowledgement tells the model what it saved.
         function runMemoryTool(args) {
-            const text = String((args && args.text) || '').trim().slice(0, 300);
-            if (!text) return Promise.resolve('Error: text is required.');
-            return upsertMemoryFact(text, true).then(() => 'Saved to memory: "' + text + '". It will be offered to future chats that have memory on. The user can remove it in Session → Memory.');
+            return shareMemory.memoryTool(args);
         }
 
         function showStatus(type, msg, holdMs = 2500) {

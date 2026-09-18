@@ -49,9 +49,9 @@ function harness({ graph = newTaskGraph() } = {}) {
     messages: [],
     selectedMode: 'build',
     // Memory rides the same turn context; these tests keep it switched off.
-    memoryOnForChat: () => false,
-    memoryFacts: [],
+    shareMemory: { onForChat: () => false, factsList: () => [] },
     memoryPromptFor: () => '',
+    activeConversationId: 'tasks-test-chat',
   };
   const loaded = loadFromIndex(NAMES, deps);
   return {
