@@ -3,8 +3,19 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
+use std::fs::OpenOptions;
+use std::io::Write;
+
+fn log_crash(msg: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("C:/Users/Public/freeai4u-crash.log") {
+        let _ = writeln!(f, "[{}] {}", chrono::Utc::now().to_rfc3339(), msg);
+    }
+}
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        log_crash(&format!("PANIC: {}", info));
+    }));
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
