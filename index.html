@@ -2464,6 +2464,10 @@
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
                                         <span>Files<br><span class="attach-item-hint">Any text file — code, config, logs</span></span>
                                     </button>
+                                    <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="voice" onclick="selectAttachKind('voice')">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M8 14l2-2l8 8"/><path d="M16 14l2-2l8-8"/></svg>
+                                        <span>Voice<br><span class="attach-item-hint">Start dictation / speak selection</span></span>
+                                    </button>
                                 </div>
                                 <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
                             </div>
@@ -2562,7 +2566,12 @@
                                 <label for="imagePuterSwitch">Draw with Puter <span class="session-switch-note">spends credits</span></label>
                                 <input type="checkbox" id="imagePuterSwitch" onchange="setDrawWithPuter(this.checked)">
                             </div>
-                            <p class="session-hint">Off, pictures come from a free provider key. On, Puter draws them &mdash; better at the top end, and it spends a monthly allowance that does not roll over. Worth turning on for one picture, not for every one.</p>
+                            <div class="session-switch">
+                                <label for="voiceModeSwitch">Start voice dictation</label>
+                                <input type="checkbox" id="voiceModeSwitch" onchange="triggerVoiceMode(this.checked)">
+                            </div>
+                            <p class="session-hint">Off, text is sent as normal chat. On, voice mode starts listening (if a microphone is available) and can read selections out loud.</p>
+                            <p class="session-hint">This uses the browser's speech recognition if available, and Edge TTS for audio output.</p>
                             <h4 class="session-subhead">Shape</h4>
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
@@ -10180,6 +10189,13 @@
             if (attachMenu.classList.contains('open')) closeAttachMenu();
             else openAttachMenu();
         }
+        // Trigger the voice dictation / TTS panel.
+        function triggerVoiceMode() {
+            toggleSessionPanel();
+            setImageMode(false);
+            document.getElementById('voiceModeSwitch').checked = true;
+            setDrawWithPuter(false);
+        }
         // The attach menu is anchored to the paperclip's own rect and to the left
         // edge of it, unlike the model menu, which is anchored to its trigger's
         // right edge: this one opens from the start of the controls row.
@@ -10242,7 +10258,13 @@
                 ? 'image/*'
                 : kind === 'document'
                     ? '.pdf,.docx'
-                    : '';
+                    : kind === 'voice'
+                        ? ''
+                        : '';
+            if (kind === 'voice') {
+                triggerVoiceMode();
+                return;
+            }
             fileInput.click();
         }
 

@@ -1999,6 +1999,46 @@ async function llmFetch(req, res) {
   sendJson(res, 200, page);
 }
 
+// Zero-key Edge TTS: Microsoft's free text-to-speech service.
+// No API key required for basic synthesis. Returns base64-encoded audio.
+async function llmTts(req, res) {
+  readJsonBody(req, 4 * 1024 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const prompt = body && typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return sendJson(res, 400, { error: 'prompt is required' });
+    const voice = body && typeof body.voice === 'string' ? body.voice.trim() : '';
+    // Edge TTS endpoint - works without key for common voices
+    const ttsUrl = 'https://edge.tts.microsoft.com/cognitiveservices/v1/audio:speak';
+    const headers = {
+      'Content-Type': 'application/ssml+xml',
+      'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3',
+      'User-Agent': 'Mozilla/5.0',
+    };
+    let ssml = '<speak version="1.0" xml:lang="en-US">';
+    if (voice) {
+      ssml += `<voice name="${voice}">`;
+    }
+    ssml += prompt;
+    if (voice) {
+      ssml += '</voice>';
+    }
+    ssml += '</speak>';
+    try {
+      const upstream = await fetch(ttsUrl, {
+        method: 'POST',
+        headers,
+        body: ssml,
+      });
+      if (!upstream.ok) return sendJson(res, upstream.status, { error: 'TTS service failed' });
+      const ab = await upstream.arrayBuffer();
+      const b64 = Buffer.from(ab).toString('base64');
+      sendJson(res, 200, { audio: b64, sampleRate: 16000 });
+    } catch (e) {
+      sendJson(res, 502, { error: 'TTS request failed: ' + (e && e.message) });
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Image generation, for every provider that sells it.
 //
@@ -5264,6 +5304,7 @@ function createRequestHandler(root) {
     }
     if (urlPath === '/api/push/register' && req.method === 'POST') return handlePushRegister(req, res);
     if (urlPath === '/api/push/unregister' && req.method === 'POST') return handlePushUnregister(req, res);
+    if (urlPath === '/api/tts' && req.method === 'POST') return llmTts(req, res);
 
     // --- Design tab: systematic graphic design workspace ---
     if (urlPath === '/api/design/templates' && req.method === 'GET') return designTemplates(req, res);
