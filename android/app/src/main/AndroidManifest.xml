@@ -33,9 +33,8 @@
     default: Android will not enable it until the person turns it on by
     hand in Settings > Accessibility, and even then every action still
     waits for a tap in the chat before it runs anything (see
-    data/Agent.kt's ActionTicket). It never draws over other apps
-    (no SYSTEM_ALERT_WINDOW) and reads the accessibility tree, never a
-    screenshot.
+    data/Agent.kt's ActionTicket). It never draws an overlay on top of
+    other apps and reads the accessibility tree, never a screenshot.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
