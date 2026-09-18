@@ -36,7 +36,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import com.neura.os.app.BuildConfig
 
 @Composable
 fun SignInScreen(vm: AppViewModel) {

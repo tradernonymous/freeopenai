@@ -145,7 +145,7 @@ private fun MarkdownViewer(file: FileGenerator.GeneratedFile) {
                 color = Palette.text,
                 style = style,
                 modifier = Modifier.padding(
-                    start = if (line.startsWith("- ")) 16.dp else 0.dp,
+                    horizontal = if (line.startsWith("- ")) 16.dp else 0.dp,
                     vertical = verticalPadding,
                 ),
             )
