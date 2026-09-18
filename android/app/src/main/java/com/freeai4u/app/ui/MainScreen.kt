@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
@@ -243,6 +244,9 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
+        DrawerRow(Icons.Filled.Image, "Images") { vm.push(Screen.Images); close() }
+        DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Screen.Tools); close() }
+        DrawerRow(Icons.Filled.Extension, "Skills") { vm.push(Screen.Skills); close() }
         DrawerRow(Icons.Filled.AutoAwesome, "Library") { vm.push(Screen.Knowledges); close() }
         DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
@@ -284,6 +288,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             }
         }
         HorizontalDivider(color = Palette.outline)
+        DrawerRow(Icons.AutoMirrored.Filled.Chat, "Chat") { vm.goToChat(); close() }
         Row(
             Modifier.fillMaxWidth().clickable { vm.push(Screen.Settings); close() }.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -436,9 +441,8 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
             }
         },
     ) { padding ->
-        // consumeWindowInsets tells imePadding that the top bar and the outer
-        // NavigationSuiteScaffold's nav bar already take up space, so the
-        // keyboard adds only what is left.
+        // consumeWindowInsets tells imePadding that the top bar already takes
+        // up space, so the keyboard adds only what is left.
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             Box(Modifier.weight(1f)) {
                 AnimatedContent(chat.messages.isEmpty(), transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "home") { empty ->

@@ -29,7 +29,9 @@ sealed interface SlashMatch {
     data class Chain(val names: List<String>) : SlashMatch
 }
 
-const val MAX_SKILL_CHAIN = 3
+/** How many skills one `/skill a b c` line may pin. Generous: a chat can
+ * carry any number of pinned skills; each new line or slash chain just adds. */
+const val MAX_SKILL_CHAIN = 20
 
 /** History length used while /compact is on: enough for context, far less to send. */
 const val COMPACT_HISTORY_MESSAGES = 10

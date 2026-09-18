@@ -48,15 +48,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Construction
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.adaptive.navigationsuite.ExperimentalMaterial3AdaptiveNavigationSuiteApi
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.semantics
@@ -165,7 +156,6 @@ class NativeActivity : ComponentActivity(), Platform {
         if (!heard.isNullOrBlank()) callback(heard)
     }
 
-    @OptIn(ExperimentalMaterial3AdaptiveNavigationSuiteApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
@@ -221,40 +211,27 @@ class NativeActivity : ComponentActivity(), Platform {
                                 }
                                 vm.back()
                             }
-                            NavigationSuiteScaffold(
-                                navigationSuiteItems = {
-                                    Tab.entries.forEach { tab ->
-                                        item(
-                                            selected = vm.currentTab == tab,
-                                            onClick = { vm.selectTab(tab) },
-                                            icon = { androidx.compose.material3.Icon(tabIcon(tab), tab.label) },
-                                            label = { androidx.compose.material3.Text(tab.label) },
-                                        )
-                                    }
-                                },
-                            ) {
-                                Box(Modifier.fillMaxSize()) {
-                                    MainScreen(vm, this@NativeActivity, voice)
-                                    AnimatedContent(
-                                        vm.screen,
-                                        transitionSpec = {
-                                            (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
-                                        },
-                                        label = "page",
-                                    ) { screen ->
-                                        when (screen) {
-                                            null -> Unit
-                                            Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
-                                            Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
-                                            Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
-                                            Screen.Personas -> PersonasScreen(vm)
-                                            Screen.Prompts -> PromptsScreen(vm)
-                                            Screen.Skills -> SkillsScreen(vm)
-                                            Screen.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
-                                            Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
-                                            Screen.Build -> BuildScreen(vm)
-                                            is Screen.Detail -> Unit
-                                        }
+                            Box(Modifier.fillMaxSize()) {
+                                MainScreen(vm, this@NativeActivity, voice)
+                                AnimatedContent(
+                                    vm.screen,
+                                    transitionSpec = {
+                                        (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
+                                    },
+                                    label = "page",
+                                ) { screen ->
+                                    when (screen) {
+                                        null -> Unit
+                                        Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
+                                        Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
+                                        Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
+                                        Screen.Personas -> PersonasScreen(vm)
+                                        Screen.Prompts -> PromptsScreen(vm)
+                                        Screen.Skills -> SkillsScreen(vm)
+                                        Screen.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
+                                        Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
+                                        Screen.Build -> BuildScreen(vm)
+                                        is Screen.Detail -> Unit
                                     }
                                 }
                             }
@@ -853,16 +830,6 @@ class NativeActivity : ComponentActivity(), Platform {
     }
 }
 
-private fun tabIcon(tab: Tab): androidx.compose.ui.graphics.vector.ImageVector = when (tab) {
-    Tab.Chat -> Icons.AutoMirrored.Filled.Chat
-    Tab.Images -> Icons.Filled.Image
-    Tab.Tools -> Icons.Filled.Construction
-    Tab.Skills -> Icons.Filled.Extension
-    Tab.Knowledges -> Icons.Filled.AutoAwesome
-    Tab.Settings -> Icons.Filled.Settings
-}
-
-/** InputStream.readNBytes is API 33; this reads at most [limit] bytes on any. */
 private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
     val out = ByteArrayOutputStream()
     val buffer = ByteArray(16384)

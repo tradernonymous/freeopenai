@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
@@ -650,6 +651,9 @@ fun SkillsScreen(vm: AppViewModel) {
                 items(vm.skills.distinctBy { it.source + "/" + it.name }, key = { it.source + "/" + it.name }) { skill ->
                     LibraryRow(
                         actions = {
+                            IconButton({ vm.pinSkillToCurrentChat(skill.name) }, Modifier.size(40.dp)) {
+                                Icon(Icons.Filled.PushPin, "Pin to this chat", tint = Palette.green)
+                            }
                             TextButton({ open = skill; vm.loadSkillInstructions(skill.name) }) { Text("View") }
                             TextButton({ vm.newChatWithSkill(skill.name) }) { Text("Use") }
                         },
@@ -679,7 +683,12 @@ fun SkillsScreen(vm: AppViewModel) {
                 }
             },
             confirmButton = { TextButton({ vm.newChatWithSkill(skill.name); open = null }) { Text("Use in a new chat") } },
-            dismissButton = { TextButton({ open = null }) { Text("Close") } },
+            dismissButton = {
+                Row {
+                    TextButton({ vm.pinSkillToCurrentChat(skill.name); open = null }) { Text("Pin to this chat") }
+                    TextButton({ open = null }) { Text("Close") }
+                }
+            },
         )
     }
 }

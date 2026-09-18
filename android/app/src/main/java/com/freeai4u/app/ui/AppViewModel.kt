@@ -302,6 +302,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     fun selectTab(tab: Tab) { nav = nav.selectedTab(tab) }
 
+    /** Returns to the chat home from any page, leaving the current chat as is. */
+    fun goToChat() { nav = nav.switchedToChat() }
+
     /** Jumps straight to a tab's root, discarding anything drilled into it --
      * for entry points (a launcher shortcut) that mean "show me X". */
     fun resetTab(tab: Tab) { nav = nav.reset(tab) }
@@ -716,6 +719,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val id = newChat()
         conversation(id)?.let { pinSkills(it, listOf(name)) }
         skillDetail = null
+    }
+
+    /** Pins a skill to the chat on screen -- skills accumulate, with no limit,
+     * so more than one can ride along in a single chat. */
+    fun pinSkillToCurrentChat(name: String) {
+        val chat = currentOrNew()
+        pinSkills(chat, listOf(name))
+        notice = "Pinned $name to this chat."
     }
 
     /** Pin skills to a chat, fetching each SKILL.md once for its prompt. */
