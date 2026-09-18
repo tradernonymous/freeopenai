@@ -73,7 +73,7 @@
         android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true">
         <activity
-            android:name=".NativeActivity"
+            android:name=".app.NativeActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
@@ -112,7 +112,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <service
-            android:name=".NewChatTileService"
+            android:name=".app.NewChatTileService"
             android:exported="true"
             android:icon="@drawable/ic_app"
             android:label="@string/tile_label"
@@ -125,7 +125,7 @@
              the app is in the foreground, so no background-start exemption is
              needed. -->
         <service
-            android:name=".ReplyService"
+            android:name=".app.ReplyService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <!-- Instant build-approval push (see FcmService.kt). Only Firebase
@@ -133,7 +133,7 @@
              unless the build was compiled with a real google-services.json,
              so declaring it costs nothing on a build that has none. -->
         <service
-            android:name=".FcmService"
+            android:name=".app.FcmService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
@@ -146,7 +146,7 @@
          tap in the chat approves the specific action (data/Agent.kt).
          NeuraOS device control for phone automation. -->
         <service
-            android:name=".DeviceControlService"
+            android:name=".app.DeviceControlService"
             android:exported="true"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:label="@string/device_control_label">
