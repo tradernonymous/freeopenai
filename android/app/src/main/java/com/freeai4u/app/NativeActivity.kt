@@ -19,7 +19,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
@@ -46,6 +46,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.adaptive.navigationsuite.ExperimentalMaterial3AdaptiveNavigationSuiteApi
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.semantics
@@ -73,6 +82,8 @@ import com.freeai4u.app.ui.Platform
 import com.freeai4u.app.ui.PromptsScreen
 import com.freeai4u.app.ui.Screen
 import com.freeai4u.app.ui.SelectTextDialog
+import com.freeai4u.app.ui.Tab
+import kotlinx.coroutines.CancellationException
 import com.freeai4u.app.ui.SettingsScreen
 import com.freeai4u.app.ui.SignInScreen
 import com.freeai4u.app.ui.ToolsScreen
@@ -151,6 +162,7 @@ class NativeActivity : ComponentActivity(), Platform {
         if (!heard.isNullOrBlank()) callback(heard)
     }
 
+    @OptIn(ExperimentalMaterial3AdaptiveNavigationSuiteApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
@@ -197,26 +209,49 @@ class NativeActivity : ComponentActivity(), Platform {
                         locked -> LockScreen(lockError) { unlock() }
                         !vm.signedIn -> SignInScreen(vm)
                         else -> {
-                            BackHandler(enabled = vm.backStack.isNotEmpty()) { vm.back() }
-                            MainScreen(vm, this@NativeActivity, voice)
-                            AnimatedContent(
-                                vm.screen,
-                                transitionSpec = {
-                                    (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
+                            PredictiveBackHandler(enabled = vm.canGoBack) { progress ->
+                                try {
+                                    progress.collect { }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                }
+                                vm.back()
+                            }
+                            NavigationSuiteScaffold(
+                                navigationSuiteItems = {
+                                    Tab.entries.forEach { tab ->
+                                        item(
+                                            selected = vm.currentTab == tab,
+                                            onClick = { vm.selectTab(tab) },
+                                            icon = { androidx.compose.material3.Icon(tabIcon(tab), tab.label) },
+                                            label = { androidx.compose.material3.Text(tab.label) },
+                                        )
+                                    }
                                 },
-                                label = "page",
-                            ) { screen ->
-                                when (screen) {
-                                    null -> Unit
-                                    Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
-                                    Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
-                                    Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
-                                    Screen.Personas -> PersonasScreen(vm)
-                                    Screen.Prompts -> PromptsScreen(vm)
-                                    Screen.Skills -> SkillsScreen(vm)
-                                    Screen.Knowledges -> Page("Knowledges", vm) { KnowledgesScreen(vm) }
-                                    Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
-                                    Screen.Build -> BuildScreen(vm)
+                            ) {
+                                Box(Modifier.fillMaxSize()) {
+                                    MainScreen(vm, this@NativeActivity, voice)
+                                    AnimatedContent(
+                                        vm.screen,
+                                        transitionSpec = {
+                                            (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
+                                        },
+                                        label = "page",
+                                    ) { screen ->
+                                        when (screen) {
+                                            null -> Unit
+                                            Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
+                                            Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
+                                            Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
+                                            Screen.Personas -> PersonasScreen(vm)
+                                            Screen.Prompts -> PromptsScreen(vm)
+                                            Screen.Skills -> SkillsScreen(vm)
+                                            Screen.Knowledges -> Page("Knowledges", vm) { KnowledgesScreen(vm) }
+                                            Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
+                                            Screen.Build -> BuildScreen(vm)
+                                            is Screen.Detail -> Unit
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -293,10 +328,7 @@ class NativeActivity : ComponentActivity(), Platform {
     private fun takeIntent(intent: Intent?) {
         when (intent?.action) {
             ACTION_NEW_CHAT -> vm.newChat()
-            ACTION_SETTINGS -> {
-                vm.backStack.clear()
-                vm.push(Screen.Settings)
-            }
+            ACTION_SETTINGS -> vm.resetTab(Tab.Settings)
             ACTION_OPEN_CHAT -> intent.getStringExtra(EXTRA_CHAT_ID)?.let { id -> if (vm.conversation(id) != null) vm.openChat(id) }
             ACTION_OPEN_BUILD -> intent.getStringExtra(EXTRA_BUILD_ID)
                 ?.takeIf { it.matches(Regex("^[a-f0-9]{16,64}$")) }
@@ -752,6 +784,15 @@ class NativeActivity : ComponentActivity(), Platform {
         private const val MAX_PHOTO_EDGE = 1280
         private const val MAX_TEXT_FILE_BYTES = 1024 * 1024
     }
+}
+
+private fun tabIcon(tab: Tab): androidx.compose.ui.graphics.vector.ImageVector = when (tab) {
+    Tab.Chat -> Icons.AutoMirrored.Filled.Chat
+    Tab.Images -> Icons.Filled.Image
+    Tab.Tools -> Icons.Filled.Construction
+    Tab.Skills -> Icons.Filled.Extension
+    Tab.Knowledges -> Icons.Filled.AutoAwesome
+    Tab.Settings -> Icons.Filled.Settings
 }
 
 /** InputStream.readNBytes is API 33; this reads at most [limit] bytes on any. */

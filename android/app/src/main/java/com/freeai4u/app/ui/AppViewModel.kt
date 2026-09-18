@@ -68,28 +68,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicReference
 
-/** Pages that open over the chat, ChatGPT-style: the chat is always the base. */
-sealed interface Screen {
-    data object Images : Screen
-    data object Tools : Screen
-    data object Settings : Screen
-    data object Personas : Screen
-    data object Prompts : Screen
-    data object Skills : Screen
-    data object Knowledges : Screen
-    data object Builds : Screen
-    data object Build : Screen
-}
-
 /** All app state for the native screens. Network and disk work runs on a
  * small pool; every state change is posted back to the main thread, which
  * is the only thread Compose state is written from. */
 private const val UI_STATE_KEY = "ui_state"
 private const val DRAFT_SAVE_BUDGET = 50_000
-private val RESTORABLE_SCREENS = listOf(
-    Screen.Images, Screen.Tools, Screen.Settings, Screen.Personas, Screen.Prompts,
-    Screen.Skills, Screen.Knowledges, Screen.Builds, Screen.Build,
-)
 
 class AppViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val store = SecureStore(app)
@@ -124,8 +107,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     var signInError by mutableStateOf<String?>(null)
         private set
 
-    val backStack = mutableStateListOf<Screen>()
-    val screen: Screen? get() = backStack.lastOrNull()
+    var nav by mutableStateOf(NavState())
+        private set
+    val screen: Screen? get() = nav.screen
+    val currentTab: Tab get() = nav.currentTab
+    val canGoBack: Boolean get() = nav.screen != null
     /** The chat on screen. A fresh one exists from the moment it is opened but
      * is only saved and listed once it has a message. */
     var currentChatId by mutableStateOf<String?>(null)
@@ -217,7 +203,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     private fun saveUiState(): Bundle = Bundle().apply {
         putString("chat", currentChatId)
-        putStringArrayList("screens", ArrayList(backStack.map { it.toString() }))
+        putString("tab", nav.currentTab.name)
+        val entries = ArrayList<String>()
+        Tab.entries.forEach { tab -> nav.stacks[tab].orEmpty().forEach { entries.add(tab.name + "|" + it.screenKey()) } }
+        putStringArrayList("nav", entries)
         builds.current?.id?.let { putString("build", it) }
         // Drafts are capped so a long paste cannot overflow the saved-state limit.
         val kept = Bundle()
@@ -235,14 +224,20 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         currentChatId = state.getString("chat")
         state.getBundle("drafts")?.let { kept -> kept.keySet().forEach { id -> kept.getString(id)?.let { drafts[id] = it } } }
         val buildId = state.getString("build")
-        state.getStringArrayList("screens").orEmpty().forEach { name ->
-            val screen = RESTORABLE_SCREENS.firstOrNull { it.toString() == name } ?: return@forEach
+        var restored = NavState()
+        state.getStringArrayList("nav").orEmpty().forEach { entry ->
+            val parts = entry.split("|", limit = 2)
+            if (parts.size != 2) return@forEach
+            val tab = Tab.entries.firstOrNull { it.name == parts[0] } ?: return@forEach
+            val screen = screenFromKey(parts[1]) ?: return@forEach
             if (screen == Screen.Build) {
                 if (buildId == null || !signedIn) return@forEach
                 builds.open(buildId)
             }
-            push(screen)
+            restored = restored.copy(stacks = restored.stacks + (tab to (restored.stacks[tab].orEmpty() + screen)))
         }
+        val savedTab = state.getString("tab")?.let { name -> Tab.entries.firstOrNull { it.name == name } }
+        nav = if (savedTab != null) restored.copy(currentTab = savedTab) else restored
     }
 
     fun openBuilds() = push(Screen.Builds)
@@ -266,14 +261,18 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     // --- Navigation --------------------------------------------------------
 
-    fun push(screen: Screen) {
-        if (backStack.lastOrNull() != screen) backStack.add(screen)
-    }
+    fun push(screen: Screen) { nav = nav.pushed(screen) }
+
+    fun selectTab(tab: Tab) { nav = nav.selectedTab(tab) }
+
+    /** Jumps straight to a tab's root, discarding anything drilled into it --
+     * for entry points (a launcher shortcut) that mean "show me X". */
+    fun resetTab(tab: Tab) { nav = nav.reset(tab) }
 
     /** Returns false when there was nothing to go back to. */
     fun back(): Boolean {
-        if (backStack.isEmpty()) return false
-        backStack.removeAt(backStack.lastIndex)
+        val next = nav.poppedOrNull() ?: return false
+        nav = next
         return true
     }
 
@@ -332,7 +331,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             conversations.clear()
             library = Library()
         }
-        backStack.clear()
+        nav = NavState()
         providers = emptyList()
         models.clear()
         signedIn = false
@@ -460,7 +459,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun openChat(id: String) {
         conversations.removeAll { it.messages.isEmpty() && it.id != id && it.id != streamingId }
         currentChatId = id
-        backStack.clear()
+        nav = nav.switchedToChat()
     }
 
     /** The chat on screen, creating a fresh one when there is none. */
@@ -477,7 +476,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val chat = Conversation(UUID.randomUUID().toString(), "New chat", personaId, provider, model, emptyList(), now, now, mode = mode)
         conversations.add(chat)
         if (draft.isNotEmpty()) drafts[chat.id] = draft
-        backStack.clear()
+        nav = nav.switchedToChat()
         currentChatId = chat.id
         return chat.id
     }

@@ -125,6 +125,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    implementation(libs.compose.material3.adaptive.navigation.suite)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     // Firebase Messaging pulls in an old transitive androidx.fragment that

@@ -1,6 +1,7 @@
 package com.freeai4u.app.ui
 
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import kotlinx.coroutines.CancellationException
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -82,8 +83,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -170,7 +169,14 @@ fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
         Box(Modifier.fillMaxSize().background(Palette.background))
         return
     }
-    BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
+    PredictiveBackHandler(enabled = drawer.isOpen) { progress ->
+        try {
+            progress.collect { }
+        } catch (e: CancellationException) {
+            throw e
+        }
+        drawer.close()
+    }
     ModalNavigationDrawer(
         drawerState = drawer,
         drawerContent = {
@@ -203,22 +209,20 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             .filter { chat -> needle.isEmpty() || chat.title.lowercase().contains(needle) || chat.messages.any { it.content.lowercase().contains(needle) } }
     }
     Column(Modifier.fillMaxHeight()) {
-        Row(Modifier.padding(start = 12.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(20.dp)).background(Palette.surfaceHigh).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.Search, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                BasicTextField(
-                    query, { query = it }, singleLine = true,
-                    textStyle = TextStyle(color = Palette.text, fontSize = 15.sp),
-                    cursorBrush = SolidColor(Palette.green),
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { inner -> if (query.isEmpty()) Text("Search", color = Palette.muted, fontSize = 15.sp); inner() },
-                )
-            }
-            IconButton({ vm.newChat(); close() }, Modifier.pressScale()) { Icon(Icons.Filled.EditNote, "New chat", tint = Palette.text) }
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 12.dp).fillMaxWidth().height(40.dp)
+                .clip(RoundedCornerShape(20.dp)).background(Palette.surfaceHigh).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Search, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                query, { query = it }, singleLine = true,
+                textStyle = TextStyle(color = Palette.text, fontSize = 15.sp),
+                cursorBrush = SolidColor(Palette.green),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner -> if (query.isEmpty()) Text("Search", color = Palette.muted, fontSize = 15.sp); inner() },
+            )
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
@@ -302,38 +306,6 @@ private fun DrawerRow(icon: ImageVector, label: String, onClick: () -> Unit) {
     }
 }
 
-/** The four places the app opens to, always at the bottom of the chat: the
- * other three push their page over it, and their back arrow returns here. */
-@Composable
-private fun BottomTabs(vm: AppViewModel) {
-    NavigationBar(containerColor = Palette.surface, tonalElevation = 0.dp) {
-        NavigationBarItem(
-            selected = true,
-            onClick = {},
-            icon = { Icon(Icons.AutoMirrored.Filled.Chat, "Chat") },
-            label = { Text("Chat") },
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = { vm.push(Screen.Images) },
-            icon = { Icon(Icons.Filled.Image, "Images") },
-            label = { Text("Images") },
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = { vm.push(Screen.Tools) },
-            icon = { Icon(Icons.Filled.Construction, "Tools") },
-            label = { Text("Tools") },
-        )
-        NavigationBarItem(
-            selected = false,
-            onClick = { vm.push(Screen.Settings) },
-            icon = { Icon(Icons.Filled.Settings, "Settings") },
-            label = { Text("Settings") },
-        )
-    }
-}
-
 // --- Chat --------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -347,6 +319,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
         }
     }
     var modelSheet by remember { mutableStateOf(false) }
+    var sessionSheet by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Int?>(null) }
     val streaming = vm.streamingId == chat.id
     // Keep the screen awake while a reply streams (from Mobile-Harness).
@@ -358,7 +331,6 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
     Scaffold(
         containerColor = Palette.background,
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = { BottomTabs(vm) },
         topBar = {
             Column {
                 TopAppBar(
@@ -376,15 +348,16 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                             Icon(Icons.Filled.ExpandMore, "Change model", tint = Palette.muted)
                         }
                     },
-                    actions = { IconButton({ vm.newChat() }, Modifier.pressScale()) { Icon(Icons.Filled.EditNote, "New chat") } },
+                    actions = { IconButton({ sessionSheet = true }, Modifier.pressScale()) { Icon(Icons.Filled.Checklist, "Session") } },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
                 )
                 AnimatedVisibility(streaming) { LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Palette.green, trackColor = Palette.background) }
             }
         },
     ) { padding ->
-        // consumeWindowInsets tells imePadding that the bottom bar and navigation
-        // bar already take up space, so the keyboard adds only what is left.
+        // consumeWindowInsets tells imePadding that the top bar and the outer
+        // NavigationSuiteScaffold's nav bar already take up space, so the
+        // keyboard adds only what is left.
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             Box(Modifier.weight(1f)) {
                 AnimatedContent(chat.messages.isEmpty(), transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "home") { empty ->
@@ -399,6 +372,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
         }
     }
     if (modelSheet) ModelSheet(vm, chat) { modelSheet = false }
+    if (sessionSheet) SessionSheet(vm, chat, onPickModel = { modelSheet = true }, onClose = { sessionSheet = false })
     editing?.let { index ->
         val original = chat.messages.getOrNull(index)
         if (original == null) {
@@ -839,6 +813,50 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+// --- Session panel -----------------------------------------------------------------
+
+/** What the top-right button opens now, replacing a bare "new chat" shortcut
+ * that duplicated the drawer: everything about the chat you're actually in,
+ * one tap away instead of buried across three different sheets. */
+@Composable
+private fun SessionSheet(vm: AppViewModel, chat: Conversation, onPickModel: () -> Unit, onClose: () -> Unit) {
+    val persona = personaFor(vm.library, chat.personaId)
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = Palette.surface) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Text("Session", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Mode", color = Palette.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                ModeToggle(chat.mode) { vm.setMode(chat.id, it) }
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onClose(); onPickModel() }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Model", color = Palette.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text(shortModel(chat.model).ifEmpty { "Pick model" }, color = Palette.text, fontSize = 14.sp)
+                Icon(Icons.Filled.ExpandMore, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
+            }
+            HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
+            SessionRow("Persona", persona.name)
+            SessionRow("Messages", chat.messages.size.toString())
+            if (chat.tasks.isNotEmpty()) SessionRow("Tasks", "${chat.tasks.count { it.status == "done" }}/${chat.tasks.size} done")
+            if (chat.skills.isNotEmpty()) SessionRow("Skills", chat.skills.joinToString(", "))
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun SessionRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(label, color = Palette.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Palette.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

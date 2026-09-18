@@ -61,7 +61,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FreeAI4U"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="false"
+        android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".NativeActivity"
             android:exported="true"
