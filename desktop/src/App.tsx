@@ -1,32 +1,24 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Sidebar from './Sidebar';
+import ChatScreen from './screens/ChatScreen';
+import DesignScreen from './screens/DesignScreen';
+import BuildScreen from './screens/BuildScreen';
+import SettingsScreen from './screens/SettingsScreen';
 import './index.css';
 
-const VIEWS: Record<string, string> = {
-  chat: '/?app=desktop#chat',
-  design: '/?app=desktop#design',
-  build: '/?app=desktop#build',
-  settings: '/?app=desktop#settings',
-};
+type View = 'chat' | 'design' | 'build' | 'settings';
 
 export default function App() {
-  const [active, setActive] = useState('chat');
-
-  const handleNavigate = (view: string) => {
-    setActive(view);
-    const url = VIEWS[view] || VIEWS.chat;
-    window.location.hash = view;
-  };
+  const [view, setView] = useState<View>('chat');
 
   return (
     <div className="app">
-      <Sidebar active={active} onNavigate={handleNavigate} />
+      <Sidebar active={view} onNavigate={setView} />
       <main className="main">
-        <webview
-          id="main-webview"
-          src={VIEWS[active]}
-          style={{ width: '100%', height: '100%', border: 'none' }}
-        />
+        {view === 'chat' && <ChatScreen />}
+        {view === 'design' && <DesignScreen />}
+        {view === 'build' && <BuildScreen />}
+        {view === 'settings' && <SettingsScreen />}
       </main>
     </div>
   );

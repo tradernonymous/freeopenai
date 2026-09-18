@@ -5,13 +5,15 @@ const NAV_ITEMS = [
   { id: 'design', label: 'Design', icon: '🎨' },
   { id: 'build', label: 'Build', icon: '🛠' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
-];
+] as const;
 
-export default function Sidebar({ active, onNavigate }: { active: string; onNavigate: (id: string) => void }) {
+type NavId = typeof NAV_ITEMS[number]['id'];
+
+export default function Sidebar({ active, onNavigate }: { active: NavId; onNavigate: (id: NavId) => void }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="sidebar-logo">◆</span>
+        <div className="sidebar-logo">AI</div>
         <span className="sidebar-title">FreeAI4U</span>
       </div>
       <nav className="sidebar-nav">
@@ -28,10 +30,7 @@ export default function Sidebar({ active, onNavigate }: { active: string; onNavi
         ))}
       </nav>
       <div className="sidebar-footer">
-        <button className="sidebar-btn" onClick={() => window.location.href = '/?app=desktop'} title="Open in browser">
-          <span className="sidebar-icon">🌐</span>
-          <span className="sidebar-label">Web</span>
-        </button>
+        <div className="sidebar-version">v2.0.0</div>
       </div>
     </aside>
   );
