@@ -82,8 +82,9 @@ function bootSandbox() {
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const chatlib = fs.readFileSync(path.join(__dirname, '..', 'chatlib.js'), 'utf8');
 // share-memory.js loads via its own <script src> too, and the page builds its
-// one instance in top-level scope.
+// one instance in top-level scope. canvas-artifacts.js is the same pattern.
 const shareMemoryLib = fs.readFileSync(path.join(__dirname, '..', 'share-memory.js'), 'utf8');
+const canvasArtifactsLib = fs.readFileSync(path.join(__dirname, '..', 'canvas-artifacts.js'), 'utf8');
 
 test('index.html has exactly one main inline script', () => {
   assert.equal(inlineScripts(html).length, 1);
@@ -95,6 +96,7 @@ test('the page initializes without a temporal-dead-zone error', () => {
   // chatlib.js loads first in the page, via its own <script src>.
   vm.runInContext(chatlib, context);
   vm.runInContext(shareMemoryLib, context);
+  vm.runInContext(canvasArtifactsLib, context);
 
   let thrown = null;
   try {

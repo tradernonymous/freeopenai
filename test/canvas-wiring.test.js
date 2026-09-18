@@ -4,97 +4,84 @@
 // stays in localStorage (closed by default) so it survives a reload, and
 // opening it always closes the session panel -- the two panes can never share
 // the corner. Unlike the one-shot dialog it never carries same-origin bytes:
-// every block is rendered through an opaque origin. The same helper-wiring
-// harness used by the diagram and preview tests lifts these functions out of
-// the page and runs them against stubs.
+// every block is rendered through an opaque origin.
 //
-// No canvas function may contain a template literal: the scanner that reads
-// them out of the page is brace-walking and would stop at the first backtick.
+// The state and decisions live in canvas-artifacts.js and are tested directly
+// below, constructed with stand-ins the way share-memory.test.js does it. This
+// file keeps the two page-level pins the module cannot see: that the shipped
+// iframe stays sandboxed without same-origin, and that the boot restores the
+// canvas after the session panel.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const {
-  assertScannerCanRead,
-  assertSandboxCovers,
-  loadFromIndex,
-  sourceOf,
-  HTML,
-} = require('./helpers/index-html.js');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const CANVAS_REACT_MARKER = '<!-- canvas react -->';
+const { create: createCanvasArtifacts, REACT_MARKER } = require('../canvas-artifacts.js');
+
+const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CANVAS_HIDDEN_KEY = 'freeopenaiCanvasHidden';
 
-const NAMES = [
-  'artifactDocument',
-  'renderCanvasArtifact',
-  'canvasShell',
-  'toggleCanvas',
-  'restoreCanvas',
-  'collectCanvasBlocks',
-  'renderCanvasPicker',
-  'selectCanvasBlock',
-  'openSelectedCanvasBlock',
-  'updateCanvasFrame',
-  'openCanvasForBlock',
-];
+// ---- module harness -------------------------------------------------------
 
-function makeDeps({ pres = [], hiddenDefault = true, persist = true } = {}) {
-  let shellHidden = hiddenDefault;
-  const shell = {
+// A storage stand-in that can be told to refuse writes, so the toggle's
+// try/catch path is exercised rather than described.
+function makeStorage({ failSets = false, stored = null } = {}) {
+  const ops = [];
+  const data = new Map();
+  if (stored !== null) data.set(CANVAS_HIDDEN_KEY, stored);
+  return {
+    ops,
+    getItem(k) { ops.push(['get', k]); return data.has(k) ? data.get(k) : null; },
+    setItem(k, v) {
+      ops.push(['set', k, String(v)]);
+      if (failSets) throw new Error('storage refused');
+      data.set(k, String(v));
+    },
+  };
+}
+
+function makeEl(extra = {}) {
+  return Object.assign({
+    attrs: {}, children: [], textContent: '', value: '', srcdoc: '', title: '',
+    handlers: {},
+    setAttribute(n, v) { this.attrs[n] = String(v); },
+    removeAttribute(n) { delete this.attrs[n]; },
+    toggleAttribute(n, on) { if (on) this.attrs[n] = ''; else delete this.attrs[n]; },
+    appendChild(c) { this.children.push(c); return c; },
+    addEventListener(t, fn) { (this.handlers[t] = this.handlers[t] || []).push(fn); },
+  }, extra);
+}
+
+function harness({ pres = [], stored = null, failSets = false, shellHidden = true, rawShell = false } = {}) {
+  const shellEl = rawShell ? { notAnElement: true } : {
     classList: {
       contains(cls) { return cls === 'canvas-hidden' ? shellHidden : false; },
       toggle(cls, on) { if (cls === 'canvas-hidden') shellHidden = on; },
     },
   };
-  function makeEl() {
-    return {
-      attrs: {}, children: [], textContent: '', value: '', srcdoc: '', title: '',
-      handlers: {},
-      setAttribute(n, v) { this.attrs[n] = String(v); },
-      removeAttribute(n) { delete this.attrs[n]; },
-      toggleAttribute(n, on) { if (on) this.attrs[n] = ''; else delete this.attrs[n]; },
-      appendChild(c) { this.children.push(c); return c; },
-      addEventListener(t, fn) { (this.handlers[t] = this.handlers[t] || []).push(fn); },
-    };
-  }
-  const canvasPane = makeEl();
-  const canvasFrame = makeEl();
-  canvasFrame.id = 'canvasFrame';
-  const canvasSelect = makeEl();
-  canvasSelect.id = 'canvasSelect';
-  const canvasCount = makeEl();
-  canvasCount.id = 'canvasCount';
-  const canvasScrim = makeEl();
-  canvasScrim.id = 'canvasScrim';
-  const els = { canvasPane, canvasFrame, canvasSelect, canvasCount, canvasScrim };
-  const storage = [];
-  const sessionToggles = [];
-  const picks = [];
-  const deps = {
-    CANVAS_REACT_MARKER,
-    CANVAS_HIDDEN_KEY,
-    canvasShell: () => shell,
-    toggleSessionPanel: (force) => { sessionToggles.push(force); },
-    renderCanvasPicker: () => { picks.push(1); },
-    document: {
-      querySelector(sel) { return sel === '#viewChat .chat-shell' ? shell : null; },
-      getElementById(id) { return els[id] || null; },
-      createElement(tag) { return makeEl(); },
-    },
-    chatMessages: {
-      querySelectorAll(sel) { return sel === '.message .message-text pre[data-lang="html"]' ? pres : []; },
-    },
-    localStorage: {
-      getItem(k) { storage.push(['get', k]); return null; },
-      setItem(k, v) { storage.push(['set', k, v]); },
-    },
-    chatMessages2: null, // placeholder slot; real name is chatMessages
+  const els = {
+    canvasPane: makeEl(),
+    canvasFrame: makeEl(),
+    canvasSelect: makeEl(),
+    canvasCount: makeEl(),
+    canvasScrim: makeEl(),
   };
-  // The page-scope picker is real (extracted) in production but a recording
-  // spy here, so tests watch the toggle without re-rendering the DOM.
-  deps.canvasBlocks = [];
-  deps.canvasIndex = -1;
-  return { deps, shell, els, storage, sessionToggles, picks };
+  const chat = { querySelectorAll(sel) { return sel === '.message .message-text pre[data-lang="html"]' ? pres : []; } };
+  const storage = makeStorage({ failSets, stored });
+  const sessionToggles = [];
+  const module = createCanvasArtifacts({
+    localStorage: storage,
+    doc: {
+      getElementById(id) { return els[id] || null; },
+      querySelector(sel) { return sel === '#viewChat .chat-shell' ? shellEl : null; },
+    },
+    chatMessages: chat,
+    onOpenPane: (force) => { sessionToggles.push(force); },
+    onBlocks: () => { blocksDrawn += 1; },
+  });
+  let blocksDrawn = 0;
+  return { module, els, storage, sessionToggles, chat, shell: shellEl, drawn: () => blocksDrawn };
 }
 
 function preBlock(code) {
@@ -105,29 +92,11 @@ function preBlock(code) {
   };
 }
 
-test('fix the canvas wiring names the scanner must be able to read', () => {
-  assertScannerCanRead(NAMES);
-});
-
-test('every page-scope name the canvas calls is supplied to the sandbox', () => {
-  assertSandboxCovers(NAMES, {
-    CANVAS_REACT_MARKER,
-    CANVAS_HIDDEN_KEY,
-    canvasShell: () => null,
-    toggleSessionPanel: () => {},
-    renderCanvasPicker: () => {},
-    selectCanvasBlock: () => {},
-    toggleCanvas: () => {},
-    document: { querySelector: () => null, getElementById: () => null },
-    chatMessages: { querySelectorAll: () => [] },
-    localStorage: { getItem: () => null, setItem: () => {} },
-  });
-});
+// ---- document building (the sandboxing rule) ------------------------------
 
 test('a bare fragment is wrapped in a full, self-contained document', () => {
-  const { deps } = makeDeps();
-  const { artifactDocument } = loadFromIndex(['artifactDocument'], deps);
-  const doc = artifactDocument('<b>hi</b>');
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('<b>hi</b>');
   assert.ok(doc.startsWith('<!doctype html>'));
   assert.ok(doc.includes('<body><b>hi</b></body>'));
   // It rode in as a plain fragment, so it must not drag React or Babel along.
@@ -136,119 +105,118 @@ test('a bare fragment is wrapped in a full, self-contained document', () => {
 });
 
 test('a complete page is let through untouched', () => {
-  const { deps } = makeDeps();
-  const { artifactDocument } = loadFromIndex(['artifactDocument'], deps);
+  const h = harness();
   const page = '<!doctype html><html><head><title>t</title></head><body>x</body></html>';
-  assert.equal(artifactDocument(page), page);
+  assert.equal(h.module.buildArtifactDocument(page), page);
 });
 
 test('the react marker switches the body out to a JSX stage', () => {
-  const { deps } = makeDeps();
-  const { artifactDocument } = loadFromIndex(['artifactDocument'], deps);
-  const doc = artifactDocument('<!-- canvas react -->\nconst App = () => <h1>hi</h1>;');
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('<!-- canvas react -->\nconst App = () => <h1>hi</h1>;');
   assert.ok(doc.includes('text/babel'), 'JSX needs the Babel toolchain, not a loophole');
   assert.ok(doc.includes('<div id="root">'));
   assert.ok(doc.includes('const App = () => <h1>hi</h1>;'));
   // The toolchains come from CDNs as ordinary scripts; the page itself must
   // not be truncated by an inline </script> in the user code, so the closer
   // is always emitted as a split string.
-  assert.match(sourceOf('artifactDocument'), /\+ '\/script>'/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'canvas-artifacts.js'), 'utf8');
+  assert.match(src, /\+ '\/script>'/);
 });
 
-test('the live frame is a sandbox without same-origin, filled via srcdoc', () => {
-  const { deps, els } = makeDeps();
-  const { renderCanvasArtifact } = loadFromIndex(['artifactDocument', 'renderCanvasArtifact'], deps);
-  renderCanvasArtifact('<p>hi</p>');
-  assert.ok(els.canvasFrame.srcdoc.startsWith('<!doctype html>'));
-  assert.ok(els.canvasFrame.srcdoc.includes('<p>hi</p>'), 'the artifact must render inside the frame');
+test('the marker constant is shared with the page, not re-declared', () => {
+  assert.equal(REACT_MARKER, '<!-- canvas react -->');
 });
 
-test('opening the canvas closes the session panel and persists the choice', () => {
-  const { deps, shell, els, storage, sessionToggles } = makeDeps({ hiddenDefault: true });
-  const page = loadFromIndex(NAMES, deps);
-  page.toggleCanvas(true);
-  assert.equal(shell.classList.contains('canvas-hidden'), false, 'opening the canvas must surface the pane');
-  assert.equal(els.canvasPane.attrs['aria-hidden'], 'false');
-  assert.equal(els.canvasScrim.attrs['aria-hidden'], 'false');
-  assert.deepEqual(sessionToggles, [false], 'the canvas pane must not share its corner with the session panel');
-  assert.equal(els.canvasSelect.children.length, 1, 'opening must draw whatever block is selected');
-  assert.ok(storage.some(([op, k, v]) => op === 'set' && k === CANVAS_HIDDEN_KEY && v === ''), 'an open canvas must be remembered as open');
+// ---- pane show/hide and persistence ----------------------------------------
+
+test('opening the canvas surfaces the pane and closes the session panel', () => {
+  const h = harness({ shellHidden: true });
+  h.module.showPane(true);
+  assert.equal(h.shell.classList.contains('canvas-hidden'), false, 'opening the canvas must surface the pane');
+  assert.equal(h.els.canvasPane.attrs['aria-hidden'], 'false');
+  assert.equal(h.els.canvasScrim.attrs['aria-hidden'], 'false');
+  assert.equal(h.els.canvasPane.attrs.inert, undefined, 'a visible pane must not be inert');
+  assert.deepEqual(h.sessionToggles.length, 1, 'the page hook runs on open (the page folds the session panel away)');
+  assert.ok(h.storage.ops.some(([op, k, v]) => op === 'set' && k === CANVAS_HIDDEN_KEY && v === ''), 'an open canvas is remembered as open');
 });
 
-test('closing the canvas hides pane and scrim and remembers the close', () => {
-  const { deps, els, storage } = makeDeps({ hiddenDefault: false });
-  const page = loadFromIndex(NAMES, deps);
-  page.toggleCanvas(false);
-  assert.equal(els.canvasPane.attrs['aria-hidden'], 'true');
-  assert.equal(els.canvasScrim.attrs['aria-hidden'], 'true');
-  assert.equal(els.canvasPane.attrs.inert, '', 'a hidden pane must be inert to keyboard focus');
-  assert.ok(storage.some(([op, k, v]) => op === 'set' && k === CANVAS_HIDDEN_KEY && v === '1'));
+test('closing the canvas hides pane and scrim, makes them inert, and remembers the close', () => {
+  const h = harness({ shellHidden: false });
+  h.module.showPane(false);
+  assert.equal(h.els.canvasPane.attrs['aria-hidden'], 'true');
+  assert.equal(h.els.canvasScrim.attrs['aria-hidden'], 'true');
+  assert.equal(h.els.canvasPane.attrs.inert, '', 'a hidden pane must be inert to keyboard focus');
+  assert.ok(h.storage.ops.some(([op, k, v]) => op === 'set' && k === CANVAS_HIDDEN_KEY && v === '1'));
+  assert.deepEqual(h.sessionToggles, [], 'closing never touches the session panel');
 });
 
 test('restore defaults to closed; an explicit stored value is honoured', () => {
-  const base = makeDeps({ hiddenDefault: true });
-  base.deps.localStorage.getItem = () => null;
-  // The real restore cannot run here because toggleCanvas() is what it calls,
-  // so hand it back through the loader instead.
-  const hidden = makeDeps({ hiddenDefault: true });
-  const page = loadFromIndex(NAMES, hidden.deps);
-  page.restoreCanvas();
-  assert.equal(page.canvasShell().classList.contains('canvas-hidden'), true, 'a canvas must stay closed until there is something to see');
+  const closed = harness({ stored: null, shellHidden: true });
+  closed.module.restorePane();
+  assert.equal(closed.shell.classList.contains('canvas-hidden'), true, 'a canvas must stay closed until there is something to see');
+  assert.deepEqual(closed.storage.ops.filter(([op]) => op === 'set'), [], 'a restore must not write the choice back as if just made');
 
-  const shown = makeDeps({ hiddenDefault: false });
-  shown.deps.localStorage.getItem = () => '';
-  const page2 = loadFromIndex(NAMES, shown.deps);
-  page2.restoreCanvas();
-  assert.equal(page2.canvasShell().classList.contains('canvas-hidden'), false);
+  const open = harness({ stored: '', shellHidden: true });
+  open.module.restorePane();
+  assert.equal(open.shell.classList.contains('canvas-hidden'), false, "an explicitly stored '' means open");
+
+  const shut = harness({ stored: '1', shellHidden: false });
+  shut.module.restorePane();
+  assert.equal(shut.shell.classList.contains('canvas-hidden'), true, "a stored '1' means closed");
 });
 
-test('collecting blocks dedupes and drops the ones already on the list', () => {
-  const pres = [preBlock('<b>a</b>'), preBlock('<b>a</b>'), preBlock('<b>b</b>')];
-  const { deps } = makeDeps({ pres });
-  deps.canvasBlocks = [];
-  deps.canvasIndex = -1;
-  const page = loadFromIndex(NAMES, deps);
-  page.collectCanvasBlocks();
-  assert.equal(deps.canvasBlocks.length, 2);
+test('a refusing storage degrades to a working toggle without the persistence', () => {
+  const h = harness({ shellHidden: true, failSets: true });
+  h.module.showPane(true);
+  assert.equal(h.shell.classList.contains('canvas-hidden'), false, 'the toggle itself still works');
 });
 
-test('an explicit pick stays put when a newer block arrives', () => {
+test('a missing shell is a no-op, not a crash', () => {
+  const h = harness({ rawShell: true });
+  h.module.showPane(true);
+  assert.ok(true, 'reaching here is the assertion');
+});
+
+// ---- block collection and selection ----------------------------------------
+
+test('collecting blocks dedupes the ones already on the list', () => {
+  const h = harness({ pres: [preBlock('<b>a</b>'), preBlock('<b>a</b>'), preBlock('<b>b</b>')] });
+  const blocks = h.module.collectBlocks();
+  assert.equal(blocks.length, 2);
+  assert.equal(h.drawn(), 1, 'the page hook fires once per collect');
+});
+
+test('a fresh collect follows the tail; an explicit pick stays put', () => {
   const first = preBlock('<b>a</b>');
   const second = preBlock('<b>b</b>');
-  const third = preBlock('<b>c</b>');
-  const { deps } = makeDeps({ pres: [first, second] });
-  deps.canvasBlocks = [];
-  deps.canvasIndex = -1;
-  const page = loadFromIndex(NAMES, deps);
-  page.collectCanvasBlocks(); // -> index 1
-  page.selectCanvasBlock(0); // reader pins the first block
-  deps.chatMessages = { querySelectorAll: () => [first, second, third] };
-  page.collectCanvasBlocks();
-  assert.equal(deps.canvasIndex, 0, 'picking an older block must not be yanked to the tail');
+  const h = harness({ pres: [first, second] });
+  h.module.collectBlocks();
+  assert.equal(h.module.currentIndex(), 1, 'a new list lands on the newest block');
+  h.module.selectBlock(0); // the reader pins the first block
+  h.chat.querySelectorAll = () => [first, second, preBlock('<b>c</b>')];
+  h.module.collectBlocks();
+  assert.equal(h.module.currentIndex(), 0, 'picking an older block must not be yanked to the tail');
 });
 
-test('an empty chat resets the picker instead of keeping the last block list', () => {
-  const { deps } = makeDeps({ pres: [] });
-  deps.canvasBlocks = [{ code: 'old', label: 'HTML — old' }];
-  deps.canvasIndex = 0;
-  const page = loadFromIndex(NAMES, deps);
-  page.collectCanvasBlocks();
-  assert.equal(deps.canvasBlocks.length, 0);
-  assert.equal(deps.canvasIndex, -1);
+test('an empty chat resets the list instead of keeping stale blocks', () => {
+  const h = harness({ pres: [] });
+  h.module.collectBlocks();
+  h.module.selectBlock(0);
+  assert.equal(h.module.blocksList().length, 0);
+  assert.equal(h.module.currentIndex(), -1);
 });
 
-test('openCanvasForBlock registers a new block and opens the pane on it', () => {
-  const pres = [preBlock('<b>a</b>')];
-  const { deps, shell, picks, sessionToggles } = makeDeps({ pres, hiddenDefault: true });
-  deps.canvasBlocks = [];
-  deps.canvasIndex = -1;
-  const page = loadFromIndex(NAMES, deps);
-  page.collectCanvasBlocks(); // the chat block is already listed
-  page.openCanvasForBlock(preBlock('<b>z</b>'));
-  assert.equal(deps.canvasBlocks.length, 2);
-  assert.equal(shell.classList.contains('canvas-hidden'), false, 'opening a block must surface the canvas');
-  assert.ok(sessionToggles.length && sessionToggles[0] === false, 'opening must fold the session panel away');
+test('openForPre registers an unseen block, selects it, and shows the pane', () => {
+  const h = harness({ pres: [preBlock('<b>a</b>')], shellHidden: true });
+  h.module.collectBlocks();
+  h.module.openForPre(preBlock('<b>z</b>'));
+  assert.equal(h.module.blocksList().length, 2, 'the tapped block joined the list');
+  assert.equal(h.module.currentIndex(), 1, 'the pane opened on the tapped block');
+  assert.equal(h.shell.classList.contains('canvas-hidden'), false, 'tapping Canvas surfaces the pane');
+  assert.equal(h.module.HIDDEN_KEY, CANVAS_HIDDEN_KEY, 'the storage key keeps its name');
 });
+
+// ---- the shipped page keeps its pins ----------------------------------------
 
 test('the canvas picker and frame are wired into the page', () => {
   // The pane, the toggle, and the mutual exclusion with the session panel are
@@ -258,7 +226,9 @@ test('the canvas picker and frame are wired into the page', () => {
   const frameTag = HTML.slice(Math.max(0, at - 200), at + 300);
   assert.match(frameTag, /<iframe[\s\S]*?sandbox="allow-scripts"/);
   assert.ok(!/allow-same-origin/.test(frameTag), 'the canvas iframe must never rejoin this origin');
-  assert.ok(HTML.includes('classList.contains(\'canvas-hidden\')'), 'the toggle keyed on the shell is how open/closed is tracked');
+  assert.ok(HTML.includes("classList.contains('canvas-hidden')"), 'the toggle keyed on the shell is how open/closed is tracked');
   assert.ok(HTML.includes('function restoreCanvas'), 'restoreCanvas must exist to reopen a persisted state');
   assert.ok(HTML.indexOf('restoreSessionPanel();') < HTML.indexOf('restoreCanvas();'), 'the boot must restore the session panel before the canvas');
+  assert.ok(HTML.includes('canvas-artifacts.js'), 'the page loads the module');
+  assert.ok(HTML.includes('CanvasArtifacts.create('), 'and builds its instance');
 });

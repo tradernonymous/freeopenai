@@ -12,6 +12,7 @@
     <script src="chatlib.js"></script>
     <script src="image-store.js"></script>
     <script src="share-memory.js"></script>
+    <script src="canvas-artifacts.js"></script>
     <script src="provider-routing.js"></script>
     <script src="transcript-controller.js"></script>
     <script src="attachment-helpers.js"></script>
@@ -3204,13 +3205,6 @@
         const SESSION_TABS = ['skills', 'tasks', 'image', 'memory'];
         let sessionTab = SESSION_TABS[0];
 
-        // The artifact canvas: whether it is open, and the HTML block selected
-        // in it. Both live with the app rather than the chat -- a pane stays
-        // where the reader left it while they move between conversations.
-        const CANVAS_HIDDEN_KEY = 'freeopenaiCanvasHidden';
-        let canvasBlocks = [];
-        let canvasIndex = -1;
-
         // Whether the reasoning summary is shown at all. On by default, because
         // seeing what a reasoning model is doing is the reason to use one; off is
         // for people who want the answer and nothing else.
@@ -3948,6 +3942,20 @@
 
         // DOM elements
         const chatMessages = document.getElementById('chatMessages');
+
+        // The page keeps the DOM half of the canvas: the frame, the picker
+        // rows, the toggle buttons. The state and decisions live in the
+        // CanvasArtifacts module (canvas-artifacts.js), injected with the
+        // seams below. Built here, before the boot sequence at the bottom of
+        // the script calls restoreCanvas() -- the same early-declaration rule
+        // the session state follows.
+        const canvasArtifacts = CanvasArtifacts.create({
+            localStorage,
+            doc: document,
+            chatMessages,
+            onOpenPane: () => { if (typeof toggleSessionPanel === 'function') toggleSessionPanel(false, false); },
+            onBlocks: () => renderCanvasPicker(),
+        });
         // Where the transcript sits, and who is allowed to move it. The app used
         // to write scrollTop = scrollHeight from ten places, nine of them
         // unconditional -- a streaming reply dragged the reader back to the
@@ -9687,35 +9695,14 @@
             if (overlay && typeof overlay.remove === 'function') overlay.remove();
         }
 
-        // The canvas: a persistent preview pane for the HTML/JS/React blocks in
-        // this chat, instead of a one-at-a-time modal. The frame gets the same
-        // opaque-origin sandbox as the tap preview (allow-scripts, never
-        // same-origin), and it is only ever populated from "Open"/"Canvas"
-        // taps and from HTML blocks that are already on screen.
-        const CANVAS_REACT_MARKER = '<!-- canvas react -->';
+        const CANVAS_REACT_MARKER = CanvasArtifacts.REACT_MARKER;
 
-        // Build the document a block runs in. Plain blocks are wrapped in a
-        // bare shell so a fragment renders; a block that opens with the react
-        // marker gets React + Babel so JSX actually runs. Script tags are
-        // written as split strings so this page's own <script> never closes
-        // early on the string content.
-        function artifactDocument(code) {
-            const text = String(code || '');
-            const trimmed = text.replace(/^\s+/, '');
-            if (trimmed.indexOf(CANVAS_REACT_MARKER) === 0) {
-                const body = trimmed.slice(CANVAS_REACT_MARKER.length);
-                return '<!doctype html><html><head><meta charset="utf-8">'
-                    + '<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><' + '/script>'
-                    + '<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><' + '/script>'
-                    + '<script src="https://unpkg.com/@babel/standalone/babel.min.js"><' + '/script>'
-                    + '</head><body><div id="root"></div><script type="text/babel">'
-                    + body
-                    + '<' + '/script></body></html>';
-            }
-            const fullPage = /^<!doctype/i.test(trimmed) || /^<html/i.test(trimmed) || /^<head/i.test(trimmed) || /^<body/i.test(trimmed);
-            if (fullPage) return trimmed;
-            return '<!doctype html><html><head><meta charset="utf-8"></head><body>' + trimmed + '</body></html>';
-        }
+        // ---- thin delegates: the names the page's markup and code call ----
+
+        // Build the document a block runs in: a plain wrapper so a fragment
+        // renders, React + Babel for a block that opens with the react marker.
+        // The rule lives in the module; this is the name the page already calls.
+        function artifactDocument(code) { return canvasArtifacts.buildArtifactDocument(code); }
 
         function renderCanvasArtifact(code) {
             const frame = document.getElementById('canvasFrame');
@@ -9728,89 +9715,35 @@
             return shell && typeof shell.classList.contains === 'function' ? shell : null;
         }
 
-        // force true shows, false hides, undefined toggles. persist false is
-        // for restoring a stored choice or cross-panel closing.
         function toggleCanvas(force, persist = true) {
-            const shell = canvasShell();
-            if (!shell) return;
-            const hidden = force === undefined ? !shell.classList.contains('canvas-hidden') : !force;
-            shell.classList.toggle('canvas-hidden', hidden);
-            const panel = document.getElementById('canvasPane');
-            const scrim = document.getElementById('canvasScrim');
-            if (panel) {
-                panel.setAttribute('aria-hidden', String(hidden));
-                if (typeof panel.toggleAttribute === 'function') panel.toggleAttribute('inert', hidden);
-                else if (hidden) panel.setAttribute('inert', '');
-                else if (typeof panel.removeAttribute === 'function') panel.removeAttribute('inert');
-            }
-            if (scrim) scrim.setAttribute('aria-hidden', String(hidden));
-            // The two right-hand panes cannot share a corner: opening one
-            // closes the other, so the session work never sits under the
-            // artifact being read.
-            if (!hidden && typeof toggleSessionPanel === 'function') toggleSessionPanel(false, false);
-            // Opening draws what is in the picker -- no fetch, it is all
-            // already on screen, whichever block was last selected.
-            if (!hidden) renderCanvasPicker();
-            if (!persist) return;
-            try {
-                localStorage.setItem(CANVAS_HIDDEN_KEY, hidden ? '1' : '');
-            } catch {
-                // A browser refusing storage shouldn't break the toggle itself.
-            }
+            canvasArtifacts.showPane(force, persist);
+            if (!(persist === false)) renderCanvasPicker();
         }
 
         function restoreCanvas() {
-            let stored = null;
-            try {
-                stored = localStorage.getItem(CANVAS_HIDDEN_KEY);
-            } catch {
-                stored = null;
-            }
-            // Closed by default, same reasoning as the session panel: it opens
-            // when there is something to look at, not on load.
-            const hidden = stored === null || stored === undefined ? true : stored === '1';
-            toggleCanvas(!hidden, false);
+            canvasArtifacts.restorePane();
         }
 
-        // Rebuild the picker from the HTML blocks currently on screen. Runs on
-        // every message re-render (so streaming blocks join as they complete)
-        // and when the canvas opens. A block only exists once its closing
-        // fence is on screen, so this is always whole-block work.
         function collectCanvasBlocks() {
-            const hadBlocks = canvasBlocks.length > 0;
-            // Advance to the newest block only when the reader is following
-            // the tail -- the pane was empty, or the last block they had open
-            // is the newest again. An explicit pick of an older block stays
-            // put when a newer one arrives.
-            const wasFollowing = !hadBlocks || canvasIndex === canvasBlocks.length - 1;
-            canvasBlocks = [];
-            const pres = chatMessages.querySelectorAll('.message .message-text pre[data-lang="html"]');
-            pres.forEach((pre) => {
-                const codeEl = pre.querySelector('code');
-                const code = codeEl ? codeEl.textContent : pre.textContent;
-                if (canvasBlocks.some((b) => b.code === code)) return;
-                const first = String(code || '').replace(/\s+/g, ' ').trim().slice(0, 42);
-                canvasBlocks.push({ code, label: 'HTML — ' + (first || 'empty block') });
-            });
-            if (!canvasBlocks.length) canvasIndex = -1;
-            else if (wasFollowing || canvasIndex < 0) canvasIndex = canvasBlocks.length - 1;
-            renderCanvasPicker();
+            canvasArtifacts.collectBlocks();
         }
 
         function renderCanvasPicker() {
             const select = document.getElementById('canvasSelect');
             const count = document.getElementById('canvasCount');
             if (!select) return;
+            const blocks = canvasArtifacts.blocksList();
+            const canvasIndex = canvasArtifacts.currentIndex();
             select.innerHTML = '';
-            if (!canvasBlocks.length) {
+            if (!blocks.length) {
                 if (count) count.textContent = 'no blocks yet';
                 const opt = document.createElement('option');
                 opt.textContent = 'No HTML blocks in this chat yet';
                 opt.disabled = true;
                 select.appendChild(opt);
             } else {
-                if (count) count.textContent = canvasBlocks.length + (canvasBlocks.length === 1 ? ' block' : ' blocks');
-                canvasBlocks.forEach((block, i) => {
+                if (count) count.textContent = blocks.length + (blocks.length === 1 ? ' block' : ' blocks');
+                blocks.forEach((block, i) => {
                     const opt = document.createElement('option');
                     opt.value = String(i);
                     opt.textContent = block.label;
@@ -9826,10 +9759,9 @@
         }
 
         function selectCanvasBlock(index) {
-            if (!canvasBlocks.length) { canvasIndex = -1; return; }
-            canvasIndex = Math.max(0, Math.min(index, canvasBlocks.length - 1));
+            canvasArtifacts.selectBlock(index);
             const select = document.getElementById('canvasSelect');
-            if (select) select.value = String(canvasIndex);
+            if (select) select.value = String(canvasArtifacts.currentIndex());
             updateCanvasFrame();
         }
 
@@ -9840,28 +9772,20 @@
         }
 
         function updateCanvasFrame() {
-            const block = canvasBlocks.length ? canvasBlocks[canvasIndex] : null;
+            const blocks = canvasArtifacts.blocksList();
+            const at = canvasArtifacts.currentIndex();
+            const block = blocks.length ? blocks[at] : null;
             const frame = document.getElementById('canvasFrame');
             const select = document.getElementById('canvasSelect');
             if (frame) {
                 frame.title = block ? block.label : 'Sandboxed artifact preview';
                 renderCanvasArtifact(block ? block.code : '');
             }
-            if (select && canvasBlocks.length) select.value = String(canvasIndex);
+            if (select && blocks.length) select.value = String(at);
         }
 
-        // The Canvas button on a block: register the block and open the pane on
-        // it. The block is a live copy of whatever is on screen.
         function openCanvasForBlock(pre) {
-            const codeEl = pre.querySelector('code');
-            const code = codeEl ? codeEl.textContent : pre.textContent;
-            const hit = canvasBlocks.findIndex((b) => b.code === code);
-            const index = hit === -1 ? canvasBlocks.length : hit;
-            if (hit === -1) {
-                const first = String(code || '').replace(/\s+/g, ' ').trim().slice(0, 42);
-                canvasBlocks.push({ code, label: 'HTML — ' + (first || 'empty block') });
-            }
-            selectCanvasBlock(index);
+            canvasArtifacts.openForPre(pre);
             toggleCanvas(true);
         }
 
