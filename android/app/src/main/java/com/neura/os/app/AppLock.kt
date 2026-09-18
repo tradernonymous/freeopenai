@@ -1,4 +1,5 @@
 package com.neura.os.app
+import com.neura.os.R
 
 import android.app.KeyguardManager
 import android.content.Context

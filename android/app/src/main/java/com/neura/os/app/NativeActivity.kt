@@ -1,4 +1,7 @@
 package com.neura.os.app
+import androidx.compose.runtime.remember
+import com.neura.os.BuildConfig
+import com.neura.os.R
 
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
@@ -73,7 +76,7 @@ import com.neura.os.app.ui.Palette
 import com.neura.os.app.ui.PersonasScreen
 import com.neura.os.app.ui.Platform
 import com.neura.os.app.ui.PromptsScreen
-import com.neura.os.app.ui.Screen
+import com.neura.os.app.ui.Route
 import com.neura.os.app.ui.SelectTextDialog
 import com.neura.os.app.ui.Tab
 import kotlinx.coroutines.CancellationException
@@ -222,17 +225,17 @@ class NativeActivity : ComponentActivity(), Platform {
                                 ) { screen ->
                                     when (screen) {
                                         null -> Unit
-                                        Screen.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
-                                        Screen.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
-                                        Screen.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
-                                        Screen.Personas -> PersonasScreen(vm)
-                                        Screen.Prompts -> PromptsScreen(vm)
-                                        Screen.Skills -> SkillsScreen(vm)
-                                        Screen.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
-                                        Screen.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
-                                        Screen.Build -> BuildScreen(vm)
-                                        Screen.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
-                                        is Screen.FilePreview -> {
+                                        Route.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
+                                        Route.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
+                                        Route.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
+                                        Route.Personas -> PersonasScreen(vm)
+                                        Route.Prompts -> PromptsScreen(vm)
+                                        Route.Skills -> SkillsScreen(vm)
+                                        Route.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
+                                        Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
+                                        Route.Build -> BuildScreen(vm)
+                                        Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
+                                        is Route.FilePreview -> {
                                             val files = remember(screen.name) {
                                                 com.neura.os.app.data.FileGenerator.detectFiles(screen.name)
                                             }
@@ -265,7 +268,7 @@ class NativeActivity : ComponentActivity(), Platform {
                                                 )
                                             }
                                         }
-                                        is Screen.Detail -> Unit
+                                        is Route.Detail -> Unit
                                     }
                                 }
                             }

@@ -69,10 +69,10 @@ fun LibraryScreen(vm: AppViewModel) {
         }
         if (needle.isEmpty()) {
             item { SectionTitle("Browse") }
-            item { ToolCard("🧩", "Skills", "${vm.skills.size} installed · pin with /skill") { vm.push(Screen.Skills) } }
-            item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Screen.Personas) } }
-            item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Screen.Prompts) } }
-            item { ToolCard("🖼️", "Gallery", "${vm.library.images.size} image(s)") { vm.push(Screen.Images) } }
+            item { ToolCard("🧩", "Skills", "${vm.skills.size} installed · pin with /skill") { vm.push(Route.Skills) } }
+            item { ToolCard("🎭", "Personas", "${allPersonas(vm.library).size}") { vm.push(Route.Personas) } }
+            item { ToolCard("📚", "Prompts", "${allPrompts(vm.library).size} · type / in chat") { vm.push(Route.Prompts) } }
+            item { ToolCard("🖼️", "Gallery", "${vm.library.images.size} image(s)") { vm.push(Route.Images) } }
             item { SectionTitle("Commands") }
             CHAT_COMMANDS.forEach { command ->
                 item(key = command.name) {

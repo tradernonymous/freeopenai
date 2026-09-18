@@ -1,4 +1,5 @@
 package com.neura.os.app
+import com.neura.os.BuildConfig
 
 import android.content.Context
 import android.os.Build

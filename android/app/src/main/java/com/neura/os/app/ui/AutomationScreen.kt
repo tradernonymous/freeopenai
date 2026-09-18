@@ -1,4 +1,5 @@
 package com.neura.os.app.ui
+import com.neura.os.app.DeviceControlService
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

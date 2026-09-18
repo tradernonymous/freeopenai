@@ -115,13 +115,13 @@ fun BeforeAfterComparison(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = (sliderPosition * size.width).dp.coerceAtLeast(0.dp)),
+                .padding(horizontal = with(density) { (sliderPosition * size.width).toDp().coerceAtLeast(0.dp) }),
         ) {
             // Divider line
             Box(
                 modifier = Modifier
                     .width(2.dp)
-                    .height(size.height.dp)
+                    .height(with(density) { size.height.toDp() })
                     .background(Palette.green)
                     .align(Alignment.Center),
             )

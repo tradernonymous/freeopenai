@@ -244,10 +244,10 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
-        DrawerRow(Icons.Filled.Image, "Images") { vm.push(Screen.Images); close() }
-        DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Screen.Tools); close() }
-        DrawerRow(Icons.Filled.Extension, "Skills") { vm.push(Screen.Skills); close() }
-        DrawerRow(Icons.Filled.AutoAwesome, "Library") { vm.push(Screen.Knowledges); close() }
+        DrawerRow(Icons.Filled.Image, "Images") { vm.push(Route.Images); close() }
+        DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Route.Tools); close() }
+        DrawerRow(Icons.Filled.Extension, "Skills") { vm.push(Route.Skills); close() }
+        DrawerRow(Icons.Filled.AutoAwesome, "Library") { vm.push(Route.Knowledges); close() }
         DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
@@ -290,7 +290,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         HorizontalDivider(color = Palette.outline)
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "Chat") { vm.goToChat(); close() }
         Row(
-            Modifier.fillMaxWidth().clickable { vm.push(Screen.Settings); close() }.padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().clickable { vm.push(Route.Settings); close() }.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(32.dp).background(Palette.greenDark, CircleShape), contentAlignment = Alignment.Center) {

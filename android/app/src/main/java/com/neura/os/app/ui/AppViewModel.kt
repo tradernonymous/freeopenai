@@ -280,7 +280,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         nav = if (savedTab != null) restored.copy(currentTab = savedTab) else restored
     }
 
-    fun openBuilds() = push(Screen.Builds)
+    fun openBuilds() = push(Route.Builds)
 
     fun openBuild(id: String) {
         builds.open(id)

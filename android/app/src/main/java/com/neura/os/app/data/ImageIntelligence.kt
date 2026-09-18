@@ -54,7 +54,7 @@ object ImageIntelligence {
      * @param serverUrl The app's server URL (for Puter/NVIDIA proxying)
      * @return The description text, or null if the model already supports vision
      */
-    suspend fun describeForModel(
+    fun describeForModel(
         imageDataUrl: String,
         modelId: String,
         apiKey: String? = null,

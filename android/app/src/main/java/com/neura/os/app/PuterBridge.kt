@@ -1,4 +1,6 @@
 package com.neura.os.app
+import com.neura.os.BuildConfig
+import com.neura.os.R
 
 import android.annotation.SuppressLint
 import android.app.Activity
