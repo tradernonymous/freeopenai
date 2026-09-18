@@ -52,6 +52,7 @@
 | **Puter on Android** | Puter models in the phone's picker, streamed through the app's own bridge. |
 | **Chat · Plan toggle** | Always visible on the phone, with a chip for each skill in use. |
 | **Launcher update notice** | The desktop `.exe` says when a newer one is published. |
+| **Native Tauri desktop** | Replaced the old Edge webview wrapper with a real Tauri 2 + React shell: native sidebar, menus, system tray, and a proper Windows EXE installer. |
 
 </details>
 
@@ -109,6 +110,8 @@ curl -s https://<project>.up.railway.app/api/health
 1. Download the `.exe` from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
 2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**.
 3. Sign in once. Shortcuts: `Alt+1/2/3` modes · `Ctrl+Shift+B` Builds. More in [Desktop](docs/desktop.md).
+
+> **Note:** The desktop app is a native Tauri 2 shell with its own sidebar, menus, and system tray. It loads the FreeAI4U web app in a native window with Railway as the backend.
 
 ## 🛠️ Remote builds
 
