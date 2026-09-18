@@ -145,7 +145,6 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
 
     Column(Modifier.fillMaxSize()) {
         // Batch progress indicator
-        )
         Column(Modifier.padding(horizontal = 16.dp)) {
             OutlinedTextField(
                 prompt, { prompt = it },
@@ -215,18 +214,6 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
             }
         }
         // Prompt history
-        PromptHistoryPanel(
-            history = promptHistory,
-            onReuse = { reusePrompt -> prompt = reusePrompt },
-            onDelete = { idx -> promptHistory = promptHistory.toMutableList().apply { removeAt(idx) } },
-        )
-        if (vm.library.images.isEmpty()) {
-            EmptyState("No images yet", "Saved encrypted on this phone.")
-        } else {
-            LazyVerticalGrid(GridCells.Fixed(2), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(vm.library.images, key = { it.id }) { image ->
-                    StoredImage(vm, image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).clickable { viewing = image }.enterUp())
-                }
             }
         }
     }
@@ -271,7 +258,6 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
                 }
             },
             confirmButton = { TextButton({ viewing = null }) { Text("Close") } },
-        )
     }
     // Before/After comparison overlay
 }
@@ -423,7 +409,6 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
             label = { Text("Custom instructions") },
             placeholder = { Text("About you, how to reply") },
             modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
-        )
         AnimatedVisibility(instructions != vm.library.instructions) {
             TextButton({ vm.saveInstructions(instructions); vm.notice = "Saved" }) { Text("Save") }
         }
@@ -445,7 +430,6 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         Text(
             "Lets a chat you approve tap or scroll things on screen by their label -- only ever after you tap Approve on that one action. Off by default; this opens Android's own Settings to turn it on or off.",
             color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp),
-        )
         SectionTitle("Data")
         SettingRow("Delete all chats", null, danger = true) { confirmClear = true }
         SectionTitle("App")
@@ -462,7 +446,6 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
             text = { Text("This cannot be undone.") },
             confirmButton = { TextButton({ vm.deleteAllChats(); confirmClear = false }) { Text("Delete", color = Palette.red) } },
             dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } },
-        )
     }
     if (confirmSignOut) {
         AlertDialog(
@@ -476,7 +459,6 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
                 }
             },
             dismissButton = { TextButton({ confirmSignOut = false }) { Text("Cancel") } },
-        )
     }
 }
 
@@ -569,7 +551,6 @@ fun PersonasScreen(vm: AppViewModel) {
                     TextButton({ editing = null }) { Text("Cancel") }
                 }
             },
-        )
     }
 }
 
@@ -627,7 +608,6 @@ fun PromptsScreen(vm: AppViewModel) {
                     TextButton({ editing = null }) { Text("Cancel") }
                 }
             },
-        )
     }
 }
 
@@ -702,7 +682,6 @@ fun SkillsScreen(vm: AppViewModel) {
                     TextButton({ open = null }) { Text("Close") }
                 }
             },
-        )
     }
 }
 

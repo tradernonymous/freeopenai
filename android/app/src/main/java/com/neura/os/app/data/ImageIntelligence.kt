@@ -238,13 +238,13 @@ object ImageIntelligence {
             else -> "bright"
         }
     }
+    fun getCached(key: String): String? = DescriptorCache.get(key)
+    fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
 }
 
 /**
  * Manages a cache of image descriptors so the same image isn't described twice.
  */
-    fun getCached(key: String): String? = DescriptorCache.get(key)
-    fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
 
 private object DescriptorCache {
     private const val MAX_ENTRIES = 100
@@ -265,4 +265,6 @@ private object DescriptorCache {
     }
 
     fun clear() = synchronized(cache) { cache.clear() }
+    fun getCached(key: String): String? = DescriptorCache.get(key)
+    fun putCached(key: String, value: String) { DescriptorCache.put(key, value) }
 }

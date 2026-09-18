@@ -235,6 +235,7 @@ class NativeActivity : ComponentActivity(), Platform {
                                         Route.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
                                         Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
                                         Route.Build -> BuildScreen(vm)
+                                        is Route.Detail -> Unit
                                         Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
                                     }
                                 }
