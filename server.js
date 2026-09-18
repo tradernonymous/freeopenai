@@ -1509,6 +1509,23 @@ const LLM_PROVIDERS = {
     kind: 'search',
     note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
   },
+  // Freebuff (github.com/Quorinex/Freebuff2API) is an OpenAI-compatible proxy
+  // in front of Freebuff free coding models. The model list is read live from
+  // its /v1/models -- it tracks the upstream free-agent roster, so pinning ids
+  // here would rot -- and FREEBUFF_MODELS narrows it the way G4F_MODELS does
+  // for gpt4free. It runs as its own Railway service, see
+  // deploy/freebuff-railway, and this slot activates on FREEBUFF_BASE_URL,
+  // with the /v1 segment added when it is missing. FREEBUFF_API_KEY is only
+  // sent when set, matching a proxy deployed with API_KEYS; an open proxy gets
+  // no auth header rather than a bare "Bearer ". Chat only: the proxy serves
+  // no image endpoint, so no image block is declared.
+  freebuff: {
+    label: 'Freebuff',
+    baseUrl: '',
+    envVar: 'FREEBUFF_API_KEY',
+    needsKey: false,
+    needsBaseUrl: true,
+  },
   // gpt4free (github.com/xtekky/gpt4free) runs as the "Interference API": one
   // OpenAI-compatible endpoint in front of a large set of community provider
   // adapters, including media generation. It is declared here because of the
@@ -1615,7 +1632,7 @@ function providerIsConfigured(provider) {
 // shape for the same reason: its Interference API is served under /v1 on a
 // server that boots on a bare host and port, and "add the version segment" is a
 // step nobody remembers on the deploy where it matters.
-const V1_APPENDED_PROVIDERS = new Set(['g4f']);
+const V1_APPENDED_PROVIDERS = new Set(['g4f', 'freebuff']);
 
 function normalizeProviderBaseUrl(id, raw) {
   let base = String(raw || '').trim().replace(/\/+$/, '');
