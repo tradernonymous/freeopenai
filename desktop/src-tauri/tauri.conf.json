@@ -7,7 +7,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "portable"],
+    "targets": ["nsis", "msi"],
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
