@@ -28,7 +28,7 @@
     real Firebase project's google-services.json; see app/build.gradle.kts.
   - DeviceControlService (data/Agent.kt's tap_text/scroll_until phone
     actions) is a BIND_ACCESSIBILITY_SERVICE, declared here deliberately and
-    visibly -- see RatchetTest for why it's the one exception to this app's
+    visibly; see RatchetTest for why it's the one exception to this app's
     "no device-control permission" rule everywhere else. It is off by
     default: Android will not enable it until the person turns it on by
     hand in Settings > Accessibility, and even then every action still
