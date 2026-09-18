@@ -297,6 +297,67 @@ test('the Forget-all button really asks the server to forget, not just the DOM',
   assert.equal(cleared, 1, 'the button drives the module, which builds the request');
 });
 
+test('the Memory tab renders a use meter per fact, dimming never-used ones', async () => {
+  // The counts were a bare number; now each fact draws a 4-segment bar so a
+  // dead fact reads as empty at a glance. This drives the shipped renderer
+  // with a compact DOM stub, since the panel harness does not extract it.
+  const { loadFromIndex } = require('./helpers/index-html.js');
+  const el = () => {
+    const node = {
+      tagName: 'div', children: [], className: '', textContent: '', title: '',
+      attrs: {}, type: '',
+      setAttribute(n, v) { this.attrs[n] = String(v); },
+      getAttribute(n) { return this.attrs[n]; },
+      addEventListener() {},
+      appendChild(kid) { kid.parent = this; this.children.push(kid); return kid; },
+    };
+    node.classList = { add(c) { node.className = (node.className + ' ' + c).trim(); } };
+    return node;
+  };
+  const ids = {};
+  const document = {
+    createElement: (tag) => el(tag),
+    getElementById: (id) => ids[id] || (ids[id] = el()),
+  };
+  const deps = {
+    document,
+    shareMemory: { factsList: () => facts, useCounts: () => counts },
+    chatlib: { memoryUseMeter: (n) => Math.min(4, Math.max(0, Math.round(Number(n) || 0))) },
+    memoryUseMeter: (n) => Math.min(4, Math.max(0, Math.round(Number(n) || 0))),
+  };
+  const facts = [{ text: 'prefers Python' }, { text: 'collects stamps' }];
+  const counts = { 'prefers Python': 3 };
+  const loaded = loadFromIndex(['renderMemoryList'], deps);
+  loaded.renderMemoryList();
+  const rows = ids.memoryList.children;
+  assert.equal(rows.length, 2, 'one row per fact');
+  const hot = rows[0];
+  const cold = rows[1];
+  assert.ok(String(cold.className).includes('dead'), 'the never-used fact is dimmed as dead');
+  assert.ok(!String(hot.className).includes('dead'), 'a used fact is not dimmed');
+  const meterOf = (row) => row.children.find((c) => String(c.className).includes('memory-fact-used'));
+  const hotMeter = meterOf(hot);
+  const coldMeter = meterOf(cold);
+  assert.ok(hotMeter && coldMeter, 'every fact row carries the meter');
+  const segsOf = (m) => m.children.find((c) => String(c.className).includes('memory-fact-meter')).children;
+  assert.equal(segsOf(hotMeter).filter((s) => String(s.className).includes('on')).length, 3, '3 uses fill 3 of 4 segments');
+  assert.equal(segsOf(coldMeter).filter((s) => String(s.className).includes('on')).length, 0, 'a dead fact fills none');
+  assert.equal(hotMeter.children[1].textContent, '3\u00d7', 'the count still reads as text');
+  assert.equal(coldMeter.children[1].textContent, '0', 'zero says zero');
+});
+
+test('memoryUseMeter turns a use count into a 0-4 gauge', () => {
+  const { memoryUseMeter } = require('../chatlib.js');
+  assert.equal(memoryUseMeter(0), 0, 'a dead fact lights nothing');
+  assert.equal(memoryUseMeter(1), 1);
+  assert.equal(memoryUseMeter(2), 2);
+  assert.equal(memoryUseMeter(4), 4, 'four uses light every segment');
+  assert.equal(memoryUseMeter(17), 4, 'beyond four stays full, not clipped visually');
+  assert.equal(memoryUseMeter('3'), 3, 'counts arrive as text from storage');
+  assert.equal(memoryUseMeter(undefined), 0, 'a missing count reads as never used');
+  assert.equal(memoryUseMeter(-2), 0, 'nonsense never lights anything');
+});
+
 // ------------------------------------------------------- ShareMemory module
 
 const { create: createShareMemory } = require('../share-memory.js');

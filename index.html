@@ -316,7 +316,15 @@
         .memory-use-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text-dim); font-size: 11px; max-width: 100%; }
         .memory-use-icon { color: var(--accent); flex-shrink: 0; }
         .memory-use-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .memory-fact-used { flex-shrink: 0; font-size: 10.5px; color: var(--accent); background: var(--accent-bg); border-radius: 999px; padding: 1px 8px; }
+        .memory-fact-used { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); }
+        /* The use meter: four 6px segments, filled as a fact earns its keep. A
+           never-used fact stays dim and its row fades -- dead weight made
+           visible, so forgetting it needs no counting. */
+        .memory-fact-meter { display: inline-flex; gap: 2px; }
+        .memory-fact-meter i { width: 6px; height: 6px; border-radius: 2px; background: var(--border); }
+        .memory-fact-meter i.on { background: var(--accent); }
+        .memory-fact-row.dead { opacity: 0.62; }
+        .memory-fact-row.dead .memory-fact-text { color: var(--text-muted); }
         .history-item .history-delete {
             background: none; border: none; color: var(--text-muted);
             cursor: pointer; padding: 0 2px; line-height: 1; font-size: 14px;
@@ -11694,13 +11702,25 @@
                 text.className = 'memory-fact-text';
                 text.textContent = fact.text;
                 row.appendChild(text);
-                if (counts[fact.text]) {
-                    const used = document.createElement('span');
-                    used.className = 'memory-fact-used';
-                    used.textContent = 'used ' + counts[fact.text] + '\u00d7';
-                    used.title = 'Replies that seem to have drawn on this fact';
-                    row.appendChild(used);
+                const usedN = counts[fact.text] || 0;
+                const meter = document.createElement('span');
+                meter.className = 'memory-fact-used';
+                meter.title = usedN ? usedN + (usedN === 1 ? ' reply drew on this fact' : ' replies drew on this fact') : 'No reply has drawn on this fact yet';
+                const bar = document.createElement('span');
+                bar.className = 'memory-fact-meter';
+                bar.setAttribute('aria-label', usedN + ' uses');
+                const fill = memoryUseMeter(usedN);
+                for (let i = 0; i < 4; i += 1) {
+                    const seg = document.createElement('i');
+                    if (i < fill) seg.className = 'on';
+                    bar.appendChild(seg);
                 }
+                meter.appendChild(bar);
+                const num = document.createElement('span');
+                num.textContent = usedN ? usedN + '\u00d7' : '0';
+                meter.appendChild(num);
+                row.appendChild(meter);
+                if (!usedN) row.classList.add('dead');
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'memory-fact-delete';

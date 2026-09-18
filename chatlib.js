@@ -5271,6 +5271,14 @@ function memoryContentWords(text) {
     .filter((w) => w.length >= 4 && !MEMORY_STOPWORDS.has(w));
 }
 
+// Meter scale for the Memory tab's use bars: 1–4 uses each draw one more
+// segment; anything beyond reads as full. Returns a 0–4 gauge for a fact.
+function memoryUseMeter(count) {
+  const n = Number(count);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(4, Math.round(n));
+}
+
 function memoryFactsUsedIn(reply, facts) {
   const text = ' ' + String(reply || '').toLowerCase() + ' ';
   const used = [];
@@ -5313,6 +5321,7 @@ if (typeof module !== 'undefined' && module.exports) {
     shareImageDataUrlFactory,
     memoryPromptFor,
     memoryFactsUsedIn,
+    memoryUseMeter,
     MEMORY_STOPWORDS,
     MEMORY_TOOL,
     TRANSCRIPT_BOTTOM_SLACK_PX,
