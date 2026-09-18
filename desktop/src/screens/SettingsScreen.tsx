@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, getServer, setServer, normalizeServer, DEFAULT_SERVER } from '../api';
+import { APP_VERSION } from '../version';
 
 export default function SettingsScreen() {
   const [health, setHealth] = useState<any>(null);
@@ -14,7 +15,7 @@ export default function SettingsScreen() {
   const [session, setSession] = useState<any>(null);
   const [memory, setMemory] = useState<Array<any>>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [version, setVersion] = useState('2.1.0');
+  const version = APP_VERSION;
 
   const load = () => {
     api.health().then(setHealth).catch(() => setHealth(null));

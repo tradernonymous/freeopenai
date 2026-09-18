@@ -45,6 +45,14 @@ test('the shell checks the WebView2 runtime before opening a window', () => {
   assert.ok(!mainRs.includes('tauri_plugin_updater'), 'the updater plugin is gone from the shell too');
 });
 
+test('the UI version constant matches the built version (update check + badges)', () => {
+  const pkg = JSON.parse(read('package.json'));
+  const src = read('src', 'version.ts');
+  const m = src.match(/APP_VERSION = '([0-9.]+)'/);
+  assert.ok(m, 'version.ts exports APP_VERSION');
+  assert.equal(m[1], pkg.version);
+});
+
 test('tauri.conf.json: plugins ship no config maps (the window-state startup panic)', () => {
   const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));
   assert.equal(conf.plugins, undefined,

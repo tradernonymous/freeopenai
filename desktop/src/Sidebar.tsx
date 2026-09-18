@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { APP_VERSION } from './version';
 
 const NAV_ITEMS = [
   { id: 'chat', label: 'Chat', icon: '💬' },
@@ -98,7 +99,7 @@ export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTer
       </nav>
       {hint && <div className="sidebar-hint">{hint}</div>}
       <div className="sidebar-footer">
-        <div className="sidebar-version">v2.1.0</div>
+        <div className="sidebar-version">v{APP_VERSION}</div>
       </div>
     </aside>
   );

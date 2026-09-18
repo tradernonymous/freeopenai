@@ -12,11 +12,10 @@ import FileTree from './components/FileTree';
 import Terminal from './components/Terminal';
 import SessionManager from './components/SessionManager';
 import './index.css';
+import { APP_VERSION } from './version';
 
 type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'settings';
 type RightPanel = 'builds' | 'knowledge' | 'none';
-
-const CURRENT_VERSION = '2.1.0';
 
 export default function App() {
   const [view, setView] = useState<View>('chat');
@@ -75,8 +74,11 @@ export default function App() {
         const res = await fetch('https://api.github.com/repos/tradernonymous/freeopenai/releases/tags/desktop-latest');
         if (!res.ok) return;
         const data = await res.json();
-        const latest = String(data.tag_name || '').replace('desktop-', '') || '';
-        if (latest && latest !== CURRENT_VERSION) setUpdateAvailable(true);
+        // The tag is 'desktop-latest' (a moving label), so the version has
+        // to come from the asset names themselves: FreeAI4U.Desktop_2.1.1_x64-setup.exe.
+        const assets: string[] = (data.assets || []).map((a: any) => String(a.name || ''));
+        const m = assets.join(' ').match(/(\d+\.\d+\.\d+)/);
+        if (m && m[1] !== APP_VERSION) setUpdateAvailable(true);
       } catch {}
     };
     checkUpdate();

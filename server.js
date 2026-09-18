@@ -409,12 +409,31 @@ function currentAppUser(req) {
   return verifySession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
 }
 
+// Origins the desktop shell actually runs on: the Tauri 2 production origin
+// (http://tauri.localhost on Windows, tauri://localhost on macOS/Linux) and
+// the vite dev server. Localhost on any port stays allowed for local
+// tooling. Everything else -- any public website -- gets no grant, because
+// reflecting an arbitrary origin back with credentials on would let it act
+// with the user's session cookie.
+function corsOriginFor(origin) {
+  if (!origin) return null;
+  if (origin === 'http://tauri.localhost' || origin === 'https://tauri.localhost' || origin === 'tauri://localhost') return origin;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+  return null;
+}
+
 function setSessionCookie(res, username, req) {
   const value = signSession(sessionSecret, username);
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  // The desktop shell is a separate origin, so a Lax cookie never rides its
+  // fetches and sign-in would not stick there. Browsers only accept a
+  // cross-site cookie as SameSite=None with Secure, which the https proxy
+  // header guarantees on Railway; same-site browser use keeps Lax.
+  const crossSite = secure !== '' && !!corsOriginFor(req.headers.origin);
+  const sameSite = crossSite ? '; SameSite=None; Secure' : `; SameSite=Lax${secure}`;
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
+    `${SESSION_COOKIE_NAME}=${value}; HttpOnly;${sameSite}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   );
 }
 
@@ -5481,6 +5500,28 @@ function createRequestHandler(root) {
   return (req, res) => {
     const urlPath = req.url.split('?')[0];
 
+    // ---- desktop CORS -------------------------------------------------
+    // The Tauri webview is a different origin from the engine site, so the
+    // browser blocks every fetch unless the response carries
+    // Access-Control-Allow-Origin -- and any non-simple request (the JSON
+    // login POST, PUT/DELETE routes) needs the OPTIONS preflight answered,
+    // which previously fell through the router as 405 and killed those
+    // calls before auth ever ran.
+    const allowOrigin = corsOriginFor(req.headers.origin);
+    if (allowOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Max-Age', '600');
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+    }
+
     if (req.method === 'POST' && urlPath === '/api/login') {
       handleLogin(req, res);
       return;
@@ -5631,6 +5672,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  corsOriginFor,
   githubApiHeaders,
   resolveSafePath,
   isAssetPath,
