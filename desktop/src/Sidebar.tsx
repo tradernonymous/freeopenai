@@ -9,7 +9,18 @@ const NAV_ITEMS = [
 
 type NavId = typeof NAV_ITEMS[number]['id'];
 
-export default function Sidebar({ active, onNavigate }: { active: NavId; onNavigate: (id: NavId) => void }) {
+interface SidebarProps {
+  active: NavId;
+  onNavigate: (id: NavId) => void;
+  onToggleFiles: () => void;
+  onToggleTerminal: () => void;
+  onToggleSessions: () => void;
+  showFiles: boolean;
+  showTerminal: boolean;
+  showSessions: boolean;
+}
+
+export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTerminal, onToggleSessions, showFiles, showTerminal, showSessions }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -28,6 +39,31 @@ export default function Sidebar({ active, onNavigate }: { active: NavId; onNavig
             <span className="sidebar-label">{item.label}</span>
           </button>
         ))}
+        <div className="sidebar-divider" />
+        <button
+          className={`sidebar-btn ${showFiles ? 'active' : ''}`}
+          onClick={onToggleFiles}
+          title="Workspace"
+        >
+          <span className="sidebar-icon">📂</span>
+          <span className="sidebar-label">Workspace</span>
+        </button>
+        <button
+          className={`sidebar-btn ${showTerminal ? 'active' : ''}`}
+          onClick={onToggleTerminal}
+          title="Terminal"
+        >
+          <span className="sidebar-icon">⌨️</span>
+          <span className="sidebar-label">Terminal</span>
+        </button>
+        <button
+          className={`sidebar-btn ${showSessions ? 'active' : ''}`}
+          onClick={onToggleSessions}
+          title="History"
+        >
+          <span className="sidebar-icon">🕒</span>
+          <span className="sidebar-label">History</span>
+        </button>
       </nav>
       <div className="sidebar-footer">
         <div className="sidebar-version">v2.0.0</div>
