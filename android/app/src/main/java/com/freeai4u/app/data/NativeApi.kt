@@ -255,7 +255,7 @@ class NativeApi(
             throw e
         } catch (e: Exception) {
             if (cancel.get() == null) onEvent(ChatEvent.Done) // stopped by the user
-            else onEvent(ChatEvent.Failure("Connection lost: " + (e.message ?: e.javaClass.simpleName)))
+            else onEvent(ChatEvent.Failure("Connection lost: " + (e.message ?: e.javaClass.simpleName), connectivity = true))
         } finally {
             cancel.set(null)
             conn.disconnect()

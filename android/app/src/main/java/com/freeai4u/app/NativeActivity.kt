@@ -10,6 +10,8 @@ import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.graphics.drawable.Icon
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.os.Parcelable
@@ -98,6 +100,7 @@ class NativeActivity : ComponentActivity(), Platform {
     private var prompting = false
     private lateinit var voice: VoiceSession
     private lateinit var puter: PuterBridge
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var viewer by mutableStateOf<Triple<String, ByteArray, String>?>(null)
     private var selecting by mutableStateOf<String?>(null)
     /** Highlights of this build, shown once after an update (not on a fresh install). */
@@ -192,6 +195,7 @@ class NativeActivity : ComponentActivity(), Platform {
         vm.puterChat = { body, onDelta, done -> puter.chat(body, onDelta, done) }
         vm.puterSignIn = { done -> puter.signIn(done) }
         registerForPush()
+        observeConnectivity()
         setContent {
             FreeAITheme {
                 LaunchedEffect(vm.finishedReply) {
@@ -297,6 +301,28 @@ class NativeActivity : ComponentActivity(), Platform {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // Covers the window between the network returning and this activity
+        // resuming, when a killed process never had a callback to fire.
+        vm.drainOutbox()
+    }
+
+    /** A chat left waiting on a connectivity failure (see AppViewModel.outbox)
+     * retries the moment the network is back, instead of sitting on an error
+     * until the user notices and taps regenerate themselves. */
+    private fun observeConnectivity() {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                runOnUiThread { vm.drainOutbox() }
+            }
+        }
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: SecurityException) {
+            // ACCESS_NETWORK_STATE is a normal permission and always granted,
+            // but an OEM restriction is a missed retry opportunity, not a crash.
+        }
     }
 
     override fun onPause() {
@@ -320,6 +346,8 @@ class NativeActivity : ComponentActivity(), Platform {
         vm.puterSignIn = null
         tts?.shutdown()
         tts = null
+        networkCallback?.let { getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(it) }
+        networkCallback = null
         super.onDestroy()
     }
 

@@ -17,7 +17,10 @@ data class ModelInfo(val id: String, val name: String, val contextLength: Int)
 
 sealed interface ChatEvent {
     data class Delta(val content: String, val reasoning: String) : ChatEvent
-    data class Failure(val message: String) : ChatEvent
+    /** [connectivity] is true only for a failure before any reply byte came
+     * back because the connection itself failed -- worth an automatic retry
+     * once the network returns -- never for a server-side error. */
+    data class Failure(val message: String, val connectivity: Boolean = false) : ChatEvent
     /** Some text arrived, then the stream failed; the text is kept. */
     data class Partial(val notice: String) : ChatEvent
     /** A fragment of a tool call; fragments with the same index join up. */

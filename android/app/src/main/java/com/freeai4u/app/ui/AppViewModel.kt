@@ -35,6 +35,7 @@ import com.freeai4u.app.data.imageModelsFor
 import com.freeai4u.app.data.imageRatio
 import com.freeai4u.app.data.ModelInfo
 import com.freeai4u.app.data.NativeApi
+import com.freeai4u.app.data.Outbox
 import com.freeai4u.app.data.Persona
 import com.freeai4u.app.data.PromptTemplate
 import com.freeai4u.app.data.PUTER_PROVIDER
@@ -162,10 +163,18 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** One-shot messages for a snackbar. */
     var notice by mutableStateOf<String?>(null)
 
+    /** Chats owed a reply that a connectivity failure kept from arriving.
+     * Drained by [drainOutbox], which NativeActivity calls from its own
+     * ConnectivityManager callback when the network comes back, and again
+     * from onResume as a safety net for a process that was killed outright. */
+    var outbox by mutableStateOf(Outbox())
+        private set
+
     init {
         io.execute {
             val chats = repo.loadConversations()
             val lib = repo.loadLibrary()
+            val savedOutbox = repo.loadOutbox()
             main.post {
                 // A chat started before the disk was read (a shared photo, a
                 // notification tap) is kept rather than replaced by the load.
@@ -173,10 +182,29 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 conversations.clear()
                 conversations.addAll(fresh + chats)
                 library = lib
+                outbox = savedOutbox
                 loaded = true
             }
         }
         if (signedIn) refreshCatalogue()
+    }
+
+    private fun updateOutbox(next: Outbox) {
+        outbox = next
+        io.execute { repo.saveOutbox(next) }
+    }
+
+    /** Retries the oldest chat whose backoff has elapsed. Only one reply ever
+     * streams at a time (runReply's own constraint), so a chat already
+     * streaming -- including one this same call just started -- means
+     * nothing else here can go yet; the rest stay queued for the next call. */
+    fun drainOutbox() {
+        val now = System.currentTimeMillis()
+        for (entry in outbox.due(now)) {
+            if (streamingId != null) break
+            updateOutbox(outbox.attempted(entry.chatId, now))
+            regenerate(entry.chatId)
+        }
     }
 
     override fun onCleared() {
@@ -737,6 +765,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         streamingId = start.id
         streamStartedAt = System.currentTimeMillis()
         stopRequested = false
+        // Any earlier connectivity failure for this chat is superseded by
+        // this attempt, whether it came from the user or from drainOutbox
+        // itself -- it will be re-queued below if this attempt fails too.
+        if (outbox.entries.any { it.chatId == start.id }) updateOutbox(outbox.acked(start.id))
         val lib = library
         ReplyService.start(context, start.id, start.title)
         io.execute {
@@ -747,6 +779,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             var stepsTaken = 0
             var finalText = ""
             var authRetried = false
+            var queueForRetry = false
             val seenCalls = HashMap<String, Int>()
             while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
                 val persona = personaFor(lib, chat.personaId)
@@ -768,6 +801,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val reasoning = StringBuilder()
                 val collector = ToolCallCollector()
                 var failure: String? = null
+                var connectivityFailure = false
                 var lastPost = 0L
                 val base = chat
                 fun draft(rawError: String?): ChatMessage = when {
@@ -809,7 +843,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                             }
                             is ChatEvent.ToolDelta -> collector.add(event)
                             is ChatEvent.ToolDeltas -> event.deltas.forEach { collector.add(it) }
-                            is ChatEvent.Failure -> failure = event.message
+                            is ChatEvent.Failure -> { failure = event.message; connectivityFailure = event.connectivity }
                             is ChatEvent.Partial -> failure = event.notice
                             ChatEvent.Done -> Unit
                         }
@@ -830,9 +864,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     }
                 } catch (e: Exception) {
                     failure = e.message ?: "The reply failed."
+                    connectivityFailure = e is java.io.IOException
                 }
                 val calls = collector.calls()
                 val error = failure
+                queueForRetry = error != null && connectivityFailure && content.isEmpty()
                 if (error != null && useTools && content.isEmpty() && calls.isEmpty() && looksLikeToolsUnsupported(error)) {
                     useTools = false
                     continue
@@ -889,10 +925,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             }
             val done = chat
             val text = finalText
+            val retry = queueForRetry
             publishChat(done, persist = true)
             main.post {
                 streamingId = null
                 finishedReply = Triple(done.id, text, System.currentTimeMillis())
+                if (retry) updateOutbox(outbox.enqueued(done.id))
             }
           } finally {
             ReplyService.stop(context)
