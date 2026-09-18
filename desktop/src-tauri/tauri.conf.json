@@ -20,7 +20,17 @@
   "productName": "FreeAI4U Desktop",
   "version": "2.0.0",
   "identifier": "com.freeai4u.desktop",
-  "plugins": {},
+  "plugins": {
+    "window-state": {
+      "all": true
+    },
+    "store": {
+      "all": true
+    },
+    "updater": {
+      "active": true
+    }
+  },
   "app": {
     "windows": [
       {

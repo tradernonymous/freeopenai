@@ -1,18 +1,43 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 
+interface Plugin {
+  id: string;
+  name: string;
+  description: string;
+  installed: boolean;
+  enabled: boolean;
+  author?: string;
+}
+
 export default function SettingsScreen() {
   const [providers, setProviders] = useState<Record<string, any>>({});
   const [health, setHealth] = useState<any>(null);
   const [version, setVersion] = useState('2.0.0');
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
 
   useEffect(() => {
     api.health().then(setHealth);
     api.providers().then((p: any) => setProviders(p || {}));
     if ((window as any).__APP_VERSION__) setVersion((window as any).__APP_VERSION__);
+    setPlugins([
+      { id: 'dsh-better-sidebar', name: 'DSH Better Sidebar', description: 'VSCode-style right sidebar with explorer/editor/terminal/Git/browser.', installed: true, enabled: true, author: 'omdsh-dev' },
+      { id: 'dsh-rewind', name: 'DSH Rewind', description: 'In-window conversation rollback without branching; lightweight workspace backup.', installed: true, enabled: true, author: 'SiriLee' },
+      { id: 'dsh-market', name: 'DSH Market', description: 'Browse, search, and install community plugins from multiple sources.', installed: true, enabled: false, author: 'jing-hy' },
+      { id: 'dsh-pet', name: 'DSH Pet', description: 'Desktop pet with preset animations and Codex resource pack import.', installed: false, enabled: false, author: 'PC2005-cloud' },
+      { id: 'dsh-balance', name: 'DSH Balance', description: 'DeepSeek balance, cost estimation, and pricing alerts.', installed: false, enabled: false, author: 'deepseek-ai' },
+    ]);
   }, []);
 
   const providerEntries = Object.entries(providers || {}).filter(([, v]: [string, any]) => !v.disabled);
+
+  const togglePlugin = (id: string) => {
+    setPlugins((prev) => prev.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p)));
+  };
+
+  const installPlugin = (id: string) => {
+    setPlugins((prev) => prev.map((p) => (p.id === id ? { ...p, installed: true, enabled: true } : p)));
+  };
 
   return (
     <div className="screen settings">
@@ -22,7 +47,7 @@ export default function SettingsScreen() {
       <div className="settings-layout">
         <aside className="settings-nav">
           <nav>
-            {['About', 'Connection', 'Providers', 'Skills'].map((item) => (
+            {['About', 'Connection', 'Providers', 'Plugins', 'Skills'].map((item) => (
               <button key={item} className="settings-nav-btn">
                 {item}
               </button>
@@ -82,6 +107,33 @@ export default function SettingsScreen() {
                 <div key={id} className="setting-row provider-row">
                   <span className="setting-label">{id}</span>
                   <span className="setting-value">{p.models?.length || 0} models</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h2>Plugins</h2>
+            <div className="plugin-grid">
+              {plugins.map((p) => (
+                <div key={p.id} className="plugin-card">
+                  <div className="plugin-card-header">
+                    <div className="plugin-name">{p.name}</div>
+                    {p.installed ? (
+                      <button onClick={() => togglePlugin(p.id)} disabled={!p.installed}>
+                        {p.enabled ? 'Disable' : 'Enable'}
+                      </button>
+                    ) : (
+                      <button onClick={() => installPlugin(p.id)} className="primary">
+                        Install
+                      </button>
+                    )}
+                  </div>
+                  <div className="plugin-desc">{p.description}</div>
+                  <div className="plugin-meta">
+                    <span>{p.author}</span>
+                    <span>{p.installed ? 'Installed' : 'Available'}</span>
+                  </div>
                 </div>
               ))}
             </div>
