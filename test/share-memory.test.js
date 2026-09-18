@@ -14,7 +14,7 @@ const path = require('path');
 
 const server = require('../server.js');
 const { createRequestHandler } = server;
-const { sharePayloadOf, shareImageDataUrlFactory, memoryPromptFor, MEMORY_TOOL } = require('../chatlib.js');
+const { sharePayloadOf, shareImageDataUrlFactory, memoryPromptFor, memoryFactsUsedIn, MEMORY_TOOL } = require('../chatlib.js');
 
 async function withApp(run) {
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
@@ -89,6 +89,26 @@ test('memory turns into a context block, or nothing when there is nothing', () =
 test('the memory tool asks for text and names itself once', () => {
   assert.equal(MEMORY_TOOL.function.name, 'save_memory');
   assert.equal(MEMORY_TOOL.function.parameters.required[0], 'text');
+});
+
+test('a reply that echoes a fact marks that fact as used', () => {
+  const facts = [{ text: 'prefers Python' }, { text: 'building a game in Godot' }];
+  const used = memoryFactsUsedIn('Here is a Python snippet to get you started.', facts);
+  // "prefers" is a stopword on purpose; the match is on "python".
+  assert.deepEqual(used, ['prefers Python']);
+  const none = memoryFactsUsedIn('The capital of France is Paris.', facts);
+  assert.deepEqual(none, []);
+  const both = memoryFactsUsedIn('For your Godot project, Python is less typical — GDScript is the engine language.', facts);
+  assert.equal(both.length, 2);
+  assert.ok(both.includes('prefers Python') && both.includes('building a game in Godot'));
+});
+
+test('stopword-only facts can never match, and empty answers nothing', () => {
+  assert.deepEqual(memoryFactsUsedIn('That is what they said about it.', [{ text: 'this that with from' }]), []);
+  assert.deepEqual(memoryFactsUsedIn('', [{ text: 'prefers Python' }]), []);
+  // A content word shared by fact and reply counts, however unremarkable:
+  // "named" is a real word in both, and one content hit is enough by design.
+  assert.deepEqual(memoryFactsUsedIn('Everything named here is hypothetical.', [{ text: 'has a cat named Max' }]), ['has a cat named Max']);
 });
 
 // ---------------------------------------------------------------- server

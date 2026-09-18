@@ -5252,6 +5252,36 @@ function memoryPromptFor(facts) {
     + list.map((text) => '- ' + text.replace(/[\\\n]/g, ' ').slice(0, 300)).join('\n');
 }
 
+// Which saved facts a reply may have drawn on: a word-level heuristic, on
+// purpose. The request carries the facts verbatim, so a reply that echoes one
+// shows the fact's own words somewhere in its text; a reply on an unrelated
+// subject matches none. Rules: content words only (four characters or more,
+// no stopwords), and one hit is enough -- a fact is usually one attribute, so
+// demanding several of its words would mark almost nothing. That bias is the
+// honest one: the chip says "may have used", and the Memory tab's counts are
+// a measure of the mechanism, not a proof about any single reply.
+const MEMORY_STOPWORDS = new Set(['this', 'that', 'with', 'from', 'they', 'them', 'their', 'have', 'been', 'were', 'will', 'would', 'could', 'should', 'when', 'what', 'where', 'which', 'while', 'about', 'into', 'only', 'also', 'than', 'then', 'over', 'under', 'some', 'such', 'most', 'more', 'very', 'just', 'like', 'want', 'need', 'make', 'made', 'using', 'used', 'uses', 'user', 'users', 'prefers', 'prefer', 'likes', 'liked', 'always', 'never', 'often', 'currently', 'building', 'working', 'learning']);
+
+function memoryContentWords(text) {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !MEMORY_STOPWORDS.has(w));
+}
+
+function memoryFactsUsedIn(reply, facts) {
+  const text = ' ' + String(reply || '').toLowerCase() + ' ';
+  const used = [];
+  for (const fact of Array.isArray(facts) ? facts : []) {
+    const words = memoryContentWords(fact && fact.text);
+    if (!words.length) continue;
+    if (words.some((w) => text.includes(w))) {
+      used.push(String(fact.text));
+    }
+  }
+  return used;
+}
+
 // One tool the model can call to add a fact. Deletion and editing stay human
 // work on purpose: the page's Memory tab is where a fact is corrected, because
 // the reader knows when a remembered thing has gone stale.
@@ -5280,6 +5310,8 @@ if (typeof module !== 'undefined' && module.exports) {
     sharePayloadOf,
     shareImageDataUrlFactory,
     memoryPromptFor,
+    memoryFactsUsedIn,
+    MEMORY_STOPWORDS,
     MEMORY_TOOL,
     TRANSCRIPT_BOTTOM_SLACK_PX,
     transcriptAtBottom,

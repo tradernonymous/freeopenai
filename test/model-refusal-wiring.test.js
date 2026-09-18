@@ -129,6 +129,9 @@ function harness({ models, answers, streamed = null }) {
         return m ? m[0] : 'upstream refused it';
     },
     refusedModelIds,
+    // finalizePartial now marks memory use on the bubble it saves; the
+    // refusal flow never draws on facts, so a returning stub is the seam.
+    markMemoryUse: () => {},
     autoRetryEnabled: false,
     RATE_LIMIT_BASE_DELAY_MS: 1,
     localStorage: { setItem() {} },

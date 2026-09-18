@@ -312,6 +312,10 @@
         .memory-fact-text { flex: 1; min-width: 0; font-size: 12.5px; overflow-wrap: anywhere; }
         .memory-fact-delete { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; flex-shrink: 0; }
         .memory-fact-delete:hover { color: var(--danger); }
+        .memory-use-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text-dim); font-size: 11px; max-width: 100%; }
+        .memory-use-icon { color: var(--accent); flex-shrink: 0; }
+        .memory-use-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .memory-fact-used { flex-shrink: 0; font-size: 10.5px; color: var(--accent); background: var(--accent-bg); border-radius: 999px; padding: 1px 8px; }
         .history-item .history-delete {
             background: none; border: none; color: var(--text-muted);
             cursor: pointer; padding: 0 2px; line-height: 1; font-size: 14px;
@@ -5655,6 +5659,10 @@
                 });
             }
             if (wanted === 'image' && typeof loadImageProviderReport === 'function') loadImageProviderReport();
+            // Memory follows the Image tab's lead: opening it re-reads the
+            // facts (another tab or device may have saved one) and re-renders
+            // the usage counts, so what it shows is never a stale snapshot.
+            if (wanted === 'memory' && typeof loadMemoryFacts === 'function') loadMemoryFacts();
             if (!persist) return;
             try {
                 localStorage.setItem(SESSION_TAB_KEY, wanted);
@@ -10102,6 +10110,7 @@
             setReasoningContent(el, reasoning);
             el.appendChild(buildMessageActions(retryText, false, attachmentLost, messages.length));
             messages.push({ type: 'bot', content, reasoning: reasoning || undefined, timestamp: Date.now() });
+            markMemoryUse(el, content);
             persistMessages();
             scrollTranscript('follow');
         }
@@ -10125,6 +10134,7 @@
             note.textContent = '⚠ ' + (notice || 'The stream ended early — the reply above may be incomplete.') + ' Continuing will send a fresh request.';
             bubble.appendChild(note);
             messages.push({ type: 'bot', content: text, reasoning: renderer.reasoning || undefined, timestamp: Date.now() });
+            markMemoryUse(bubble, text);
             persistMessages();
             scrollTranscript('follow');
             showStatus('error', notice || 'The stream ended early');
@@ -10140,6 +10150,7 @@
             el.appendChild(textEl);
             setMessageContent(el, content);
             if (opts.reasoning) setReasoningContent(el, opts.reasoning);
+            if (type === 'bot') markMemoryUse(el, content);
 
             if (type === 'bot') {
                 el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost, messages.length));
@@ -11259,6 +11270,9 @@
         function renderSavedMessages() {
             const saved = messages;
             messages = [];
+            // Re-drawn replies re-detect their memory chips, but a redraw is
+            // not a new use: counting is suppressed for this loop only.
+            restoringTranscript = true;
             if (saved.length) emptyState.style.display = 'none';
             saved.forEach((msg, i) => {
                 if (msg.type === 'bot' && Array.isArray(msg.images) && msg.images.length) {
@@ -11272,6 +11286,7 @@
                 const retryText = retryTargetFor(msg, saved[i - 1]);
                 addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
             });
+            restoringTranscript = false;
         }
 
         function renderSavedImageMessage(msg) {
@@ -11641,6 +11656,56 @@
         // state itself is declared with the other session state near the top
         // of the page; this is the tab's behavior.
 
+        // ------------------------------------------------------------
+        // Marking the replies that drew on saved memory.
+        //
+        // The request carries the facts verbatim, so detection is a word
+        // match (chatlib's memoryFactsUsedIn): a reply echoing a fact's own
+        // words gets a chip saying so. Counts live in localStorage keyed by
+        // fact text -- a measure of the mechanism for the Memory tab, not a
+        // proof about any single reply -- and a transcript being re-rendered
+        // from storage re-draws chips without counting again.
+        const MEMORY_USE_KEY = 'freeopenaiMemoryUse';
+        let restoringTranscript = false;
+
+        function memoryUseCounts() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(MEMORY_USE_KEY) || '{}');
+                return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+            } catch { return {}; }
+        }
+
+        function bumpMemoryUseCount(text) {
+            try {
+                const counts = memoryUseCounts();
+                counts[text] = (counts[text] || 0) + 1;
+                localStorage.setItem(MEMORY_USE_KEY, JSON.stringify(counts));
+            } catch { /* a refused counter costs nothing: the chip still shows */ }
+        }
+
+        function markMemoryUse(el, content) {
+            if (!memoryOnForChat() || !memoryFacts.length || !el) return;
+            const used = memoryFactsUsedIn(content, memoryFacts);
+            if (!used.length) return;
+            if (!restoringTranscript) used.forEach(bumpMemoryUseCount);
+            const chip = document.createElement('div');
+            chip.className = 'memory-use-chip';
+            chip.setAttribute('aria-label', 'This reply drew on saved memory: ' + used.join('; '));
+            chip.title = 'This reply drew on saved memory. Manage the facts in Session → Memory.';
+            const icon = document.createElement('span');
+            icon.className = 'memory-use-icon';
+            icon.textContent = '✦';
+            icon.setAttribute('aria-hidden', 'true');
+            chip.appendChild(icon);
+            const label = document.createElement('span');
+            label.className = 'memory-use-text';
+            label.textContent = used.length === 1
+                ? 'drew on saved memory: “' + used[0] + '”'
+                : 'drew on ' + used.length + ' saved facts';
+            chip.appendChild(label);
+            el.appendChild(chip);
+        }
+
         // Keep the switch honest with the conversation actually on screen.
         function syncMemorySwitch() {
             const sw = document.getElementById('memoryModeSwitch');
@@ -11677,6 +11742,7 @@
                 list.appendChild(empty);
                 return;
             }
+            const counts = memoryUseCounts();
             for (const fact of memoryFacts) {
                 const row = document.createElement('div');
                 row.className = 'memory-fact-row';
@@ -11684,6 +11750,13 @@
                 text.className = 'memory-fact-text';
                 text.textContent = fact.text;
                 row.appendChild(text);
+                if (counts[fact.text]) {
+                    const used = document.createElement('span');
+                    used.className = 'memory-fact-used';
+                    used.textContent = 'used ' + counts[fact.text] + '\u00d7';
+                    used.title = 'Replies that seem to have drawn on this fact';
+                    row.appendChild(used);
+                }
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'memory-fact-delete';
