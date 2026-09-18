@@ -2242,7 +2242,9 @@ function memoryKey(req) {
 
 function handleMemoryList(req, res) {
   const list = memoryStore.get(memoryKey(req)) || [];
-  sendJson(res, 200, { facts: list });
+  // max rides along so the page can warn before the next save is refused,
+  // instead of the user meeting the cap as a failure.
+  sendJson(res, 200, { facts: list, max: MEMORY_MAX_FACTS });
 }
 
 function handleMemoryUpsert(req, res) {

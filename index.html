@@ -325,6 +325,8 @@
         .memory-fact-meter i.on { background: var(--accent); }
         .memory-fact-row.dead { opacity: 0.62; }
         .memory-fact-row.dead .memory-fact-text { color: var(--text-muted); }
+        /* The near-cap warning: quiet until it matters, then it says so. */
+        .memory-capacity-warn { font-size: 11.5px; color: var(--warn, #e2b341); background: rgba(226, 179, 65, 0.08); border: 1px solid rgba(226, 179, 65, 0.25); border-radius: 8px; padding: 6px 9px; margin: 4px 0 8px; }
         .history-item .history-delete {
             background: none; border: none; color: var(--text-muted);
             cursor: pointer; padding: 0 2px; line-height: 1; font-size: 14px;
@@ -2614,6 +2616,7 @@
                             </div>
                             <p class="session-hint">Facts saved here are offered to every chat with this switch on. Saved facts ride as context on the live request — they are never written into the stored transcript.</p>
                             <h4 class="session-subhead"><span>Saved</span><span class="todo-count" id="memoryCount">empty</span></h4>
+                            <p class="memory-capacity-warn" id="memoryCapacity" hidden></p>
                             <div class="memory-list" id="memoryList" aria-live="polite"><div class="image-provider-report-empty">Nothing saved yet. When the model learns something worth keeping, it saves it here — or you can add one.</div></div>
                             <div class="memory-add-row">
                                 <input type="text" id="memoryAddInput" placeholder="Add a fact yourself…" aria-label="New memory fact" maxlength="300" autocomplete="off">
@@ -11680,6 +11683,20 @@
             showStatus('info', on ? 'Memory offered to this chat' : 'Memory off for this chat');
         }
 
+        // The cap warning, shown before the next save is refused rather than
+        // as one. The server reports its cap with the list; an older backend
+        // that doesn't simply shows nothing.
+        function renderMemoryCapacity() {
+            const el = document.getElementById('memoryCapacity');
+            if (!el) return;
+            const cap = shareMemory.capacityInfo();
+            if (!cap || cap.state === 'ok') { el.hidden = true; el.textContent = ''; return; }
+            el.hidden = false;
+            el.textContent = cap.state === 'full'
+                ? 'Memory is full — the next new fact will be refused. Forget something to make room.'
+                : 'Only ' + cap.remaining + (cap.remaining === 1 ? ' slot' : ' slots') + ' left before memory is full — consider forgetting what you no longer need.';
+        }
+
         function renderMemoryList() {
             const memoryFacts = shareMemory.factsList();
             const list = document.getElementById('memoryList');
@@ -11692,8 +11709,10 @@
                 empty.className = 'image-provider-report-empty';
                 empty.textContent = 'Nothing saved yet. When the model learns something worth keeping, it saves it here — or you can add one below.';
                 list.appendChild(empty);
+                renderMemoryCapacity();
                 return;
             }
+            renderMemoryCapacity();
             const counts = shareMemory.useCounts();
             for (const fact of memoryFacts) {
                 const row = document.createElement('div');

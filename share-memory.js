@@ -21,6 +21,9 @@
   const MEMORY_ENABLED_KEY = 'freeopenaiMemoryChats';
   const MEMORY_USE_KEY = 'freeopenaiMemoryUse';
   const MAX_FACT_CHARS = 300;
+  // How close to the cap counts as "nearly full": at this many remaining
+  // slots or fewer, the Memory tab says so before the next save is refused.
+  const MEMORY_NEAR_LIMIT = 5;
 
   function create(deps) {
     const {
@@ -42,6 +45,7 @@
     // ---- saved memory ----
 
     let facts = [];
+    let memoryMax = 0;
     let memoryOffByChat = new Set();
     try {
       const raw = storage.getItem(MEMORY_ENABLED_KEY);
@@ -55,6 +59,18 @@
 
     function factsList() {
       return facts;
+    }
+
+    // How close the store is to its cap, from the max the server reports
+    // with the list. Null when the server didn't say (older backend): the
+    // tab then shows nothing rather than guessing. 'full' means the next
+    // new fact will be refused outright.
+    function capacityInfo() {
+      if (!Number.isFinite(memoryMax) || memoryMax <= 0) return null;
+      const remaining = memoryMax - facts.length;
+      if (remaining <= 0) return { state: 'full', remaining: 0, max: memoryMax };
+      if (remaining <= MEMORY_NEAR_LIMIT) return { state: 'near', remaining, max: memoryMax };
+      return { state: 'ok', remaining, max: memoryMax };
     }
 
     function onForChat(convoId) {
@@ -75,8 +91,11 @@
       try {
         const { ok, data } = await fetchJson('/api/memory');
         facts = ok && Array.isArray(data.facts) ? data.facts : [];
+        const max = ok && data ? Number(data.max) : NaN;
+        memoryMax = Number.isFinite(max) ? max : 0;
       } catch {
         facts = [];
+        memoryMax = 0;
       }
       return facts;
     }
@@ -254,6 +273,7 @@
     return {
       // memory
       factsList,
+      capacityInfo,
       onForChat,
       setForChat,
       loadFacts,
