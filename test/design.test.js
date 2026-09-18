@@ -29,10 +29,6 @@ function putJson(app, path, body) {
   });
 }
 
-function del(app, path) {
-  return fetch(`http://127.0.0.1:${app.address().port}${path}`, { method: 'DELETE' });
-}
-
 test('design templates returns the template list', async () => {
   const app = await startApp();
   try {

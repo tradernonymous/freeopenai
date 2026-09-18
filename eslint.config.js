@@ -1,6 +1,6 @@
 module.exports = [
   {
-    ignores: ['node_modules/**', 'index.html'],
+    ignores: ['node_modules/**', 'index.html', '.worktrees/**'],
   },
   {
     files: ['**/*.js'],

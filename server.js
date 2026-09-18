@@ -17,7 +17,7 @@ const {
   parseCookieHeader,
   checkRateLimit,
 } = require('./auth.js');
-const { matchListEntry, isFreeModelId, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter, skillEntriesFromTree, MODELS, DEFAULT_MODEL } = require('./chatlib.js');
+const { matchListEntry, isFreeModelId, freeRowsOnly, selectAllowedModels, isRetryableStatus, isQuotaExhausted, unsafeHeaderChar, SKILL_SOURCES, parseSkillFrontmatter, skillEntriesFromTree, MODELS, DEFAULT_MODEL } = require('./chatlib.js');
 const {
   encryptJson,
   decryptJson,
@@ -5137,6 +5137,7 @@ function designSaveBrandProfile(req, res) {
 }
 
 function createRequestHandler(root) {
+  const buildStore = createBuildStore(root);
   const buildHelpers = {
     currentUser: currentAppUser,
     gateOn: () => getConfiguredAccounts(process.env).length > 0,
