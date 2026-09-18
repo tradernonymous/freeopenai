@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  FreeAI4U Android app: a native Kotlin/Compose client for the FreeAI4U
+  NeuraOS Android app: a native Kotlin/Compose client for the NeuraOS
   server, with a native sign-in that keeps the phone logged in. Security
   posture:
   - Permissions: INTERNET, ACCESS_NETWORK_STATE, USE_BIOMETRIC and SET_ALARM
@@ -66,9 +66,9 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@drawable/ic_app"
-        android:label="FreeAI4U"
+        android:label="NeuraOS"
         android:supportsRtl="true"
-        android:theme="@style/Theme.FreeAI4U"
+        android:theme="@style/Theme.NeuraOS"
         android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="false"
         android:enableOnBackInvokedCallback="true">
@@ -93,7 +93,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
-            <!-- "Ask FreeAI4U" in the text-selection menu of other apps. -->
+            <!-- "Ask NeuraOS" in the text-selection menu of other apps. -->
             <intent-filter android:label="@string/process_text_label">
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -139,11 +139,12 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
-        <!-- Off until the person turns it on in Settings > Accessibility.
-             Only the system can bind it (BIND_ACCESSIBILITY_SERVICE); it
-             reads the accessibility tree and taps/scrolls elements by their
-             label, never a screenshot or a raw coordinate, and only after a
-             tap in the chat approves the specific action (data/Agent.kt). -->
+    <!-- Off until the person turns it on in Settings > Accessibility.
+         Only the system can bind it (BIND_ACCESSIBILITY_SERVICE); it
+         reads the accessibility tree and taps/scrolls elements by their
+         label, never a screenshot or a raw coordinate, and only after a
+         tap in the chat approves the specific action (data/Agent.kt).
+         NeuraOS device control for phone automation. -->
         <service
             android:name=".DeviceControlService"
             android:exported="true"

@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "freeai4u"
+rootProject.name = "neuraos"
 include(":app")

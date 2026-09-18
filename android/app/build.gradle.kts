@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Push notifications need a Firebase project, which is the user's own (free)
@@ -37,11 +38,11 @@ val updateUrl: String = System.getenv("APK_UPDATE_URL") ?: ""
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
-    namespace = "com.freeai4u.app"
+    namespace = "com.neura.os"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.freeai4u.app"
+        applicationId = "com.neura.os"
         // Android 10: MediaStore saves into Downloads with no storage
         // permission, which is what lets the manifest keep INTERNET alone.
         minSdk = 29
@@ -62,7 +63,7 @@ android {
             create("release") {
                 storeFile = file(keystorePath)
                 storePassword = System.getenv("APK_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("APK_KEY_ALIAS") ?: "freeai4u"
+                keyAlias = System.getenv("APK_KEY_ALIAS") ?: "neuraos"
                 keyPassword = System.getenv("APK_KEY_PASSWORD") ?: System.getenv("APK_KEYSTORE_PASSWORD")
                 storeType = "PKCS12"
             }
@@ -148,4 +149,8 @@ dependencies {
     // under plain unit tests, so the parser tests need the real thing.)
     testImplementation(libs.org.json)
     testImplementation(libs.junit)
+    // Navigation 3 serialization for type-safe routes.
+    implementation(libs.androidx.serialization.json)
+    // Coil for image loading in the image studio.
+    implementation(libs.coil.compose)
 }

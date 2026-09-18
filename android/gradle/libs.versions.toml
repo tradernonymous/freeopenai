@@ -1,10 +1,10 @@
 [versions]
 agp = "8.7.3"
-kotlin = "2.0.21"
+kotlin = "2.1.0"
 activity = "1.10.1"
 core = "1.15.0"
-lifecycle = "2.8.7"
-composeBom = "2024.12.01"
+lifecycle = "2.9.0"
+composeBom = "2025.01.01"
 composeAdaptiveNavSuite = "1.3.1"
 orgJson = "20240303"
 junit = "4.13.2"
@@ -12,6 +12,8 @@ googleServices = "4.4.2"
 firebaseBom = "33.7.0"
 leakcanary = "2.14"
 fragment = "1.8.5"
+serialization = "1.7.3"
+coil = "2.7.0"
 
 [libraries]
 androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
@@ -32,9 +34,12 @@ firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.r
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 leakcanary-android = { group = "com.squareup.leakcanary", name = "leakcanary-android", version.ref = "leakcanary" }
 androidx-fragment-ktx = { group = "androidx.fragment", name = "fragment-ktx", version.ref = "fragment" }
+androidx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

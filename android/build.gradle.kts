@@ -1,4 +1,4 @@
-// Top-level build file for the FreeAI4U Android app.
+// Top-level build file for the NeuraOS Android app.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
