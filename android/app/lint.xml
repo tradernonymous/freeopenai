@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Suppress the NonNullableMutableLiveDataDetector crash that breaks
+         release builds with Kotlin 2.1.0's new analysis API.
+         This is a known AGP 8.7.x + Kotlin 2.1.x incompatibility.
+         See: https://issuetracker.google.com/issues/400000000 -->
+    <issue id="NullSafeMutableLiveData" severity="ignore" />
+</lint>
