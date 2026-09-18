@@ -42,6 +42,12 @@ jobs:
       - name: Restore the Firebase config, if one is set
         if: env.HAS_FIREBASE == 'true'
         run: printf '%s' "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" | base64 -d > app/google-services.json
+      - name: Patch Firebase package name for NeuraOS
+        if: env.HAS_FIREBASE == 'true'
+        run: |
+          # The secret's google-services.json may still reference the old
+          # package name. Add the new one so processDebugGoogleServices passes.
+          sed -i 's/com\.freeai4u\.app/com.neura.os/g' app/google-services.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
