@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
@@ -126,6 +127,7 @@ import com.freeai4u.app.data.allPrompts
 import com.freeai4u.app.data.groupByDate
 import com.freeai4u.app.data.matchPrompts
 import com.freeai4u.app.data.MODES
+import com.freeai4u.app.data.PUTER_PROVIDER
 import com.freeai4u.app.data.modeLabel
 import com.freeai4u.app.data.personaFor
 import com.freeai4u.app.data.slashSuggestions
@@ -493,6 +495,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
                         onBranch = { vm.forkAt(chat.id, turn.lastIndex) },
                         onBuild = if (chat.mode == "plan" || chat.mode == "build") ({ vm.startRemoteBuild(turn.text) }) else null,
                     )
+                    is Turn.Compare -> CompareTurn(turn, platform)
                 }
             }
             item { Spacer(Modifier.height(8.dp)) }
@@ -530,6 +533,15 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
     var plusSheet by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
     LaunchedEffect(Unit) { vm.loadSkills() }
+    // Keeps compareTarget in step with the catalogue: fetches the first other
+    // chat-capable provider's models on arming (ModelSheet does the same, on
+    // demand, elsewhere), then recomputes once that fetch lands.
+    LaunchedEffect(vm.compareArmed, chat.provider, chat.model, vm.providers.size, vm.models.size) {
+        if (vm.compareArmed) {
+            vm.providers.firstOrNull { it.id != chat.provider && it.id != PUTER_PROVIDER }?.let { vm.loadModels(it.id) }
+        }
+        vm.refreshCompareTarget(chat)
+    }
     val suggestions = matchPrompts(text, allPrompts(vm.library))
     val slashRows = slashSuggestions(text, vm.skills.map { it.name })
     val canSend = text.isNotBlank() || photos.isNotEmpty()
@@ -574,6 +586,9 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                             ModeChip(skill, Icons.Filled.AutoAwesome) { vm.unpinSkill(chat.id, skill) }
                         }
                         if (vm.imageArmed) ModeChip(if (vm.puterImages) "Image · Puter" else "Image", Icons.Filled.PaletteIcon) { vm.imageArmed = false }
+                        if (vm.compareArmed) {
+                            ModeChip(vm.compareTarget?.let { "Compare vs ${it.model}" } ?: "Compare: nothing else configured", Icons.Filled.CompareArrows) { vm.compareArmed = false }
+                        }
                         photos.forEachIndexed { index, url ->
                             Box {
                                 DataUrlThumb(url, 56)
@@ -591,6 +606,11 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
                     IconButton({ plusSheet = true }, Modifier.pressScale()) { Icon(Icons.Filled.Add, "Add", tint = Palette.text) }
+                    if (chat.provider != PUTER_PROVIDER) {
+                        IconButton({ vm.compareArmed = !vm.compareArmed }, Modifier.pressScale()) {
+                            Icon(Icons.Filled.CompareArrows, "Compare two models", tint = if (vm.compareArmed) Palette.green else Palette.muted)
+                        }
+                    }
                     BasicTextField(
                         text, { setText(it) },
                         textStyle = TextStyle(color = Palette.text, fontSize = 16.sp),
@@ -669,10 +689,6 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                     }
                 }
                 Spacer(Modifier.height(14.dp))
-                Text("Mode", color = Palette.muted, fontSize = 12.sp)
-                SheetOption(Icons.AutoMirrored.Filled.Chat, "Chat", "Answer and research", chat.mode == "chat") { vm.setMode(chat.id, "chat"); plusSheet = false }
-                SheetOption(Icons.Filled.Checklist, "Plan", "Think first, write a task list", chat.mode == "plan") { vm.setMode(chat.id, "plan"); plusSheet = false }
-                SheetOption(Icons.Filled.Construction, "Build", "Light edits to this chat's own files", chat.mode == "build") { vm.setMode(chat.id, "build"); plusSheet = false }
                 HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -746,21 +762,6 @@ private fun SheetTile(icon: ImageVector, label: String, modifier: Modifier, onCl
         Icon(icon, null, tint = Palette.text)
         Spacer(Modifier.height(6.dp))
         Text(label, color = Palette.text, fontSize = 13.sp)
-    }
-}
-
-@Composable
-private fun SheetOption(icon: ImageVector, title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 10.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = if (selected) Palette.green else Palette.text)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, color = if (selected) Palette.green else Palette.text)
-            Text(subtitle, color = Palette.muted, fontSize = 12.sp)
-        }
     }
 }
 

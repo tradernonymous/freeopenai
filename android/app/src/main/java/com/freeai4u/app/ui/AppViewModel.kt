@@ -27,6 +27,9 @@ import com.freeai4u.app.data.Library
 import com.freeai4u.app.data.Limits
 import com.freeai4u.app.data.COMPACT_HISTORY_MESSAGES
 import com.freeai4u.app.data.MAX_HISTORY_MESSAGES
+import com.freeai4u.app.data.CompareTarget
+import com.freeai4u.app.data.compareTargetsValid
+import com.freeai4u.app.data.defaultCompareTarget
 import com.freeai4u.app.data.Skill
 import com.freeai4u.app.data.SlashMatch
 import com.freeai4u.app.data.renderCommandsHelp
@@ -554,6 +557,30 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     /** True when the message was accepted, so the composer can let go of the
      * photos it was holding; false leaves them attached for another try. */
+    // --- Compare -------------------------------------------------------------------
+
+    /** The composer's Compare toggle: while on, the next send asks a second
+     * provider/model the same question and shows both replies side by side,
+     * instead of the usual single reply. */
+    var compareArmed by mutableStateOf(false)
+
+    /** The second target Compare will use, or null when there is nothing to
+     * compare [chat] against yet (catalogue still loading, or only one
+     * chat-capable provider/model configured). Recompute whenever Compare is
+     * armed or the chat's own provider/model or the catalogue changes -- a
+     * stale target left over from a different chat would silently compare
+     * against the wrong pair. */
+    var compareTarget by mutableStateOf<CompareTarget?>(null)
+        private set
+
+    fun refreshCompareTarget(chat: Conversation) {
+        compareTarget = if (!compareArmed || chat.provider.isEmpty() || chat.model.isEmpty() || chat.provider == PUTER_PROVIDER) {
+            null
+        } else {
+            defaultCompareTarget(CompareTarget(chat.provider, chat.model), providers.filter { it.id != PUTER_PROVIDER }, models)
+        }
+    }
+
     fun send(id: String, text: String, images: List<String> = emptyList()): Boolean {
         val chat = conversation(id) ?: return false
         val trimmed = text.trim()
@@ -571,7 +598,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         )
         drafts.remove(id)
         replace(withUser)
-        runReply(withUser)
+        val primary = CompareTarget(chat.provider, chat.model)
+        val compare = compareTarget
+        if (compareArmed && compare != null && compareTargetsValid(primary, compare)) {
+            runCompareReply(withUser, primary, compare)
+        } else {
+            runReply(withUser)
+        }
         return true
     }
 
@@ -938,6 +971,76 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 streamingId = null
                 finishedReply = Triple(done.id, text, System.currentTimeMillis())
                 if (retry) updateOutbox(outbox.enqueued(done.id))
+            }
+          } finally {
+            ReplyService.stop(context)
+          }
+        }
+    }
+
+    /** Compare's own reply loop: two sequential, tool-free calls, one to
+     * [primary] and one to [secondary], each appended as its own ChatMessage
+     * tagged with the same compareGroup so buildTurns renders them together
+     * (see ui/Messages.kt) instead of merging into one assistant turn.
+     * Deliberately does not reuse runReply's tool loop, tools-unsupported
+     * retry, or outbox queuing -- Compare is a quick side-by-side reading of
+     * two models, not a full agent turn, and running two tool loops at once
+     * would need more than the single activeStream/streamingId this app
+     * tracks for an in-flight reply. */
+    private fun runCompareReply(start: Conversation, primary: CompareTarget, secondary: CompareTarget) {
+        streamingId = start.id
+        streamStartedAt = System.currentTimeMillis()
+        stopRequested = false
+        val lib = library
+        ReplyService.start(context, start.id, start.title)
+        io.execute {
+          try {
+            val groupId = UUID.randomUUID().toString()
+            val persona = personaFor(lib, start.personaId)
+            val prompt = systemPrompt(persona.systemPrompt, lib.instructions, "chat")
+            var chat = start
+            for ((sideIndex, target) in listOf(primary, secondary).withIndex()) {
+                if (stopRequested) break
+                val body = buildChatBody(target.model, prompt, start.messages)
+                val started = System.currentTimeMillis()
+                val content = StringBuilder()
+                var lastPost = 0L
+                val base = chat
+                fun draft(rawError: String?): ChatMessage = if (rawError == null) {
+                    ChatMessage("assistant", content.toString(), createdAt = started, model = target.model, compareGroup = groupId)
+                } else {
+                    ChatMessage("assistant", maskSecrets(rawError), createdAt = started, error = true, model = target.model, compareGroup = groupId)
+                }
+                publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                var failure: String? = null
+                try {
+                    api.streamChat(target.provider, body, activeStream) { event ->
+                        when (event) {
+                            is ChatEvent.Delta -> {
+                                content.append(event.content)
+                                val now = System.currentTimeMillis()
+                                if (now - lastPost > 60) {
+                                    lastPost = now
+                                    publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                }
+                            }
+                            is ChatEvent.Failure -> failure = event.message
+                            is ChatEvent.Partial -> failure = event.notice
+                            else -> Unit
+                        }
+                    }
+                } catch (e: ApiException) {
+                    failure = e.message
+                } catch (e: Exception) {
+                    failure = e.message ?: "The reply failed."
+                }
+                chat = base.copy(messages = base.messages + draft(failure))
+                publishChat(chat, persist = sideIndex == 1)
+            }
+            val done = chat
+            main.post {
+                streamingId = null
+                finishedReply = Triple(done.id, done.messages.lastOrNull()?.content ?: "", System.currentTimeMillis())
             }
           } finally {
             ReplyService.stop(context)

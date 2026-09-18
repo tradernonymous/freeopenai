@@ -35,6 +35,10 @@ data class ChatMessage(
     val imageIds: List<String> = emptyList(),
     /** A phone action the assistant proposed; runs only when the user taps. */
     val action: String = "",
+    /** Set on both replies of a Compare run, tying them together so they
+     * render side by side instead of merging into one assistant turn. Empty
+     * for every ordinary message. */
+    val compareGroup: String = "",
 )
 
 data class Conversation(
@@ -100,6 +104,7 @@ fun ChatMessage.toJson(): JSONObject = JSONObject()
     .put("toolName", toolName)
     .put("imageIds", JSONArray(imageIds))
     .put("action", action)
+    .put("compareGroup", compareGroup)
 
 fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     role = obj.optString("role", "user"),
@@ -118,6 +123,7 @@ fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     toolName = obj.optString("toolName", ""),
     imageIds = obj.optJSONArray("imageIds")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
     action = obj.optString("action", ""),
+    compareGroup = obj.optString("compareGroup", ""),
 )
 
 fun Conversation.toJson(): JSONObject {

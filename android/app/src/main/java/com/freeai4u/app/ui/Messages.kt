@@ -100,9 +100,14 @@ sealed interface Turn {
         val actions: List<String>,
         val lastIndex: Int,
     ) : Turn
+    /** Two replies from one Compare run, kept apart from Turn.Assistant so
+     * they render side by side instead of concatenating into one block. */
+    data class Compare(override val key: String, val replies: List<CompareReply>) : Turn
 }
 
 data class Step(val summary: String, val done: Boolean, val failed: Boolean, val output: String)
+
+data class CompareReply(val model: String, val text: String, val error: Boolean)
 
 fun buildTurns(messages: List<ChatMessage>): List<Turn> {
     // One pass to index tool results, so each call's result is a map lookup
@@ -116,6 +121,18 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
         if (message.role == "user") {
             turns.add(Turn.User("u$index-${message.createdAt}", index, message))
             index++
+            continue
+        }
+        if (message.role == "assistant" && message.compareGroup.isNotEmpty()) {
+            val start = index
+            val groupId = message.compareGroup
+            val replies = mutableListOf<CompareReply>()
+            while (index < messages.size && messages[index].compareGroup == groupId) {
+                val part = messages[index]
+                replies.add(CompareReply(part.model, part.content, part.error))
+                index++
+            }
+            turns.add(Turn.Compare("c$start-${messages[start].createdAt}", replies))
             continue
         }
         val steps = mutableListOf<Step>()
@@ -225,6 +242,26 @@ fun AssistantTurn(
         val canBuild = onBuild != null && !streaming && !turn.error && planLike
         AnimatedVisibility(canBuild, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
             BuildRemotelyChip { onBuild?.invoke() }
+        }
+    }
+}
+
+/** A Compare run's two replies, stacked and labelled by model -- side by
+ * side would cramp either one to under half the screen's width on a phone. */
+@Composable
+fun CompareTurn(turn: Turn.Compare, platform: Platform) {
+    Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        turn.replies.forEach { reply ->
+            Surface(color = Palette.surface, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(reply.model.ifEmpty { "—" }, color = Palette.muted, fontSize = 12.sp)
+                    when {
+                        reply.error -> Text(reply.text, color = Palette.red, fontSize = 14.sp)
+                        reply.text.isEmpty() -> TypingDots(Palette.green)
+                        else -> MarkdownText(reply.text) { platform.copy(it) }
+                    }
+                }
+            }
         }
     }
 }

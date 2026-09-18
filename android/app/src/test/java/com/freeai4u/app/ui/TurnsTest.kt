@@ -41,6 +41,51 @@ class TurnsTest {
     }
 
     @Test
+    fun compareRepliesGroupIntoOneTurnInsteadOfMerging() {
+        val turns = buildTurns(
+            listOf(
+                ChatMessage("user", "q"),
+                ChatMessage("assistant", "answer A", model = "a", compareGroup = "g1"),
+                ChatMessage("assistant", "answer B", model = "b", compareGroup = "g1"),
+            ),
+        )
+        assertEquals(2, turns.size)
+        val compare = turns[1] as Turn.Compare
+        assertEquals(listOf("a", "b"), compare.replies.map { it.model })
+        assertEquals(listOf("answer A", "answer B"), compare.replies.map { it.text })
+    }
+
+    @Test
+    fun aCompareGroupEndsWhenTheNextUserMessageArrives() {
+        val turns = buildTurns(
+            listOf(
+                ChatMessage("user", "q1"),
+                ChatMessage("assistant", "A1", compareGroup = "g1"),
+                ChatMessage("assistant", "B1", compareGroup = "g1"),
+                ChatMessage("user", "q2"),
+                ChatMessage("assistant", "plain reply"),
+            ),
+        )
+        assertEquals(4, turns.size)
+        assertEquals(2, (turns[1] as Turn.Compare).replies.size)
+        assertEquals("plain reply", (turns[3] as Turn.Assistant).text)
+    }
+
+    @Test
+    fun aFailedCompareSideIsMarkedAsAnError() {
+        val turns = buildTurns(
+            listOf(
+                ChatMessage("user", "q"),
+                ChatMessage("assistant", "ok", compareGroup = "g1"),
+                ChatMessage("assistant", "boom", error = true, compareGroup = "g1"),
+            ),
+        )
+        val replies = (turns[1] as Turn.Compare).replies
+        assertFalse(replies[0].error)
+        assertTrue(replies[1].error)
+    }
+
+    @Test
     fun aLongChatBuildsEveryTurn() {
         val messages = (0 until 2000).flatMap { i ->
             listOf(
