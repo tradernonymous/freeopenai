@@ -105,7 +105,7 @@ curl -s https://<project>.up.railway.app/api/health
 
 ## 🖥️ Desktop app (Windows)
 
-**Download:** [FreeAI4U-Desktop.exe](https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/FreeAI4U-Desktop.exe)
+**Download:** [FreeAI4U.Desktop_2.0.0_x64-setup.exe](https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/FreeAI4U.Desktop_2.0.0_x64-setup.exe)
 
 1. Download the `.exe` from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
 2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**.

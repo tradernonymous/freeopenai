@@ -56,7 +56,5 @@ jobs:
           name: FreeAI4U Desktop for Windows (latest build)
           files: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/nsis/*.sha256
-          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
