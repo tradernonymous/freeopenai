@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { id: 'build', label: 'Builds', icon: '🛠' },
   { id: 'design', label: 'Design', icon: '🎨' },
   { id: 'library', label: 'Library', icon: '📚' },
+  { id: 'files', label: 'Files', icon: '📁' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ] as const;
 

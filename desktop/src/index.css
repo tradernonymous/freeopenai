@@ -1697,3 +1697,41 @@ button.linkish {
   color: var(--text-2);
   margin: 4px 0;
 }
+
+/* ---- Files & Office -------------------------------------------------- */
+.files-screen { max-width: 980px; margin: 0 auto; }
+.files-error { color: var(--danger, #ff6b6b); font-size: 13px; margin: 6px 0; }
+.dropzone {
+  border: 2px dashed var(--border); border-radius: 12px; padding: 28px 16px;
+  text-align: center; cursor: pointer; margin: 14px 0; color: var(--text-muted);
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.dragging { border-color: var(--accent); background: var(--bg-2); }
+.extract-card, .gen-card {
+  border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 14px 0;
+  background: var(--bg-1);
+}
+.extract-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.extract-actions { margin-left: auto; display: flex; gap: 8px; }
+.extract-preview {
+  max-height: 320px; overflow: auto; background: var(--bg-0); padding: 10px 12px;
+  border-radius: 8px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
+  margin: 10px 0 0;
+}
+.gen-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.gen-row select, .gen-row input {
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px;
+}
+.gen-row input { flex: 1; min-width: 220px; }
+.approval-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
+.approval-card.status-saved { border-color: var(--ok, #3ddc84); }
+.approval-card.status-error { border-color: var(--danger, #ff6b6b); }
+.approval-head { display: flex; align-items: center; gap: 10px; }
+.approval-status { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-2); text-transform: uppercase; }
+.approval-actions { display: flex; gap: 8px; margin-top: 10px; }
+.attach-chip {
+  display: flex; align-items: center; gap: 8px; margin: 6px 8px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); font-size: 12.5px;
+}
+.attach-chip button { margin-left: auto; }

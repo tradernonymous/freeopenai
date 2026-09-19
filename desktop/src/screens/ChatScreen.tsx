@@ -78,6 +78,7 @@ export default function ChatScreen() {
   const [limits, setLimits] = useState<any>(null);
   const [sending, setSending] = useState(false);
   const [streamError, setStreamError] = useState('');
+  const [attached, setAttached] = useState<string>('');
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -153,6 +154,22 @@ export default function ChatScreen() {
     if (stickToBottom.current) scrollToBottom(false);
   }, [active?.messages.length, active?.id, scrollToBottom]);
 
+  // Files/Design hand staged text here through sessionStorage + this event;
+  // it rides the next send as a fenced quote the model can read.
+  useEffect(() => {
+    const onAttach = () => {
+      try {
+        const pending = sessionStorage.getItem('freeai4u.pendingAttachment');
+        if (!pending) return;
+        sessionStorage.removeItem('freeai4u.pendingAttachment');
+        setAttached(pending);
+      } catch { /* private mode: the chip just won't appear */ }
+    };
+    window.addEventListener('freeai4u-attach', onAttach);
+    onAttach();
+    return () => window.removeEventListener('freeai4u-attach', onAttach);
+  }, []);
+
   const startNew = () => {
     const s = newSession(providerRows[0]?.id || '', '');
     persist([s, ...sessions].slice(0, MAX_SESSIONS));
@@ -168,7 +185,12 @@ export default function ChatScreen() {
       await startBuild(text);
       return;
     }
-    const userMsg: Msg = { role: 'user', content: text, ts: Date.now() };
+    const userMsg: Msg = {
+      role: 'user',
+      content: attached ? `${text}\n\n--- attached ---\n${attached}` : text,
+      ts: Date.now(),
+    };
+    if (attached) setAttached('');
     const assistantMsg: Msg = { role: 'assistant', content: '', model: active.model, ts: Date.now() };
     const history = [...active.messages, userMsg];
     patchSession(active.id, {
@@ -411,6 +433,12 @@ export default function ChatScreen() {
       )}
 
       <div className="composer">
+        {attached && (
+          <div className="attach-chip">
+            <span className="attach-label">📎 Attached text · {attached.length.toLocaleString()} chars</span>
+            <button onClick={() => setAttached('')} title="Remove attachment">✕</button>
+          </div>
+        )}
         <div className="composer-row">
           {sending
             ? <button className="stop-btn" onClick={stop} title="Stop the reply">■ Stop</button>

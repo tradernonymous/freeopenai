@@ -7,6 +7,7 @@ import DesignScreen from './screens/DesignScreen';
 import ImagesScreen from './screens/ImagesScreen';
 import BuildScreen from './screens/BuildScreen';
 import LibraryScreen from './screens/LibraryScreen';
+import FilesScreen from './screens/FilesScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import FileTree from './components/FileTree';
 import Terminal from './components/Terminal';
@@ -14,7 +15,7 @@ import SessionManager from './components/SessionManager';
 import './index.css';
 import { APP_VERSION } from './version';
 
-type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'settings';
+type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'files' | 'settings';
 type RightPanel = 'builds' | 'knowledge' | 'none';
 
 export default function App() {
@@ -91,13 +92,17 @@ export default function App() {
 
   // Alt+1..6 walks the sidebar in its displayed order.
   useEffect(() => {
-    const order: View[] = ['chat', 'images', 'build', 'design', 'library', 'settings'];
+    const order: View[] = ['chat', 'images', 'build', 'design', 'library', 'files', 'settings'];
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       const n = Number.parseInt(e.key, 10);
-      if (n >= 1 && n <= order.length) {
+      if (n >= 1 && n <= order.length && e.altKey) {
         e.preventDefault();
         setView(order[n - 1]);
+      }
+      if (e.altKey && e.key === 'f' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setView('files');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -179,6 +184,7 @@ export default function App() {
                   {view === 'images' && <ImagesScreen />}
                   {view === 'build' && <BuildScreen />}
                   {view === 'library' && <LibraryScreen />}
+                  {view === 'files' && <FilesScreen />}
                   {view === 'settings' && <SettingsScreen />}
                 </>
               )}

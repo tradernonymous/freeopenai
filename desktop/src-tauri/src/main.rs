@@ -13,6 +13,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
+mod save;
+use tauri::generate_handler;
+
 const CRASH_LOG: &str = "C:/Users/Public/freeai4u-crash.log";
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 
@@ -69,6 +72,7 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .invoke_handler(generate_handler![save::save_file_dialog])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())

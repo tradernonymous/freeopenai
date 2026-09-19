@@ -177,6 +177,28 @@ export const api = {
   models: (provider: string) => request(`/api/llm/models?provider=${encodeURIComponent(provider)}`),
   limits: () => request('/api/llm/limits'),
 
+  // One-shot (non-streaming) chat, used by tools that want a complete answer
+  // rather than a token stream. The engine requires a model, so this resolves
+  // the first free provider/model when the caller does not name one.
+  chat: async (messages: Array<{ role: string; content: any }>, model?: string): Promise<any> => {
+    const provs = await request('/api/llm/providers');
+    const rows: any[] = Array.isArray(provs) ? provs : (Array.isArray(provs?.providers) ? provs.providers : []);
+    const row = rows.find((p) => p.free) || rows[0];
+    const provider = String(row?.id || '');
+    if (!provider) throw new Error('no providers available on the engine');
+    let chosen = model;
+    if (!chosen) {
+      const ms = await request(`/api/llm/models?provider=${encodeURIComponent(provider)}`);
+      const list: any[] = Array.isArray(ms) ? ms : (Array.isArray(ms?.models) ? ms.models : []);
+      chosen = String(list[0]?.id || list[0] || '');
+    }
+    if (!chosen) throw new Error(`no models available on provider "${provider}"`);
+    return request(`/api/llm/chat?provider=${encodeURIComponent(provider)}`, {
+      method: 'POST',
+      body: JSON.stringify({ model: chosen, messages }),
+    });
+  },
+
   // chat helpers
   skills: () => request('/api/skills'),
   skillContent: (name: string) => request(`/api/skills/content?name=${encodeURIComponent(name)}`),
