@@ -7,8 +7,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use tauri::Manager;
 
+// pub: generate_handler! resolves commands through their module path, so a
+// private fn here fails the release build with "function is private".
 #[tauri::command]
-fn save_file_dialog(
+pub fn save_file_dialog(
     app: tauri::AppHandle,
     file_name: String,
     mime: String,
@@ -44,8 +46,3 @@ fn save_file_dialog(
     let _ = mime; // recorded for future dialogs; the extension carries the type
     Ok(format!("Saved to {}", path.display()))
 }
-
-// The command attribute generates a hidden macro that generate_handler!
-// resolves at the call site; without this re-export it stays private to the
-// module and the build fails with "macro import is private".
-pub use __cmd__save_file_dialog;
