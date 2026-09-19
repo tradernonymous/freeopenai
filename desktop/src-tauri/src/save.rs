@@ -44,3 +44,8 @@ fn save_file_dialog(
     let _ = mime; // recorded for future dialogs; the extension carries the type
     Ok(format!("Saved to {}", path.display()))
 }
+
+// The command attribute generates a hidden macro that generate_handler!
+// resolves at the call site; without this re-export it stays private to the
+// module and the build fails with "macro import is private".
+pub use __cmd__save_file_dialog;
