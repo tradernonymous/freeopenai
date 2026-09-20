@@ -25,6 +25,21 @@
 | `Alt+1` … `Alt+6` | Chat, Images, Builds, Design, Library, Settings |
 | `Enter` / `Shift+Enter` | Send / newline in the composer |
 
+## First run (and every time the engine is unreachable)
+
+The app shows a **connect surface** whenever the user can do something about the state, and never for the states they cannot:
+
+| What the engine said | What you see |
+| :-- | :-- |
+| It never answered | *Connect to an engine* — the address field, ready to change |
+| It wants a login | *Sign in to this engine* — the same card, with the form |
+| It is failing on its side (5xx) | The app, with a banner saying so |
+| Nothing yet (first probe in flight) | The app — no connect card flashes at a working install |
+
+Settings stays reachable from the connect surface, and saving a new address there re-probes the shell, so fixing a wrong address moves the app on without a restart. The rule lives in `src/onboarding.js` (pure, tested); the wording lives in `src/connection.js`.
+
+Earlier builds did the opposite: `loginRequired && !signedIn` hid *every* screen including Settings, so on a login-gated engine a fresh install was a locked door, and the banner said "cannot reach the engine" for what was actually a missing sign-in.
+
 ## The engine address
 
 The desktop talks to `https://freeopenai-production.up.railway.app` by default. Settings → **Engine server** accepts any FreeAI4U server: `https://` anywhere, `http://localhost` for a self-hosted engine. Test + save; the choice is remembered. The window title bar tells you when the engine cannot be reached.
@@ -51,7 +66,10 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | Module | Owns |
 | :-- | :-- |
 | `src/api.ts` | Transport only: the engine address, `request`, the SSE stream, the route table |
-| `src/connection.js` | What an engine outcome *means*: `kind` (unreachable / signed-out / refused / rejected / engine-error / no-reply) and the copy for it — the error message and the shell banner |
+| `src/connection.js` | What an engine outcome *means*: `kind` (ok / unreachable / signed-out / refused / rejected / engine-error / no-reply) and the copy for it — the error message and the shell banner |
+| `src/onboarding.js` | Which surface the shell shows (`connect` or `app`), why (`checking` / `first-run` / `unreachable` / `signed-out` / `ready` / `degraded`), and which failures deserve a banner |
+| `src/components/ConnectionCard.tsx` | The engine address, the probe and the sign-in form — one owner, used by the connect screen and by Settings |
+| `src/screens/ConnectScreen.tsx` | The way in: the headline, the advice, the card |
 | `src/chats.js` | The chat store: its key, the 60-session cap, validation, merge, recency order, export/import. Chat, History, Library and the shell all read it here — no one else spells `freeai4u.chats` |
 | `src/update.js` | Release policy: version parsing/comparison, the payload, retry with backoff |
 | `src/useUpdateCheck.ts` | The React binding for it: polling, the dismissed version, the installer |

@@ -1752,3 +1752,63 @@ button.linkish {
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); font-size: 12.5px;
 }
 .attach-chip button { margin-left: auto; }
+
+/* The way in: shown when the engine needs an address or a sign-in. It is the
+   engine card plus one sentence about why, not a modal or a wizard. */
+.connect-screen {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.connect-panel {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connect-mark {
+  font-size: 28px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.connect-panel h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.connect-advice {
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connect-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.link-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* The card is the same object on the connect screen and in Settings. */
+.connection-card .connection-message {
+  color: var(--text-1);
+  font-weight: 500;
+}

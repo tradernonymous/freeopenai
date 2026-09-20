@@ -13,6 +13,10 @@ const DESKTOP = path.join(__dirname, '..', 'desktop');
 const read = (...parts) => fs.readFileSync(path.join(DESKTOP, ...parts), 'utf8');
 
 test('an outcome classifies by status, not by guesswork', () => {
+  // A 2xx is a kind too: the shell classifies its healthy probe as well, and a
+  // success that fell through to "rejected" made the app hide behind connect.
+  assert.equal(connection.classify({ status: 200 }).kind, 'ok');
+  assert.equal(connection.classify({ status: 204 }).kind, 'ok');
   assert.equal(connection.classify({ status: 401 }).kind, 'signed-out');
   assert.equal(connection.classify({ status: 403 }).kind, 'refused');
   assert.equal(connection.classify({ status: 404 }).kind, 'rejected');
@@ -44,12 +48,15 @@ test('"could not reach" names the origin, and "sign-in required" says only that'
 test('the banner is only for the states that need one', () => {
   assert.match(connection.bannerFor('unreachable'), /Cannot reach the engine/);
   assert.match(connection.bannerFor('signed-out'), /sign in/i);
-  // A refusal or a 500 is not a banner state: the screen that made the call
-  // reports it, and a shell-wide banner would blame the connection.
+  // The engine answered but is broken: the app stays up, so it says so in a
+  // banner instead of hiding behind the connect surface.
+  assert.match(connection.bannerFor('engine-error'), /having trouble/);
+  // A refusal and a rejected request are not banner states: the screen that
+  // made the call reports them, and a shell-wide banner would blame the link.
   assert.equal(connection.bannerFor('refused'), null);
   assert.equal(connection.bannerFor('rejected'), null);
-  assert.equal(connection.bannerFor('engine-error'), null);
   assert.equal(connection.bannerFor('no-reply'), null);
+  assert.equal(connection.bannerFor('ok'), null, 'a healthy engine says nothing');
 });
 
 test('every kind is classified and described', () => {

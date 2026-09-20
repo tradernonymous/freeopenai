@@ -41,6 +41,15 @@ export function getServer(): string {
   return DEFAULT_SERVER;
 }
 
+/** Whether an address has actually been chosen here (vs the built-in default). */
+export function serverSaved(): boolean {
+  try {
+    return !!localStorage.getItem(SERVER_KEY);
+  } catch {
+    return false;
+  }
+}
+
 export function setServer(raw: string): string | null {
   const ok = normalizeServer(raw);
   if (!ok) return null;
@@ -174,6 +183,8 @@ export async function streamChat(
 
 export const api = {
   // engine health + auth
+  getServer,
+  serverSaved,
   health: () => request('/api/health'),
   session: () => request('/api/session'),
   login: (username: string, password: string) => request('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) }),

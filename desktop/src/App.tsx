@@ -9,6 +9,7 @@ import BuildScreen from './screens/BuildScreen';
 import LibraryScreen from './screens/LibraryScreen';
 import FilesScreen from './screens/FilesScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import ConnectScreen from './screens/ConnectScreen';
 import FileTree from './components/FileTree';
 import Terminal from './components/Terminal';
 import SessionManager from './components/SessionManager';
@@ -19,9 +20,11 @@ import { useUpdateCheck } from './useUpdateCheck';
 // UMD modules load for their side effect and are picked up off globalThis.
 import './chats.js';
 import './connection.js';
+import './onboarding.js';
 
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
 const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
+const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
 
 type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'files' | 'settings';
 type RightPanel = 'builds' | 'knowledge' | 'none';
@@ -34,45 +37,48 @@ export default function App() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanel>('none');
-  const [loginRequired, setLoginRequired] = useState<boolean | null>(null);
-  const [signedIn, setSignedIn] = useState<boolean | false>(false);
-  const [serverOk, setServerOk] = useState<boolean | null>(null);
+  // What the engine said, and how the shell should react to it. The decision
+  // itself is onboarding.shellState (pure, tested); these are its inputs.
+  const [health, setHealth] = useState<any>(null);
+  const [outcome, setOutcome] = useState<import('./connection.js').ConnectionOutcome | null>(null);
+  const [signedIn, setSignedIn] = useState<boolean>(false);
   const [importMsg, setImportMsg] = useState('');
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
+  // One probe decides everything the shell shows. A failure is classified, not
+  // collapsed: "the engine wants a login" and "the engine never answered" are
+  // different states with different surfaces, and they used to look identical.
   const checkAuth = useCallback(() => {
     api.health()
       .then((h: any) => {
-        setServerOk(!!h?.ok);
-        const required = !!(h && h.loginRequired);
-        setLoginRequired(required);
-        if (!required) return null;
-        return api.session().then((s: any) => setSignedIn(!!(s && s.gate && s.user)));
+        setHealth(h);
+        setOutcome(connection.classify({ status: 200 }));
+        if (h && h.loginRequired) {
+          return api.session()
+            .then((s: any) => setSignedIn(!!(s && s.gate && s.user)))
+            .catch(() => setSignedIn(false));
+        }
+        setSignedIn(true);
+        return null;
       })
-      .catch(() => {
-        // Every failure collapses to "cannot reach" here: an engine asking for a
-        // login is reported by the gate, not by this banner. classify() can tell
-        // the two apart from the status, which is the one-line change that makes
-        // this banner honest -- it is the only behaviour this refactor keeps on
-        // purpose, so nothing the user sees moves in this pass.
-        setServerOk(false);
+      .catch((err) => {
+        setHealth(null);
+        setSignedIn(false);
+        setOutcome(connection.classify({ error: err, origin: api.getServer() }));
       });
   }, []);
 
   useEffect(() => {
     checkAuth();
-    const onAuth = () => setSignedIn(false);
+    // A 401 anywhere in the app means the session went away: re-probe rather
+    // than trusting a stale "signed in".
+    const onAuth = () => checkAuth();
     window.addEventListener('auth-required', onAuth);
     return () => window.removeEventListener('auth-required', onAuth);
   }, [checkAuth]);
-
-  // Re-check the gate when the user returns from Settings (server may have changed).
-  useEffect(() => {
-    if (view === 'settings') checkAuth();
-  }, [view, checkAuth]);
 
   const toggle = () => setTheme((t) => toggleTheme(t));
   const toggleRightPanel = (panel: RightPanel) => setRightPanel((prev) => (prev === panel ? 'none' : panel));
@@ -96,7 +102,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const gate = loginRequired === true && !signedIn;
+  // The shell's screen decision: show the way in when the user can act on it,
+  // otherwise the app. Settings stays reachable from the connect surface, since
+  // it is where a power user expects the address and sign-in to live too.
+  const shell = onboarding.shellState({
+    outcome,
+    health,
+    signedIn,
+    serverSaved: api.serverSaved(),
+  });
+  const showConnect = shell.surface === 'connect' && view !== 'settings';
+  const banner: string | null =
+    shell.surface === 'app' && shell.bannerKind ? connection.bannerFor(shell.bannerKind) : null;
 
   // The anchor is in the document for the click and the object URL is revoked
   // afterwards; both were skipped before.
@@ -160,20 +177,17 @@ export default function App() {
               <button onClick={dismissUpdate}>✕</button>
             </div>
           )}
-          {serverOk === false && (
-            <div className="server-banner">
-              {connection.bannerFor('unreachable')}
-            </div>
+          {banner && (
+            <div className="server-banner">{banner}</div>
           )}
           <div className="main-content">
             <div className="primary-pane">
-              {gate ? (
-                <div className="empty-state" style={{ height: '100%' }}>
-                  <div className="empty-icon">🔒</div>
-                  <h2>Sign-in required</h2>
-                  <p>This engine asks for a login. Sign in once in Settings — the session is kept in this window's profile.</p>
-                  <button className="primary" onClick={() => setView('settings')}>Open Settings to sign in</button>
-                </div>
+              {showConnect ? (
+                <ConnectScreen
+                  reason={shell.reason}
+                  onConnected={checkAuth}
+                  onOpenSettings={() => setView('settings')}
+                />
               ) : (
                 <>
                   {view === 'chat' && <ChatScreen />}
@@ -182,7 +196,7 @@ export default function App() {
                   {view === 'build' && <BuildScreen />}
                   {view === 'library' && <LibraryScreen />}
                   {view === 'files' && <FilesScreen />}
-                  {view === 'settings' && <SettingsScreen />}
+                  {view === 'settings' && <SettingsScreen onConnectionChanged={checkAuth} />}
                 </>
               )}
             </div>

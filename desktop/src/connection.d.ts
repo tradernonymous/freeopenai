@@ -1,5 +1,6 @@
 /** The engine-outcome-to-copy module (UMD, shared with node:test). */
 export type ConnectionKind =
+  | 'ok'
   | 'unreachable'
   | 'signed-out'
   | 'refused'

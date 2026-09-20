@@ -17,17 +17,21 @@
   else root.FreeAI4UConnection = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   // The kinds, and what each one means:
+  //   ok           it worked
   //   unreachable  the request never got an answer (offline, DNS, TLS, CORS)
   //   signed-out   the engine wants a login (401)
   //   refused      the engine understood and said no (403, e.g. WORKSPACE_RUN off)
   //   rejected     the engine rejected the request itself (other 4xx)
   //   engine-error the engine failed on its side (5xx)
   //   no-reply     a provider answered without anything readable in it
-  var KINDS = ['unreachable', 'signed-out', 'refused', 'rejected', 'engine-error', 'no-reply'];
+  var KINDS = ['ok', 'unreachable', 'signed-out', 'refused', 'rejected', 'engine-error', 'no-reply'];
 
   function kindForStatus(status) {
     var code = Number(status) || 0;
     if (!code) return 'unreachable';
+    // A success has to be a kind: the shell classifies its healthy probe too,
+    // and without this a 200 fell through to "rejected".
+    if (code >= 200 && code < 300) return 'ok';
     if (code === 401) return 'signed-out';
     if (code === 403) return 'refused';
     if (code >= 500) return 'engine-error';
@@ -39,6 +43,8 @@
     var opts = options || {};
     var status = Number(opts.status) || 0;
     switch (kind) {
+      case 'ok':
+        return 'OK';
       case 'unreachable':
         return 'Could not reach ' + (opts.origin || 'the engine') +
           ' — check your connection or the server address in Settings.';
@@ -61,7 +67,12 @@
         return 'Cannot reach the engine right now — check the address in Settings.';
       case 'signed-out':
         return 'Signed out — sign in again from Settings.';
+      case 'engine-error':
+        // The engine answered, so the app stays usable; some calls will fail.
+        return 'The engine is having trouble right now — some things may fail.';
       default:
+        // A refusal, a rejected request and an unreadable reply are reported by
+        // the screen that made the call, where the user can act on them.
         return null;
     }
   }

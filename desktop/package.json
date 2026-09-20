@@ -1,6 +1,6 @@
 {
   "name": "freeai4u-desktop",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "FreeAI4U Desktop — native Windows app on the freeai4u engine",
   "scripts": {
     "dev": "vite",
