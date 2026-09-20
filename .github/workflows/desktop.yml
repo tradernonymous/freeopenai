@@ -28,8 +28,12 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm install
+      # The desktop's own gate, so a shell or frontend mistake fails here as
+      # well as in CI: config + engine wiring, the update-check rules, and the
+      # chat import/export merge. Paths are repo-root relative (this job has no
+      # working-directory), and that is where these files live.
       - name: Desktop tests (config + engine wiring)
-        run: node --test test/desktop.test.js
+        run: node --test test/desktop.test.js test/desktop-update.test.js test/desktop-chats.test.js
       - name: Build Tauri app
         working-directory: desktop
         run: npm run tauri:build
