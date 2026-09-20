@@ -5,6 +5,13 @@
 // The server base is a setting, not a constant: it lives in localStorage under
 // freeai4u.server and is edited in Settings. https only, except localhost --
 // the same rule the launcher enforced.
+//
+// This file is transport: the address, the request, the stream, the route
+// table. What an outcome MEANS, and the words for it, belong to connection.js.
+// UMD module: loaded for its side effect, read off globalThis.
+import './connection.js';
+
+const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 
 const SERVER_KEY = 'freeai4u.server';
 export const DEFAULT_SERVER = 'https://freeopenai-production.up.railway.app';
@@ -62,19 +69,19 @@ async function request(path: string, opts: RequestInit = {}): Promise<any> {
       ...opts,
     });
   } catch (err) {
-    throw new ApiError(0, `Could not reach ${base()} — check your connection or the server address in Settings.`);
+    throw new ApiError(0, connection.classify({ origin: base() }).message);
   }
   if (res.status === 401) {
     window.dispatchEvent(new CustomEvent('auth-required'));
-    throw new ApiError(401, 'Sign-in required');
+    throw new ApiError(401, connection.classify({ status: 401 }).message);
   }
   if (!res.ok) {
-    let message = `HTTP ${res.status}`;
+    let engineMessage = '';
     try {
       const data = await res.json();
-      if (data && typeof data.error === 'string') message = data.error;
+      if (data && typeof data.error === 'string') engineMessage = data.error;
     } catch { /* a body that is not JSON says nothing more */ }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, connection.classify({ status: res.status, message: engineMessage }).message);
   }
   if (res.status === 204) return null;
   return res.json();
@@ -108,15 +115,15 @@ export async function streamChat(
     });
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
-    throw new ApiError(0, `Could not reach ${base()}`);
+    throw new ApiError(0, connection.classify({ origin: base() }).message);
   }
   if (!res.ok) {
-    let message = `HTTP ${res.status}`;
+    let engineMessage = '';
     try {
       const data = await res.json();
-      if (data && typeof data.error === 'string') message = data.error;
+      if (data && typeof data.error === 'string') engineMessage = data.error;
     } catch { /* keep the status line */ }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, connection.classify({ status: res.status, message: engineMessage }).message);
   }
   const type = String(res.headers.get('content-type') || '');
   if (!type.includes('text/event-stream') || !res.body) {
@@ -127,7 +134,7 @@ export async function streamChat(
       onFrame({ content, done: true });
       return;
     }
-    throw new ApiError(res.status, (data && data.error) || 'The provider sent no readable reply.');
+    throw new ApiError(res.status, (data && data.error) || connection.messageFor('no-reply'));
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

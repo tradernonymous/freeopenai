@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { OPEN_CHAT_EVENT } from '../screens/ChatScreen';
 import type { ChatSession } from '../screens/ChatScreen';
+// UMD module: loaded for its side effect, read off globalThis. The history this
+// panel shows is the chat store's, not a second parse of localStorage.
+import '../chats.js';
+
+const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 
 interface Props {
   onExport: () => void;
@@ -14,12 +19,7 @@ export default function SessionManager({ onExport, onImport, importMsg }: Props)
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem('freeai4u.chats') || '[]');
-      const rows: ChatSession[] = Array.isArray(raw) ? raw : [];
-      rows.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-      setSessions(rows);
-    } catch { setSessions([]); }
+    setSessions(chats.byRecency(chats.readStore()) as ChatSession[]);
   }, []);
 
   const filtered = sessions.filter((s) =>

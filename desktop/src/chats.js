@@ -19,6 +19,66 @@
   var MAX_SESSIONS = 60;
   // Fired after an import so a mounted Chat screen reloads what it is showing.
   var CHATS_CHANGED_EVENT = 'freeai4u:chats-changed';
+  var STORE_KEY = 'freeai4u.chats';
+
+  // localStorage can throw (private mode, a locked-down profile). Reading an
+  // empty history is a better answer than a screen that cannot render.
+  function browserStorage() {
+    var scope = typeof globalThis !== 'undefined' ? globalThis : {};
+    try {
+      if (scope.localStorage) return scope.localStorage;
+    } catch { /* fall through */ }
+    return null;
+  }
+
+  function store(storage) {
+    return storage || browserStorage();
+  }
+
+  // A session as THIS APP wrote it. Reading our own store is deliberately more
+  // forgiving than importing a file: nothing in it is untrusted, and rejecting
+  // a chat the user has been using would be data loss. So this checks only what
+  // rendering needs, while imports go through isChatSession below.
+  function isStoredSession(value) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value) &&
+      typeof value.id === 'string' && value.id.trim() &&
+      Array.isArray(value.messages));
+  }
+
+  function readStore(storage) {
+    var target = store(storage);
+    if (!target) return [];
+    try {
+      var raw = target.getItem(STORE_KEY);
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isStoredSession).slice(0, MAX_SESSIONS);
+    } catch {
+      return [];
+    }
+  }
+
+  // The cap is applied on write as well as on read: whichever way a history
+  // grows, what is stored is never more than the limit.
+  function writeStore(storage, sessions) {
+    var target = store(storage);
+    if (!target) return false;
+    try {
+      var rows = (Array.isArray(sessions) ? sessions : []).filter(isStoredSession);
+      target.setItem(STORE_KEY, JSON.stringify(rows.slice(0, MAX_SESSIONS)));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The list as a history panel wants it: most recently updated first. */
+  function byRecency(sessions) {
+    return (Array.isArray(sessions) ? sessions.slice() : []).sort(function (a, b) {
+      return updatedAtOf(b) - updatedAtOf(a);
+    });
+  }
 
   function updatedAtOf(session) {
     var value = Number(session && session.updatedAt);
@@ -141,7 +201,13 @@
 
   return {
     MAX_SESSIONS: MAX_SESSIONS,
+    STORE_KEY: STORE_KEY,
     CHATS_CHANGED_EVENT: CHATS_CHANGED_EVENT,
+    browserStorage: browserStorage,
+    isStoredSession: isStoredSession,
+    readStore: readStore,
+    writeStore: writeStore,
+    byRecency: byRecency,
     isChatSession: isChatSession,
     updatedAtOf: updatedAtOf,
     sanitize: sanitize,

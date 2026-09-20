@@ -25,26 +25,17 @@ export interface ChatSession {
   updatedAt: number;
 }
 
-const STORE_KEY = 'freeai4u.chats';
-const MAX_SESSIONS = 60;
+// The chat store lives in ../chats.js -- key, cap, validation, merge, export.
+// This screen reads and writes it and owns nothing about it, so the History
+// panel and the Library see exactly the same history this screen does.
+const MAX_SESSIONS = chats.MAX_SESSIONS;
 
-export function loadSessions(): ChatSession[] {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((s: any) => s && typeof s.id === 'string' && Array.isArray(s.messages))
-      .slice(0, MAX_SESSIONS);
-  } catch {
-    return [];
-  }
+function loadSessions(): ChatSession[] {
+  return chats.readStore() as ChatSession[];
 }
 
-export function saveSessions(sessions: ChatSession[]) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(sessions.slice(0, MAX_SESSIONS)));
-  } catch { /* full storage: the chat still works, it just will not resume */ }
+function saveSessions(sessions: ChatSession[]) {
+  chats.writeStore(null, sessions);
 }
 
 export function newSession(provider = '', model = ''): ChatSession {
@@ -74,7 +65,7 @@ interface ProviderRow {
 export default function ChatScreen() {
   // Parsed once. The active id is taken from the list this component already
   // loaded; the old code read and parsed localStorage a second time here.
-  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
+  const [sessions, setSessions] = useState<ChatSession[]>(() => chats.readStore() as ChatSession[]);
   const [activeId, setActiveId] = useState<string>(() => sessions[0]?.id ?? '');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [models, setModels] = useState<Array<{ id: string; free?: string }>>([]);
@@ -101,7 +92,7 @@ export default function ChatScreen() {
 
   // An import rewritten localStorage: reload what is on screen.
   useEffect(() => {
-    const onChanged = () => setSessions(loadSessions());
+    const onChanged = () => setSessions(chats.readStore() as ChatSession[]);
     window.addEventListener(chats.CHATS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(chats.CHATS_CHANGED_EVENT, onChanged);
   }, []);

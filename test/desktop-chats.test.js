@@ -105,7 +105,106 @@ test('export puts the anchor in the document and releases the object URL', () =>
   assert.equal(chats.downloadJson('x.json', '[]', { document: null }), false);
 });
 
+// ---- the store: one owner -----------------------------------------------
+
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+  };
+}
+
+const stored = (id, updatedAt, extra = {}) => ({
+  id,
+  title: id,
+  messages: [{ role: 'user', content: 'hi' }],
+  provider: 'p',
+  model: 'm',
+  mode: 'chat',
+  draft: '',
+  updatedAt,
+  ...extra,
+});
+
+test('the store round-trips, and caps what it writes', () => {
+  const storage = memoryStorage();
+  let rows = [stored('a', 3), stored('b', 2)];
+  for (let i = 0; i < 70; i += 1) rows.push(stored('old-' + i, i));
+  assert.equal(chats.writeStore(storage, rows), true);
+
+  const loaded = chats.readStore(storage);
+  assert.equal(loaded.length, chats.MAX_SESSIONS, 'the cap holds on write and on read');
+  assert.equal(loaded[0].id, 'a', 'order is preserved: the screen prepends, so the head is newest');
+  assert.ok(loaded.some((s) => s.id === 'old-57'), 'the 60th entry is still there');
+  assert.ok(!loaded.some((s) => s.id === 'old-69'), 'the tail -- the oldest -- is what the cap drops');
+  assert.deepEqual(chats.readStore(memoryStorage()), [], 'an empty store is an empty list');
+});
+
+test('reading our own store is forgiving, importing a file is not', () => {
+  const storage = memoryStorage();
+  // Our own data may predate a field; it is not untrusted input, and dropping a
+  // chat the user has been using would be data loss.
+  storage.setItem(chats.STORE_KEY, JSON.stringify([
+    { id: 'kept', messages: [] },
+    { id: '', messages: [] },
+    { messages: [] },
+    'not an object',
+  ]));
+  assert.deepEqual(chats.readStore(storage).map((s) => s.id), ['kept']);
+  assert.equal(chats.isStoredSession({ id: 'kept', messages: [] }), true);
+  assert.equal(chats.isStoredSession({ id: 'kept', messages: [] }), true);
+
+  // An imported file is untrusted: a message with no role, or a non-string
+  // content, is refused instead of rendering as a blank bubble.
+  assert.equal(chats.isChatSession({ id: 'x', messages: [{ role: 1 }] }), false);
+  assert.equal(chats.isChatSession({ id: 'x', messages: [{ role: 'user', content: {} }] }), false);
+  assert.equal(chats.isChatSession({ id: 'x', messages: [{ role: 'user', content: 'ok' }] }), true);
+});
+
+test('the history list orders by recency without touching its input', () => {
+  const rows = [stored('old', 1), stored('new', 9), stored('mid', 5)];
+  const sorted = chats.byRecency(rows);
+  assert.deepEqual(sorted.map((s) => s.id), ['new', 'mid', 'old']);
+  assert.deepEqual(rows.map((s) => s.id), ['old', 'new', 'mid'], 'the caller\'s array is not reordered');
+});
+
 // ---- wiring -------------------------------------------------------------
+
+test('exactly one module knows where the chat store lives', () => {
+  const sources = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(ts|tsx|js)$/.test(entry.name)) sources.push(full);
+    }
+  })(path.join(ROOT, 'desktop', 'src'));
+
+  const owners = sources.filter((file) => fs.readFileSync(file, 'utf8').includes('freeai4u.chats'));
+  assert.deepEqual(owners.map((f) => path.basename(f)), ['chats.js'],
+    'the key belongs to the store; four files used to spell it out');
+});
+
+test('every reader of the history goes through the store', () => {
+  const readers = [
+    ['desktop', 'src', 'App.tsx'],
+    ['desktop', 'src', 'screens', 'ChatScreen.tsx'],
+    ['desktop', 'src', 'screens', 'LibraryScreen.tsx'],
+    ['desktop', 'src', 'components', 'SessionManager.tsx'],
+  ];
+  for (const parts of readers) {
+    const src = read(...parts);
+    const label = parts.join('/');
+    assert.match(src, /import '.*chats\.js'/, `${label} loads the store`);
+    // The local name may differ (Library already has a `chats` state), so this
+    // checks the call into the store, not the alias a screen chose.
+    assert.match(src, /\.(readStore|writeStore|byRecency|merge)\(/, `${label} uses the store`);
+    assert.doesNotMatch(src, /localStorage\.(get|set)Item\('freeai4u\.chats'/,
+      `${parts.join('/')} does not parse the store itself`);
+  }
+});
+
 
 test('App uses the module for both halves of import/export', () => {
   const app = read('desktop', 'src', 'App.tsx');

@@ -44,6 +44,27 @@ Closing the window hides the app to the tray; **Quit** (tray menu) is a clean ex
 
 CI writes `desktop-version.json` into the `desktop-latest` release — the real version plus a `sha256` and byte size for every artifact, taken from the files it just built. The app fetches that file (three attempts with backoff, straight from the release CDN rather than the rate-limited GitHub API) and offers the update only when the published version is **strictly newer** than the running one. The banner names the installer, its size, and its sha256 on hover; dismissing it silences that version until a newer one appears.
 
+## Code map
+
+Each concern has one owner, and the shell (App.tsx) composes rather than implements.
+
+| Module | Owns |
+| :-- | :-- |
+| `src/api.ts` | Transport only: the engine address, `request`, the SSE stream, the route table |
+| `src/connection.js` | What an engine outcome *means*: `kind` (unreachable / signed-out / refused / rejected / engine-error / no-reply) and the copy for it — the error message and the shell banner |
+| `src/chats.js` | The chat store: its key, the 60-session cap, validation, merge, recency order, export/import. Chat, History, Library and the shell all read it here — no one else spells `freeai4u.chats` |
+| `src/update.js` | Release policy: version parsing/comparison, the payload, retry with backoff |
+| `src/useUpdateCheck.ts` | The React binding for it: polling, the dismissed version, the installer |
+| `src/theme.ts` | The theme value, its key, and applying it |
+| `src/run-result.js` | An engine run response turned into the terminal's display block |
+| `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
+| `src-tauri/src/main.rs` | Wiring: boot checks, tray, window, plugins, commands |
+| `src-tauri/src/crash.rs` | Where a failure is recorded: path, size cap, rotation, hint |
+| `src-tauri/src/webview2.rs` | The runtime the window needs, and what to tell a user missing it |
+| `src-tauri/src/save.rs` | The native save dialog and its derived filters |
+
+The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read off `globalThis`) are the ones that carry rules; `node --test` runs them directly, so the same code paths the app uses are the ones the tests check. The shell's Rust rules are asserted from the shell sources as a set (`test/desktop.test.js`), so moving a rule between modules is not a test break.
+
 ## How it is built
 
 [`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.

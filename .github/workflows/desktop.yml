@@ -29,11 +29,18 @@ jobs:
         working-directory: desktop
         run: npm install
       # The desktop's own gate, so a shell or frontend mistake fails here as
-      # well as in CI: config + engine wiring, the update-check rules, and the
-      # chat import/export merge. Paths are repo-root relative (this job has no
-      # working-directory), and that is where these files live.
+      # well as in CI: config + engine wiring, the update-check rules, the
+      # chat store, and the connection copy. Paths are repo-root relative (this
+      # job has no working-directory), and that is where these files live.
+      # test/desktop.test.js reads the whole shell as one source, so moving a
+      # concern between Rust modules does not break it.
       - name: Desktop tests (config + engine wiring)
-        run: node --test test/desktop.test.js test/desktop-update.test.js test/desktop-chats.test.js
+        run: >-
+          node --test
+          test/desktop.test.js
+          test/desktop-update.test.js
+          test/desktop-chats.test.js
+          test/desktop-connection.test.js
       - name: Build Tauri app
         working-directory: desktop
         run: npm run tauri:build

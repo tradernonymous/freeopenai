@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
+// UMD module: loaded for its side effect, read off globalThis.
+import '../chats.js';
+
+// Named for the store, not `chats`: this screen already has a `chats` state.
+const chatStore: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 
 interface Skill {
   source: string;
@@ -24,9 +29,7 @@ export default function LibraryScreen() {
       .then((rows: any) => setSkills(Array.isArray(rows) ? rows : []))
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
-    try {
-      setChats(JSON.parse(localStorage.getItem('freeai4u.chats') || '[]'));
-    } catch { setChats([]); }
+    setChats(chatStore.byRecency(chatStore.readStore()) as ChatSession[]);
   };
 
   useEffect(() => { load(); }, []);

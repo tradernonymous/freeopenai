@@ -155,9 +155,15 @@ test('CI writes desktop-version.json with sha256 + size into the release', () =>
 });
 
 test('the app fetches that file instead of regexing asset names', () => {
-  const app = read('desktop', 'src', 'App.tsx');
-  assert.match(app, /update\.fetchVersion/);
-  assert.match(app, /update\.isNewer/);
-  assert.doesNotMatch(app, /assets\.join\(' '\)\.match/, 'the asset-name regex is gone');
-  assert.doesNotMatch(app, /api\.github\.com/, 'and so is the rate-limited API call');
+  // The check is the hook's job now (useUpdateCheck), so the shell composes it
+  // and the rules stay in the module.
+  const hook = read('desktop', 'src', 'useUpdateCheck.ts');
+  assert.match(hook, /update\.fetchVersion/);
+  assert.match(hook, /update\.isNewer/);
+  assert.match(hook, /APP_VERSION/);
+  const shell = read('desktop', 'src', 'App.tsx');
+  assert.doesNotMatch(hook + shell, /assets\.join\(' '\)\.match/, 'the asset-name regex is gone');
+  assert.doesNotMatch(hook + shell, /api\.github\.com/,
+    'and so is the rate-limited API call');
+  assert.match(shell, /useUpdateCheck\(\)/, 'App composes it');
 });

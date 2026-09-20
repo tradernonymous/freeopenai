@@ -14,22 +14,22 @@ import Terminal from './components/Terminal';
 import SessionManager from './components/SessionManager';
 import './index.css';
 import { APP_VERSION } from './version';
+import { applyTheme, readTheme, toggleTheme, type Theme } from './theme';
+import { useUpdateCheck } from './useUpdateCheck';
 // UMD modules load for their side effect and are picked up off globalThis.
-import './update.js';
 import './chats.js';
+import './connection.js';
 
-const update: typeof import('./update.js') = (globalThis as any).FreeAI4UUpdate;
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
-
-const DISMISSED_KEY = 'freeai4u.updateDismissed';
+const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 
 type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'files' | 'settings';
 type RightPanel = 'builds' | 'knowledge' | 'none';
 
 export default function App() {
   const [view, setView] = useState<View>('chat');
-  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
-  const [updateInfo, setUpdateInfo] = useState<import('./update.js').VersionPayload | null>(null);
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const { info: updateInfo, installer, dismiss: dismissUpdate, humanSize, releaseUrl } = useUpdateCheck();
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
@@ -40,18 +40,8 @@ export default function App() {
   const [importMsg, setImportMsg] = useState('');
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      localStorage.setItem('freeai4u-theme', theme);
-    } catch {}
+    applyTheme(theme);
   }, [theme]);
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('freeai4u-theme') as 'light' | 'dark' | null;
-      if (saved) setTheme(saved);
-    } catch {}
-  }, []);
 
   const checkAuth = useCallback(() => {
     api.health()
@@ -62,7 +52,14 @@ export default function App() {
         if (!required) return null;
         return api.session().then((s: any) => setSignedIn(!!(s && s.gate && s.user)));
       })
-      .catch(() => setServerOk(false));
+      .catch(() => {
+        // Every failure collapses to "cannot reach" here: an engine asking for a
+        // login is reported by the gate, not by this banner. classify() can tell
+        // the two apart from the status, which is the one-line change that makes
+        // this banner honest -- it is the only behaviour this refactor keeps on
+        // purpose, so nothing the user sees moves in this pass.
+        setServerOk(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -77,27 +74,7 @@ export default function App() {
     if (view === 'settings') checkAuth();
   }, [view, checkAuth]);
 
-  // The release publishes desktop-version.json (version + sha256 + size per
-  // artifact). Reading that instead of guessing a version out of asset names
-  // means a build-numbered or renamed file cannot misreport, and a DOWN-dated
-  // release is not an update. The fetch retries with backoff, and a failure
-  // leaves the banner hidden instead of throwing.
-  useEffect(() => {
-    let cancelled = false;
-    const checkUpdate = async () => {
-      const found = await update.fetchVersion({ fetchImpl: fetch });
-      if (cancelled || !found || !update.isNewer(found.version, APP_VERSION)) return;
-      try {
-        if (localStorage.getItem(DISMISSED_KEY) === found.version) return;
-      } catch { /* no storage: show it anyway */ }
-      setUpdateInfo(found);
-    };
-    checkUpdate();
-    const interval = setInterval(checkUpdate, 1000 * 60 * 60);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, []);
-
-  const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  const toggle = () => setTheme((t) => toggleTheme(t));
   const toggleRightPanel = (panel: RightPanel) => setRightPanel((prev) => (prev === panel ? 'none' : panel));
 
   // Alt+1..6 walks the sidebar in its displayed order.
@@ -124,7 +101,7 @@ export default function App() {
   // The anchor is in the document for the click and the object URL is revoked
   // afterwards; both were skipped before.
   const exportChats = () => {
-    const text = localStorage.getItem('freeai4u.chats') || '[]';
+    const text = JSON.stringify(chats.readStore());
     setImportMsg(chats.downloadJson('freeai4u-chats.json', text)
       ? 'Exported freeai4u-chats.json.'
       : 'Export failed: this window has no download surface.');
@@ -138,9 +115,8 @@ export default function App() {
         const incoming = JSON.parse(text);
         const list = Array.isArray(incoming) ? incoming : incoming?.sessions;
         if (!Array.isArray(list)) throw new Error('not a chat export');
-        const raw = JSON.parse(localStorage.getItem('freeai4u.chats') || '[]');
-        const result = chats.merge(raw, incoming, chats.MAX_SESSIONS);
-        localStorage.setItem('freeai4u.chats', JSON.stringify(result.sessions));
+        const result = chats.merge(chats.readStore(), incoming, chats.MAX_SESSIONS);
+        chats.writeStore(null, result.sessions);
         window.dispatchEvent(new CustomEvent(chats.CHATS_CHANGED_EVENT));
         setImportMsg(chats.summary(result));
       } catch (err) {
@@ -149,17 +125,9 @@ export default function App() {
     });
   };
 
-  const installer = update.installerFor(updateInfo);
-  const dismissUpdate = () => {
-    try {
-      if (updateInfo) localStorage.setItem(DISMISSED_KEY, updateInfo.version);
-    } catch { /* best effort */ }
-    setUpdateInfo(null);
-  };
-
   return (
     <div className="app">
-      <TitleBar onToggleTheme={toggleTheme} theme={theme} />
+      <TitleBar onToggleTheme={toggle} theme={theme} />
       <div className="app-body">
         <Sidebar
           active={view}
@@ -183,10 +151,10 @@ export default function App() {
                 <span className="update-meta"
                   title={installer.sha256 ? `sha256 ${installer.sha256}` : undefined}>
                   {installer.name}
-                  {installer.size ? ` · ${update.humanSize(installer.size)}` : ''}
+                  {installer.size ? ` · ${humanSize(installer.size)}` : ''}
                 </span>
               )}
-              <a href={update.desktopUrl()} target="_blank" rel="noreferrer">
+              <a href={releaseUrl} target="_blank" rel="noreferrer">
                 Download
               </a>
               <button onClick={dismissUpdate}>✕</button>
@@ -194,7 +162,7 @@ export default function App() {
           )}
           {serverOk === false && (
             <div className="server-banner">
-              Cannot reach the engine right now — check the address in Settings.
+              {connection.bannerFor('unreachable')}
             </div>
           )}
           <div className="main-content">

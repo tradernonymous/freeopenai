@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api';
+// UMD module: loaded for its side effect, read off globalThis.
+import '../run-result.js';
+
+const runResult: typeof import('../run-result.js') = (globalThis as any).FreeAI4URunResult;
 
 // The engine terminal: commands run on the server workspace (WORKSPACE_RUN=1 +
 // a login). Three things here are deliberate:
@@ -28,20 +32,6 @@ function nextId(): string {
   return `run-${Date.now().toString(36)}-${counter}`;
 }
 
-/** The engine's answer as one block of text to display. */
-function formatResult(res: any): { out: string; kind: Exclude<Entry['kind'], 'running'> } {
-  const stdout = String(res?.stdout ?? '');
-  const stderr = String(res?.stderr ?? '');
-  const notes: string[] = [];
-  if (res?.timedOut) notes.push('timed out');
-  if (res?.exitCode != null && res.exitCode !== 0) notes.push(`exit ${res.exitCode}`);
-  if (res?.stdoutTruncated || res?.stderrTruncated) notes.push('output truncated');
-  if (res?.durationMs != null) notes.push(`${Math.round(Number(res.durationMs))}ms`);
-  const text = [stdout.replace(/\s+$/, ''), stderr.replace(/\s+$/, '')].filter(Boolean).join('\n');
-  const withNotes = notes.length ? [text, `— ${notes.join(' · ')}`].filter(Boolean).join('\n') : text;
-  const kind: Exclude<Entry['kind'], 'running'> = stderr && !stdout ? 'err' : res?.exitCode ? 'err' : 'out';
-  return { out: withNotes || 'ok', kind };
-}
 
 export default function Terminal() {
   const [history, setHistory] = useState<Entry[]>([]);
@@ -65,7 +55,7 @@ export default function Terminal() {
     try {
       const res: any = await api.workspaceRun(cmd);
       if (typeof res?.cwd === 'string' && res.cwd) setCwd(res.cwd);
-      settle(formatResult(res));
+      settle(runResult.formatRun(res));
     } catch (e) {
       settle({ out: `Error: ${(e as Error).message}`, kind: 'err' });
     }

@@ -7,8 +7,18 @@ export interface ChatImportResult {
   total: number;
   trimmed: number;
 }
+export interface ChatStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
 export declare const MAX_SESSIONS: number;
+export declare const STORE_KEY: string;
 export declare const CHATS_CHANGED_EVENT: string;
+export declare function browserStorage(): ChatStorage | null;
+export declare function isStoredSession(value: unknown): boolean;
+export declare function readStore(storage?: ChatStorage | null): any[];
+export declare function writeStore(storage: ChatStorage | null, sessions: any[]): boolean;
+export declare function byRecency(sessions: any[]): any[];
 export declare function isChatSession(value: unknown): boolean;
 export declare function updatedAtOf(session: any): number;
 export declare function sanitize(list: unknown): any[];

@@ -15,6 +15,16 @@ function read(...parts) {
   return fs.readFileSync(path.join(DESKTOP, ...parts), 'utf8');
 }
 
+// The Rust shell is several modules (main.rs wires, crash.rs records failures,
+// webview2.rs checks the runtime, save.rs writes files). A rule belongs to the
+// shell, not to whichever file currently holds it, so the shell assertions read
+// them together -- moving a concern between modules must not break a test.
+const SHELL_MODULES = ['main.rs', 'crash.rs', 'webview2.rs', 'save.rs'];
+function shellSource(...only) {
+  const files = only.length ? only : SHELL_MODULES;
+  return files.map((f) => read('src-tauri', 'src', f)).join('\n/* ---- module ---- */\n');
+}
+
 test('tauri.conf.json: the installer installs WebView2 (the blank-screen fix)', () => {
   const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));
   assert.equal(
@@ -38,11 +48,13 @@ test('tauri.conf.json: NSIS ships and the window settings are sane', () => {
 });
 
 test('the shell checks the WebView2 runtime before opening a window', () => {
-  const mainRs = read('src-tauri', 'src', 'main.rs');
-  assert.match(mainRs, /F3017226-FE2A-4295-8BDF-00C3A9A7E4C5/, 'the runtime registry key');
-  assert.match(mainRs, /HKEY_CURRENT_USER[\s\S]*HKEY_LOCAL_MACHINE|HKEY_LOCAL_MACHINE[\s\S]*HKEY_CURRENT_USER/, 'both hives');
-  assert.match(mainRs, /go\.microsoft\.com/, 'the message names the fix');
-  assert.ok(!mainRs.includes('tauri_plugin_updater'), 'the updater plugin is gone from the shell too');
+  const mainRs = shellSource('main.rs');
+  const shell = shellSource();
+  assert.match(shell, /F3017226-FE2A-4295-8BDF-00C3A9A7E4C5/, 'the runtime registry key');
+  assert.match(shell, /HKEY_CURRENT_USER[\s\S]*HKEY_LOCAL_MACHINE|HKEY_LOCAL_MACHINE[\s\S]*HKEY_CURRENT_USER/, 'both hives');
+  assert.match(shell, /go\.microsoft\.com/, 'the message names the fix');
+  assert.match(mainRs, /webview2::version\(\)/, 'the check runs from main, before the window');
+  assert.ok(!shell.includes('tauri_plugin_updater'), 'the updater plugin is gone from the shell too');
 });
 
 test('the UI version constant matches the built version (update check + badges)', () => {
@@ -59,11 +71,10 @@ test('tauri.conf.json: plugins ship no config maps (the window-state startup pan
     'window-state/store reject config maps; `{}` under plugins panics every launch');
 });
 
-test('main.rs: release is windowed (no console flash) and never expect()s at boot', () => {
-  const main = read('src-tauri', 'src', 'main.rs');
-  assert.match(main, /windows_subsystem\s*=\s*"windows"/,
+test('the shell: release is windowed (no console flash) and never expect()s at boot', () => {
+  assert.match(shellSource('main.rs'), /windows_subsystem\s*=\s*"windows"/,
     'the release exe must not open a console window');
-  assert.ok(!/\.expect\(/.test(main),
+  assert.ok(!/\.expect\(/.test(shellSource()),
     'a boot failure must become a dialog + crash log, never a silent death');
 });
 
@@ -168,9 +179,11 @@ test('markdown rendering escapes before it decorates', () => {
   assert.match(md, /dangerouslySetInnerHTML|renderMarkdown/, 'the chat screen consumes the renderer');
 });
 
-test('chat sessions persist locally with the stable store key', () => {
+test('chat sessions persist locally through the store, with the stable key', () => {
+  const store = read('src', 'chats.js');
+  assert.match(store, /freeai4u\.chats/, 'History, import and export all read this one key');
   const chat = read('src', 'screens', 'ChatScreen.tsx');
-  assert.match(chat, /freeai4u\.chats/, 'History, import and export all read this one key');
+  assert.match(chat, /chats\.(readStore|writeStore)/, 'the screen uses the store, not its own copy');
   assert.match(chat, /draft/, 'an unsent draft survives a restart');
   assert.match(chat, /AbortController/, 'Stop actually stops the stream');
 });
@@ -186,17 +199,17 @@ test('the frontend still builds (tsc + vite), so CI compiles what it ships', () 
 // ---- Phase 0 hardening: one test per fixed defect ------------------------
 
 test('the crash log lives in the app directory, is capped, and is named in the dialog', () => {
-  const main = read('src-tauri', 'src', 'main.rs');
-  assert.ok(!main.includes('C:/Users/Public'),
+  const shell = shellSource();
+  assert.ok(!shell.includes('C:/Users/Public'),
     'a public, not-always-writable path defeats the "no silent deaths" promise');
-  assert.match(main, /LOCALAPPDATA|app_log_dir/, 'it follows the user profile (or Tauri app dir)');
-  assert.match(main, /CRASH_LOG_MAX_BYTES/, 'a crash loop must not fill the disk');
-  assert.match(main, /log rotated|create_dir_all/, 'rotation + a created directory');
-  assert.match(main, /crash_log_hint/, 'the error dialog points at the real file');
+  assert.match(shell, /LOCALAPPDATA|app_log_dir/, 'it follows the user profile (or Tauri app dir)');
+  assert.match(shell, /CRASH_LOG_MAX_BYTES/, 'a crash loop must not fill the disk');
+  assert.match(shell, /log rotated|create_dir_all/, 'rotation + a created directory');
+  assert.match(shellSource('main.rs'), /crash::hint\(\)/, 'the error dialog points at the real file');
 });
 
 test('quitting is a clean exit, and only quitting closes the window', () => {
-  const main = read('src-tauri', 'src', 'main.rs');
+  const main = shellSource('main.rs');
   assert.ok(!main.includes('std::process::exit'),
     'process::exit skips window-state persistence and orphans WebView2 children');
   assert.match(main, /QUITTING\.store/, 'the quit path raises the flag');
@@ -206,7 +219,7 @@ test('quitting is a clean exit, and only quitting closes the window', () => {
 });
 
 test('the save dialog derives its filters from the file, and always offers all files', () => {
-  const save = read('src-tauri', 'src', 'save.rs');
+  const save = shellSource('save.rs');
   assert.match(save, /fn extension_for/, 'the extension comes from the name/mime');
   assert.match(save, /extension_for\(&file_name, &mime\)/, 'and is actually used');
   assert.match(save, /add_filter\("All files"/, 'a wrong guess cannot make a file unsaveable');
@@ -218,9 +231,37 @@ test('terminal results are matched by identity, and the output shown is the real
   assert.match(term, /h\.id === id/, 'a result lands on the entry that asked for it');
   assert.doesNotMatch(term, /h\.cmd === cmd/, 'the by-value match is gone');
   assert.doesNotMatch(term, /res\.output/, 'the engine never sends `output`');
-  assert.match(term, /res\?\.stdout|res\.stdout/, 'stdout reaches the screen');
-  assert.match(term, /stderr|exitCode/, 'so does stderr and the exit code');
+  assert.match(term, /runResult\.formatRun\(/, 'the response is formatted by the module');
   assert.doesNotMatch(term, /useState\('\.'\)/, 'the decorative cwd is gone');
+
+  // The formatting rules themselves live in run-result.js and are tested below.
+  const formatter = read('src', 'run-result.js');
+  assert.match(formatter, /stdout/, 'stdout reaches the screen');
+  assert.match(formatter, /stderr/, 'so does stderr');
+  assert.match(formatter, /exitCode/, 'and the exit code');
+});
+
+// ---- the terminal's formatter (run-result.js) ----------------------------
+
+test('a run response becomes the block the terminal shows', () => {
+  const runResult = require('../desktop/src/run-result.js');
+  const ok = runResult.formatRun({ stdout: 'hello\n', stderr: '', exitCode: 0, durationMs: 12 });
+  assert.equal(ok.kind, 'out');
+  assert.match(ok.out, /hello/);
+  assert.match(ok.out, /12ms/);
+
+  const failed = runResult.formatRun({ stdout: 'partial', stderr: 'boom\n', exitCode: 2 });
+  assert.equal(failed.kind, 'err', 'a non-zero exit is an error line');
+  assert.match(failed.out, /boom/);
+  assert.match(failed.out, /exit 2/);
+
+  const silent = runResult.formatRun({ stdout: '', stderr: '', exitCode: 0 });
+  assert.equal(silent.out, 'ok', 'a command that printed nothing says so');
+
+  const timedOut = runResult.formatRun({ stdout: '', stderr: '', exitCode: null, timedOut: true });
+  assert.match(timedOut.out, /timed out/);
+  const truncated = runResult.formatRun({ stdout: 'x', exitCode: 0, stdoutTruncated: true });
+  assert.match(truncated.out, /truncated/);
 });
 
 test('provider and model fallbacks are persisted, not just shown', () => {
