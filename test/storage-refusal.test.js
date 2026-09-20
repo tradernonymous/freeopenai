@@ -7,7 +7,10 @@
 // of the shipped file, and are expected to carry on.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { loadFromIndex, HTML } = require('./helpers/index-html.js');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 function refusingStore() {
   const attempts = [];

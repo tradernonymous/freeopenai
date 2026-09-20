@@ -2,9 +2,10 @@
 // Knowledges hub. The DOM half runs in the browser smoke; what is checked here is
 // the logic that decides what is shown, and that the page is actually wired to it.
 const test = require('node:test');
-const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const assert = require('node:assert/strict');
 const hub = require('../hub.js');
 
 const ROOT = path.join(__dirname, '..');

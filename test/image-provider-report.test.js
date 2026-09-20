@@ -6,7 +6,6 @@ const path = require('node:path');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 test('image session tab gives users actionable provider diagnostics', () => {
   assert.match(css, /id="imageProviderReport"[^>]*aria-live="polite"/);

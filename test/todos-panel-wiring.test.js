@@ -27,7 +27,6 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 // The panel's open/close/tab machinery is extracted together, because the
 // interesting rules are the ones between them: that opening draws the section it

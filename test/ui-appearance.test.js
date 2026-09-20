@@ -8,7 +8,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the palette is the neutral ladder, not white on black', () => {
   const root = HTML.slice(HTML.indexOf(':root {'), HTML.indexOf('html[data-theme="light"] {'));
@@ -103,7 +109,7 @@ test('a picture can be saved from the message and from the lightbox', () => {
   // An <a download> can only hand back the bytes it was given, so the lightbox
   // anchor had to become a button over the re-encoder.
   assert.doesNotMatch(HTML, /<a id="lightboxDownload"/, 'the lightbox download went back to an anchor');
-  assert.match(CSS, /<button id="lightboxDownload"[\s\S]{0,80}onclick="toggleImageDownloadMenu\(event, lightboxImg\.src, lightboxImg\.alt\)"/);
+  assert.match(HTML, /<button id="lightboxDownload"[\s\S]{0,80}onclick="toggleImageDownloadMenu\(event, lightboxImg\.src, lightboxImg\.alt\)"/);
   const tools = sourceOf('appendImageTools');
   assert.match(tools, /toggleImageDownloadMenu\(event, src, promptText\)/, 'the image row needs a way to save without opening it first');
 });

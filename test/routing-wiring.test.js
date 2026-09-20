@@ -7,7 +7,10 @@
 // function that can be run is run.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers, HTML } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const { refusedModelIds } = require('../chatlib.js');
 
 const NAMES = ['forgetRoutedModel'];

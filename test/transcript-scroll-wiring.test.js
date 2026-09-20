@@ -219,7 +219,7 @@ test('a rotation keeps a reader who was at the bottom at the bottom', () => {
   // ...and the write waits for the layout it describes.
   assert.match(TRANSCRIPT_MODULE, /if \(resizeTimer\) cancel\(resizeTimer\);[\s\S]{0,400}resizeTimer = 0/);
   // And the page delegates to it rather than keeping a second copy.
-  assert.match(HTML, /transcriptController\.handleResize\(\)/);
+  assert.match(APP_JS, /transcriptController\.handleResize\(\)/);
 });
 
 test('the markup carries the id and the label the wiring looks for', () => {

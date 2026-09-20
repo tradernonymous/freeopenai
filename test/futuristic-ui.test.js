@@ -7,7 +7,6 @@ const { COMMAND_STATES, commandStateOf, commandStateLabel } = require('../comman
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 test('the chat has a restrained futuristic ambient layer', () => {
   assert.match(css, /body::before[\s\S]*?ambient-grid/);

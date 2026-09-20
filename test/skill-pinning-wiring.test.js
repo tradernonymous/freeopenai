@@ -12,7 +12,6 @@ const { sourceOf } = require('./helpers/index-html.js');
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 test('a command is resolved before anything is sent, and never sent to a model', () => {
   const send = HTML.slice(HTML.indexOf('async function sendMessage()'));

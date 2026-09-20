@@ -139,7 +139,7 @@ test('every control in the composer row is one height on a small screen', () => 
 });
 
 test('a finger-sized target is one number, not a scatter of 44px literals', () => {
-  assert.match(HTML, /--touch:\s*44px/, 'the touch token is gone -- re-point this test');
+  assert.match(CSS, /--touch:\s*44px/, 'the touch token is gone -- re-point this test');
   const sized = rules(SMALL).filter((r) => /min-height:\s*var\(--touch\)/.test(r.body));
   assert.ok(sized.length, 'the shared block must size its selects with var(--touch)');
   assert.match(SMALL, /\.settings-row select\s*\{[^}]*min-height:\s*var\(--touch\)/);
@@ -155,7 +155,7 @@ test('a screen with no hover reveals its own delete controls', () => {
 });
 
 test('the bar height is a token, so no block can set a different one by hand', () => {
-  assert.match(HTML, /--bar-h:\s*44px/);
+  assert.match(CSS, /--bar-h:\s*44px/);
   assert.match(CSS, /\.chat-bar\s*\{[^}]*height:\s*var\(--bar-h\)/);
   assert.match(SMALL, /:root\s*\{\s*--bar-h:\s*52px/);
   assert.match(LANDSCAPE, /:root\s*\{\s*--bar-h:\s*46px/);

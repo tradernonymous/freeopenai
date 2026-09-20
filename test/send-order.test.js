@@ -7,7 +7,10 @@
 // decision that consumes them, and the composer path must still be first.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 // The page defines sendMessage inside a <script> block; the shared extractor
 // finds it the same way every other wiring test does.

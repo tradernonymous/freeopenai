@@ -22,7 +22,6 @@ const { create: createCanvasArtifacts, REACT_MARKER } = require('../canvas-artif
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const CANVAS_HIDDEN_KEY = 'freeopenaiCanvasHidden';
 
 // ---- module harness -------------------------------------------------------

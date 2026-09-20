@@ -14,7 +14,10 @@ const {
   MODELS,
   DEFAULT_MODEL,
 } = require('../chatlib.js');
+const fs = require('node:fs');
+const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // Priced models, the way a server provider lists them.
 const PRICED = [
@@ -107,5 +110,5 @@ test('the planner asks for the routed model, and Puter honours it', () => {
   assert.match(sourceOf('routableModels'), /selectedProvider === PUTER_PROVIDER \? MODELS : providerModels/);
   assert.match(sourceOf('routeForPlanner'), /mode: routingMode/);
   assert.match(sourceOf('routeForPlanner'), /preferred: selectedProvider === PUTER_PROVIDER \? DEFAULT_MODEL : ''/);
-  assert.ok(HTML.includes('function routeForPlanner()'), 'expected the wiring to live in the page');
+  assert.ok(APP_JS.includes('function routeForPlanner()'), 'expected the wiring to live in the page');
 });

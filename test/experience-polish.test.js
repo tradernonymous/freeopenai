@@ -7,7 +7,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { HTML, sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 function makeClassList() {
   const set = new Set();
