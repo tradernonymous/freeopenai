@@ -25,6 +25,7 @@ const {
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 // The panel's open/close/tab machinery is extracted together, because the
 // interesting rules are the ones between them: that opening draws the section it
@@ -468,8 +469,8 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   }
   // The shell carries the class the toggle flips -- a toggle for a class nobody
   // sets is a button that does nothing.
-  assert.match(HTML, /class="chat-shell[^"]*"/);
-  assert.match(HTML, /\.chat-shell\.session-hidden \.session-panel/);
+  assert.match(CSS, /class="chat-shell[^"]*"/);
+  assert.match(CSS, /\.chat-shell\.session-hidden \.session-panel/);
   // The panel is still one thing, not two: the width-budget rule that used to
   // arbitrate between two pop-ups has nothing left to arbitrate.
   assert.doesNotMatch(HTML, /panelsFitTogether|PANELS_BESIDE_MEASURE_PX/);
@@ -499,9 +500,9 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   assert.doesNotMatch(panel, /flex-shrink/, 'a floating panel is not a layout column');
   // One scroll region: the section scrolls, and neither list keeps a scrollbar
   // of its own. Two nested scrollers inside 300px is a maze.
-  assert.match(HTML, /\.session-section \{ display: none; flex: 1; min-height: 0; overflow-y: auto;/);
-  assert.match(HTML, /\.session-section\.active \{ display: block; \}/);
-  assert.match(HTML, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
+  assert.match(CSS, /\.session-section \{ display: none; flex: 1; min-height: 0; overflow-y: auto;/);
+  assert.match(CSS, /\.session-section\.active \{ display: block; \}/);
+  assert.match(CSS, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
   // Hidden has to mean gone, not merely invisible: a transparent panel still
   // swallows the clicks meant for the transcript underneath it.
   const putAway = HTML.slice(HTML.indexOf('.chat-shell.session-hidden .session-panel {'), HTML.indexOf('.session-tabs {'));
@@ -533,7 +534,7 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // controls became one chip in the settings group.
   assert.match(HTML, /id="sessionToggle"/);
   assert.match(HTML, /id="sessionChip"/);
-  assert.match(HTML, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
+  assert.match(CSS, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
   // The actions group is down to attach alone, and it now leads the settings row
   // rather than holding a line of its own -- so the slice runs from the group to
   // the first control after it.
@@ -578,7 +579,7 @@ test('every control in the toolbar is built from the same four values', () => {
   assert.match(composer, /\.composer-attach \{[^}]*background: var\(--ctl-bg\)/);
   assert.match(composer, /\.composer-attach \{[^}]*border-color: var\(--border\)/);
   // A visible keyboard focus ring on all of them, which the pills never had.
-  assert.match(HTML, /\.effort-chip:focus-visible[\s\S]{0,200}box-shadow: var\(--glow\)/);
+  assert.match(CSS, /\.effort-chip:focus-visible[\s\S]{0,200}box-shadow: var\(--glow\)/);
 });
 
 test('the reasoning summary can be switched off, and the setting reaches old replies', () => {
@@ -609,7 +610,7 @@ test('the skills panel records what applied, per conversation', () => {
   assert.match(log, /pinned: !!skill\.pinned/);
   assert.match(log, /turns: prev\.turns \+ 1/);
   // Every path that changes which chat is open redraws it, from one place.
-  assert.match(HTML, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
+  assert.match(CSS, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
   // A skill that is no longer installed cannot be pinned, so tapping it drops
   // the row rather than offering something that cannot work.
   const tap = HTML.slice(HTML.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));

@@ -13,6 +13,8 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', '..', 'style.css'), 'utf8');
+const HUB_CSS = fs.readFileSync(path.join(__dirname, '..', '..', 'hub.css'), 'utf8');
 
 // The source of a named function, from `function` through its closing brace.
 function sourceOf(name) {
@@ -127,6 +129,8 @@ function assertSandboxCovers(names, deps) {
 
 module.exports = {
   HTML,
+  CSS,
+  HUB_CSS,
   sourceOf,
   declarationOf,
   loadFromIndex,

@@ -80,6 +80,7 @@ function bootSandbox() {
 }
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const chatlib = fs.readFileSync(path.join(__dirname, '..', 'chatlib.js'), 'utf8');
 // share-memory.js loads via its own <script src> too, and the page builds its
 // one instance in top-level scope. canvas-artifacts.js is the same pattern.

@@ -31,6 +31,7 @@ test('anything else is not an app link', () => {
 
 test('the page reads the link on load and on hashchange, as a value only', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
   assert.match(html, /applyAppLink\(\);\s*window\.addEventListener\('hashchange', applyAppLink\);/);
   const body = html.slice(html.indexOf('function applyAppLink()'), html.indexOf('function initializeApp()'));
   assert.match(body, /history\.replaceState/);

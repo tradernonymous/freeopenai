@@ -9,6 +9,7 @@ const hub = require('../hub.js');
 
 const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const js = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'hub.css'), 'utf8');
 

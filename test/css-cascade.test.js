@@ -21,6 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const PSEUDO_ELEMENT = '\u0001';
 
 function styleBlocks(html) {

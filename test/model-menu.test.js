@@ -13,6 +13,7 @@ const {
 } = require('../chatlib.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 // The composer sits at the foot of the window, which is the whole reason the
 // menu cannot open downward.
@@ -100,7 +101,7 @@ test('the model menu is fixed to the viewport, never absolute in the toolbar', (
 test('opening the menu computes its placement rather than relying on CSS alone', () => {
   // A menu that is never placed falls back to the stylesheet's guess, which is
   // how the first version ended up clipped with no way to reach the rest.
-  const open = HTML.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
+  const open = CSS.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
   assert.ok(open, 'index.html no longer defines openModelDropdown() -- re-point this test');
   assert.match(open[1], /positionModelDropdown\(\)/, 'openModelDropdown must position the menu it opens');
   // Both popups share the one resize listener, so a rotated phone re-places
