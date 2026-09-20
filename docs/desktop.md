@@ -15,6 +15,7 @@
 
 - **Chat** with real token streaming, markdown + code blocks (copy button), Stop and Retry, and per-chat provider/model pickers with the free-tier limit on the row. Chats are saved on the machine and resume where you left them; History can export or import them as a JSON file.
 - **Chat · Plan · Build** modes. Build mode starts a real remote build session: watch the steps live, read the diffs, **Approve / Reject** each change, answer the build's questions, cancel.
+- **Local**: open a folder on this machine and read it — a real file tree, a read-only viewer, and a terminal that runs commands *here* (with a cwd that follows `cd`) rather than on the engine. Nothing is uploaded and nothing is written without asking. The panels in the sidebar are the local ones; the engine's own workspace and terminal live under Settings → Advanced.
 - **Images** on the engine's free image models (Free FLUX first, Puter only when you switch it on), with a gallery and save-to-disk.
 - **Builds** screen for the full session list, plan composer and live event stream.
 - **Library**: every skill the engine serves, with its full SKILL.md, plus the chats stored locally.
@@ -22,8 +23,30 @@
 
 | Shortcut | Does |
 | :-- | :-- |
-| `Alt+1` … `Alt+6` | Chat, Images, Builds, Design, Library, Settings |
+| `Alt+1` … `Alt+7` | Chat, Images, Builds, Local, Design, Library, Settings |
+| `Alt+F` | Files |
+| `Ctrl+K` | The command palette |
 | `Enter` / `Shift+Enter` | Send / newline in the composer |
+
+## The local folder
+
+Everything else this app does is the engine's work: chat, images, builds, and the engine's own workspace. The **Local** screen and the **Folder** / **Terminal** panels are the app's own, and they are the first surfaces here that work with no engine at all.
+
+The shell owns the filesystem and the process, and it is confined to one folder. The rules are the engine's own `resolveInside()` + `protectedPath()`, ported rule for rule (`src-tauri/src/local.rs`):
+
+- a path is always relative to the open folder — an absolute path, a drive letter or a NUL byte is refused outright;
+- `..` may climb only while it stays inside the folder;
+- the nearest existing ancestor is canonicalised and re-checked, so a symlink or a Windows junction cannot carry a write outside;
+- `.git` internals and secrets files (`.env`) are readable but **never** written;
+- a command that is destructive by nature (the list is the shell's: `git push`, `rm -rf`, `git reset --hard`, `Remove-Item -Recurse -Force`, `shutdown`, …) is refused unless the caller says a human approved it — and in the terminal that refusal is a prompt with **Run it anyway** / **Cancel**, in the rule's own words.
+
+The frontend carries the same rules in `src/local-fs.js` so a path can be refused with a readable message before crossing into Rust, and `test/desktop-local.test.js` reads the Rust constants and asserts the two lists are identical — the same guard `test/desktop-net.test.js` puts on the host allowlist.
+
+Two things the terminal does that a submit button does not: **`cd` is decided in the frontend** (a child process could never hand the change back), which is what makes `cd desktop && npm test` one line, and **output streams** — the shell emits a `local-run` event per line and the settled result replaces it, so the final block still carries the exit code, duration and truncation. Streaming is a nicety, not the mechanism: if no event ever arrives the result is still rendered.
+
+Read-only is on purpose. `local_write_file` and `local_edit_file` exist in the shell for the coding agent (P7) to use behind its approval; the viewer is not that agent.
+
+Verified through the real surface: `pwd` reflects `cd`, `git status` runs in the picked folder, a destructive command stops at the prompt, and `..\..\Windows\System32` is refused with the reason.
 
 ## First run (and every time the engine is unreachable)
 
@@ -106,7 +129,13 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/update.js` | Release policy: version parsing/comparison, the payload, retry with backoff |
 | `src/useUpdateCheck.ts` | The React binding for it: polling, the dismissed version, the installer |
 | `src/theme.ts` | The theme value, its key, and applying it |
-| `src/run-result.js` | An engine run response turned into the terminal's display block |
+| `src/run-result.js` | A run response (engine or local) turned into the terminal's display block |
+| `src/local-fs.js` | The local folder's rules: the frontend's copy of the shell's confinement and approval lists, `cd`/`pwd`, and what a file row is |
+| `src/components/LocalTerminal.tsx` | The local dock: a live cwd, streamed output, the inline approval for a destructive command |
+| `src/components/LocalTree.tsx` | The open folder, one level at a time, labelled by what each file is |
+| `src/screens/LocalScreen.tsx` | The LOCAL screen: the empty state that invites picking a folder, the tree, the read-only viewer |
+| `src/useLocalRun.ts` | The React binding for `local-run` events |
+| `src-tauri/src/local.rs` | The real filesystem and command runner, confined to the open folder, with the engine's wording |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
 | `src/main.tsx` | The boot guard: a start failure paints its own message into `#root` instead of leaving an empty window (and only while `#root` is empty, so a running app is never replaced) |
 | `src/bridge.ts` | The one place that talks to the Rust shell (`hasShell`, `remoteGet`, `downloadVerified`, `runInstaller`, `diagnosticsFacts`) |
@@ -130,7 +159,7 @@ The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read of
 
 ## How it is built
 
-[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.
+[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), plus the local-confinement suite (`test/desktop-local.test.js`), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.
 
 ## Upgrade roadmap
 

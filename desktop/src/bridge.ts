@@ -74,6 +74,135 @@ export async function diagnosticsFacts(): Promise<DiagnosticsFacts> {
   return call<DiagnosticsFacts>('diagnostics');
 }
 
+// ---- the local folder ----------------------------------------------------
+//
+// Real paths on this machine, confined to one folder by the shell (src-tauri/
+// src/local.rs). The frontend's copy of those rules is src/local-fs.js, and the
+// two lists are asserted identical in test/desktop-local.test.js.
+
+export interface LocalEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+  ext: string;
+}
+
+export interface LocalListing {
+  path: string;
+  absolute: string;
+  entries: LocalEntry[];
+  capped: boolean;
+}
+
+export interface LocalFile {
+  path: string;
+  absolute: string;
+  bytes: number;
+  binary: boolean;
+  truncated: boolean;
+  text: string;
+}
+
+export interface LocalRunResult {
+  runId: string;
+  command: string;
+  cwd: string;
+  absoluteCwd: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+}
+
+export interface LocalRunChunk {
+  runId: string;
+  stream: 'stdout' | 'stderr';
+  text?: string;
+  done?: boolean;
+}
+
+/** The native folder picker; null when it is cancelled. */
+export async function pickFolder(): Promise<string | null> {
+  return (await call<string | null>('local_pick_folder')) ?? null;
+}
+
+export async function listLocalDir(root: string, path = ''): Promise<LocalListing> {
+  return call<LocalListing>('local_list_dir', { root, path });
+}
+
+export async function readLocalFile(root: string, path: string): Promise<LocalFile> {
+  return call<LocalFile>('local_read_file', { root, path });
+}
+
+export async function writeLocalFile(root: string, path: string, content: string): Promise<{ path: string; bytes: number }> {
+  return call('local_write_file', { root, path, content });
+}
+
+export async function editLocalFile(args: {
+  root: string;
+  path: string;
+  oldText: string;
+  newText: string;
+  replaceAll?: boolean;
+}): Promise<{ path: string; replaced: number; bytes: number }> {
+  return call('local_edit_file', {
+    root: args.root,
+    path: args.path,
+    oldText: args.oldText,
+    newText: args.newText,
+    replaceAll: args.replaceAll ?? false,
+  });
+}
+
+export async function runLocal(args: {
+  root: string;
+  runId: string;
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+  approveRisky?: boolean;
+}): Promise<LocalRunResult> {
+  return call<LocalRunResult>('local_run', {
+    root: args.root,
+    runId: args.runId,
+    command: args.command,
+    cwd: args.cwd ?? '',
+    timeoutMs: args.timeoutMs,
+    approveRisky: args.approveRisky ?? false,
+  });
+}
+
+/**
+ * Live output from a running local command.
+ *
+ * This goes through Tauri's own event plugin (`plugin:event|listen`), which is
+ * the same call @tauri-apps/api makes -- the app deliberately carries no
+ * frontend dependency on it. Nothing depends on it for CORRECTNESS: runLocal
+ * returns the settled output either way, so if this subscription is ever
+ * refused the terminal shows the whole result when the command finishes
+ * instead of nothing at all.
+ */
+export async function onLocalRun(handler: (chunk: LocalRunChunk) => void): Promise<() => void> {
+  const w = window as any;
+  const internals = w.__TAURI_INTERNALS__;
+  if (!internals || typeof internals.invoke !== 'function' || typeof internals.transformCallback !== 'function') {
+    return () => {};
+  }
+  const id = internals.transformCallback((payload: LocalRunChunk) => handler(payload), false);
+  try {
+    await call('plugin:event|listen', { event: 'local-run', target: { kind: 'Any' }, handler: id });
+  } catch {
+    return () => {};
+  }
+  return () => {
+    call('plugin:event|unlisten', { event: 'local-run', eventId: id }).catch(() => {});
+  };
+}
+
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
   if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();

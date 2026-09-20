@@ -48,6 +48,7 @@ jobs:
           test/desktop-shell.test.js
           test/desktop-commands.test.js
           test/desktop-toasts.test.js
+          test/desktop-local.test.js
       - name: Build Tauri app
         working-directory: desktop
         run: npm run tauri:build

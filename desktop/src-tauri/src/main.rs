@@ -4,7 +4,8 @@
 // plugins and commands exist. Each concern with rules of its own lives next to
 // it -- crash.rs (where a failure is recorded), webview2.rs (the runtime the
 // window needs), save.rs (the native save dialog), net.rs (the network edge a
-// webview cannot be), diag.rs (the facts behind Copy diagnostics).
+// webview cannot be), local.rs (the real filesystem and command runner, with the
+// engine's confinement rules), diag.rs (the facts behind Copy diagnostics).
 //
 // Release builds carry windows_subsystem="windows": a GUI app must never
 // open a console window (the "black terminal flash" on launch).
@@ -19,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod crash;
 mod diag;
+mod local;
 mod net;
 mod save;
 mod webview2;
@@ -60,7 +62,13 @@ fn main() {
             net::remote_get,
             net::remote_download,
             net::run_installer,
-            diag::diagnostics
+            diag::diagnostics,
+            local::local_pick_folder,
+            local::local_list_dir,
+            local::local_read_file,
+            local::local_write_file,
+            local::local_edit_file,
+            local::local_run
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())

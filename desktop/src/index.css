@@ -2089,3 +2089,310 @@ button.linkish {
   color: var(--text-1);
   font-weight: 500;
 }
+
+/* ---- Local: the folder on this machine ---------------------------------- */
+
+/* A dock that stays mounted while it is hidden, so a terminal keeps its
+   scrollback when the user looks at another screen. */
+.dock-slot {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.dock-hidden {
+  display: none;
+}
+
+.local-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.local-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding-left: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.local-cwd {
+  color: var(--text-3);
+}
+
+.local-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* The tree sits on the LEFT of this screen, so the divider is on its right
+   rather than its left (the engine's dock is on the other side). */
+.local-tree {
+  width: 280px;
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+
+.local-tree .file-tree-header {
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.tree-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: none;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-row:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+.tree-row.active {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+
+/* Dotfiles are shown, never shouted: they are the user's files. */
+.tree-row.dim .tree-name {
+  color: var(--text-3);
+}
+
+.tree-size {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
+
+.tree-hint {
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.tree-error {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* What a row IS, in colour: a code file should not look like a picture. */
+.kind-folder { color: var(--accent); }
+.kind-code { color: var(--ok); }
+.kind-image { color: var(--warn); }
+.kind-data { color: var(--text-2); }
+
+.local-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.viewer-path {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-meta,
+.viewer-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.viewer-meta {
+  margin-left: auto;
+}
+
+.viewer-text {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+  white-space: pre;
+}
+
+.local-note {
+  font-size: 12px;
+  max-width: 340px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ---- the local terminal dock -------------------------------------------- */
+
+.dock-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.local-terminal .terminal-header {
+  gap: 8px;
+}
+
+.local-terminal .terminal-cwd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-action,
+.dock-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 3px 5px;
+}
+
+.dock-action:hover,
+.dock-send:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+.dock-send:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.dock-running {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.dock-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* A note from the terminal itself (where cd landed, what was cancelled) is
+   not command output and should not read like it. */
+.terminal-output.terminal-note {
+  color: var(--text-3);
+}
+
+.local-mark {
+  background: var(--bg-3);
+  color: var(--text-3);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-right: 2px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+}
+
+/* The inline approval for a destructive command: the same card language as a
+   build approval, at dock scale. */
+.approval-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+
+.approval-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* ---- the engine's own shell, demoted to Settings ------------------------ */
+
+.engine-shell summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.engine-shell-body {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.engine-shell-body > * {
+  flex: 1;
+  height: 380px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}

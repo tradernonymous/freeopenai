@@ -10,9 +10,11 @@ import LibraryScreen from './screens/LibraryScreen';
 import FilesScreen from './screens/FilesScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
-import FileTree from './components/FileTree';
-import Terminal from './components/Terminal';
+import LocalScreen from './screens/LocalScreen';
+import LocalTree from './components/LocalTree';
+import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
+import { hasShell, pickFolder } from './bridge';
 import CommandPalette, { type PaletteEntry } from './components/CommandPalette';
 import StatusBar from './components/StatusBar';
 import Icon from './components/Icon';
@@ -34,7 +36,20 @@ const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4
 
 type View = NavId;
 type RightPanel = 'builds' | 'knowledge' | 'none';
-type PanelKey = 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge';
+type PanelKey = 'folder' | 'terminal' | 'sessions' | 'builds' | 'knowledge';
+
+// The folder the local surfaces work in. One owner (this state), one key: the
+// terminal dock and the Local screen both read it from here rather than each
+// keeping their own idea of "the" folder.
+const LOCAL_ROOT_KEY = 'freeai4u.localRoot';
+
+function readLocalRoot(): string {
+  try {
+    return localStorage.getItem(LOCAL_ROOT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 export default function App() {
   const [view, setView] = useState<View>('chat');
@@ -51,10 +66,12 @@ export default function App() {
     install: installUpdate,
     checkNow,
   } = useUpdateCheck();
-  const [showFiles, setShowFiles] = useState(false);
+  const [showFolder, setShowFolder] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanel>('none');
+  const [localRoot, setLocalRoot] = useState<string>(readLocalRoot);
+  const [localCwd, setLocalCwd] = useState('');
   // What the engine said, and how the shell should react to it. The decision
   // itself is onboarding.shellState (pure, tested); these are its inputs.
   const [health, setHealth] = useState<any>(null);
@@ -116,7 +133,7 @@ export default function App() {
   const toggleRightPanel = (panel: RightPanel) => setRightPanel((prev) => (prev === panel ? 'none' : panel));
 
   const panels: Record<PanelKey, boolean> = {
-    files: showFiles,
+    folder: showFolder,
     terminal: showTerminal,
     sessions: showSessions,
     builds: rightPanel === 'builds',
@@ -124,11 +141,36 @@ export default function App() {
   };
 
   const togglePanel = (key: PanelKey) => {
-    if (key === 'files') setShowFiles((v) => !v);
+    if (key === 'folder') setShowFolder((v) => !v);
     else if (key === 'terminal') setShowTerminal((v) => !v);
     else if (key === 'sessions') setShowSessions((v) => !v);
     else toggleRightPanel(key);
   };
+
+  // Choosing a folder is a native dialog through the shell; a browser build has
+  // no picker, so it says so instead of failing quietly.
+  const openFolder = useCallback(() => {
+    if (!hasShell()) {
+      pushToast('warn', 'Choosing a folder needs the installed desktop app.');
+      return;
+    }
+    pickFolder()
+      .then((chosen) => {
+        if (!chosen) return;
+        try {
+          localStorage.setItem(LOCAL_ROOT_KEY, chosen);
+        } catch { /* the session still has it */ }
+        setLocalRoot(chosen);
+        setShowFolder(true);
+        pushToast('ok', `Working in ${chosen}`);
+      })
+      .catch((e: unknown) => pushToast('warn', (e as Error).message || String(e)));
+  }, []);
+
+  const showLocalTerminal = useCallback(() => {
+    setView('local');
+    setShowTerminal(true);
+  }, []);
 
   // The palette's rows are read when it opens, so they are current: chats are
   // read from the one store, skills from what the engine served.
@@ -155,10 +197,13 @@ export default function App() {
       case 'toggle-theme':
         toggle();
         break;
-      case 'toggle-files':
+      case 'open-folder':
+        openFolder();
+        break;
+      case 'toggle-folder-panel':
       case 'toggle-terminal':
       case 'toggle-history':
-        togglePanel(entry.id.replace('toggle-', '') === 'history' ? 'sessions' : entry.id.replace('toggle-', '') as PanelKey);
+        togglePanel(entry.id === 'toggle-history' ? 'sessions' : entry.id === 'toggle-terminal' ? 'terminal' : 'folder');
         break;
       case 'check-updates':
         checkNow().then((result: 'update' | 'current' | 'unknown') => {
@@ -172,9 +217,9 @@ export default function App() {
     }
   };
 
-  // Alt+1..6 walks the sidebar in its displayed order; Ctrl+K is the palette.
+  // Alt+1..7 walks the sidebar in its displayed order; Ctrl+K is the palette.
   useEffect(() => {
-    const order: View[] = ['chat', 'images', 'build', 'design', 'library', 'files', 'settings'];
+    const order: View[] = ['chat', 'images', 'build', 'local', 'design', 'library', 'files', 'settings'];
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if ((e.ctrlKey || e.metaKey) && key === 'k') {
@@ -309,6 +354,15 @@ export default function App() {
                   {view === 'images' && <ImagesScreen />}
                   {view === 'build' && <BuildScreen />}
                   {view === 'library' && <LibraryScreen />}
+                  {view === 'local' && (
+                    <LocalScreen
+                      root={localRoot}
+                      cwd={localCwd}
+                      terminalOpen={showTerminal}
+                      onOpenFolder={openFolder}
+                      onShowTerminal={showLocalTerminal}
+                    />
+                  )}
                   {view === 'files' && <FilesScreen />}
                   {view === 'settings' && (
                     <SettingsScreen
@@ -344,8 +398,20 @@ export default function App() {
             )}
           </div>
         </main>
-        {showFiles && <FileTree />}
-        {showTerminal && <Terminal />}
+        {/* The docks are mounted whether or not they are shown: a terminal that
+            forgets its scrollback the moment you look at Chat is not a dock.
+            The folder tree is cheap to re-read, so it is not kept. */}
+        {showFolder && localRoot && (
+          <LocalTree root={localRoot} onOpenFile={() => setView('local')} onOpenFolder={openFolder} />
+        )}
+        <div className={showTerminal ? 'dock-slot' : 'dock-slot dock-hidden'}>
+          <LocalTerminal
+            root={localRoot}
+            cwd={localCwd}
+            onCwdChange={setLocalCwd}
+            onOpenFolder={openFolder}
+          />
+        </div>
         {showSessions && (
           <SessionManager
             onExport={exportChats}

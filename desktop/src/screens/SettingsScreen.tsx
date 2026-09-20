@@ -3,6 +3,8 @@ import { api } from '../api';
 import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
 import DiagnosticsCard from '../components/DiagnosticsCard';
+import FileTree from '../components/FileTree';
+import Terminal from '../components/Terminal';
 
 // Settings: everything the engine can tell us about itself.
 //
@@ -111,6 +113,28 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
                   <button onClick={() => forget(f.id)}>Forget</button>
                 </div>
               ))}
+            </div>
+          </section>
+
+          {/* The engine's own shell, kept but demoted. It only works when the
+              server sets WORKSPACE_RUN=1 and the account is signed in, which is
+              why it is not a sidebar row any more: the local folder and the
+              local terminal answer for the app's own machine. */}
+          <section className="settings-section">
+            <h2>Advanced</h2>
+            <div className="settings-card">
+              <details className="engine-shell">
+                <summary>Engine shell (needs WORKSPACE_RUN=1 on the server)</summary>
+                <p className="settings-hint">
+                  Commands and files on the FreeAI4U server, in the engine's own workspace — not on
+                  this machine. The <strong>Folder</strong> and <strong>Terminal</strong> panels in
+                  the sidebar are the local ones.
+                </p>
+                <div className="engine-shell-body">
+                  <FileTree />
+                  <Terminal />
+                </div>
+              </details>
             </div>
           </section>
 

@@ -6,6 +6,12 @@
 // The four-second hint that used to appear down here is gone: feedback belongs
 // in the toast queue (src/toasts.js), where it can be read, dismissed and
 // announced.
+//
+// The panels used to advertise the ENGINE's workspace and terminal, two things
+// that mostly refuse to work (they need WORKSPACE_RUN=1 and a login on the
+// server). Folder and Terminal are now the local ones -- real files on this
+// machine, which is what a desktop app should answer for -- and the engine's
+// two live under Settings → Advanced, labelled for what they are.
 import Icon, { type IconName } from './components/Icon';
 import { APP_VERSION } from './version';
 
@@ -13,28 +19,39 @@ const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string 
   { id: 'chat', label: 'Chat', icon: 'chat', keys: 'Alt+1' },
   { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+2' },
   { id: 'build', label: 'Builds', icon: 'build', keys: 'Alt+3' },
-  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+4' },
-  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+5' },
+  { id: 'local', label: 'Local', icon: 'terminal', keys: 'Alt+4' },
+  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+5' },
+  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+6' },
   { id: 'files', label: 'Files', icon: 'folder', keys: 'Alt+F' },
-  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+6' },
+  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+7' },
 ];
 
-const PANEL_ITEMS: Array<{ key: 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge'; label: string; icon: IconName; title: string }> = [
-  { key: 'files', label: 'Workspace', icon: 'folder', title: 'Files on the engine' },
-  { key: 'terminal', label: 'Terminal', icon: 'terminal', title: 'Commands on the engine (needs WORKSPACE_RUN=1)' },
+const PANEL_ITEMS: Array<{ key: 'folder' | 'terminal' | 'sessions' | 'builds' | 'knowledge'; label: string; icon: IconName; title: string }> = [
+  { key: 'folder', label: 'Folder', icon: 'folder', title: 'Files in the folder you opened' },
+  { key: 'terminal', label: 'Terminal', icon: 'terminal', title: 'Commands on this machine' },
   { key: 'sessions', label: 'History', icon: 'history', title: 'Saved chats' },
   { key: 'builds', label: 'Approvals', icon: 'check', title: 'Pending build approvals' },
   { key: 'knowledge', label: 'Skills', icon: 'skills', title: 'Skills and memory' },
 ];
 
-export type NavId = 'chat' | 'images' | 'build' | 'design' | 'library' | 'files' | 'settings';
+export type NavId = 'chat' | 'images' | 'build' | 'local' | 'design' | 'library' | 'files' | 'settings';
+
+export interface PanelKeyMap {
+  folder: boolean;
+  terminal: boolean;
+  sessions: boolean;
+  builds: boolean;
+  knowledge: boolean;
+}
+
+export type PanelId = keyof PanelKeyMap;
 
 interface SidebarProps {
   active: NavId;
   onNavigate: (id: NavId) => void;
   onOpenPalette: () => void;
-  onTogglePanel: (key: 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge') => void;
-  panels: Record<string, boolean>;
+  onTogglePanel: (key: PanelId) => void;
+  panels: Partial<PanelKeyMap>;
 }
 
 export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels }: SidebarProps) {
