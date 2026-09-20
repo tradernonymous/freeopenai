@@ -1,5 +1,210 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* ---- premium shell: icons, focus, motion ------------------------------- */
+
+.icon { display: block; flex-shrink: 0; }
+
+/* Keyboard users get the affordance mouse users get from hover. */
+:where(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar-btn,
+  .sidebar-search,
+  .palette-row,
+  .status-button,
+  .toast {
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+}
+
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 10px;
+  padding: 7px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.sidebar-search:hover { color: var(--text-1); border-color: var(--accent-mid); }
+.sidebar-search > span { flex: 1; }
+.sidebar-search kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.sidebar-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: 8px 14px 4px;
+}
+.sidebar-btn .icon { opacity: 0.8; }
+.sidebar-btn.active .icon { opacity: 1; }
+.sidebar-keys {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* The command palette (Ctrl+K). */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 50;
+}
+.palette {
+  width: min(620px, 92vw);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+.palette-input input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 14px;
+}
+.palette-hint,
+.palette-keys,
+.status-button .palette-keys {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.palette-list { max-height: 52vh; overflow: auto; padding: 6px; }
+.palette-group {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: 8px 8px 4px;
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-1);
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+.palette-row.active { background: var(--accent-dim); }
+.palette-title { font-size: 13px; }
+.palette-sub { flex: 1; font-size: 11px; color: var(--text-3); }
+.palette-empty { padding: 16px; font-size: 13px; color: var(--text-3); }
+
+/* Toasts: messages that arrive, can be dismissed, and age out. */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 42px;
+  width: min(360px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 60;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+.toast-ok { border-left-color: var(--ok); }
+.toast-warn { border-left-color: var(--warn); }
+.toast-error { border-left-color: var(--err); }
+.toast-text { flex: 1; }
+.toast-close {
+  display: flex;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.toast-close:hover { color: var(--text-1); }
+
+/* The status bar: engine, sign-in, update, version. */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  padding: 0 12px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.status-item { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.status-spacer { flex: 1; }
+.status-muted { color: var(--text-3); }
+.status-button {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.status-button:hover { color: var(--text-1); background: var(--bg-2); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.status-ok .status-dot { background: var(--ok); }
+.status-warn .status-dot { background: var(--warn); }
+.status-error .status-dot { background: var(--err); }
+.status-warn { color: var(--warn); }
+
 /* The boot guard (src/main.tsx): shown instead of an empty window when the app
    cannot start, so a boot failure names itself. */
 .boot-failure {
@@ -75,7 +280,9 @@
   --border: #2a3d26;
   --text-1: #e8f0e3;
   --text-2: #a8b8a0;
-  --text-3: #6a7a64;
+  /* Was #6a7a64: 3.88:1 -- fine for large text, short of AA for the 11-13px
+     hints and status text it is actually used for. */
+  --text-3: #83917c;
   --accent: #4ade80;
   --accent-dim: rgba(74, 222, 128, 0.12);
   --accent-mid: rgba(74, 222, 128, 0.35);
@@ -94,13 +301,16 @@
   --border: #b8c8b0;
   --text-1: #1a2614;
   --text-2: #3d4d36;
-  --text-3: #6a7a64;
+  /* Darkened from #6a7a64 with the status colours below: on these light
+     surfaces they measured 3.6-4.3:1, i.e. short of AA at the sizes they are
+     used at. */
+  --text-3: #586653;
   --accent: #166534;
   --accent-dim: rgba(22, 101, 52, 0.08);
   --accent-mid: rgba(22, 101, 52, 0.25);
-  --ok: #15803d;
-  --warn: #a16207;
-  --err: #dc2626;
+  --ok: #14703a;
+  --warn: #8a5406;
+  --err: #b91c1c;
 }
 
 html, body, #root {

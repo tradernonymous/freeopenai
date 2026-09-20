@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, imageUrlFrom } from '../api';
+import Icon from '../components/Icon';
 
 interface Row {
   id: string;
@@ -148,7 +149,7 @@ export default function ImagesScreen() {
         <div className="images-gallery">
           {gallery.length === 0 && !busy && (
             <div className="empty-state">
-              <div className="empty-icon">🖼</div>
+              <div className="empty-icon"><Icon name="image" size={28} /></div>
               <h2>No images yet</h2>
               <p>Describe something above — the first image is one prompt away.</p>
             </div>

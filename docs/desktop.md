@@ -76,6 +76,17 @@ Every "we cannot reach it" failure in this app had one shape: work a webview is 
 
 `src/net-policy.js` is the frontend's copy of the same rules, so a URL can be refused with a readable sentence *before* it crosses the boundary. `test/desktop-net.test.js` asserts the two host lists are identical, so they cannot drift.
 
+## The shell
+
+Four things make the window read as a product rather than a panel of buttons:
+
+- **One icon set** (`src/components/Icon.tsx`), drawn here rather than imported: 24x24, 1.6px stroke, `currentColor`, so an icon is the same weight as its label and the same colour as the state it sits in. The sidebar's icons used to be emoji (💬 🖼 🛠 …), which render differently on every Windows build and cannot be aligned, sized or coloured.
+- **`Ctrl+K`** opens a command palette over every screen, action, panel, saved chat and skill (`src/commands.js` holds the registry and the matching rules; `Ctrl+K`, arrows, `Enter`, `Esc`). Before it, the whole keyboard story was `Alt+1..6`.
+- **Toasts** (`src/toasts.js`) replace a `setTimeout` hint in the sidebar: queued, dismissible, announced with `aria-live`, repeats refresh instead of stacking, and a failure can be sticky until it is dealt with.
+- **A status bar**: which engine this build is pointed at, whether it answered — and what it *wants* (an engine that reports healthy while refusing every call says *sign-in required*, not *connected*) — plus an available update and the version.
+
+The app is held to its own design bar, by test: every frontend file passes the anti-slop linter this repo ships for generated artifacts (`test/desktop-shell.test.js`), and every text token pair clears WCAG AA in both themes. That gate found real defects when it was written — `--text-3` measured 3.88:1 where the 11-13px hints that use it need 4.5:1, and the light theme's status colours measured 4.1-4.3:1; all were corrected rather than exempted. The same pass made the linter itself more honest: a prompt that says *no lorem ipsum* is an instruction, not shipped placeholder copy, and is no longer reported as one.
+
 ## Diagnostics
 
 Settings has a **Copy diagnostics** button. It copies a short report — build version, engine address, what the last engine answer meant, OS/arch, WebView2 version, where the data and cache directories are, and the tail of the crash log — built by `src/diagnostics.js` from facts the shell gathers (`src-tauri/src/diag.rs`). It is safe to paste: query strings are dropped from addresses and anything shaped like `hf_…`, `sk-…` or `Bearer …` is redacted. A failure should not need a screenshot.
@@ -99,6 +110,10 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
 | `src/main.tsx` | The boot guard: a start failure paints its own message into `#root` instead of leaving an empty window (and only while `#root` is empty, so a running app is never replaced) |
 | `src/bridge.ts` | The one place that talks to the Rust shell (`hasShell`, `remoteGet`, `downloadVerified`, `runInstaller`, `diagnosticsFacts`) |
+| `src/components/Icon.tsx` | The icon set: one grid, one stroke weight, `currentColor` |
+| `src/commands.js` + `components/CommandPalette.tsx` | The palette's registry and match rules, and its list/cursor/keys |
+| `src/toasts.js` + `components/Toasts.tsx` | What stacks, what replaces what, what expires — and the surface that shows it |
+| `src/components/StatusBar.tsx` | Engine, sign-in, update, version |
 | `src/net-policy.js` | The frontend's copy of the shell's network allowlist, and the sentence explaining a refusal |
 | `src/diagnostics.js` | The `Copy diagnostics` text, and the redaction that makes it safe to paste |
 | `src-tauri/src/net.rs` | The network edge: the allowlist, hand-followed redirects, verified downloads, running a downloaded installer |

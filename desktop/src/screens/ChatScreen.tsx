@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, type StreamFrame } from '../api';
 import { renderMarkdown } from '../markdown';
+import Icon from '../components/Icon';
 // UMD module: loaded for its side effect, read off globalThis.
 import '../chats.js';
 
@@ -53,6 +54,10 @@ export function newSession(provider = '', model = ''): ChatSession {
 
 /** Chat listens for this event so History can open a session from anywhere. */
 export const OPEN_CHAT_EVENT = 'freeai4u:open-chat';
+// The command palette's "New chat" arrives the same way History's "open a
+// session" does -- as an event -- so the shell never has to know how a chat is
+// created.
+export const NEW_CHAT_EVENT = 'freeai4u:new-chat';
 
 interface ProviderRow {
   id: string;
@@ -164,6 +169,8 @@ export default function ChatScreen() {
     return () => window.removeEventListener(OPEN_CHAT_EVENT, onOpen);
   }, []);
 
+  const startNewRef = useRef<() => void>(() => {});
+
   const scrollToBottom = useCallback((smooth = true) => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   }, []);
@@ -194,6 +201,15 @@ export default function ChatScreen() {
     setActiveId(s.id);
     inputRef.current?.focus();
   };
+
+  // The listener is registered once, so it reads the current startNew through a
+  // ref rather than re-subscribing on every render.
+  startNewRef.current = startNew;
+  useEffect(() => {
+    const onNew = () => startNewRef.current();
+    window.addEventListener(NEW_CHAT_EVENT, onNew);
+    return () => window.removeEventListener(NEW_CHAT_EVENT, onNew);
+  }, []);
 
   const send = async () => {
     if (!active || sending) return;
@@ -373,7 +389,7 @@ export default function ChatScreen() {
     return (
       <div className="screen chat">
         <div className="empty-state">
-          <div className="empty-icon">💬</div>
+          <div className="empty-icon"><Icon name="chat" size={28} /></div>
           <h2>No chats yet</h2>
           <p>Starting one now…</p>
           <button className="primary" onClick={startNew}>New chat</button>
@@ -393,7 +409,7 @@ export default function ChatScreen() {
           {(['chat', 'plan', 'build'] as const).map((m) => (
             <button key={m} className={`mode-tab ${active.mode === m ? 'active' : ''}`}
               onClick={() => patchSession(active.id, { mode: m })}>
-              {m === 'chat' ? '💬 Chat' : m === 'plan' ? '🧭 Plan' : '🛠 Build'}
+              {m === 'chat' ? 'Chat' : m === 'plan' ? 'Plan' : 'Build'}
             </button>
           ))}
         </div>
@@ -415,14 +431,14 @@ export default function ChatScreen() {
             ))}
             {models.length === 0 && <option value="">—</option>}
           </select>
-          <button onClick={startNew} title="New chat">＋</button>
+          <button onClick={startNew} title="New chat" aria-label="New chat"><Icon name="plus" size={15} /></button>
         </div>
       </header>
 
       <div className="chat-messages" ref={listRef} onScroll={onScroll} onClick={onMessagesClick}>
         {active.messages.length === 0 && (
           <div className="empty-state">
-            <div className="empty-icon">💬</div>
+            <div className="empty-icon"><Icon name="chat" size={28} /></div>
             <h2>Start a conversation</h2>
             <p>Free models first, limits on the row. Plan drafts a plan; Build starts a real build session with approvals.</p>
           </div>
@@ -457,13 +473,17 @@ export default function ChatScreen() {
       <div className="composer">
         {attached && (
           <div className="attach-chip">
-            <span className="attach-label">📎 Attached text · {attached.length.toLocaleString()} chars</span>
-            <button onClick={() => setAttached('')} title="Remove attachment">✕</button>
+            <span className="attach-label">
+              <Icon name="paperclip" size={13} /> Attached text · {attached.length.toLocaleString()} chars
+            </span>
+            <button onClick={() => setAttached('')} title="Remove attachment" aria-label="Remove attachment">
+              <Icon name="close" size={13} />
+            </button>
           </div>
         )}
         <div className="composer-row">
           {sending
-            ? <button className="stop-btn" onClick={stop} title="Stop the reply">■ Stop</button>
+            ? <button className="stop-btn" onClick={stop} title="Stop the reply"><Icon name="stop" size={12} /> Stop</button>
             : null}
           <textarea
             ref={inputRef}
@@ -474,7 +494,7 @@ export default function ChatScreen() {
             rows={1}
           />
           <button onClick={send} disabled={sending || !active.draft.trim()} className="send-btn">
-            {sending ? '…' : '↑'}
+            {sending ? '…' : <Icon name="arrow-up" size={16} />}
           </button>
         </div>
       </div>

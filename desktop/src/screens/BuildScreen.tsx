@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api';
 import { escapeHtml } from '../markdown';
+import Icon from '../components/Icon';
 
 interface Step {
   id: string | number;
@@ -201,7 +202,7 @@ export default function BuildScreen() {
     return (
       <div className="screen build">
         <div className="empty-state">
-          <div className="empty-icon">🛠</div>
+          <div className="empty-icon"><Icon name="build" size={28} /></div>
           <h2>Builds are not enabled on this server</h2>
           <p>{gateReason || 'Set WORKSPACE_RUN=1 (and a login) on the FreeAI4U server to run builds.'}</p>
         </div>
@@ -307,7 +308,7 @@ export default function BuildScreen() {
             </div>
           ) : (
             <div className="empty-state">
-              <div className="empty-icon">🛠</div>
+              <div className="empty-icon"><Icon name="build" size={28} /></div>
               <h2>No build selected</h2>
               <p>Write a plan on the left and start one. Approvals appear here the moment the build needs you.</p>
             </div>

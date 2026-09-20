@@ -130,6 +130,35 @@ test('emoji inside code samples is not an icon violation', () => {
   assert.deepEqual(slop.lint(doc), []);
 });
 
+// The same principle one rule over: a prompt that FORBIDS placeholder copy is
+// not placeholder copy. Flagging it made the linter unusable on the design
+// screen's own system prompt, which is why the rule now reads what precedes it.
+test('an instruction to avoid placeholder copy is not placeholder copy', () => {
+  for (const instruction of [
+    'Write a self-contained page (no external assets, no lorem ipsum).',
+    'A real document, never lorem ipsum, with one sentence per block.',
+    'Use real copy, not "your text here".',
+    'Avoid placeholder text in the output.',
+  ]) {
+    assert.deepEqual(slop.lint(instruction).filter((f) => f.id === 'generic-copy'), [], instruction);
+  }
+});
+
+test('placeholder copy actually shipped is still flagged', () => {
+  for (const shipped of [
+    '<p>Lorem ipsum dolor sit amet.</p>',
+    '<h1>Your content here</h1>',
+    '<div>placeholder text</div>',
+    // "and" is not a negation, so this one stands.
+    '<p>No border, and lorem ipsum body copy.</p>',
+  ]) {
+    assert.ok(
+      slop.lint(shipped).some((f) => f.id === 'generic-copy'),
+      shipped,
+    );
+  }
+});
+
 test('every rule carries the fields the UI renders', () => {
   for (const rule of slop.RULES) {
     assert.ok(rule.id && rule.label && rule.why && rule.fix, rule.id + ' is complete');

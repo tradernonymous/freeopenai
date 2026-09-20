@@ -1,106 +1,91 @@
-import { useState } from 'react';
+// The sidebar. It used to be twelve flat buttons whose icons were emoji
+// (💬 🖼 🛠 …), which render differently on every Windows build, cannot be
+// aligned or sized, and made the app look unfinished at a glance. Now every row
+// is the same 24x24 stroke icon at the same weight as its label.
+//
+// The four-second hint that used to appear down here is gone: feedback belongs
+// in the toast queue (src/toasts.js), where it can be read, dismissed and
+// announced.
+import Icon, { type IconName } from './components/Icon';
 import { APP_VERSION } from './version';
 
-const NAV_ITEMS = [
-  { id: 'chat', label: 'Chat', icon: '💬' },
-  { id: 'images', label: 'Images', icon: '🖼' },
-  { id: 'build', label: 'Builds', icon: '🛠' },
-  { id: 'design', label: 'Design', icon: '🎨' },
-  { id: 'library', label: 'Library', icon: '📚' },
-  { id: 'files', label: 'Files', icon: '📁' },
-  { id: 'settings', label: 'Settings', icon: '⚙️' },
-] as const;
+const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string }> = [
+  { id: 'chat', label: 'Chat', icon: 'chat', keys: 'Alt+1' },
+  { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+2' },
+  { id: 'build', label: 'Builds', icon: 'build', keys: 'Alt+3' },
+  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+4' },
+  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+5' },
+  { id: 'files', label: 'Files', icon: 'folder', keys: 'Alt+F' },
+  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+6' },
+];
 
-type NavId = typeof NAV_ITEMS[number]['id'];
+const PANEL_ITEMS: Array<{ key: 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge'; label: string; icon: IconName; title: string }> = [
+  { key: 'files', label: 'Workspace', icon: 'folder', title: 'Files on the engine' },
+  { key: 'terminal', label: 'Terminal', icon: 'terminal', title: 'Commands on the engine (needs WORKSPACE_RUN=1)' },
+  { key: 'sessions', label: 'History', icon: 'history', title: 'Saved chats' },
+  { key: 'builds', label: 'Approvals', icon: 'check', title: 'Pending build approvals' },
+  { key: 'knowledge', label: 'Skills', icon: 'skills', title: 'Skills and memory' },
+];
+
+export type NavId = 'chat' | 'images' | 'build' | 'design' | 'library' | 'files' | 'settings';
 
 interface SidebarProps {
   active: NavId;
   onNavigate: (id: NavId) => void;
-  onToggleFiles: () => void;
-  onToggleTerminal: () => void;
-  onToggleSessions: () => void;
-  onToggleBuilds: () => void;
-  onToggleKnowledge: () => void;
-  showFiles: boolean;
-  showTerminal: boolean;
-  showSessions: boolean;
-  showBuilds: boolean;
-  showKnowledge: boolean;
+  onOpenPalette: () => void;
+  onTogglePanel: (key: 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge') => void;
+  panels: Record<string, boolean>;
 }
 
-export default function Sidebar({ active, onNavigate, onToggleFiles, onToggleTerminal, onToggleSessions, onToggleBuilds, onToggleKnowledge, showFiles, showTerminal, showSessions, showBuilds, showKnowledge }: SidebarProps) {
-  const [hint, setHint] = useState('');
-
-  const press = (fn: () => void, what: string) => {
-    fn();
-    setHint(what);
-    setTimeout(() => setHint(''), 4000);
-  };
-
+export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
         <div className="sidebar-logo">AI</div>
         <span className="sidebar-title">FreeAI4U</span>
       </div>
-      <nav className="sidebar-nav">
+
+      <button className="sidebar-search" type="button" onClick={onOpenPalette}>
+        <Icon name="search" size={14} />
+        <span>Search or run a command</span>
+        <kbd>Ctrl+K</kbd>
+      </button>
+
+      <nav className="sidebar-nav" aria-label="Screens">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
             className={`sidebar-btn ${active === item.id ? 'active' : ''}`}
             onClick={() => onNavigate(item.id)}
-            title={item.label}
+            title={`${item.label} — ${item.keys}`}
+            aria-current={active === item.id ? 'page' : undefined}
           >
-            <span className="sidebar-icon">{item.icon}</span>
+            <Icon name={item.icon} />
+            <span className="sidebar-label">{item.label}</span>
+            <span className="sidebar-keys">{item.keys}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="sidebar-divider" />
+      <div className="sidebar-group-label">Panels</div>
+      <nav className="sidebar-nav" aria-label="Panels">
+        {PANEL_ITEMS.map((item) => (
+          <button
+            key={item.key}
+            className={`sidebar-btn ${panels[item.key] ? 'active' : ''}`}
+            onClick={() => onTogglePanel(item.key)}
+            title={item.title}
+            aria-pressed={!!panels[item.key]}
+          >
+            <Icon name={item.icon} />
             <span className="sidebar-label">{item.label}</span>
           </button>
         ))}
-        <div className="sidebar-divider" />
-        <button
-          className={`sidebar-btn ${showFiles ? 'active' : ''}`}
-          onClick={onToggleFiles}
-          title="Server workspace files"
-        >
-          <span className="sidebar-icon">📂</span>
-          <span className="sidebar-label">Workspace</span>
-        </button>
-        <button
-          className={`sidebar-btn ${showTerminal ? 'active' : ''}`}
-          onClick={() => press(onToggleTerminal, 'Runs commands on the engine (needs WORKSPACE_RUN=1 on the server).')}
-          title="Engine terminal"
-        >
-          <span className="sidebar-icon">⌨️</span>
-          <span className="sidebar-label">Terminal</span>
-        </button>
-        <button
-          className={`sidebar-btn ${showSessions ? 'active' : ''}`}
-          onClick={onToggleSessions}
-          title="Chat history"
-        >
-          <span className="sidebar-icon">🕒</span>
-          <span className="sidebar-label">History</span>
-        </button>
-        <div className="sidebar-divider" />
-        <button
-          className={`sidebar-btn ${showBuilds ? 'active' : ''}`}
-          onClick={onToggleBuilds}
-          title="Builds panel"
-        >
-          <span className="sidebar-icon">🛠</span>
-          <span className="sidebar-label">Builds</span>
-        </button>
-        <button
-          className={`sidebar-btn ${showKnowledge ? 'active' : ''}`}
-          onClick={onToggleKnowledge}
-          title="Knowledge panel"
-        >
-          <span className="sidebar-icon">✨</span>
-          <span className="sidebar-label">Skills</span>
-        </button>
       </nav>
-      {hint && <div className="sidebar-hint">{hint}</div>}
+
       <div className="sidebar-footer">
-        <div className="sidebar-version">v{APP_VERSION}</div>
+        <span className="sidebar-version" title="FreeAI4U Desktop">v{APP_VERSION}</span>
       </div>
     </aside>
   );

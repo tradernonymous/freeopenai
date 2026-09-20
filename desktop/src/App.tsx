@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
-import Sidebar from './Sidebar';
+import Sidebar, { type NavId } from './Sidebar';
 import TitleBar from './TitleBar';
-import ChatScreen from './screens/ChatScreen';
+import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT } from './screens/ChatScreen';
 import DesignScreen from './screens/DesignScreen';
 import ImagesScreen from './screens/ImagesScreen';
 import BuildScreen from './screens/BuildScreen';
@@ -13,6 +13,10 @@ import ConnectScreen from './screens/ConnectScreen';
 import FileTree from './components/FileTree';
 import Terminal from './components/Terminal';
 import SessionManager from './components/SessionManager';
+import CommandPalette, { type PaletteEntry } from './components/CommandPalette';
+import StatusBar from './components/StatusBar';
+import Icon from './components/Icon';
+import Toasts, { pushToast } from './components/Toasts';
 import './index.css';
 import { APP_VERSION } from './version';
 import { applyTheme, readTheme, toggleTheme, type Theme } from './theme';
@@ -21,13 +25,16 @@ import { useUpdateCheck } from './useUpdateCheck';
 import './chats.js';
 import './connection.js';
 import './onboarding.js';
+import './commands.js';
 
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
 const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
+const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
 
-type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'files' | 'settings';
+type View = NavId;
 type RightPanel = 'builds' | 'knowledge' | 'none';
+type PanelKey = 'files' | 'terminal' | 'sessions' | 'builds' | 'knowledge';
 
 export default function App() {
   const [view, setView] = useState<View>('chat');
@@ -42,6 +49,7 @@ export default function App() {
     installError,
     downloaded,
     install: installUpdate,
+    checkNow,
   } = useUpdateCheck();
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -53,6 +61,9 @@ export default function App() {
   const [outcome, setOutcome] = useState<import('./connection.js').ConnectionOutcome | null>(null);
   const [signedIn, setSignedIn] = useState<boolean>(false);
   const [importMsg, setImportMsg] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteExtra, setPaletteExtra] = useState<PaletteEntry[]>([]);
+  const [skillEntries, setSkillEntries] = useState<PaletteEntry[]>([]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -90,20 +101,98 @@ export default function App() {
     return () => window.removeEventListener('auth-required', onAuth);
   }, [checkAuth]);
 
+  // Skills the engine serves, so the palette can reach them by name too. A
+  // failure here is not worth a message: the Library screen reports it.
+  useEffect(() => {
+    api.skills()
+      .then((rows: any) => {
+        const list = Array.isArray(rows) ? rows : [];
+        setSkillEntries(list.slice(0, 40).map((s: any) => chatCommands.skillCommand(s)));
+      })
+      .catch(() => setSkillEntries([]));
+  }, []);
+
   const toggle = () => setTheme((t) => toggleTheme(t));
   const toggleRightPanel = (panel: RightPanel) => setRightPanel((prev) => (prev === panel ? 'none' : panel));
 
-  // Alt+1..6 walks the sidebar in its displayed order.
+  const panels: Record<PanelKey, boolean> = {
+    files: showFiles,
+    terminal: showTerminal,
+    sessions: showSessions,
+    builds: rightPanel === 'builds',
+    knowledge: rightPanel === 'knowledge',
+  };
+
+  const togglePanel = (key: PanelKey) => {
+    if (key === 'files') setShowFiles((v) => !v);
+    else if (key === 'terminal') setShowTerminal((v) => !v);
+    else if (key === 'sessions') setShowSessions((v) => !v);
+    else toggleRightPanel(key);
+  };
+
+  // The palette's rows are read when it opens, so they are current: chats are
+  // read from the one store, skills from what the engine served.
+  const openPalette = useCallback(() => {
+    const chatRows = chats.byRecency(chats.readStore()).slice(0, 20)
+      .map((s: any) => chatCommands.chatCommand(s));
+    setPaletteExtra([...chatRows, ...skillEntries]);
+    setPaletteOpen(true);
+  }, [skillEntries]);
+
+  const runCommand = (entry: PaletteEntry) => {
+    if (entry.palette) { setView(entry.palette as View); return; }
+    if (entry.chat) {
+      setView('chat');
+      window.dispatchEvent(new CustomEvent(OPEN_CHAT_EVENT, { detail: entry.chat }));
+      return;
+    }
+    if (entry.skill) { setView('library'); return; }
+    switch (entry.id) {
+      case 'new-chat':
+        setView('chat');
+        window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT));
+        break;
+      case 'toggle-theme':
+        toggle();
+        break;
+      case 'toggle-files':
+      case 'toggle-terminal':
+      case 'toggle-history':
+        togglePanel(entry.id.replace('toggle-', '') === 'history' ? 'sessions' : entry.id.replace('toggle-', '') as PanelKey);
+        break;
+      case 'check-updates':
+        checkNow().then((result: 'update' | 'current' | 'unknown') => {
+          if (result === 'update') pushToast('info', 'A newer build is available — see the banner at the top.');
+          else if (result === 'current') pushToast('ok', 'This is the newest build.');
+          else pushToast('warn', 'Could not reach the release page to check.');
+        });
+        break;
+      default:
+        break;
+    }
+  };
+
+  // Alt+1..6 walks the sidebar in its displayed order; Ctrl+K is the palette.
   useEffect(() => {
     const order: View[] = ['chat', 'images', 'build', 'design', 'library', 'files', 'settings'];
     const onKey = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === 'k') {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+      if (key === 'escape') {
+        setPaletteOpen(false);
+        return;
+      }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       const n = Number.parseInt(e.key, 10);
       if (n >= 1 && n <= order.length && e.altKey) {
         e.preventDefault();
         setView(order[n - 1]);
       }
-      if (e.altKey && e.key === 'f' && !e.ctrlKey && !e.metaKey) {
+      if (e.altKey && e.key === 'f') {
         e.preventDefault();
         setView('files');
       }
@@ -129,9 +218,9 @@ export default function App() {
   // afterwards; both were skipped before.
   const exportChats = () => {
     const text = JSON.stringify(chats.readStore());
-    setImportMsg(chats.downloadJson('freeai4u-chats.json', text)
-      ? 'Exported freeai4u-chats.json.'
-      : 'Export failed: this window has no download surface.');
+    const ok = chats.downloadJson('freeai4u-chats.json', text);
+    setImportMsg(ok ? 'Exported freeai4u-chats.json.' : 'Export failed: this window has no download surface.');
+    pushToast(ok ? 'ok' : 'warn', ok ? 'Exported freeai4u-chats.json.' : 'Export failed: this window has no download surface.');
   };
 
   // Validated entries, newest copy of each id wins, and the 60 kept are the 60
@@ -146,8 +235,10 @@ export default function App() {
         chats.writeStore(null, result.sessions);
         window.dispatchEvent(new CustomEvent(chats.CHATS_CHANGED_EVENT));
         setImportMsg(chats.summary(result));
+        pushToast('ok', chats.summary(result));
       } catch (err) {
         setImportMsg('Import failed: ' + (err as Error).message);
+        pushToast('error', 'Import failed: ' + (err as Error).message);
       }
     });
   };
@@ -159,16 +250,9 @@ export default function App() {
         <Sidebar
           active={view}
           onNavigate={setView}
-          onToggleFiles={() => setShowFiles((v) => !v)}
-          onToggleTerminal={() => setShowTerminal((v) => !v)}
-          onToggleSessions={() => setShowSessions((v) => !v)}
-          onToggleBuilds={() => toggleRightPanel('builds')}
-          onToggleKnowledge={() => toggleRightPanel('knowledge')}
-          showFiles={showFiles}
-          showTerminal={showTerminal}
-          showSessions={showSessions}
-          showBuilds={rightPanel === 'builds'}
-          showKnowledge={rightPanel === 'knowledge'}
+          onOpenPalette={openPalette}
+          onTogglePanel={togglePanel}
+          panels={panels}
         />
         <main className="main">
           {updateInfo && (
@@ -193,7 +277,9 @@ export default function App() {
               <a href={releaseUrl} target="_blank" rel="noreferrer">
                 Download manually
               </a>
-              <button onClick={dismissUpdate}>✕</button>
+              <button onClick={dismissUpdate} aria-label="Dismiss this update">
+                <Icon name="close" size={14} />
+              </button>
             </div>
           )}
           {banner && (
@@ -237,7 +323,9 @@ export default function App() {
               <aside className="right-panel">
                 <div className="right-panel-header">
                   <h3>{rightPanel === 'builds' ? 'Builds' : 'Knowledge'}</h3>
-                  <button onClick={() => setRightPanel('none')}>✕</button>
+                  <button onClick={() => setRightPanel('none')} aria-label="Close panel">
+                    <Icon name="close" size={14} />
+                  </button>
                 </div>
                 <div className="right-panel-body">
                   {rightPanel === 'builds' && (
@@ -266,6 +354,23 @@ export default function App() {
           />
         )}
       </div>
+      <StatusBar
+        engine={api.getServer()}
+        // The actionable state, not just the reachable one: an engine that
+        // answers "healthy" while refusing every call wants a sign-in, and that
+        // is what the bar should say.
+        state={shell.reason === 'signed-out' ? 'signed-out' : (outcome ? outcome.kind : 'checking')}
+        signedIn={signedIn}
+        updateAvailable={updateInfo?.version}
+        onOpenPalette={openPalette}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        extra={paletteExtra}
+        onRun={runCommand}
+      />
+      <Toasts />
     </div>
   );
 }

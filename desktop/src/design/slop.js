@@ -84,7 +84,20 @@
       id: 'generic-copy',
       label: 'Generic placeholder copy',
       why: '"Lorem ipsum" or "Your text here" shipped to production.',
-      test: (src) => /lorem ipsum|your (text|content) here|placeholder text/i.test(src),
+      // A NEGATED mention is an instruction, not shipped copy: a design prompt
+      // that says "no lorem ipsum" is asking for the opposite of this rule, and
+      // flagging it made the linter unusable on its own prompts. Only an
+      // unqualified occurrence is the sin this catches.
+      test: (src) => {
+        const re = /lorem ipsum|your (text|content) here|placeholder text/gi;
+        let match;
+        while ((match = re.exec(String(src || '')))) {
+          const before = String(src).slice(Math.max(0, match.index - 24), match.index).toLowerCase();
+          if (/\b(no|not|never|without|avoid|instead of)\W*$/.test(before)) continue;
+          return true;
+        }
+        return false;
+      },
       fix: 'Write one real sentence per block, in the brand voice.',
     },
   ];

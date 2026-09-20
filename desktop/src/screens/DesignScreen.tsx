@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, streamChat } from '../api';
 import { escapeHtml } from '../markdown';
+import Icon from '../components/Icon';
 // The design modules are UMD (shared with node:test): the import runs the
 // factory, which hangs the API off globalThis in the browser.
 import '../design/brand.js';
@@ -258,7 +259,7 @@ export default function DesignScreen() {
           <select className="model-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
-          <button onClick={createProject} disabled={!name.trim()}>＋ New</button>
+          <button onClick={createProject} disabled={!name.trim()}><Icon name="plus" size={14} /> New</button>
         </div>
       </header>
 
@@ -386,7 +387,7 @@ export default function DesignScreen() {
             </>
           ) : (
             <div className="empty-state">
-              <div className="empty-icon">🎨</div>
+              <div className="empty-icon"><Icon name="design" size={28} /></div>
               <h2>Systematic design, not slot machines</h2>
               <p>Create a project, extract its brand from a real URL, then generate — every draft is scored against the anti-slop rules before you apply it.</p>
             </div>

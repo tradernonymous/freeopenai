@@ -44,6 +44,8 @@ export interface UpdateCheck {
   humanSize: (bytes: number) => string;
   /** Where a user goes to get it. */
   releaseUrl: string;
+  /** Check on demand; the palette reports the answer instead of a silent poll. */
+  checkNow: () => Promise<'update' | 'current' | 'unknown'>;
   installState: InstallState;
   installError: string;
   /** The bytes that were downloaded, before the installer took over. */
@@ -72,22 +74,24 @@ export function useUpdateCheck(): UpdateCheck {
   const [installError, setInstallError] = useState('');
   const [downloaded, setDownloaded] = useState<DownloadedBuild | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      const fetchImpl = hasShell() ? shellFetch : fetch;
-      const found = await update.fetchVersion({ fetchImpl });
-      if (cancelled || !found || !update.isNewer(found.version, APP_VERSION)) return;
-      if (dismissedVersion() === found.version) return;
-      setInfo(found);
-    };
-    check();
-    const interval = setInterval(check, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+  // The manual check is the same code path as the polled one, so "check for
+  // updates" in the command palette cannot behave differently from what runs on
+  // its own -- including the retry/backoff and the dismissed-version rule.
+  const checkNow = useCallback(async (): Promise<'update' | 'current' | 'unknown'> => {
+    const fetchImpl = hasShell() ? shellFetch : fetch;
+    const found = await update.fetchVersion({ fetchImpl });
+    if (!found) return 'unknown';
+    if (!update.isNewer(found.version, APP_VERSION)) return 'current';
+    if (dismissedVersion() === found.version) return 'current';
+    setInfo(found);
+    return 'update';
   }, []);
+
+  useEffect(() => {
+    checkNow();
+    const interval = setInterval(() => { void checkNow(); }, POLL_MS);
+    return () => clearInterval(interval);
+  }, [checkNow]);
 
   const dismiss = useCallback(() => {
     setInfo((current) => {
@@ -133,6 +137,7 @@ export function useUpdateCheck(): UpdateCheck {
     dismiss,
     humanSize: update.humanSize,
     releaseUrl: update.desktopUrl(),
+    checkNow,
     installState,
     installError,
     downloaded,
