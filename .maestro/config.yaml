@@ -1,0 +1,36 @@
+# Maestro configuration for NeuraOS Android app
+appId: com.neura.os
+
+# Test environment
+env:
+  MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
+  MAESTRO_ADB_PATH: "adb"
+
+# Default timeouts
+timeouts:
+  default: 10000
+  launch: 30000
+  element: 15000
+
+# Retry configuration
+retry:
+  enabled: true
+  maxRetries: 2
+  retryInterval: 5000
+
+# Reporting
+reporting:
+  junit: true
+  junitOutput: "build/reports/maestro"
+  screenshots: true
+  screenshotsOnFailure: true
+  video: false
+
+# Device requirements
+device:
+  minApiLevel: 29
+  preferredOrientation: "portrait"
+
+# Flow discovery
+flows:
+  - "flows/*.yaml"

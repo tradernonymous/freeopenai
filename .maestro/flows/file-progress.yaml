@@ -1,0 +1,92 @@
+appId: com.neura.os
+---
+# File operations: workspace file listing
+- launchApp
+- assertVisible:
+    text: "Settings"
+    optional: true
+- tapOn:
+    text: "Settings"
+    optional: true
+- assertVisible:
+    text: "Workspace"
+    optional: true
+- tapOn:
+    text: "Workspace"
+    optional: true
+- assertVisible:
+    text: "Files"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 10000
+
+---
+# File operations: create file
+- launchApp
+- tapOn:
+    text: "Settings"
+    optional: true
+- tapOn:
+    text: "Workspace"
+    optional: true
+- tapOn:
+    text: "Create file"
+    optional: true
+- assertVisible:
+    text: "Filename"
+    optional: true
+- inputText: "maestro-test.txt"
+- tapOn:
+    text: "Create"
+    optional: true
+- assertVisible:
+    text: "maestro-test.txt"
+    timeout: 10000
+- assertVisible:
+    text: "READY"
+    timeout: 10000
+
+---
+# File operations: read file
+- launchApp
+- tapOn:
+    text: "Settings"
+    optional: true
+- tapOn:
+    text: "Workspace"
+    optional: true
+- tapOn:
+    text: "maestro-test.txt"
+    optional: true
+- assertVisible:
+    text: "maestro-test.txt"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 10000
+
+---
+# File operations: delete file
+- launchApp
+- tapOn:
+    text: "Settings"
+    optional: true
+- tapOn:
+    text: "Workspace"
+    optional: true
+- tapOn:
+    text: "maestro-test.txt"
+    optional: true
+- tapOn:
+    text: "Delete"
+    optional: true
+- assertVisible:
+    text: "Confirm"
+    optional: true
+- tapOn:
+    text: "Confirm"
+    optional: true
+- assertNotVisible:
+    text: "maestro-test.txt"
+    timeout: 10000

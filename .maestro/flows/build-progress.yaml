@@ -1,0 +1,58 @@
+appId: com.neura.os
+---
+# Build mode: tool execution progress
+- launchApp
+- assertVisible:
+    text: "Chat"
+    optional: true
+- tapOn:
+    text: "Build"
+    optional: true
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "create a python hello world file"
+- tapOn:
+    id: "send_button"
+- assertVisible:
+    text: "RUNNING"
+    timeout: 15000
+- assertVisible:
+    text: "1 step"
+    optional: true
+- assertVisible:
+    text: "2 steps"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 60000
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000
+
+---
+# Build mode: task progress (LinearProgressIndicator)
+- launchApp
+- tapOn:
+    text: "Build"
+    optional: true
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "create a multi-file project with main.py and utils.py"
+- tapOn:
+    id: "send_button"
+- assertVisible:
+    text: "RUNNING"
+    timeout: 15000
+- assertVisible:
+    text: "step"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 120000
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000
