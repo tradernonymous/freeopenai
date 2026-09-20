@@ -2875,3 +2875,115 @@ html * {
         --measure: 800px;
     }
 }
+
+
+/* === NAV CLEANUP: Minimalistic Layout === */
+
+/* Hide old chat bar - completely removed from view */
+.chat-bar { display: none !important; }
+
+/* Hide old history sidebar - replaced by hover dropdown */
+.history-sidebar { display: none !important; }
+.history-scrim { display: none !important; }
+.chat-shell.history-hidden .history-sidebar { display: none !important; }
+
+/* Nav chat group - relative container for dropdown */
+.nav-chat-group {
+    position: relative;
+}
+
+/* Chat history dropdown */
+.chat-history-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 280px;
+    max-height: 400px;
+    background: var(--glass);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: all 200ms var(--ease-out);
+    z-index: 200;
+    overflow: hidden;
+}
+.chat-history-dropdown.open {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(4px);
+}
+.chat-history-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+.chat-history-list {
+    max-height: 340px;
+    overflow-y: auto;
+    padding: 6px;
+}
+.chat-history-list .history-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-dim);
+    transition: all 150ms ease;
+}
+.chat-history-list .history-item:hover {
+    background: var(--ctl-bg-hover);
+    color: var(--text);
+}
+.chat-history-list .history-item.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+}
+.chat-history-list .history-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.icon-btn-sm {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    transition: all 150ms ease;
+}
+.icon-btn-sm:hover {
+    background: var(--ctl-bg-hover);
+    color: var(--accent);
+}
+
+/* Adjust main layout since chat-bar is hidden */
+#viewChat { padding: 0; }
+#viewChat .chat-card { border-radius: 0; border: none; box-shadow: none; }
+#viewChat .chat-card::before { display: none; }
+
+/* Other views - remove their chat-bar padding */
+#viewModels .settings-body,
+#viewSettings .settings-body,
+#viewGallery .gallery-body {
+    padding-top: 8px;
+}
