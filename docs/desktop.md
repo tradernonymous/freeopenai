@@ -223,9 +223,21 @@ What the shell does that a window of tabs does not:
 - **Zen mode (`Ctrl+Shift+Z`).** The titlebar, the rail and the status bar leave,
   the canvas stays, and a single pill fades in on hover to bring them back. It is
   a mode, not a setting, so it is deliberately not written to disk.
-- **The rail.** Icons only, 60px wide, widening on hover or focus to reveal the
+- **The rail.** Icons only, 40px wide, widening on hover or focus to reveal the
   labels and the shortcut for each row. Nothing moves under the pointer while it
-  animates, so a hover never turns into a mis-click.
+  animates, so a hover never turns into a mis-click. The width and the icon size
+  are two tokens and every pad is arithmetic on them (`--rail-pad`), so the
+  brand badge, the search box and the rows cannot drift onto three different
+  centre lines the next time one of them is edited.
+- **The palette reaches everything.** `Ctrl+K` is not just navigation: the same
+  list starts and stops the local model, opens the build logs and the approvals
+  panel, exports the chats, and toggles Zen. A row that resolves to nothing is a
+  test failure rather than a keypress that does nothing.
+- **Loading a model shows the wait it is actually in.** The chip draws a ring
+  against the shell's own warm-up deadline (three minutes, `models.rs`) and says
+  "42s of 180s", while the card polls once a second instead of once every
+  fifteen. A bar that fills at a pleasing speed would be a lie about a file
+  read nobody can see.
 - **The radial menu.** Right-click a reply and the actions for what is under the
   pointer open in a ring around it: copy, explain, rework, and retry when the turn
   failed. Placement is [`src/radial.js`](../desktop/src/radial.js) -- a ring that

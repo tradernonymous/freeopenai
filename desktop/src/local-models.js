@@ -140,6 +140,12 @@
 
   var STATES = ['stopped', 'starting', 'ready', 'error'];
 
+  // How long the shell waits for the server to answer /health before it kills
+  // it and says so (models.rs). The loading ring reports against this number
+  // rather than against a guess at how far a file read has got: a bar that
+  // pretends to measure something is worse than no bar.
+  var WARMUP_MS = 180000;
+
   /**
    * What the shell last reported, reduced to one state.
    *
@@ -206,9 +212,32 @@
     return 'Change the model or the settings, then start again.';
   }
 
+  /**
+   * Progress through the shell's warm-up wait, or null when nothing is loading.
+   *
+   * The numbers are the shell's own: elapsed time against the same deadline it
+   * will give up at, so "42s of 180s" is a fact about this machine rather than
+   * a decoration that fills at a pleasing speed.
+   */
+  function warmup(status) {
+    var value = status || {};
+    if (stateOf(value) !== 'starting') return null;
+    var elapsed = Math.max(0, Number(value.uptime_ms || 0));
+    var seconds = Math.round(elapsed / 1000);
+    var deadline = Math.round(WARMUP_MS / 1000);
+    return {
+      elapsedSeconds: seconds,
+      deadlineSeconds: deadline,
+      fraction: Math.min(1, elapsed / WARMUP_MS),
+      label: seconds + 's of ' + deadline + 's',
+    };
+  }
+
   return {
     CATALOGUE: CATALOGUE,
     STATES: STATES,
+    WARMUP_MS: WARMUP_MS,
+    warmup: warmup,
     machine: machine,
     fit: fit,
     contextFor: contextFor,

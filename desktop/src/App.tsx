@@ -210,7 +210,18 @@ export default function App() {
       case 'toggle-folder-panel':
       case 'toggle-terminal':
       case 'toggle-history':
-        togglePanel(entry.id === 'toggle-history' ? 'sessions' : entry.id === 'toggle-terminal' ? 'terminal' : 'folder');
+      case 'toggle-approvals':
+      case 'toggle-skills':
+        togglePanel(
+          entry.id === 'toggle-history' ? 'sessions'
+            : entry.id === 'toggle-terminal' ? 'terminal'
+              : entry.id === 'toggle-approvals' ? 'builds'
+                : entry.id === 'toggle-skills' ? 'knowledge'
+                  : 'folder',
+        );
+        break;
+      case 'export-chats':
+        exportChats();
         break;
       case 'check-updates':
         checkNow().then((result: 'update' | 'current' | 'unknown') => {

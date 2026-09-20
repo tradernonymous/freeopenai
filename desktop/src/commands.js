@@ -34,6 +34,11 @@
     { id: 'toggle-folder-panel', group: 'Panel', title: 'Local folder tree', hint: 'Files on this machine' },
     { id: 'toggle-terminal', group: 'Panel', title: 'Terminal', hint: 'Run commands on this machine' },
     { id: 'toggle-history', group: 'Panel', title: 'History', hint: 'Your saved chats' },
+    { id: 'toggle-approvals', group: 'Panel', title: 'Approvals', hint: 'Pending build approvals, docked on the right' },
+    { id: 'toggle-skills', group: 'Panel', title: 'Skills', hint: 'The skills and memory behind the replies' },
+    { id: 'build-logs', group: 'Do', title: 'Show build logs', hint: 'The live build timeline and its approvals', palette: 'build' },
+    { id: 'local-models', group: 'Do', title: 'Local LLM', hint: 'Start or stop the llama.cpp server on this machine', palette: 'settings' },
+    { id: 'export-chats', group: 'Do', title: 'Export chats', hint: 'Write every conversation to a JSON file' },
     { id: 'check-updates', group: 'Do', title: 'Check for updates', hint: 'Read the latest release' },
     { id: 'copy-diagnostics', group: 'Do', title: 'Copy diagnostics', hint: 'The report, in Settings', palette: 'settings' },
   ];

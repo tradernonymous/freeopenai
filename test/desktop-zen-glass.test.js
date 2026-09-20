@@ -159,6 +159,8 @@ test('glass belongs to floating surfaces, never to what is read at length', () =
     '.right-panel',
     '.dock-slot',
     '.palette',
+    '.mode-panel',
+    '.model-panel',
     '.toast',
     '.palette-backdrop',
   ];
@@ -222,6 +224,29 @@ test('a reader who asked for less gets panels, not glass', () => {
 });
 
 // ---- zen mode -----------------------------------------------------------
+
+test('the activity bar is 40px, and every glyph on it shares one centre line', () => {
+  const root = bodies(':root').join('\n');
+  assert.match(root, /--rail:\s*40px/, 'the rail is the width the plan asks for');
+  // The pad is arithmetic on the two numbers it centres, so editing either one
+  // cannot leave the glyphs behind: that is the regression this pins.
+  assert.match(root, /--rail-pad:\s*calc\(\(var\(--rail\) - var\(--rail-icon\)\) \/ 2\)/);
+  assert.match(root, /--rail-tile-pad:\s*calc\(\(var\(--rail\) - var\(--rail-tile\)\) \/ 2\)/);
+
+  const onTheLine = ['.sidebar-nav', '.sidebar-brand', '.sidebar-search', '.sidebar-group-label'];
+  for (const selector of onTheLine) {
+    const declarations = bodies(selector).join('\n');
+    const usesPad = /var\(--rail-pad\)/.test(declarations) || /var\(--rail-tile-pad\)/.test(declarations);
+    assert.ok(usesPad, `${selector} must sit on the rail's centre line, not a hand-tuned number`);
+  }
+
+  // The rows carry no left padding of their own: the column is the nav's.
+  assert.match(declarations('.sidebar-btn'), /padding:\s*9px 12px 9px 0/);
+
+  // Collapsed, the width is what the icons are centred in.
+  assert.match(declarations('.sidebar'), /width:\s*var\(--rail\)/);
+  assert.match(declarations('.sidebar:hover'), /width:\s*var\(--rail-open\)/);
+});
 
 test('zen hides exactly the chrome it promises, and nothing else', () => {
   const hidden = declarations('.app.zen .status-bar');

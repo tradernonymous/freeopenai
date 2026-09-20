@@ -38,6 +38,16 @@ export declare function fit(entry: Partial<LocalModelEntry>, machineInfo?: Machi
 export declare function contextFor(entry: Partial<LocalModelEntry>): number;
 export declare function quantFor(entry: Partial<LocalModelEntry>): string;
 export declare function stateOf(status: any): LocalModelState;
+
+/** Progress through the shell's warm-up wait, or null when nothing is loading. */
+export declare function warmup(status: any): {
+  elapsedSeconds: number;
+  deadlineSeconds: number;
+  fraction: number;
+  label: string;
+} | null;
+
+export declare const WARMUP_MS: number;
 export declare function statusLine(status: any): string;
 export declare function providerRow(status: any): {
   id: string;

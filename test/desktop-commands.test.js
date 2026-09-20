@@ -79,6 +79,21 @@ test('a title match outranks a mention in a hint', () => {
   assert.equal(results[0].id, 'go-design', 'the screen named Design wins');
 });
 
+test('every command in the registry actually resolves to something', () => {
+  const shell = read('desktop', 'src', 'App.tsx');
+  // A palette row that matches nothing is a dead entry: the list promises an
+  // action and the shell silently does nothing. Every id is therefore either a
+  // screen (palette), a chat, a skill, or has its own branch in the shell.
+  for (const entry of commands.COMMANDS) {
+    if (entry.palette || entry.chat || entry.skill) continue;
+    assert.match(
+      shell,
+      new RegExp(`case '${entry.id}':`),
+      `${entry.id} is listed in the palette but the shell has no branch for it`,
+    );
+  }
+});
+
 test('the palette is wired: Ctrl+K opens it, every action resolves', () => {
   const shell = read('desktop', 'src', 'App.tsx');
   assert.match(shell, /ctrlKey \|\| e\.metaKey\) && key === 'k'/, 'Ctrl+K is bound');

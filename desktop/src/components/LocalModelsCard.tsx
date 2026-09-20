@@ -25,6 +25,9 @@ const localModels: typeof import('../local-models.js') = (globalThis as any).Fre
 // src/local-models.js, where node:test can check it.
 
 const MEMORY_POLL_MS = 15000;
+// While a model is loading, status is what the ring is drawn from, so it is
+// read once a second; the machine's memory facts are not worth that.
+const LOADING_POLL_MS = 1000;
 
 export default function LocalModelsCard() {
   const [server, setServer] = useState<LocalServerFacts | null>(null);
@@ -42,10 +45,6 @@ export default function LocalModelsCard() {
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(() => {
-      localModelStatus().then(setStatus).catch(() => { /* the card reports the failure it can see */ });
-    }, MEMORY_POLL_MS);
-    return () => clearInterval(timer);
   }, [refresh]);
 
   const chooseBinary = () => {
@@ -106,6 +105,21 @@ export default function LocalModelsCard() {
 
   const running = localModels.stateOf(status);
   const line = status ? localModels.statusLine(status) : '';
+  // How far into the shell's own warm-up wait we are. Loading a 4B model takes
+  // tens of seconds, and the shell gives up after three minutes; the ring is
+  // that same deadline, so it tells the truth rather than pretending to know
+  // how far the file read has got.
+  const warm = localModels.warmup(status);
+
+  // A loading model is polled once a second so the ring moves; an idle one is
+  // not worth a request a second.
+  useEffect(() => {
+    const every = running === 'starting' ? LOADING_POLL_MS : MEMORY_POLL_MS;
+    const timer = setInterval(() => {
+      localModelStatus().then(setStatus).catch(() => { /* the card shows what it can see */ });
+    }, every);
+    return () => clearInterval(timer);
+  }, [running]);
 
   if (!hasShell()) {
     return (
@@ -124,8 +138,33 @@ export default function LocalModelsCard() {
       <div className="settings-card">
         <div className="local-status-row">
           <span className={`chip ${running === 'ready' ? 'chip-ok' : running === 'error' ? 'chip-warn' : ''}`}>
-            <Icon name={running === 'ready' ? 'check' : running === 'stopped' ? 'stop' : 'activity'} size={12} />
+            {warm ? (
+              <span
+                className="warm-ring"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={warm.deadlineSeconds}
+                aria-valuenow={warm.elapsedSeconds}
+                aria-label="Waiting for the model to load"
+                title={`The shell gives up after ${warm.deadlineSeconds}s`}
+              >
+                <svg viewBox="0 0 36 36" width="16" height="16" aria-hidden="true">
+                  <circle className="warm-ring-track" cx="18" cy="18" r="15" />
+                  <circle
+                    className="warm-ring-fill"
+                    cx="18"
+                    cy="18"
+                    r="15"
+                    /* 2πr, so the dash is a real fraction of the circle. */
+                    strokeDasharray={`${(warm.fraction * 94.2).toFixed(1)} 94.2`}
+                  />
+                </svg>
+              </span>
+            ) : (
+              <Icon name={running === 'ready' ? 'check' : running === 'stopped' ? 'stop' : 'activity'} size={12} />
+            )}
             {line || 'No local model running'}
+            {warm && <span className="warm-ring-text">{warm.label}</span>}
           </span>
           {running === 'ready' || running === 'starting' ? (
             <button onClick={stop} disabled={!!busy}>Stop</button>

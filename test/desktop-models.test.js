@@ -105,6 +105,44 @@ test('the status line says what is loaded and where it is listening', () => {
   assert.match(local.statusLine({ state: 'error', detail: 'llama-server exited with exit code: 1' }), /exited/);
 });
 
+test('the loading ring measures the shell’s deadline, not a pleasing speed', () => {
+  const starting = { state: 'starting', repo: 'unsloth/Qwen3-Coder-1.5B-GGUF', uptime_ms: 42000 };
+  const warm = local.warmup(starting);
+  assert.equal(warm.elapsedSeconds, 42, 'elapsed time is what the shell reported');
+  assert.equal(warm.deadlineSeconds, local.WARMUP_MS / 1000);
+  assert.equal(warm.label, '42s of 180s', 'the chip says the real numbers');
+  assert.ok(Math.abs(warm.fraction - 42 / 180) < 0.001, 'and the ring is that fraction of the circle');
+
+  // Nothing loading means nothing to draw: a ring that sits at zero next to a
+  // stopped server is noise pretending to be progress.
+  for (const state of ['stopped', 'ready', 'error']) {
+    assert.equal(local.warmup({ state, uptime_ms: 5000 }), null, `${state} has no warm-up to show`);
+  }
+
+  // A server still not answering at the deadline is the shell's problem to
+  // report, not a ring that overfills.
+  const late = local.warmup({ state: 'starting', uptime_ms: 900000 });
+  assert.equal(late.fraction, 1, 'the ring never passes full');
+
+  const fresh = local.warmup({ state: 'starting' });
+  assert.equal(fresh.elapsedSeconds, 0, 'a missing uptime is the start, not a crash');
+  assert.equal(fresh.fraction, 0);
+});
+
+test('the deadline the ring draws is the deadline the shell enforces', () => {
+  const rust = read('desktop', 'src-tauri', 'src', 'models.rs');
+  assert.match(rust, /Duration::from_secs\(180\)/, 'the shell still waits three minutes');
+  assert.equal(local.WARMUP_MS, 180000, 'and the ring is drawn against the same three minutes');
+});
+
+test('the card shows the ring, and asks more often while it is loading', () => {
+  const card = read('desktop', 'src', 'components', 'LocalModelsCard.tsx');
+  assert.match(card, /role="progressbar"/, 'the wait is announced, not just drawn');
+  assert.match(card, /aria-valuenow=\{warm\.elapsedSeconds\}/, 'with the real elapsed time');
+  assert.match(card, /strokeDasharray=\{`\$\{\(warm\.fraction \* 94\.2\)/, '2πr: the dash is a fraction of the circle');
+  assert.match(card, /running === 'starting' \? LOADING_POLL_MS : MEMORY_POLL_MS/, 'status is read every second while loading, not every fifteen');
+});
+
 test('a local model only becomes a provider row when it can actually answer', () => {
   assert.equal(local.providerRow({ state: 'stopped' }), null);
   assert.equal(local.providerRow({ state: 'starting', repo: 'x/y' }), null, 'a loading model must not be offered in Chat');
