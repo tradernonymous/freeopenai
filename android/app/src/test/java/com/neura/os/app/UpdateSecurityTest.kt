@@ -187,7 +187,9 @@ class UpdateSecurityTest {
 
     @Test
     fun parseUpdate_versionNameSanitisedAndCapped() {
-        val dirty = goodManifest.replace("2.0.150", "2.0.150\u0000\u0007evil")
+        // Control chars arrive JSON-escaped (a raw NUL would make the JSON
+        // text itself malformed); the parsed value must still be stripped.
+        val dirty = goodManifest.replace("2.0.150", "2.0.150\\u0000\\u0007evil")
         assertEquals("2.0.150evil", parseUpdateInfo(dirty)!!.versionName)
         val long = goodManifest.replace("2.0.150", "v".repeat(60))
         assertEquals(32, parseUpdateInfo(long)!!.versionName.length)
