@@ -8849,3 +8849,91 @@ document.addEventListener('keydown', function(e) {
         }
     }
 });
+
+// ============================================================
+// PHASE 1: Provider Health Dashboard
+// ============================================================
+var providerHealthState = {};
+
+function refreshProviderHealth() {
+    var providers = ['nara', 'openrouter', 'cliproxy', 'kiro', 'puter'];
+    
+    providers.forEach(function(provider) {
+        var statusEl = document.getElementById(provider + 'Status');
+        if (!statusEl) return;
+        
+        var dot = statusEl.querySelector('.health-dot');
+        var label = statusEl.querySelector('.health-label');
+        
+        // Set to checking state
+        dot.className = 'health-dot health-unknown';
+        label.textContent = 'Checking...';
+        
+        // Check provider status via server endpoint
+        fetch('/api/llm/providers')
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                var p = data.find(function(item) { return item.id === provider; });
+                if (p) {
+                    if (p.ready) {
+                        dot.className = 'health-dot health-ready';
+                        label.textContent = 'Ready';
+                    } else if (p.rateLimited) {
+                        dot.className = 'health-dot health-limited';
+                        label.textContent = 'Rate Limited';
+                    } else {
+                        dot.className = 'health-dot health-error';
+                        label.textContent = 'Offline';
+                    }
+                } else {
+                    dot.className = 'health-dot health-unknown';
+                    label.textContent = 'Unknown';
+                }
+            })
+            .catch(function() {
+                dot.className = 'health-dot health-error';
+                label.textContent = 'Error';
+            });
+    });
+}
+
+function testAllProviders() {
+    // Test each provider with a simple request
+    var providers = ['nara', 'openrouter', 'cliproxy', 'kiro', 'puter'];
+    
+    providers.forEach(function(provider) {
+        var statusEl = document.getElementById(provider + 'Status');
+        if (!statusEl) return;
+        
+        var dot = statusEl.querySelector('.health-dot');
+        var label = statusEl.querySelector('.health-label');
+        
+        dot.className = 'health-dot health-unknown';
+        label.textContent = 'Testing...';
+        
+        // Simple test request
+        fetch('/api/llm/test?provider=' + provider)
+            .then(function(res) {
+                if (res.ok) {
+                    dot.className = 'health-dot health-ready';
+                    label.textContent = 'Working';
+                } else {
+                    dot.className = 'health-dot health-error';
+                    label.textContent = 'Failed';
+                }
+            })
+            .catch(function() {
+                dot.className = 'health-dot health-error';
+                label.textContent = 'Error';
+            });
+    });
+}
+
+// Auto-refresh health on Settings view
+var originalJumpToSettingsSection = window.jumpToSettingsSection;
+window.jumpToSettingsSection = function(section) {
+    if (originalJumpToSettingsSection) originalJumpToSettingsSection(section);
+    if (section === 'health') {
+        refreshProviderHealth();
+    }
+};

@@ -548,6 +548,62 @@
                         </div>
                     </div>
                 </div>
+                    <h3 class="settings-section-title" id="settingsSectionHealth">
+                        <i class="fas fa-heartbeat" style="margin-right: 8px;"></i>Provider Health
+                    </h3>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Real-time provider status</strong>
+                            <p class="settings-hint">Shows which providers are ready, rate-limited, or offline. Click refresh to check now.</p>
+                        </div>
+                        <div class="provider-health-grid" id="providerHealthGrid">
+                            <div class="provider-health-card" data-provider="nara">
+                                <div class="provider-health-status" id="naraStatus">
+                                    <span class="health-dot health-unknown"></span>
+                                    <span class="health-label">Checking...</span>
+                                </div>
+                                <div class="provider-health-name">Nara (Free)</div>
+                                <div class="provider-health-info">Cloudflare Workers AI</div>
+                            </div>
+                            <div class="provider-health-card" data-provider="openrouter">
+                                <div class="provider-health-status" id="openrouterStatus">
+                                    <span class="health-dot health-unknown"></span>
+                                    <span class="health-label">Checking...</span>
+                                </div>
+                                <div class="provider-health-name">OpenRouter</div>
+                                <div class="provider-health-info">Multiple free models</div>
+                            </div>
+                            <div class="provider-health-card" data-provider="cliproxy">
+                                <div class="provider-health-status" id="cliproxyStatus">
+                                    <span class="health-dot health-unknown"></span>
+                                    <span class="health-label">Checking...</span>
+                                </div>
+                                <div class="provider-health-name">CLIProxyAPI</div>
+                                <div class="provider-health-info">Gemini via CLI login</div>
+                            </div>
+                            <div class="provider-health-card" data-provider="kiro">
+                                <div class="provider-health-status" id="kiroStatus">
+                                    <span class="health-dot health-unknown"></span>
+                                    <span class="health-label">Checking...</span>
+                                </div>
+                                <div class="provider-health-name">Kiro Gateway</div>
+                                <div class="provider-health-info">Claude, DeepSeek, Qwen</div>
+                            </div>
+                            <div class="provider-health-card" data-provider="puter">
+                                <div class="provider-health-status" id="puterStatus">
+                                    <span class="health-dot health-unknown"></span>
+                                    <span class="health-label">Checking...</span>
+                                </div>
+                                <div class="provider-health-name">Puter (Keyless)</div>
+                                <div class="provider-health-info">GPT-4o, Claude, Gemini</div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 12px; display: flex; gap: 8px;">
+                            <button class="icon-btn-text" onclick="refreshProviderHealth()">Refresh Status</button>
+                            <button class="icon-btn-text" onclick="testAllProviders()">Test All Providers</button>
+                        </div>
+                    </div>
+
             </div>
             <div class="view" id="viewGallery">
                 
