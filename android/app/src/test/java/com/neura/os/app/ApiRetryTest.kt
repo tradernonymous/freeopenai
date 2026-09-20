@@ -73,10 +73,7 @@ class ApiRetryTest {
     @Test
     fun chatApi_loginRetriesTransportFailures() {
         var calls = 0
-        val api = ChatApi("https://x", attempts = 4, backoffMs = 1L) {
-            calls++
-            throw IOException("signal blip")
-        }
+        val api = ChatApi("https://x", opener = { calls++; throw IOException("signal blip") }, attempts = 4, backoffMs = 1L)
         val e = assertThrows(ApiException::class.java) { api.login("u", "p") }
         assertEquals(4, calls)
         assertTrue(e.message?.startsWith("Could not reach the server") == true)
