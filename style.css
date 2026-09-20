@@ -2457,3 +2457,233 @@ button, a, .icon-btn, .model-trigger, .effort-select, .drawer-nav-btn {
 .icon-btn:focus-visible, .model-trigger:focus-visible, .effort-select:focus-visible {
     box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-bg);
 }
+
+
+/* === PHASE 2: MODERNIZED CHAT, PLAN, BUILD MODES === */
+
+/* Modern Chat Interface */
+.chat-messages {
+    scroll-behavior: smooth;
+}
+.message {
+    animation: messageSlideIn 300ms cubic-bezier(.16, 1, .3, 1);
+}
+@keyframes messageSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.message-text {
+    line-height: 1.65;
+    letter-spacing: 0.01em;
+}
+.message.user .message-text {
+    background: linear-gradient(135deg, var(--accent-bg), rgba(99, 102, 241, 0.08));
+    border: 1px solid var(--bubble-edge);
+    border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+    padding: 12px 16px;
+}
+.message:not(.user) .message-text {
+    background: var(--surface-2);
+    border-radius: var(--r-lg) var(--r-lg) var(--r-lg) var(--r-sm);
+    padding: 12px 16px;
+}
+/* Timestamp on messages */
+.message-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    opacity: 0.7;
+}
+
+/* Modern Input Area */
+.composer {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--lift), 0 -4px 16px rgba(0, 0, 0, 0.1);
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.composer:focus-within {
+    border-color: var(--accent);
+    box-shadow: var(--lift), 0 0 0 3px var(--accent-bg), 0 -4px 16px rgba(0, 0, 0, 0.1);
+}
+.composer-input {
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 12px 16px;
+}
+.composer-send {
+    background: linear-gradient(135deg, var(--accent), rgba(99, 102, 241, 0.9));
+    border: none;
+    border-radius: var(--ctl-r);
+    color: #fff;
+    transition: all 200ms ease;
+}
+.composer-send:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+.composer-send:active {
+    transform: translateY(0) scale(0.97);
+}
+
+/* Plan Mode - Task Grid */
+.todo-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 10px 12px;
+    transition: all 200ms ease;
+}
+.todo-row:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transform: translateY(-1px);
+}
+.todo-row.done {
+    opacity: 0.7;
+    background: var(--surface-2);
+}
+.todo-row.doing {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+}
+.todo-row.blocked {
+    border-color: var(--danger);
+    background: rgba(255, 107, 107, 0.08);
+}
+.todo-check {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--border-strong);
+    transition: all 200ms ease;
+}
+.todo-row.done .todo-check {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 8px var(--accent-bg);
+}
+.todo-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+}
+.todo-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), rgba(99, 102, 241, 0.8));
+    border-radius: 2px;
+    transition: width 400ms cubic-bezier(.16, 1, .3, 1);
+}
+
+/* Build Mode - Project Cards */
+.build-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 16px;
+    transition: all 200ms ease;
+}
+.build-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+.build-card.running {
+    border-color: var(--hub-violet);
+    box-shadow: 0 0 16px rgba(163, 113, 247, 0.2);
+}
+.build-card.done {
+    border-color: var(--hub-green);
+}
+.build-card.failed {
+    border-color: var(--danger);
+}
+
+/* Status Indicators */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-dot.ready { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.5); }
+.status-dot.running { background: var(--accent); animation: pulse 2s infinite; }
+.status-dot.error { background: var(--danger); }
+.status-dot.pending { background: var(--text-muted); }
+
+/* Provider Row Improvements */
+.image-provider-row {
+    transition: background 150ms ease;
+}
+.image-provider-row:hover {
+    background: var(--surface-2);
+}
+.image-provider-row.ready .image-provider-dot {
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+/* Model Card Enhancements */
+.model-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 12px;
+    transition: all 200ms ease;
+}
+.model-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-2px);
+}
+.model-card.selected {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    box-shadow: 0 0 12px var(--accent-bg);
+}
+
+/* Empty States */
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+}
+.empty-state i {
+    font-size: 48px;
+    color: var(--accent);
+    opacity: 0.5;
+    margin-bottom: 16px;
+}
+.hero-greet {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+.hero-sub {
+    font-size: 14px;
+    color: var(--text-muted);
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* Smooth page transitions */
+.view {
+    animation: viewFadeIn 200ms ease;
+}
+@keyframes viewFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Enhanced scrollbar for chat */
+.chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 3px;
+}
+.chat-messages::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
