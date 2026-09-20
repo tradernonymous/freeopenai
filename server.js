@@ -2679,12 +2679,56 @@ function imageDrawOrder(requested, options) {
 // follows the conversation, so this is the operator's view of the order rather
 // than the browser's. It is also what a failure message is written from, so the
 // variables it names are the ones that would actually fix the setup.
+// Every image model this service could be asked for, best first.
+//
+// A picker that can only offer the one model the server already chose is not a
+// picker: on a gateway with several image models (OpenRouter, an OpenAI-shaped
+// proxy, a Google key) the choice is real and the user can see it. The list is
+// what this service actually has -- its own current model, the operator's
+// naming, and whatever its catalogue publishes that can draw -- and never a
+// model invented here, because sending an id a service does not serve is how a
+// draw fails with someone else's error message.
+function imageModelChoices(id, candidate, store) {
+  const out = [];
+  const push = (value) => {
+    const text = String(value || '').trim();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  push(candidate && candidate.model);
+  if (store) {
+    push(store.modelEnv ? process.env[store.modelEnv] : '');
+    push(store.defaultModel);
+    push(store.discoveredModel);
+    for (const alt of (Array.isArray(store.models) ? store.models : [])) push(alt);
+  }
+  const warm = modelCache.get(id);
+  if (warm && Array.isArray(warm.models)) {
+    const rank = (text) => IMAGE_MODEL_MARKERS.findIndex((marker) => text.toLowerCase().includes(marker));
+    const drawable = warm.models
+      .map((m) => (typeof m === 'string' ? m : (m && m.id) || ''))
+      .filter(Boolean)
+      .filter((text) => {
+        const lower = text.toLowerCase();
+        if (IMAGE_MODEL_NOT.some((word) => lower.includes(word))) return false;
+        return rank(text) >= 0;
+      })
+      // The same ranking discovery uses, so the model the server would pick is
+      // the first row of the list rather than a separate opinion.
+      .sort((a, b) => rank(a) - rank(b));
+    for (const text of drawable) push(text);
+  }
+  return out.slice(0, 12);
+}
+
 function imageProviderRow(id, provider, candidate, store) {
   return {
     id,
     label: provider.label,
     ready: !candidate.error,
     model: candidate.model || '',
+    // What the picker offers for this service. `model` stays as the one it is
+    // ready to use, so an older client that reads only that is unaffected.
+    models: imageModelChoices(id, candidate, store),
     reason: candidate.error || '',
     // Only the store that states its dimensions has any: everywhere else a size
     // is a preference the upstream may or may not know.

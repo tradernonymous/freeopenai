@@ -55,4 +55,17 @@ module.exports = [
       },
     },
   },
+  {
+    // The Puter SDK bridge: it exists to drive a browser SDK, so `document` and
+    // `FileReader` are the point rather than a mistake. Everything it does is
+    // behind a `loaded()` check, so in node it reports "not loaded" instead of
+    // reaching for either.
+    files: ['desktop/src/puter.js'],
+    languageOptions: {
+      globals: {
+        document: 'readonly',
+        FileReader: 'readonly',
+      },
+    },
+  },
 ];

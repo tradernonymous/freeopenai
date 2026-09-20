@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, streamChat } from '../api';
 import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
+import SelectPill from '../components/SelectPill';
 // The design modules are UMD (shared with node:test): the import runs the
 // factory, which hangs the API off globalThis in the browser.
 import '../design/brand.js';
@@ -256,9 +257,17 @@ export default function DesignScreen() {
         <h1>Design</h1>
         <div className="header-actions">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="New project…" style={{ width: 160 }} />
-          <select className="model-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-            {templates.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-          </select>
+          <SelectPill
+            label="Template"
+            title="Which template a new project starts from"
+            value={templateId}
+            options={templates.map((t: any) => ({
+              value: t.id,
+              label: t.label,
+              note: `${t.width}×${t.height}${t.unit}`,
+            }))}
+            onPick={(id) => setTemplateId(id)}
+          />
           <button onClick={createProject} disabled={!name.trim()}><Icon name="plus" size={14} /> New</button>
         </div>
       </header>
@@ -320,12 +329,22 @@ export default function DesignScreen() {
           {active ? (
             <>
               <div className="design-toolbar">
-                <select className="model-select" value={provider} onChange={(e) => setProvider(e.target.value)}>
-                  {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-                </select>
-                <select className="model-select" value={model} onChange={(e) => setModel(e.target.value)}>
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
+                <SelectPill
+                  label="Service"
+                  title="Which service drafts the design"
+                  value={provider}
+                  options={providers.map((p: any) => ({ value: p.id, label: p.label }))}
+                  onPick={(id) => setProvider(id)}
+                />
+                <SelectPill
+                  label="Model"
+                  title="Which model drafts the design"
+                  value={model}
+                  mono
+                  filterable
+                  options={models.map((m: string) => ({ value: m, label: m }))}
+                  onPick={(m) => setModel(m)}
+                />
                 <span className="design-id">{template ? `${template.label} · ${template.width}×${template.height}${template.unit}` : ''}</span>
                 <button onClick={exportHtml} disabled={!active.canvas?.html}>HTML</button>
                 <button onClick={exportPdf} disabled={!active.canvas?.html}>PDF</button>

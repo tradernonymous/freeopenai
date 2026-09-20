@@ -11,6 +11,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+// Bundled, not borrowed from the machine: the app should look the same on every
+// Windows build rather than inheriting whatever Segoe happens to be installed.
+import '@fontsource-variable/inter';
 import './index.css';
 
 function rootElement(): HTMLElement | null {

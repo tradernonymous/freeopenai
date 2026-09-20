@@ -3,6 +3,7 @@ import { api } from '../api';
 import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
 import DiagnosticsCard from '../components/DiagnosticsCard';
+import LocalModelsCard from '../components/LocalModelsCard';
 import FileTree from '../components/FileTree';
 import Terminal from '../components/Terminal';
 
@@ -76,7 +77,7 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
                   </span>
                   <span className={`setting-value ${p.configured ? 'ok' : 'warn'}`}>
                     {p.configured
-                      ? (p.freeTier && p.freeTier.limitText ? p.freeTier.limitText : 'ready')
+                      ? ((p.freeTier && (p.freeTier.text || p.freeTier.limitText)) || 'ready')
                       : (p.note || 'no key set')}
                   </span>
                 </div>
@@ -89,8 +90,11 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
             <div className="settings-card">
               {limits?.retries && (
                 <div className="setting-row">
-                  <span className="setting-label">Rate-limit retry budget</span>
-                  <span className="setting-value">{Math.round(limits.retries.budgetMs / 1000)}s across {limits.retries.maxAttempts} attempt(s)</span>
+                  <span className="setting-label">How long a rate-limited model is retried</span>
+                  <span className="setting-value">
+                    {Math.round(limits.retries.budgetMs / 1000)}s in total, {limits.retries.maxAttempts} attempt
+                    {limits.retries.maxAttempts === 1 ? '' : 's'}, {Math.round((limits.retries.baseDelayMs || 0) / 1000 * 10) / 10}s apart
+                  </span>
                 </div>
               )}
               {limits?.timeouts && (
@@ -99,7 +103,11 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
                   <span className="setting-value">{Math.round(limits.timeouts.chat / 1000)}s</span>
                 </div>
               )}
-              <p className="settings-hint">A rate-limited provider is waited on only as long as the turn is worth; then another provider takes it.</p>
+              <p className="settings-hint">
+                A rate-limited service is retried only as long as the turn is worth waiting for; after that the engine hands
+                the same question to the next model instead of leaving you with nothing. This is why a rate limit never ends a
+                turn here, and it is a setting rather than a warning: nothing is wrong with your chat.
+              </p>
             </div>
           </section>
 
@@ -115,6 +123,8 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
               ))}
             </div>
           </section>
+
+          <LocalModelsCard />
 
           {/* The engine's own shell, kept but demoted. It only works when the
               server sets WORKSPACE_RUN=1 and the account is signed in, which is

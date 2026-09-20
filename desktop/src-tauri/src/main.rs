@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod crash;
 mod diag;
 mod local;
+mod models;
 mod net;
 mod save;
 mod webview2;
@@ -68,7 +69,14 @@ fn main() {
             local::local_read_file,
             local::local_write_file,
             local::local_edit_file,
-            local::local_run
+            local::local_run,
+            models::local_server_find,
+            models::local_server_pick,
+            models::local_server_use,
+            models::local_open_releases,
+            models::local_model_start,
+            models::local_model_status,
+            models::local_model_stop
         ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
@@ -116,6 +124,11 @@ fn main() {
                         // the shutdown runs, so the window-state plugin persists
                         // the window position and the WebView2 children are
                         // reaped instead of being orphaned.
+                        //
+                        // A local model server is a child process of this app.
+                        // Leaving one running after the window is gone would be
+                        // a process the user cannot see and did not ask for.
+                        models::shutdown();
                         QUITTING.store(true, Ordering::SeqCst);
                         app.exit(0);
                     }

@@ -85,7 +85,9 @@ export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePan
       </nav>
 
       <div className="sidebar-divider" />
-      <div className="sidebar-group-label">Panels</div>
+      <div className="sidebar-group-label">
+        <span className="sidebar-group-label-text">Panels</span>
+      </div>
       <nav className="sidebar-nav" aria-label="Panels">
         {PANEL_ITEMS.map((item) => (
           <button

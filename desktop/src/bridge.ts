@@ -186,6 +186,69 @@ export async function runLocal(args: {
  * refused the terminal shows the whole result when the command finishes
  * instead of nothing at all.
  */
+// ---- the local model server (llama.cpp) ---------------------------------
+//
+// The binary is the user's: this app neither ships one nor downloads one
+// behind their back. `find` says where it looks, `pick` takes the file they
+// chose, and `openReleases` opens the page to get it from.
+
+export interface LocalServerFacts {
+  found: boolean;
+  path: string;
+  source: string;
+  expected_name: string;
+  releases_url: string;
+  dir: string;
+}
+
+export interface LocalModelStatus {
+  state: 'stopped' | 'starting' | 'ready' | 'error';
+  repo: string;
+  quant: string;
+  port: number;
+  pid: number;
+  uptime_ms: number;
+  base_url: string;
+  detail: string;
+}
+
+export async function localServerFind(): Promise<LocalServerFacts> {
+  return call<LocalServerFacts>('local_server_find');
+}
+
+/** The native picker; resolves with the source path, or null if cancelled. */
+export async function localServerPick(): Promise<string | null> {
+  return (await call<string | null>('local_server_pick')) ?? null;
+}
+
+export async function localServerUse(path: string): Promise<{ path: string; bytes: number }> {
+  return call('local_server_use', { path });
+}
+
+/** Opens the llama.cpp release page in the user's browser. */
+export async function localOpenReleases(): Promise<void> {
+  await call('local_open_releases');
+}
+
+export async function localModelStart(args: {
+  repo: string;
+  quant?: string;
+  port?: number;
+  ctx?: number;
+  gpuLayers?: number;
+  threads?: number;
+}): Promise<LocalModelStatus> {
+  return call<LocalModelStatus>('local_model_start', args);
+}
+
+export async function localModelStatus(): Promise<LocalModelStatus> {
+  return call<LocalModelStatus>('local_model_status');
+}
+
+export async function localModelStop(): Promise<{ stopped: boolean }> {
+  return call('local_model_stop');
+}
+
 export async function onLocalRun(handler: (chunk: LocalRunChunk) => void): Promise<() => void> {
   const w = window as any;
   const internals = w.__TAURI_INTERNALS__;

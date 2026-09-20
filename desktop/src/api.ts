@@ -134,6 +134,46 @@ export async function streamChat(
     } catch { /* keep the status line */ }
     throw new ApiError(res.status, connection.classify({ status: res.status, message: engineMessage }).message);
   }
+  return readStream(res, onFrame);
+}
+
+/**
+ * The same stream, against a model running on THIS machine.
+ *
+ * `llama-server` speaks the OpenAI shape at `http://127.0.0.1:<port>/v1`, so
+ * this is the same code with a different base and no engine round-trip: the
+ * conversation never leaves the computer, and it works with the engine
+ * unreachable. The shell's CSP allows exactly this (loopback http only).
+ */
+export async function streamLocalChat(
+  baseUrl: string,
+  model: string,
+  messages: Array<{ role: string; content: any }>,
+  onFrame: (frame: StreamFrame) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const origin = String(baseUrl || '').replace(/\/+$/, '');
+  if (!origin) throw new ApiError(0, 'No local model server is running.');
+  let res: Response;
+  try {
+    res = await fetch(`${origin}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model || 'local', messages, stream: true }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    throw new ApiError(0, `The local model server at ${origin} is not answering. Start it in Settings → Local models.`);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `The local model server answered ${res.status}.`);
+  }
+  return readStream(res, onFrame);
+}
+
+/** One SSE reader for both transports: engine and local server. */
+async function readStream(res: Response, onFrame: (frame: StreamFrame) => void): Promise<void> {
   const type = String(res.headers.get('content-type') || '');
   if (!type.includes('text/event-stream') || !res.body) {
     // A provider answered without a stream: read it whole, still one frame.
@@ -236,8 +276,18 @@ export const api = {
 
   // images
   imageProviders: () => request('/api/llm/images/providers'),
-  imageGenerate: (body: { prompt: string; model?: string; size?: string }) =>
-    request('/api/llm/images/generations', { method: 'POST', body: JSON.stringify(body) }),
+  // `provider` is what pins the service. Without it the engine walks its own
+  // order, and a model id -- which means different things on different services
+  // -- decided the draw instead of the choice on screen.
+  imageGenerate: (body: {
+    prompt: string;
+    provider?: string;
+    preferProvider?: string;
+    model?: string;
+    size?: string;
+    quality?: string;
+    n?: number;
+  }) => request('/api/llm/images/generations', { method: 'POST', body: JSON.stringify(body) }),
 
   // design
   designTemplates: () => request('/api/design/templates'),

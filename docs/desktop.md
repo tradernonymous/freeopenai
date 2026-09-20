@@ -103,16 +103,56 @@ Every "we cannot reach it" failure in this app had one shape: work a webview is 
 
 Four things make the window read as a product rather than a panel of buttons:
 
-- **One icon set** (`src/components/Icon.tsx`), drawn here rather than imported: 24x24, 1.6px stroke, `currentColor`, so an icon is the same weight as its label and the same colour as the state it sits in. The sidebar's icons used to be emoji (💬 🖼 🛠 …), which render differently on every Windows build and cannot be aligned, sized or coloured.
+- **One icon set** (`src/components/Icon.tsx`), drawn here rather than imported: 24x24, 1.6px stroke, `currentColor`, so an icon is the same weight as its label and the same colour as the state it sits in. The sidebar's icons used to be emoji (💬 🖼 🛠 …), which render differently on every Windows build and cannot be aligned, sized or coloured. The typeface is bundled the same way (`@fontsource-variable/inter`, imported in `main.tsx`), so the app looks the same on every machine instead of inheriting whatever Segoe build happens to be installed.
 - **`Ctrl+K`** opens a command palette over every screen, action, panel, saved chat and skill (`src/commands.js` holds the registry and the matching rules; `Ctrl+K`, arrows, `Enter`, `Esc`). Before it, the whole keyboard story was `Alt+1..6`.
 - **Toasts** (`src/toasts.js`) replace a `setTimeout` hint in the sidebar: queued, dismissible, announced with `aria-live`, repeats refresh instead of stacking, and a failure can be sticky until it is dealt with.
 - **A status bar**: which engine this build is pointed at, whether it answered — and what it *wants* (an engine that reports healthy while refusing every call says *sign-in required*, not *connected*) — plus an available update and the version.
 
+Three more rules came out of using it, and they are what stop the window reading as a web page in a frame:
+
+- **A choice is one control, not a row of buttons.** The chat header carried three always-present mode tabs (Chat / Plan / Build) that read as navigation while actually being a property of the next message; they are one pill (`src/components/ModePicker.tsx`) that names the current mode and explains each option where the choice is made. The service-and-model pair is likewise one pill (`ModelPicker.tsx`) rather than two dropdowns that had to be read as a pair.
+- **No operating-system chrome.** Every `<select>` is gone: they open an OS-styled menu with a system font and highlight colour, which is the one element in a hand-styled window that betrays it. `src/components/SelectPill.tsx` is the app's own control — pill, panel, filter, per-option note — used by Images (service, model, shape), Design (template, service, model) and Files (document type). `test/desktop-images.test.js` walks every `.tsx` and fails if a `<select>` comes back, comments excluded.
+- **One failure, one place.** A failed turn is reported *in that turn*: which service and model were asked, the provider's own words, and what to do, with Retry and *try another model* as actions. The red bar at the bottom of the screen that repeated the same failure in shorthand — and, when nothing had failed, printed the engine's retry arithmetic as `rate-limit budget 20s`, which looked like a permanent fault and explained nothing — is gone. What the free tier meters is a quiet line beside the composer (`30,000 tokens/min · 12 of 1000 used today`), and the retry budget itself lives in Settings → *Limits the engine enforces*, where it belongs.
+
 The app is held to its own design bar, by test: every frontend file passes the anti-slop linter this repo ships for generated artifacts (`test/desktop-shell.test.js`), and every text token pair clears WCAG AA in both themes. That gate found real defects when it was written — `--text-3` measured 3.88:1 where the 11-13px hints that use it need 4.5:1, and the light theme's status colours measured 4.1-4.3:1; all were corrected rather than exempted. The same pass made the linter itself more honest: a prompt that says *no lorem ipsum* is an instruction, not shipped placeholder copy, and is no longer reported as one.
+
+## The content policy
+
+`tauri.conf.json` carries a real CSP now instead of `null`, and it is written to allow exactly what the app does:
+
+- `object-src 'none'`, `frame-src 'none'`, `base-uri 'self'`, `form-action 'self'` — no plugin, no frame, no injected base, no posting a form somewhere else.
+- `script-src 'self' https://js.puter.com` — the only remote script this app can ever run is the Puter SDK the user asked for by clicking it (Images → Puter). Inline is permitted because the boot guard and the dev server both need it; the value here is that no *third-party origin* can be introduced.
+- `connect-src 'self' https:` — the engine address is a setting, so the policy cannot name it in advance; https anywhere is the same reach the app already had. `http` is loopback only, and `ws://127.0.0.1:*`/`ws://localhost:*` are there for the dev server.
+- `wss://*.puter.com` for the SDK, and `img-src` includes `data:`/`blob:` because that is how a drawn picture arrives.
 
 ## Diagnostics
 
 Settings has a **Copy diagnostics** button. It copies a short report — build version, engine address, what the last engine answer meant, OS/arch, WebView2 version, where the data and cache directories are, and the tail of the crash log — built by `src/diagnostics.js` from facts the shell gathers (`src-tauri/src/diag.rs`). It is safe to paste: query strings are dropped from addresses and anything shaped like `hf_…`, `sk-…` or `Bearer …` is redacted. A failure should not need a screenshot.
+
+## Local models
+
+A model can run on this machine, and it answers in the Chat screen as **Local** — no engine, no network, no quota. Settings → **Local models** is where it is set up.
+
+The binary is the user's. This app neither ships `llama-server.exe` nor downloads one behind their back: **Open the llama.cpp releases** takes them to the page, **I have the file…** takes the file they unzip into the app's own folder (checked by name first — a path is not a licence to run whatever is at it), and the app runs it from there, or from `PATH` if a copy is already installed. A verified download of a release whose digest we have not published would be a claim this app cannot make, so it does not make it.
+
+Start passes `-hf <repo>:<quant>`, so **llama.cpp fetches and caches the weights itself** — the Unsloth-documented path, and the reason there is no GGUF downloader in this repo. The server is started on `--host 127.0.0.1` only, and the app reaps the child on quit: a model server left running after the window is gone is a process the user cannot see.
+
+`--ctx-size` and `--threads` come from the machine, and the **memory guard** is the part that matters: starting a model the machine cannot hold is the one way this feature can freeze a computer, so `src/local-models.js` estimates weights + KV cache + overhead against the memory the browser reports (which is rounded down and capped, so it is treated as a floor), refuses what does not fit, and says the numbers. A model that only just fits is called *tight* rather than comfortable.
+
+Lifecycle in one rule: a server that has not answered `/health` is **starting**, never *ready* — a model that has not loaded cannot answer, and saying it is ready is how a first message disappears into a void.
+
+## Signing
+
+The installer and the portable exe are **not signed**, which is why Windows SmartScreen shows *"Windows protected your PC"* the first time somebody runs a fresh download. That is a certificate, not code: an Authenticode certificate is issued to a verified legal identity, and the identity check is the user's to make.
+
+The pipeline is already wired for it. `bundle.windows.certificateThumbprint` is declared in `tauri.conf.json`, and the Desktop workflow signs when the repository has the secrets — no code change, no rebuild of the process:
+
+| Secret | What it is |
+| :-- | :-- |
+| `WINDOWS_CERTIFICATE` | The `.pfx` bundle, base64-encoded |
+| `WINDOWS_CERTIFICATE_PASSWORD` | Its password |
+
+With both set, CI imports the certificate, builds with its thumbprint, and **verifies** the signature on the installer and the portable exe — a build that claimed to be signed but is not fails the job rather than shipping quietly. Without them the build is unchanged, and the release notes say unsigned, so nobody has to guess which one they downloaded.
 
 ## Code map
 
@@ -136,6 +176,12 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/screens/LocalScreen.tsx` | The LOCAL screen: the empty state that invites picking a folder, the tree, the read-only viewer |
 | `src/useLocalRun.ts` | The React binding for `local-run` events |
 | `src-tauri/src/local.rs` | The real filesystem and command runner, confined to the open folder, with the engine's wording |
+| `src/failure.js` | Why a turn failed: what was asked, the provider's own words, and one sentence of advice |
+| `src/images.js` | Which image service draws, with which model, at which shape — and the curated Puter chains |
+| `src/puter.js` | The Puter SDK, injected only when the user picks it |
+| `src/local-models.js` | The local catalogue, the memory guard, and the lifecycle states |
+| `src/components/ModelPicker.tsx` | One pill for "who answers": service and model as one decision |
+| `src-tauri/src/models.rs` | The llama.cpp server: find, start, wait, stop — loopback only, reaped on exit |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
 | `src/main.tsx` | The boot guard: a start failure paints its own message into `#root` instead of leaving an empty window (and only while `#root` is empty, so a running app is never replaced) |
 | `src/bridge.ts` | The one place that talks to the Rust shell (`hasShell`, `remoteGet`, `downloadVerified`, `runInstaller`, `diagnosticsFacts`) |
@@ -163,4 +209,16 @@ The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read of
 
 ## Upgrade roadmap
 
-[`desktop-premium-plan.md`](./desktop-premium-plan.md) is the master plan for the next nine phases: the Rust network edge and a working updater, the premium shell pass, local-first files and terminal, llama.cpp + GGUF local models, Sign in with Hugging Face and the Hub browser, Hugging Face inference providers, the local approval-gated coding agent, the Agent Skills knowledge pack, and local images / parallel agents / fine-tuning. It also records what each reference repo (freebuff, codebuff-swe-bench, evalbuff, stagehand, opentui, unsloth and its forks, stable-diffusion.cpp, huggingface.js / skills / huggingface_hub) contributes to which phase.
+[`desktop-premium-plan.md`](./desktop-premium-plan.md) is the master plan for the nine phases: the Rust network edge and a working updater, the premium shell pass, local-first files and terminal, llama.cpp + GGUF local models, Sign in with Hugging Face and the Hub browser, Hugging Face inference providers, the local approval-gated coding agent, the Agent Skills knowledge pack, and local images / parallel agents / fine-tuning. It also records what each reference repo (freebuff, codebuff-swe-bench, evalbuff, stagehand, opentui, unsloth and its forks, stable-diffusion.cpp, huggingface.js / skills / huggingface_hub) contributes to which phase.
+
+| Phase | State |
+| :-- | :-- |
+| P1 — trust spine (network edge, updater, diagnostics, single instance) | shipped |
+| P2 — premium shell (icons, palette, toasts, status bar, tokens, bundled typeface, signing pipeline) | shipped |
+| P3 — local-first folder, terminal and confinement, LOCAL tab | shipped |
+| P4 — local models: llama.cpp + GGUF, the memory guard, `Local` in the picker | shipped |
+| P5 — Sign in with Hugging Face + the Hub browser | not started |
+| P6 — Hugging Face as a model route, BYOK un-parked | not started |
+| P7 — the local, approval-gated coding agent (the flagship) | not started |
+| P8 — knowledge and skills (Agent Skills, the HF catalogue) | not started |
+| P9 — local images, parallel agents, fine-tuning (stretch) | not started |

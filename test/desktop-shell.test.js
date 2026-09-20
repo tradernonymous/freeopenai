@@ -132,6 +132,33 @@ test('the shell is chrome plus screens, in that order', () => {
   assert.match(status, /engine: string/, 'the bar takes the engine address as a prop');
 });
 
+test('a choice is one control, not a row of buttons', () => {
+  const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
+  // The mode is a property of the next message, so it is a pill with a panel --
+  // three always-present tabs read as navigation and cost a row of the header.
+  assert.match(chat, /<ModePicker/);
+  assert.ok(!/className="mode-tab /.test(chat), 'the mode tabs are gone');
+  const mode = read('desktop', 'src', 'components', 'ModePicker.tsx');
+  assert.match(mode, /aria-expanded/);
+  assert.match(mode, /Escape/, 'a panel that cannot be dismissed by keyboard is a trap');
+  // The panel explains each mode where the choice is made, rather than leaving
+  // three unexplained words in the layout.
+  assert.match(mode, /Draft a plan first/);
+});
+
+test('a failed turn is reported once, in the turn it belongs to', () => {
+  const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
+  // No second red bar repeating the same failure at the bottom of the screen.
+  assert.ok(!/className="stream-error"/.test(chat), 'the duplicate bottom error bar is gone');
+  assert.ok(!/setStreamError/.test(chat), 'and so is its state');
+  // The failure card in the message carries the whole report, and names what
+  // was asked of which service -- never whichever provider worded the error.
+  assert.match(chat, /msg\.failure\.upstream/);
+  assert.match(chat, /failure\.attribute\(/);
+  // The free tier's budget is a fact beside the composer, not a warning.
+  assert.match(chat, /composer-note/);
+});
+
 test('the sidebar says what each row is and how to reach it', () => {
   const sidebar = read('desktop', 'src', 'Sidebar.tsx');
   assert.match(sidebar, /aria-current/, 'the active screen is announced');

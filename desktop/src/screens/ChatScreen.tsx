@@ -1,18 +1,30 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { api, streamChat, type StreamFrame } from '../api';
+import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
+import { hasShell, localModelStatus } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import Icon from '../components/Icon';
-// UMD module: loaded for its side effect, read off globalThis.
+import ModelPicker from '../components/ModelPicker';
+import ModePicker from '../components/ModePicker';
+// UMD modules: loaded for their side effect, read off globalThis.
 import '../chats.js';
+import '../failure.js';
+import '../local-models.js';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
+const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
+const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 
 export interface Msg {
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  /** The provider the turn was asked of, and the words for it. */
+  provider?: string;
+  providerLabel?: string;
   ts?: number;
   error?: boolean;
+  /** Why it failed, classified: what was asked, the provider's words, advice. */
+  failure?: import('../failure.js').Attribution;
 }
 
 export interface ChatSession {
@@ -65,6 +77,10 @@ interface ProviderRow {
   configured: boolean;
   kind?: string;
   freeTier?: any;
+  /** Only on the local row: where llama.cpp is listening, and on what. */
+  baseUrl?: string;
+  model?: string;
+  local?: boolean;
 }
 
 export default function ChatScreen() {
@@ -73,10 +89,16 @@ export default function ChatScreen() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => chats.readStore() as ChatSession[]);
   const [activeId, setActiveId] = useState<string>(() => sessions[0]?.id ?? '');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
+  // The model running on this machine, when there is one. It is a provider row
+  // like any other, so the picker needed no new concept -- but it is served by
+  // llama.cpp here, not by the engine, and the turn goes straight to it.
+  const [localRow, setLocalRow] = useState<ProviderRow | null>(null);
   const [models, setModels] = useState<Array<{ id: string; free?: string }>>([]);
-  const [limits, setLimits] = useState<any>(null);
+  // The picker's list: the engine's providers plus a local model if one is up.
+  const choices = localRow && !providerRows.some((p) => p.id === 'local')
+    ? [localRow, ...providerRows]
+    : providerRows;
   const [sending, setSending] = useState(false);
-  const [streamError, setStreamError] = useState('');
   const [attached, setAttached] = useState<string>('');
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -132,13 +154,45 @@ export default function ChatScreen() {
         });
       })
       .catch(() => setProviderRows([]));
-    api.limits().then(setLimits).catch(() => setLimits(null));
+  }, []);
+
+  // A local model comes and goes while the app is open, so the row is polled
+  // rather than read once. It is one localhost call; when nothing is running
+  // the shell answers immediately without touching a socket.
+  useEffect(() => {
+    if (!hasShell()) return;
+    const read = () => {
+      localModelStatus()
+        .then((status) => setLocalRow((current) => {
+          const row = localModels.providerRow(status);
+          // The label carries the model name, so a change of model is a change
+          // of row -- and a session sitting on the old one has to move.
+          if (current && !row) return null;
+          return row as ProviderRow | null;
+        }))
+        .catch(() => setLocalRow(null));
+    };
+    read();
+    const timer = setInterval(read, 15000);
+    return () => clearInterval(timer);
   }, []);
 
   // models follow the provider
   useEffect(() => {
     if (!active?.provider) {
       setModels([]);
+      return;
+    }
+    // A local server serves exactly the model it was started with, so its list
+    // is that one model -- asked of the shell, not of the engine.
+    if (active.provider === 'local') {
+      const repo = localRow?.model || '';
+      setModels(repo ? [{ id: repo, free: 'local · no limits, no network' }] : []);
+      setSessions((prev) => {
+        const next = prev.map((s) => (s.id === active.id && !repo ? { ...s, model: '' } : s));
+        saveSessions(next);
+        return next;
+      });
       return;
     }
     let gone = false;
@@ -225,7 +279,16 @@ export default function ChatScreen() {
       ts: Date.now(),
     };
     if (attached) setAttached('');
-    const assistantMsg: Msg = { role: 'assistant', content: '', model: active.model, ts: Date.now() };
+    // The turn records the provider AND the model it was asked of, so the label
+    // above a failure names what was asked -- never whichever provider happened
+    // to answer the error, which is what made an error look unrelated to the
+    // model on screen.
+    const asked = {
+      provider: active.provider,
+      providerLabel: providerRows.find((p) => p.id === active.provider)?.label || active.provider,
+      model: active.model,
+    };
+    const assistantMsg: Msg = { role: 'assistant', content: '', ...asked, ts: Date.now() };
     const history = [...active.messages, userMsg];
     patchSession(active.id, {
       messages: [...history, assistantMsg],
@@ -233,7 +296,6 @@ export default function ChatScreen() {
       title: active.messages.length === 0 ? text.slice(0, 48) : active.title,
     });
     setSending(true);
-    setStreamError('');
     stickToBottom.current = true;
 
     const controller = new AbortController();
@@ -254,30 +316,36 @@ export default function ChatScreen() {
     };
 
     try {
-      await streamChat(
-        active.provider,
-        { model: active.model, messages: history.map(({ role, content }) => ({ role, content })) },
-        (frame: StreamFrame) => {
+      const turns = history.map(({ role, content }) => ({ role, content }));
+      if (active.provider === 'local') {
+        await streamLocalChat(localRow?.baseUrl || '', active.model, turns, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
-        },
-        controller.signal,
-      );
+        }, controller.signal);
+      } else {
+        await streamChat(active.provider, { model: active.model, messages: turns }, (frame: StreamFrame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal);
+      }
       // persist the finished transcript
       setSessions((prev) => { saveSessions(prev); return prev; });
     } catch (err) {
       const aborted = (err as Error).name === 'AbortError';
-      const message = aborted ? 'Stopped.' : (err as Error).message || 'The reply failed.';
+      const told = failure.attribute({ ...asked, message: aborted ? '' : (err as Error).message });
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sid) return s;
         const msgs = s.messages.slice();
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
-          msgs[msgs.length - 1] = { ...last, content: last.content || (aborted ? '' : message), error: !aborted };
+          msgs[msgs.length - 1] = aborted
+            ? { ...last, error: false }
+            : { ...last, error: true, failure: told };
+          // A stopped turn with nothing in it is not a turn.
           if (aborted && !last.content) msgs.pop();
         }
         return { ...s, messages: msgs, updatedAt: Date.now() };
       }));
-      if (!aborted) setStreamError(message);
+      // One place, not two: the failure card in this turn is the whole report.
+      // The bottom bar that repeated it in shorthand is gone.
     } finally {
       setSending(false);
       abortRef.current = null;
@@ -289,20 +357,29 @@ export default function ChatScreen() {
 
   const stop = () => abortRef.current?.abort();
 
-  const retry = async () => {
+  // `modelOverride` is how "try another model" works without waiting for a
+  // render: the failed turn is re-sent to the next model in the same list the
+  // picker shows, and the session follows it.
+  const retry = async (modelOverride?: string) => {
     if (!active || sending) return;
+    const model = modelOverride || active.model;
+    if (modelOverride && modelOverride !== active.model) patchSession(active.id, { model });
     const msgs = active.messages.slice();
     while (msgs.length && msgs[msgs.length - 1].role === 'assistant') msgs.pop();
     const lastUser = msgs[msgs.length - 1];
     if (!lastUser || lastUser.role !== 'user') return;
     patchSession(active.id, { messages: msgs });
     setSending(true);
-    setStreamError('');
     const controller = new AbortController();
     abortRef.current = controller;
     const sid = active.id;
+    const asked = {
+      provider: active.provider,
+      providerLabel: providerRows.find((p) => p.id === active.provider)?.label || active.provider,
+      model,
+    };
     setSessions((prev) => prev.map((s) => (s.id === sid
-      ? { ...s, messages: [...msgs, { role: 'assistant', content: '', model: s.model, ts: Date.now() }], updatedAt: Date.now() }
+      ? { ...s, messages: [...msgs, { role: 'assistant', content: '', ...asked, ts: Date.now() }], updatedAt: Date.now() }
       : s)));
     const append = (piece: string) => {
       setSessions((prev) => prev.map((s) => {
@@ -315,14 +392,26 @@ export default function ChatScreen() {
       if (stickToBottom.current) scrollToBottom(false);
     };
     try {
-      await streamChat(
-        active.provider,
-        { model: active.model, messages: msgs.map(({ role, content }) => ({ role, content })) },
-        (frame) => { if (frame.content) append(frame.content); },
-        controller.signal,
-      );
+      const turns = msgs.map(({ role, content }) => ({ role, content }));
+      if (active.provider === 'local') {
+        await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal);
+      } else {
+        await streamChat(active.provider, { model, messages: turns }, (frame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal);
+      }
     } catch (err) {
-      if ((err as Error).name !== 'AbortError') setStreamError((err as Error).message);
+      if ((err as Error).name === 'AbortError') return;
+      const told = failure.attribute({ ...asked, message: (err as Error).message });
+      setSessions((prev) => prev.map((s) => {
+        if (s.id !== sid) return s;
+        const list = s.messages.slice();
+        const last = list[list.length - 1];
+        if (last && last.role === 'assistant') list[list.length - 1] = { ...last, error: true, failure: told };
+        return { ...s, messages: list, updatedAt: Date.now() };
+      }));
     } finally {
       setSending(false);
       abortRef.current = null;
@@ -337,7 +426,6 @@ export default function ChatScreen() {
     // chip is cleared: a build used to leave it sitting there forever.
     const fullPlan = attached ? `${plan}\n\n--- attached ---\n${attached}` : plan;
     setSending(true);
-    setStreamError('');
     if (attached) setAttached('');
     try {
       const session: any = await api.buildRun({ plan: fullPlan });
@@ -352,7 +440,25 @@ export default function ChatScreen() {
         title: active.messages.length === 0 ? plan.slice(0, 48) : active.title,
       });
     } catch (err) {
-      setStreamError((err as Error).message);
+      // A build that could not start says so where the request was made, with
+      // the same failure card a chat turn uses -- the bottom bar it used to
+      // write to is gone, and silently doing nothing was the alternative.
+      const told = failure.attribute({
+        provider: active.provider,
+        providerLabel: 'Build',
+        model: '',
+        message: (err as Error).message,
+      });
+      const note: Msg = {
+        role: 'assistant',
+        content: '',
+        error: true,
+        failure: told,
+        ts: Date.now(),
+      };
+      patchSession(active.id, {
+        messages: [...active.messages, { role: 'user', content: fullPlan, ts: Date.now() } as Msg, note],
+      });
     } finally {
       setSending(false);
     }
@@ -398,39 +504,49 @@ export default function ChatScreen() {
     );
   }
 
-  const freeTierNote = limits?.retries?.budgetMs != null
-    ? `rate-limit budget ${Math.round(limits.retries.budgetMs / 1000)}s`
-    : '';
+  // What the service this session is on meters, in its own numbers -- not the
+  // engine's internal retry budget.
+  //
+  // The old line here read "rate-limit budget 20s", which is a fact about this
+  // server's backoff arithmetic. It sat at the bottom of the screen in the same
+  // styling as an error, so the app looked permanently broken and explained
+  // nothing. The useful fact is the free tier: how many calls the day allows,
+  // how many are left, and whether the allowance is shared. When a service
+  // publishes no numbers there is nothing worth saying, so nothing is said.
+  const tier = providerRows.find((p) => p.id === active.provider)?.freeTier as
+    | { text?: string; callsToday?: number; cap?: number }
+    | undefined;
+  const freeTierNote = (() => {
+    if (!tier) return '';
+    const parts: string[] = [];
+    if (tier.text) parts.push(tier.text);
+    if (tier.cap && typeof tier.callsToday === 'number') {
+      parts.push(`${tier.callsToday} of ${tier.cap} used today`);
+    }
+    return parts.join(' · ');
+  })();
 
   return (
     <div className="screen chat">
       <header className="screen-header">
-        <div className="mode-tabs">
-          {(['chat', 'plan', 'build'] as const).map((m) => (
-            <button key={m} className={`mode-tab ${active.mode === m ? 'active' : ''}`}
-              onClick={() => patchSession(active.id, { mode: m })}>
-              {m === 'chat' ? 'Chat' : m === 'plan' ? 'Plan' : 'Build'}
-            </button>
-          ))}
-        </div>
+        {/* One pill, not three tabs: the mode is a property of the next
+            message, so it reads as a setting rather than as navigation. */}
+        <ModePicker
+          mode={active.mode}
+          onPick={(m) => patchSession(active.id, { mode: m })}
+          disabled={sending}
+        />
         <div className="header-actions">
-          <select className="model-select" value={active.provider}
-            onChange={(e) => patchSession(active.id, { provider: e.target.value, model: '' })}
-            title="Provider">
-            {providerRows.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}{p.freeTier && p.freeTier.limitText ? ` · ${p.freeTier.limitText}` : ''}
-              </option>
-            ))}
-            {providerRows.length === 0 && <option value="">no provider</option>}
-          </select>
-          <select className="model-select" value={active.model}
-            onChange={(e) => patchSession(active.id, { model: e.target.value })}>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>{m.id}{m.free ? ` · ${m.free}` : ''}</option>
-            ))}
-            {models.length === 0 && <option value="">—</option>}
-          </select>
+          {/* One pill, not two dropdowns: the service and the model are one
+              decision, and the pill names both without being read as a pair. */}
+          <ModelPicker
+            providers={choices}
+            models={models}
+            provider={active.provider}
+            model={active.model}
+            onPick={(provider, model) => patchSession(active.id, { provider, model })}
+            disabled={sending}
+          />
           <button onClick={startNew} title="New chat" aria-label="New chat"><Icon name="plus" size={15} /></button>
         </div>
       </header>
@@ -445,10 +561,40 @@ export default function ChatScreen() {
         )}
         {active.messages.map((msg, i) => (
           <div key={i} className={`message ${msg.role}${msg.error ? ' errored' : ''}`}>
-            <div className="message-role">{msg.role === 'user' ? 'You' : (msg.model || 'Assistant')}</div>
+            <div className="message-role">
+              {msg.role === 'user'
+                ? 'You'
+                : (msg.providerLabel && msg.model ? `${msg.providerLabel} · ${msg.model}` : (msg.model || 'Assistant'))}
+            </div>
             {msg.role === 'assistant'
-              ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+              ? (msg.content
+                ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                : null)
               : <div className="message-content">{msg.content}</div>}
+            {/* What failed, what it was asked of (which the label above already
+                names), the provider's own words, and what to do next -- instead
+                of the provider's error dump standing in for a reply. */}
+            {msg.failure && (
+              <div className="failure-card">
+                <div className="failure-head">
+                  <span className="failure-tag">{msg.failure.label}</span>
+                  <strong>{msg.failure.summary}</strong>
+                </div>
+                {msg.failure.upstream && <div className="failure-upstream">{msg.failure.upstream}</div>}
+                <div className="failure-advice">{msg.failure.advice}</div>
+                <div className="failure-actions">
+                  <button onClick={() => retry()} disabled={sending}>Retry {msg.model}</button>
+                  {models.length > 1 && (
+                    <button
+                      onClick={() => retry(failure.nextModel(msg.model || '', models))}
+                      disabled={sending}
+                    >
+                      Try {failure.nextModel(msg.model || '', models)}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ))}
         {sending && (
@@ -458,18 +604,10 @@ export default function ChatScreen() {
         )}
       </div>
 
-      {(streamError || freeTierNote) && (
-        <div className="stream-error">
-          {streamError && (
-            <>
-              <span>{streamError}</span>
-              <button onClick={retry}>Retry</button>
-            </>
-          )}
-          {!streamError && <span className="limit-badge">{freeTierNote}</span>}
-        </div>
-      )}
-
+      {/* No error bar down here any more. A failure is about one turn, and it
+          belongs in that turn -- the card above names what was asked of which
+          service and what to do, with its own Retry. A second red strip at the
+          bottom said the same thing twice and read as a permanent fault. */}
       <div className="composer">
         {attached && (
           <div className="attach-chip">
@@ -485,6 +623,13 @@ export default function ChatScreen() {
           {sending
             ? <button className="stop-btn" onClick={stop} title="Stop the reply"><Icon name="stop" size={12} /> Stop</button>
             : null}
+          {/* The free tier's own numbers, as a quiet fact beside the box rather
+              than a warning bar: a limit working as intended is not a fault. */}
+          {freeTierNote && (
+            <span className="composer-note" title="What this service's free tier meters">
+              {freeTierNote}
+            </span>
+          )}
           <textarea
             ref={inputRef}
             value={active.draft}

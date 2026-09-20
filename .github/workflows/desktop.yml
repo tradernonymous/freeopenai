@@ -16,6 +16,12 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    # At job level because a step's `if` cannot read `secrets` -- only `env`,
+    # `steps` and the like. Empty when the repository has no certificate, which
+    # is the ordinary case and must produce exactly the build it produced before.
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,11 +55,58 @@ jobs:
           test/desktop-commands.test.js
           test/desktop-toasts.test.js
           test/desktop-local.test.js
+          test/desktop-failure.test.js
+          test/desktop-images.test.js
+          test/desktop-models.test.js
+      # Code signing is a certificate, not code, so the pipeline is built to
+      # switch on the moment the repository has one and to be exactly today's
+      # build when it does not. `bundle.windows.certificateThumbprint` is
+      # already declared in tauri.conf.json; this imports the .pfx into the
+      # runner's own store and passes the thumbprint as a build-time config
+      # override, so nothing in the repo has to change to sign.
+      - name: Import the signing certificate (only when one is configured)
+        id: signing
+        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $secure = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $imported = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+          "thumbprint=$($imported.Thumbprint)" >> $env:GITHUB_OUTPUT
+          Write-Host "Imported signing certificate $($imported.Thumbprint) ($($imported.Subject))"
+
       - name: Build Tauri app
         working-directory: desktop
-        run: npm run tauri:build
+        shell: pwsh
+        run: |
+          if ('${{ steps.signing.outputs.thumbprint }}') {
+            npm run tauri:build -- --config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"${{ steps.signing.outputs.thumbprint }}\"}}}"
+          } else {
+            Write-Host '::warning::Building UNSIGNED - set WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD to sign.'
+            npm run tauri:build
+          }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A build that says it is signed must be signed. Verifying here is the
+      # difference between "we passed the thumbprint" and "the file Windows
+      # will trust".
+      - name: Verify the signature (only when signing)
+        if: ${{ steps.signing.outputs.thumbprint != '' }}
+        shell: pwsh
+        run: |
+          $files = @()
+          $files += Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*.exe
+          $files += Get-ChildItem desktop/src-tauri/target/release/bundle/msi/*.msi
+          $files += Get-Item desktop/src-tauri/target/release/freeai4u-desktop.exe
+          $bad = 0
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { $bad++ }
+          }
+          if ($bad -gt 0) { throw "$bad artifact(s) are not validly signed although a certificate was configured" }
       - name: Upload Installer (NSIS)
         uses: actions/upload-artifact@v4
         with:
@@ -108,6 +161,10 @@ jobs:
         with:
           tag_name: desktop-latest
           name: FreeAI4U Desktop for Windows (latest build)
+          body: |
+            ${{ steps.signing.outputs.thumbprint != '' && 'Signed build — the installer and the portable exe carry an Authenticode signature this job verified.' || 'Unsigned build — Windows SmartScreen will warn on first run. See docs/desktop.md (Signing) for the certificate the pipeline is waiting for.' }}
+
+            Built from `${{ github.sha }}`. Update metadata (`desktop-version.json`: version, sha256 and size per artifact) is published with this release and read by the app''s own update check.
           files: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/msi/*.msi

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { api } from '../api';
+import SelectPill from '../components/SelectPill';
 // UMD modules load for their side effect and are picked up off globalThis
 // -- the same pattern the design engine uses (rollup cannot see named
 // exports through a UMD wrapper).
@@ -255,9 +256,13 @@ export default function FilesScreen() {
       <section className="gen-card">
         <h3>Generate a file</h3>
         <div className="gen-row">
-          <select value={genKind} onChange={(e) => isKind(e.target.value) && setGenKind(e.target.value)}>
-            {GEN_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
-          </select>
+          <SelectPill
+            label="Type"
+            title="What kind of document to write"
+            value={genKind}
+            options={GEN_KINDS.map((k) => ({ value: k.id, label: k.label }))}
+            onPick={(id) => isKind(id) && setGenKind(id)}
+          />
           <input
             value={genAsk}
             onChange={(e) => setGenAsk(e.target.value)}

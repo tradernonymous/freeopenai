@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import Icon from '../components/Icon';
 import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
 // UMD module: loaded for its side effect, read off globalThis.
 import '../chats.js';
@@ -49,7 +50,9 @@ export default function LibraryScreen() {
       <header className="screen-header">
         <h1>Library</h1>
         <div className="header-actions">
-          <button onClick={load} disabled={loading}>{loading ? '…' : '↻ Refresh'}</button>
+          <button onClick={load} disabled={loading} title="Re-read the engine's skills and this machine's chats">
+            <Icon name="refresh" size={13} /> Refresh
+          </button>
         </div>
       </header>
 
