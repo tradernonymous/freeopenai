@@ -119,8 +119,10 @@ test('sendPush posts a data-only message -- no top-level notification field', as
   assert.deepEqual(parsed.message, {
     token: 'device-token-abc',
     data: { title: 'Build needs you', body: 'Approve a change' },
+    android: { priority: 'HIGH' },
   });
   assert.equal('notification' in parsed.message, false, 'a notification field would make Android auto-display it and skip this app\'s own handler while backgrounded');
+  assert.equal(parsed.message.android.priority, 'HIGH', 'a data-only approval push must not be deferred by Android\'s normal-priority delivery');
 });
 
 test('sendPush stringifies every payload value and drops a null one', async () => {

@@ -5043,7 +5043,7 @@ function imageDownloadFilename(promptText, format, width, height) {
   const w = Math.round(Number(width) || 0);
   const h = Math.round(Number(height) || 0);
   const size = w > 0 && h > 0 ? `-${w}x${h}` : '';
-  return `freeai4u-${imageDownloadStem(promptText)}${size}.${spec.ext}`;
+  return `neuraos-${imageDownloadStem(promptText)}${size}.${spec.ext}`;
 }
 
 // The page is the picture.
