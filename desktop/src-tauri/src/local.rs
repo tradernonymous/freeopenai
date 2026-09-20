@@ -25,10 +25,10 @@
 // call by its opening words, so "Refused:", "old_text was not found" and the
 // rest are the engine's own phrases, kept verbatim so the local coding agent
 // (P7) reads them the same way.
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// A text file larger than this is not a document, it is a data dump: read the
 /// head and say so.

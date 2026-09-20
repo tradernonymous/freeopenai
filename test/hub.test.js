@@ -11,9 +11,8 @@ const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const appJs = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const js = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'hub.css'), 'utf8');
+const hubCss = fs.readFileSync(path.join(ROOT, 'hub.css'), 'utf8');
 
 test('a reply reads like a plan when it has steps', () => {
   assert.equal(hub.looksLikePlan('1. Add a test\n2. Write the code'), true);

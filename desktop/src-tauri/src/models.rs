@@ -393,7 +393,6 @@ pub async fn local_model_start(
     // Wait for /health. A 4B model on a cold cache takes a while to load, but
     // "a while" is not forever: a deadline, and then the log's own words.
     let deadline = Instant::now() + Duration::from_secs(180);
-    let mut detail = String::new();
     loop {
         let exited = {
             let mut guard = match slot().lock() {
@@ -414,8 +413,7 @@ pub async fn local_model_start(
             shutdown();
             return Err(format!("{}. {}", reason, tail));
         }
-        let (ok, said) = health(port).await;
-        detail = said;
+        let (ok, detail) = health(port).await;
         if ok {
             let guard = match slot().lock() {
                 Ok(g) => g,
