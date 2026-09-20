@@ -6,12 +6,16 @@ import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
 import ModePicker from '../components/ModePicker';
 // UMD modules: loaded for their side effect, read off globalThis.
+import RadialMenu, { type RadialItem } from '../components/RadialMenu';
+import { pushToast } from '../components/Toasts';
 import '../chats.js';
 import '../failure.js';
+import '../fallback.js';
 import '../local-models.js';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
+const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFallback;
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 
 export interface Msg {
@@ -100,6 +104,12 @@ export default function ChatScreen() {
     : providerRows;
   const [sending, setSending] = useState(false);
   const [attached, setAttached] = useState<string>('');
+  // Right-click on a reply opens the actions for what is under the pointer.
+  const [radial, setRadial] = useState<{ x: number; y: number; items: RadialItem[] } | null>(null);
+  // A switch the app may take on its own (the local model, when a remote one
+  // rate-limits). It rides a ref because the next render is the one that has
+  // the failed turn written; the decision is made in the catch, taken after.
+  const autoFallback = useRef<import('../fallback.js').FallbackAttempt | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -346,12 +356,39 @@ export default function ChatScreen() {
       }));
       // One place, not two: the failure card in this turn is the whole report.
       // The bottom bar that repeated it in shorthand is gone.
+      //
+      // The one switch the app may take without asking: a rate-limited remote
+      // turn answered by the local model. It is the same request to a private
+      // server, so there is nothing to consent to -- and it is the difference
+      // between a wall and a reply. Every other switch stays a button.
+      if (!aborted) {
+        const switchPlan = fallback.plan({
+          failure: told,
+          provider: asked.provider,
+          model: asked.model,
+          next: failure.nextModel(asked.model, models),
+          local: localRow ? { baseUrl: localRow.baseUrl, model: localRow.model, ready: true } : null,
+        });
+        if (switchPlan.automatic && switchPlan.attempts.length) {
+          autoFallback.current = switchPlan.attempts[0];
+          if (switchPlan.note) pushToast('info', switchPlan.note);
+        }
+      }
     } finally {
       setSending(false);
       abortRef.current = null;
       // one authoritative save with the final state
       setTimeout(() => setSessions((prev) => { saveSessions(prev); return prev; }), 0);
       inputRef.current?.focus();
+      // Taken after the failed turn is on screen, and with the transcript it
+      // was built from: `active` here is the render that started this send, so
+      // it cannot be the source of the next attempt's messages.
+      const switchTo = autoFallback.current;
+      autoFallback.current = null;
+      if (switchTo) {
+        const turns = [...history];
+        setTimeout(() => { retry(switchTo.model, switchTo.provider, turns); }, 0);
+      }
     }
   };
 
@@ -359,12 +396,22 @@ export default function ChatScreen() {
 
   // `modelOverride` is how "try another model" works without waiting for a
   // render: the failed turn is re-sent to the next model in the same list the
-  // picker shows, and the session follows it.
-  const retry = async (modelOverride?: string) => {
-    if (!active || sending) return;
+  // picker shows, and the session follows it. `providerOverride` is the same
+  // move across providers -- it is what lets a rate-limited turn be answered by
+  // the local server instead.
+  const retry = async (modelOverride?: string, providerOverride?: string, messagesOverride?: Msg[]) => {
+    if (!active) return;
+    // The click path must not race an in-flight turn; the automatic path is
+    // started by that turn ending and passes its own transcript in.
+    if (!messagesOverride && sending) return;
     const model = modelOverride || active.model;
-    if (modelOverride && modelOverride !== active.model) patchSession(active.id, { model });
-    const msgs = active.messages.slice();
+    const provider = providerOverride || active.provider;
+    if (providerOverride && modelOverride && (model !== active.model || provider !== active.provider)) {
+      patchSession(active.id, { model, provider });
+    } else if (modelOverride && modelOverride !== active.model) {
+      patchSession(active.id, { model });
+    }
+    const msgs = (messagesOverride || active.messages).slice();
     while (msgs.length && msgs[msgs.length - 1].role === 'assistant') msgs.pop();
     const lastUser = msgs[msgs.length - 1];
     if (!lastUser || lastUser.role !== 'user') return;
@@ -374,8 +421,8 @@ export default function ChatScreen() {
     abortRef.current = controller;
     const sid = active.id;
     const asked = {
-      provider: active.provider,
-      providerLabel: providerRows.find((p) => p.id === active.provider)?.label || active.provider,
+      provider,
+      providerLabel: providerRows.find((p) => p.id === provider)?.label || provider,
       model,
     };
     setSessions((prev) => prev.map((s) => (s.id === sid
@@ -393,7 +440,7 @@ export default function ChatScreen() {
     };
     try {
       const turns = msgs.map(({ role, content }) => ({ role, content }));
-      if (active.provider === 'local') {
+      if (provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
           if (frame.content) append(frame.content);
         }, controller.signal);
@@ -477,6 +524,49 @@ export default function ChatScreen() {
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
+  // Right-click on a reply: the actions for what is under the pointer, in a
+  // ring at the pointer. The text is either the selection (what the user means)
+  // or the code block it landed on, and it is capped so a right-click on a
+  // 4000-line reply cannot paste the whole thing into the composer.
+  const onMessagesContextMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('.message')) return;
+    const selection = String(window.getSelection?.() || '').trim();
+    const code = target.closest('.code-block')?.querySelector('pre')?.textContent || '';
+    const body = selection || code.trim() || (target.closest('.message')?.textContent || '').trim();
+    if (!body) return;
+    e.preventDefault();
+    const snippet = body.length > 4000 ? `${body.slice(0, 4000)}\n…` : body;
+    const fenced = `\`\`\`\n${snippet}\n\`\`\``;
+    const ask = (text: string) => {
+      patchSession(active.id, { draft: text });
+      inputRef.current?.focus();
+    };
+    const items: RadialItem[] = [
+      {
+        id: 'copy',
+        label: 'Copy',
+        icon: 'copy',
+        run: () => {
+          navigator.clipboard.writeText(snippet)
+            .then(() => pushToast('ok', 'Copied.'))
+            .catch(() => pushToast('warn', 'This window would not let the app copy.'));
+        },
+      },
+      { id: 'explain', label: 'Explain', icon: 'chat', run: () => ask(`Explain this:\n\n${fenced}`) },
+      { id: 'rework', label: 'Rework', icon: 'build', run: () => ask(`Rework this and show the improved version:\n\n${fenced}`) },
+    ];
+    if (active.messages.some((m) => m.failure)) {
+      items.push({
+        id: 'retry-next',
+        label: 'Retry',
+        icon: 'refresh',
+        run: () => retry(failure.nextModel(active.model, models)),
+      });
+    }
+    setRadial({ x: e.clientX, y: e.clientY, items });
+  };
+
   // Copy buttons inside rendered code blocks.
   const onMessagesClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -551,7 +641,13 @@ export default function ChatScreen() {
         </div>
       </header>
 
-      <div className="chat-messages" ref={listRef} onScroll={onScroll} onClick={onMessagesClick}>
+      <div
+        className="chat-messages"
+        ref={listRef}
+        onScroll={onScroll}
+        onClick={onMessagesClick}
+        onContextMenu={onMessagesContextMenu}
+      >
         {active.messages.length === 0 && (
           <div className="empty-state">
             <div className="empty-icon"><Icon name="chat" size={28} /></div>
@@ -608,6 +704,14 @@ export default function ChatScreen() {
           belongs in that turn -- the card above names what was asked of which
           service and what to do, with its own Retry. A second red strip at the
           bottom said the same thing twice and read as a permanent fault. */}
+      {radial && (
+        <RadialMenu
+          x={radial.x}
+          y={radial.y}
+          items={radial.items}
+          onClose={() => setRadial(null)}
+        />
+      )}
       <div className="composer">
         {attached && (
           <div className="attach-chip">
@@ -635,7 +739,7 @@ export default function ChatScreen() {
             value={active.draft}
             onChange={(e) => patchSession(active.id, { draft: e.target.value })}
             onKeyDown={onKey}
-            placeholder={active.mode === 'build' ? 'Describe the build — this starts a remote build session…' : 'Message FreeAI4U…'}
+            placeholder={active.mode === 'build' ? 'Describe the build — this starts a remote build session…' : 'Message NeuraOS…'}
             rows={1}
           />
           <button onClick={send} disabled={sending || !active.draft.trim()} className="send-btn">

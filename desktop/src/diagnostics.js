@@ -55,7 +55,7 @@
     var client = (input && input.client) || {};
     var lines = [];
 
-    lines.push('FreeAI4U Desktop' + (shell.version ? ' ' + shell.version : ''));
+    lines.push('NeuraOS Desktop' + (shell.version ? ' ' + shell.version : ''));
     lines.push('');
     [
       line('engine    ', redactUrl(client.engine) || 'not set'),

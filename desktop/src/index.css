@@ -306,6 +306,16 @@
   --hover: rgba(255, 255, 255, 0.055);
   --rail: 60px;
   --rail-open: 224px;
+  /* Liquid glass. A translucent panel is only readable because of its two
+     edges: the hairline border and the light along its top lip. Without them
+     a blurred panel dissolves into the very background it is blurring. The
+     values live here so the light theme can answer them, and so a test can
+     read them without guessing at hex codes. */
+  --glass-bg: rgba(17, 26, 16, 0.6);
+  --glass-bg-strong: rgba(13, 20, 12, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.075);
+  --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --glass-blur: 18px;
 }
 
 [data-theme="light"] {
@@ -329,6 +339,13 @@
   --ok: #14703a;
   --warn: #8a5406;
   --err: #b91c1c;
+  /* Glass on a light surface needs less blur and more of its own colour, or
+     the text behind it reads as dirty rather than deep. */
+  --glass-bg: rgba(238, 244, 234, 0.64);
+  --glass-bg-strong: rgba(245, 249, 242, 0.88);
+  --glass-border: rgba(20, 30, 18, 0.1);
+  --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --glass-blur: 14px;
 }
 
 html, body, #root {
@@ -3046,6 +3063,323 @@ button.linkish {
 
 .local-row:hover {
   border-color: var(--accent-mid);
+}
+
+/* ---- liquid glass: the ambient layer and the surfaces over it ---------- */
+
+/* Glass over a flat colour is just a dimmer flat colour: blur needs something
+   with structure behind it to be worth the GPU time. Two wide, very slow
+   gradients sit under the whole shell, so every translucent panel above them
+   gains depth -- and this costs no elements in the DOM and no JavaScript. */
+.app::before {
+  content: '';
+  position: fixed;
+  inset: -15%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(34% 40% at 16% 10%, var(--accent-mid), transparent 68%),
+    radial-gradient(30% 34% at 84% 82%, rgba(56, 189, 248, 0.22), transparent 70%),
+    radial-gradient(42% 36% at 66% 4%, rgba(168, 85, 247, 0.16), transparent 72%);
+  opacity: 0.55;
+}
+
+/* The ambient layer paints above the in-flow bands unless they are lifted, so
+   the three shell bands say they are positioned. Text never sits on tint. */
+.titlebar,
+.app-body,
+.status-bar {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app::before {
+    animation: ambient-drift 72s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes ambient-drift {
+  from { transform: translate3d(-1.5%, -1%, 0) scale(1); }
+  to { transform: translate3d(1.5%, 1.5%, 0) scale(1.06); }
+}
+
+/* The floating surfaces. These are the panels that hover over the canvas --
+   the rail, the chrome bands, the palette, the toasts, the docks. Content that
+   must be read at length (chat bubbles, code, forms) is deliberately NOT here:
+   a blurred code block is a worse code block. */
+.sidebar,
+.titlebar,
+.status-bar,
+.right-panel,
+.dock-slot,
+.palette,
+.toast {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+}
+
+.sidebar,
+.titlebar,
+.status-bar,
+.right-panel {
+  background: var(--glass-bg);
+}
+
+.palette,
+.toast {
+  background: var(--glass-bg-strong);
+  box-shadow: var(--glass-light), var(--shadow-2);
+}
+
+.sidebar,
+.titlebar,
+.status-bar,
+.right-panel,
+.dock-slot,
+.palette,
+.toast,
+.update-banner,
+.server-banner {
+  border-color: var(--glass-border);
+}
+
+.dock-slot {
+  box-shadow: var(--glass-light), 0 -18px 40px rgba(0, 0, 0, 0.35);
+}
+
+/* The palette hangs in front of everything, so its backdrop is blurred too --
+   that blur is what makes the panel read as floating rather than pasted. */
+.palette-backdrop {
+  background: rgba(4, 8, 4, 0.42);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+[data-theme='light'] .palette-backdrop {
+  background: rgba(30, 40, 26, 0.26);
+}
+
+/* The same tints over a pale background read as dirt rather than depth, so the
+   light theme keeps the ambient layer but lets it stay quiet. */
+[data-theme='light'] .app::before {
+  opacity: 0.3;
+}
+
+/* ---- zen: the chrome leaves ------------------------------------------- */
+
+/* Zen mode answers "why is this still an app from 2000": the titlebar, the
+   rail and the status bar are the shell explaining itself, and while you are
+   working in one screen none of that is the work. Hiding them leaves the
+   canvas, and one pill fades in under the pointer so the way back is never a
+   guess. It stays clickable at zero opacity -- it is hovered, not hunted. */
+.app.zen .titlebar,
+.app.zen .sidebar,
+.app.zen .status-bar {
+  display: none;
+}
+
+.zen-peek {
+  position: fixed;
+  /* Centred on the top edge, where every screen leaves its header empty: the
+     corner is where the screens put their own first control, and the way out
+     of full-screen mode should not land on top of it. */
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.zen-peek:hover,
+.zen-peek:focus-visible {
+  opacity: 1;
+  color: var(--text-1);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .zen-peek {
+    transition: opacity 160ms ease, color 120ms ease;
+  }
+
+  /* Motion with a reason: a row leans toward the pointer, a primary button
+     lifts off the surface it is painted on, a press settles it back. All of
+     it is under the reduced-motion guard because none of it is information. */
+  .sidebar-btn {
+    transition: transform 140ms ease, background-color 120ms ease, color 120ms ease;
+  }
+
+  .sidebar-btn:hover {
+    transform: translateX(2px);
+  }
+
+  .send-btn,
+  .dock-send,
+  .update-install {
+    transition: transform 120ms ease, box-shadow 140ms ease, background-color 120ms ease;
+  }
+
+  .send-btn:hover:not(:disabled),
+  .dock-send:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .send-btn:active:not(:disabled),
+  .dock-send:active:not(:disabled) {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .palette-row.active {
+    box-shadow: var(--glass-light), 0 0 0 1px var(--accent-mid);
+  }
+}
+
+/* ---- the radial menu --------------------------------------------------- */
+
+/* Right-click opens a ring at the pointer: the same actions in the same
+   directions every time, which is what makes a ring faster than a list you
+   read top to bottom. The scrim exists to catch the click that dismisses it. */
+.radial-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(4, 8, 4, 0.18);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.radial {
+  position: fixed;
+  width: 0;
+  height: 0;
+}
+
+.radial-hub {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim);
+}
+
+.radial-item {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  color: var(--text-1);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--glass-light), var(--shadow-1);
+}
+
+.radial-item:hover,
+.radial-item:focus-visible {
+  border-color: var(--accent-mid);
+  color: var(--accent);
+}
+
+/* The label arrives on hover: four icons are learnable, four captions sitting
+   in a ring are noise until the moment they are needed. */
+.radial-label {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  color: var(--text-2);
+  opacity: 0;
+}
+
+.radial-item:hover .radial-label,
+.radial-item:focus-visible .radial-label {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .radial-item {
+    transition: border-color 120ms ease, color 120ms ease, transform 120ms ease;
+  }
+
+  /* The button leans out toward the pointer, the way the rail rows lean
+     toward it: the ring reads as something held rather than drawn. */
+  .radial-item:hover {
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+
+  .radial-label {
+    transition: opacity 120ms ease;
+  }
+}
+
+/* ---- and when the reader asks for less ---------------------------------- */
+
+/* Glass is decoration, and decoration is the first thing to give up. A reader
+   who has asked for less transparency, or more contrast, gets the opaque panel
+   the glass was standing in for -- and loses the ambient layer, which is the
+   only part of this that costs frames on a weak GPU. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .sidebar,
+  .titlebar,
+  .status-bar,
+  .right-panel,
+  .dock-slot,
+  .palette,
+  .toast,
+  .palette-backdrop,
+  .radial-scrim,
+  .radial-item,
+  .radial-label,
+  .zen-peek {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .sidebar,
+  .titlebar,
+  .status-bar,
+  .right-panel {
+    background: var(--bg-1);
+  }
+
+  .palette,
+  .toast,
+  .radial-item,
+  .radial-label,
+  .zen-peek {
+    background: var(--bg-2);
+  }
+
+  .app::before {
+    display: none;
+  }
 }
 
 /* Too big for this machine: dimmed, and the button says why it cannot. */

@@ -462,8 +462,7 @@ pub fn local_run(
             Err(e) => return Err(format!("The command could not be waited for: {}", e)),
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             timed_out = true;
             break;
         }
@@ -487,6 +486,35 @@ pub fn local_run(
         "stdoutTruncated": out_text.len() > MAX_RUN_OUTPUT,
         "stderrTruncated": err_text.len() > MAX_RUN_OUTPUT,
     }))
+}
+
+/// Stop a run for good, and stop what the run started.
+///
+/// `child.kill()` reaps the shell and nothing it started: `cmd /C npm test` is
+/// two processes, and killing the first leaves the second running -- a test
+/// runner still writing into a folder the app has stopped watching, or a
+/// llama-server still holding a port after the session that wanted it is gone.
+/// The plan for this app called that "automatic cleanup"; on Windows it has one
+/// honest implementation, and it is to kill the tree by its root pid.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // No console: this runs while a terminal panel is on screen, and a
+        // black window flashing over it would be its own bug report.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    // The root is still reaped here, whatever the tree kill did: a pid is not
+    // reusable until it is waited for, and a zombie child would outlive the run.
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn clamp(text: &str) -> String {

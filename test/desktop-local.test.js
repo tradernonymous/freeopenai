@@ -77,6 +77,21 @@ test('the shell registers every local command the frontend calls', () => {
   }
 });
 
+test('a run that is stopped stops what it started', () => {
+  const source = rust();
+  // `cmd /C npm test` is two processes. Killing the shell leaves the test
+  // runner writing into a folder the app has stopped watching -- the resource
+  // leak the plan called "automatic cleanup", and on Windows the only honest
+  // way to be sure is to kill the tree by its root pid.
+  assert.ok(source.includes('fn kill_tree(child: &mut std::process::Child)'));
+  assert.ok(source.includes('args(["/T", "/F", "/PID"'), 'the tree is killed by its root pid');
+  assert.ok(source.includes('creation_flags(CREATE_NO_WINDOW)'), 'and without a console flashing over the panel');
+  assert.ok(source.includes('child.wait()'), 'the root is reaped even if the tree kill failed');
+  assert.ok(source.includes('kill_tree(&mut child)'), 'the timeout goes through it');
+  assert.ok(!/child\.kill\(\);\s*\n\s*let _ = child\.wait\(\);\s*\n\s*timed_out/.test(source),
+    'the timeout path no longer kills the shell alone');
+});
+
 test('the refusal wording the engine recognises is kept verbatim', () => {
   const source = rust();
   // agent-sessions.js classifies a failed tool call by these opening words.

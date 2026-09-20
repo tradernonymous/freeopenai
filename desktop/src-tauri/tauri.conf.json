@@ -12,8 +12,8 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "longDescription": "FreeAI4U Desktop — the free AI desktop: chat, images and builds on free models.",
-    "shortDescription": "FreeAI4U Desktop",
+    "longDescription": "NeuraOS Desktop — chat, images, local models and approval-gated builds, in one window.",
+    "shortDescription": "NeuraOS Desktop",
     "category": "productivity",
     "fileAssociations": [],
     "windows": {
@@ -25,13 +25,13 @@
       }
     }
   },
-  "productName": "FreeAI4U Desktop",
-  "version": "2.7.0",
+  "productName": "NeuraOS Desktop",
+  "version": "2.8.0",
   "identifier": "com.freeai4u.desktop",
   "app": {
     "windows": [
       {
-        "title": "FreeAI4U Desktop",
+        "title": "NeuraOS",
         "width": 1360,
         "height": 900,
         "resizable": true,

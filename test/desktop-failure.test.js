@@ -126,7 +126,9 @@ test('the chat screen leads with what was asked, and offers another model', () =
   assert.match(screen, /msg\.failure\.upstream/);
   assert.match(screen, /failure\.nextModel\(msg\.model \|\| '', models\)/);
   // Retrying with another model re-sends with that model, in one action.
-  assert.match(screen, /const retry = async \(modelOverride\?: string\)/);
+  // The retry takes a provider too, and (for the automatic handoff) the
+  // transcript it was started from, so a switch cannot re-send a stale turn.
+  assert.match(screen, /const retry = async \(modelOverride\?: string, providerOverride\?: string, messagesOverride\?: Msg\[\]\)/);
   assert.match(screen, /patchSession\(active\.id, \{ model \}\)/);
   // The card is the whole report -- there is no second banner repeating it in
   // shorthand at the bottom of the screen.

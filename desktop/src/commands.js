@@ -29,6 +29,7 @@
     { id: 'go-settings', group: 'Go to', title: 'Settings', hint: 'Engine, sign-in, diagnostics', keys: 'Alt+7', palette: 'settings' },
     { id: 'new-chat', group: 'Do', title: 'New chat', hint: 'Start a fresh conversation' },
     { id: 'toggle-theme', group: 'Do', title: 'Switch theme', hint: 'Light or dark' },
+    { id: 'toggle-zen', group: 'Do', title: 'Zen mode', hint: 'Hide the chrome and keep only the canvas', keys: 'Ctrl+Shift+Z' },
     { id: 'open-folder', group: 'Do', title: 'Open a local folder', hint: 'Choose the folder the terminal and agent work in' },
     { id: 'toggle-folder-panel', group: 'Panel', title: 'Local folder tree', hint: 'Files on this machine' },
     { id: 'toggle-terminal', group: 'Panel', title: 'Terminal', hint: 'Run commands on this machine' },

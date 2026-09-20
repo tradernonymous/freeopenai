@@ -36,7 +36,7 @@ export function paintFailure(error: unknown): void {
   const box = document.createElement('div');
   box.className = 'boot-failure';
   const title = document.createElement('h1');
-  title.textContent = 'FreeAI4U could not start';
+  title.textContent = 'NeuraOS could not start';
   const detail = document.createElement('pre');
   detail.textContent = message;
   const hint = document.createElement('p');
@@ -57,7 +57,7 @@ const container = rootElement();
 if (!container) {
   // index.html is bundled with the app; if #root is missing the shell and the
   // frontend do not match, and saying so beats a blank window.
-  document.body.textContent = 'FreeAI4U: this build is missing its #root element.';
+  document.body.textContent = 'NeuraOS: this build is missing its #root element.';
 } else {
   try {
     ReactDOM.createRoot(container).render(

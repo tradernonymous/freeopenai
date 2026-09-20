@@ -43,7 +43,7 @@ test('tauri.conf.json: NSIS ships and the window settings are sane', () => {
   const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));
   assert.ok(conf.bundle.targets.includes('nsis'));
   assert.ok(conf.bundle.active);
-  assert.equal(conf.productName, 'FreeAI4U Desktop');
+  assert.equal(conf.productName, 'NeuraOS Desktop');
   assert.ok(conf.app.windows[0].width >= 1000, 'the chat needs room');
 });
 

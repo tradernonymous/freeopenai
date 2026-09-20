@@ -79,7 +79,7 @@
       case 'unreachable':
         return 'Connect to an engine';
       case 'first-run':
-        return 'Welcome to FreeAI4U';
+        return 'Welcome to NeuraOS';
       default:
         return 'Connect to an engine';
     }

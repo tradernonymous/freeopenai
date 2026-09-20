@@ -203,9 +203,53 @@ The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read of
 > [!IMPORTANT]
 > Those modules publish their global **unconditionally**, and must keep doing so. The traditional UMD wrapper assigns the global only in the branch taken when it cannot see CommonJS — and inside a Vite bundle it *does* see a `module` object (the interop helper leaves one in scope), so the global was never set. The app then died on its first read of one: a window painted in the app's background colour, with nothing in it, while `vite dev` worked perfectly. `test/desktop-umd.test.js` runs every one of these modules the way the bundle runs it — a `module` in scope, no `require` — so this cannot come back quietly. The shell's Rust rules are asserted from the shell sources as a set (`test/desktop.test.js`), so moving a rule between modules is not a test break.
 
+## The NeuraOS shell
+
+The desktop front end is **NeuraOS**. The engine it talks to is still the
+FreeAI4U server, and the crate, the binary, the bundle identifier and the
+`localStorage` keys all keep their `freeai4u-*` spelling -- they are what an
+existing install and the update path are keyed on, so the rename is a name and
+not a new app: an upgrade lands in place, and existing chats and settings
+survive it.
+
+What the shell does that a window of tabs does not:
+
+- **Liquid glass, over an ambient layer.** `.app::before` paints two very slow
+  gradients under everything, and the floating surfaces are translucent with
+  `backdrop-filter`: the rail, the titlebar and status bar, the right panel, the
+  docks, the command palette, the toasts and the radial ring. Content that is
+  read at length -- chat bubbles, code, forms -- stays opaque on purpose: a
+  blurred code block is a worse code block.
+- **Zen mode (`Ctrl+Shift+Z`).** The titlebar, the rail and the status bar leave,
+  the canvas stays, and a single pill fades in on hover to bring them back. It is
+  a mode, not a setting, so it is deliberately not written to disk.
+- **The rail.** Icons only, 60px wide, widening on hover or focus to reveal the
+  labels and the shortcut for each row. Nothing moves under the pointer while it
+  animates, so a hover never turns into a mis-click.
+- **The radial menu.** Right-click a reply and the actions for what is under the
+  pointer open in a ring around it: copy, explain, rework, and retry when the turn
+  failed. Placement is [`src/radial.js`](../desktop/src/radial.js) -- a ring that
+  opens half off-screen hides exactly the action someone wanted, so the rule is
+  pure and tested rather than eyeballed.
+- **Smart provider fallback.** [`src/fallback.js`](../desktop/src/fallback.js)
+  decides what a failed turn tries next. One switch is taken without asking: a
+  rate-limited remote turn is answered by the running local model, because it is
+  the same request to a private server and the difference between a wall and a
+  reply. Every other switch -- a different remote model -- is a button, because a
+  different model is a different answer and that is the user's call.
+- **Less transparency and more contrast are answered.** A reader who has asked
+  for either gets the opaque panel the glass was standing in for, and the ambient
+  layer goes with it: decoration is the first thing to give up, and it is the only
+  part of this that costs frames on a weak GPU.
+- **A missing runtime offers the install.** The boot check still runs before the
+  first window exists, but the dialog now has a button that opens the WebView2
+  download (without a console flashing over it) and the crash log records whether
+  it was taken. A branded in-app window is the one thing that cannot be built
+  there: drawing a window needs the runtime that is missing.
+
 ## How it is built
 
-[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), plus the local-confinement suite (`test/desktop-local.test.js`), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.
+[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), the local-confinement suite (`test/desktop-local.test.js`), the IPC/route contract (`test/desktop-contract.test.js`), the shell's own look and its fallbacks (`test/desktop-zen-glass.test.js`), the fallback policy (`test/desktop-fallback.test.js`) and the radial menu (`test/desktop-radial.test.js`), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.
 
 ## Upgrade roadmap
 
@@ -222,3 +266,21 @@ The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read of
 | P7 — the local, approval-gated coding agent (the flagship) | not started |
 | P8 — knowledge and skills (Agent Skills, the HF catalogue) | not started |
 | P9 — local images, parallel agents, fine-tuning (stretch) | not started |
+
+The NeuraOS pass (the UI/UX and hybrid-compute plan) is tracked separately,
+because it cuts across those phases:
+
+| Phase | State |
+| :-- | :-- |
+| 1 — foundation and the UI paradigm shift (glass, zen, palette, the hover rail, micro-interactions, the WebView2 fallback, the IPC/route contract) | shipped |
+| 2 — advanced build and planning (inline diffs, a sandboxed local runner) | partial: the approval card already renders the diff inline, and a stopped run now kills its whole process tree after the timeout; the node-based planning canvas is not started |
+| 3 — local intelligence and hybrid compute (llama.cpp, smart fallback, remote handoff) | partial: local models load and serve, and the fallback rule is shipped; the remote handoff orchestrator is not started |
+| 4 — polish, interaction and autonomy (radial menus, micro-animations, brand) | shipped, except the 60 FPS profile, which needs a machine with a GPU and a profiler rather than a promise in a document |
+
+What that leaves unbuilt on purpose, in the order it is worth doing: Hugging
+Face OAuth and the Hub browser (P5/P6), the local approval-gated coding agent
+(P7, the flagship), the Agent Skills knowledge pack (P8), and fine-tuning (P9).
+`test/desktop-contract.test.js` is the guard rail for all of them: it holds the
+frontend's Tauri command names against the shell's `generate_handler!` list and
+`api.ts`'s routes against `server.js`, so a screen that calls something the
+other side does not have fails here instead of in front of a user.

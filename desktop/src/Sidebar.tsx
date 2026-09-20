@@ -54,12 +54,17 @@ interface SidebarProps {
   panels: Partial<PanelKeyMap>;
 }
 
+// The name is the product's, not the engine's: this is NeuraOS, and the engine
+// it talks to is still the FreeAI4U server. The crate, the binary, the bundle
+// identifier and the localStorage keys all keep their freeai4u-* spelling, so
+// an existing install updates in place and existing chats and settings survive
+// the rename.
 export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-logo">AI</div>
-        <span className="sidebar-title">FreeAI4U</span>
+        <div className="sidebar-logo">N</div>
+        <span className="sidebar-title">NeuraOS</span>
       </div>
 
       <button className="sidebar-search" type="button" onClick={onOpenPalette}>

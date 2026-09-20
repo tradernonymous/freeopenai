@@ -79,6 +79,10 @@ export default function App() {
   const [signedIn, setSignedIn] = useState<boolean>(false);
   const [importMsg, setImportMsg] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Zen is a mode, not a setting: it is deliberately not written to disk,
+  // because the app should open looking the same way every time. Ctrl+Shift+Z
+  // drops the chrome from anywhere; the peek pill brings it back.
+  const [zen, setZen] = useState(false);
   const [paletteExtra, setPaletteExtra] = useState<PaletteEntry[]>([]);
   const [skillEntries, setSkillEntries] = useState<PaletteEntry[]>([]);
 
@@ -194,6 +198,9 @@ export default function App() {
         setView('chat');
         window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT));
         break;
+      case 'toggle-zen':
+        setZen((on) => !on);
+        break;
       case 'toggle-theme':
         toggle();
         break;
@@ -216,6 +223,20 @@ export default function App() {
         break;
     }
   };
+
+  // Zen has its own listener because it is a mode rather than a move: it has
+  // to work from every screen, and from inside the palette itself, where the
+  // other handler is already using the keyboard.
+  useEffect(() => {
+    const onZen = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        setZen((on) => !on);
+      }
+    };
+    window.addEventListener('keydown', onZen);
+    return () => window.removeEventListener('keydown', onZen);
+  }, []);
 
   // Alt+1..7 walks the sidebar in its displayed order; Ctrl+K is the palette.
   useEffect(() => {
@@ -289,7 +310,7 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={zen ? 'app zen' : 'app'}>
       <TitleBar onToggleTheme={toggle} theme={theme} />
       <div className="app-body">
         <Sidebar
@@ -436,6 +457,16 @@ export default function App() {
         extra={paletteExtra}
         onRun={runCommand}
       />
+      {zen && (
+        <button
+          className="zen-peek"
+          onClick={() => setZen(false)}
+          title="Leave Zen mode (Ctrl+Shift+Z)"
+        >
+          <Icon name="close" size={12} />
+          Leave Zen
+        </button>
+      )}
       <Toasts />
     </div>
   );

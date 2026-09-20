@@ -37,7 +37,8 @@ type IconName =
   | 'moon'
   | 'alert'
   | 'shield'
-  | 'activity';
+  | 'activity'
+  | 'copy';
 
 const PATHS: Record<IconName, string> = {
   chat: 'M21 12a8 8 0 0 1-8 8H8l-4 3v-4.5A8 8 0 0 1 6 5.5 8 8 0 0 1 13 4a8 8 0 0 1 8 8Z',
@@ -56,6 +57,7 @@ const PATHS: Record<IconName, string> = {
   download: 'M12 3.5v11m0 0 4-4m-4 4-4-4M4.5 19.5h15',
   refresh: 'M20 11.5A8 8 0 1 0 17.4 6M20 4v5h-5',
   plus: 'M12 5v14M5 12h14',
+  copy: 'M9 9.5A2.5 2.5 0 0 1 11.5 7H19a2 2 0 0 1 2 2v9.5A2.5 2.5 0 0 1 18.5 21H11a2 2 0 0 1-2-2V9.5ZM6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1',
   'chevron-right': 'M9.5 5.5 16 12l-6.5 6.5',
   'chevron-down': 'M5.5 9.5 12 16l6.5-6.5',
   'arrow-up': 'M12 19.5V5m0 0-6.5 6.5M12 5l6.5 6.5',

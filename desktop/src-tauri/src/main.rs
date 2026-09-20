@@ -1,4 +1,7 @@
-// FreeAI4U Desktop shell (Tauri 2).
+// NeuraOS Desktop shell (Tauri 2) -- the desktop front end for the FreeAI4U
+// engine. The crate, the binary and the bundle identifier keep their
+// freeai4u-* names: they are what an existing install and the update path are
+// keyed on, and a rename there would be a new app, not a new version.
 //
 // This file is wiring only: boot checks, the tray, the window, and which
 // plugins and commands exist. Each concern with rules of its own lives next to
@@ -40,11 +43,11 @@ fn main() {
     // that turns "double-click, nothing happens" into an explanation.
     if webview2::version().is_none() {
         crash::log("WebView2 runtime not found at startup");
-        let _ = rfd::MessageDialog::new()
-            .set_title("FreeAI4U Desktop")
-            .set_level(rfd::MessageLevel::Warning)
-            .set_description(&webview2::install_message())
-            .show();
+        // The dialog offers to open the download. Whether it was taken is
+        // recorded either way, so the crash log answers "did they install it?"
+        // without asking the user to remember.
+        let opened = webview2::ask_to_install();
+        crash::log(&format!("WebView2 install offered; download page opened: {}", opened));
         return;
     }
 
@@ -172,10 +175,10 @@ fn main() {
 fn fatal_error(msg: &str) {
     crash::log(&format!("FATAL: {}", msg));
     let _ = rfd::MessageDialog::new()
-        .set_title("FreeAI4U Desktop")
+        .set_title("NeuraOS Desktop")
         .set_level(rfd::MessageLevel::Error)
         .set_description(&format!(
-            "FreeAI4U failed to start: {}\n\nA note was appended to:\n{}\n\nInclude it if you report this.",
+            "NeuraOS failed to start: {}\n\nA note was appended to:\n{}\n\nInclude it if you report this.",
             msg,
             crash::hint()
         ))

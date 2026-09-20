@@ -27,7 +27,7 @@ test('the report carries what is needed to debug a failure', () => {
     shell: SHELL,
     client: { engine: 'https://freeopenai-production.up.railway.app', state: 'signed-out · signed out', hasShell: true },
   });
-  assert.match(report, /FreeAI4U Desktop 2\.4\.0/);
+  assert.match(report, /NeuraOS Desktop 2\.4\.0/);
   assert.match(report, /engine\s+https:\/\/freeopenai-production\.up\.railway\.app/);
   assert.match(report, /signed-out/);
   assert.match(report, /shell\s+desktop/);
