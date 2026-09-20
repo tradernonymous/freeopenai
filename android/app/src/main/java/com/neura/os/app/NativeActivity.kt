@@ -108,6 +108,11 @@ class NativeActivity : ComponentActivity(), Platform {
     private var onPhotos: ((List<String>) -> Unit)? = null
     private var onTextFile: ((String, String) -> Unit)? = null
     private var onSpeech: ((String) -> Unit)? = null
+    /** Guards the async update check (findings: cancellation / lifecycle):
+     * every check captures the current generation; onDestroy bumps it so a
+     * late IO result is dropped instead of touching a dead Activity. */
+    private var updateCheckSeq = 0
+    private var updateDialog: AlertDialog? = null
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         val callback = onPhotos ?: return@registerForActivityResult
@@ -322,6 +327,13 @@ class NativeActivity : ComponentActivity(), Platform {
     }
 
     override fun onDestroy() {
+        updateCheckSeq++
+        try {
+            updateDialog?.dismiss()
+        } catch (e: Exception) {
+            // Dismiss is cleanup; a window that is already gone is fine.
+        }
+        updateDialog = null
         if (::voice.isInitialized) voice.release()
         if (::puter.isInitialized) puter.close()
         vm.puterDraw = null
@@ -441,34 +453,60 @@ class NativeActivity : ComponentActivity(), Platform {
 
     private fun checkForUpdate(manual: Boolean) {
         val url = BuildConfig.UPDATE_URL
-        if (url.isEmpty()) {
+        if (url.isEmpty() || !isUpdateManifestUrl(url)) {
             if (manual) toast(getString(R.string.update_unavailable))
             return
         }
         val now = System.currentTimeMillis()
-        if (!manual && now - vm.store.lastUpdateCheck < 24 * 60 * 60 * 1000L) return
+        if (!manual && now - vm.store.lastUpdateCheck < UPDATE_CHECK_THROTTLE_MS) return
         vm.store.lastUpdateCheck = now
+        val generation = ++updateCheckSeq
         vm.runOnIo {
-            val info = fetchUpdateInfo(url)
+            val result = fetchUpdateInfoResult(url, BuildConfig.VERSION_CODE)
             vm.runOnMain {
-                if (isFinishing || isDestroyed) return@runOnMain
-                when {
-                    info != null && updateAvailable(info, BuildConfig.VERSION_CODE) ->
-                        AlertDialog.Builder(this)
+                // Dropped when the Activity died or a newer check superseded
+                // this one (findings: cancellation / background-foreground
+                // lifecycle): never touch views after onDestroy.
+                if (generation != updateCheckSeq || isFinishing || isDestroyed) return@runOnMain
+                when (result) {
+                    is UpdateCheckResult.Available -> {
+                        val info = result.info
+                        try {
+                            updateDialog?.dismiss()
+                        } catch (e: Exception) {
+                        }
+                        updateDialog = AlertDialog.Builder(this)
                             .setTitle(getString(R.string.update_title, info.versionName))
                             .setMessage(getString(R.string.update_message, BuildConfig.VERSION_NAME))
                             .setPositiveButton(R.string.update_download) { _, _ -> openLink(info.url) }
                             .setNegativeButton(R.string.update_later, null)
+                            .setOnDismissListener { updateDialog = null }
                             .show()
-                    manual && info == null -> toast(getString(R.string.update_failed))
-                    manual -> toast(getString(R.string.update_current, BuildConfig.VERSION_NAME))
+                    }
+                    is UpdateCheckResult.Current -> {
+                        if (manual) toast(getString(R.string.update_current, BuildConfig.VERSION_NAME))
+                    }
+                    is UpdateCheckResult.Failed -> {
+                        if (!manual) return@runOnMain
+                        toast(
+                            when (result.reason) {
+                                UpdateCheckFailure.OFFLINE_OR_NETWORK -> getString(R.string.update_no_connection)
+                                UpdateCheckFailure.HTTP_ERROR -> getString(R.string.update_server_error)
+                                UpdateCheckFailure.BAD_URL,
+                                UpdateCheckFailure.EMPTY_OR_TOO_LARGE,
+                                UpdateCheckFailure.MALFORMED -> getString(R.string.update_bad_response)
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 
     private fun openLink(url: String) {
-        if (!url.startsWith("https://")) return
+        // Double-guard at the call site: only a validated release-download
+        // link is ever opened, even though parseUpdateInfo already enforces it.
+        if (!isUpdateDownloadUrl(url)) return
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (e: ActivityNotFoundException) {
@@ -834,6 +872,9 @@ class NativeActivity : ComponentActivity(), Platform {
         ).joinToString("\n\n")
         private const val MAX_PHOTO_EDGE = 1280
         private const val MAX_TEXT_FILE_BYTES = 1024 * 1024
+        /** Automatic update checks run at most once per cold start window;
+         * manual "Check for updates" always runs (findings: network use). */
+        private const val UPDATE_CHECK_THROTTLE_MS = 24 * 60 * 60 * 1000L
     }
 }
 
