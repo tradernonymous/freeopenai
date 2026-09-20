@@ -1,0 +1,94 @@
+/* ============================================================
+   PHASE 3: Enhanced Share Links CSS
+   ============================================================ */
+
+/* ---- Share Options ---- */
+.share-options {
+    margin-bottom: 16px;
+}
+
+.share-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.share-option label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.share-select {
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+.share-select:focus {
+    border-color: var(--accent);
+}
+
+/* ---- Share Link Info ---- */
+.share-link-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #60a5fa;
+}
+
+.share-link-info i {
+    color: #3b82f6;
+}
+
+/* ---- Fork Button ---- */
+.share-fork-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* ---- Notifications ---- */
+.share-notification {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 13px;
+    color: var(--text);
+    z-index: 2000;
+    opacity: 0;
+    transition: all 0.3s ease;
+}
+
+.share-notification-show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.share-notification-success {
+    border-color: #22c55e;
+}
+
+.share-notification-error {
+    border-color: #ef4444;
+}
