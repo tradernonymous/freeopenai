@@ -47,6 +47,11 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- "Reply ready" when a reply finishes in the background (Android 13+ asks once). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app update installs (NativeActivity.downloadUpdate): the system
+         installer still verifies the APK signature and the user still grants
+         "Install unknown apps" per-app; without this declaration the install
+         intent silently does nothing and a good download looks broken. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Keeps a streaming reply alive while the app is in the background. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

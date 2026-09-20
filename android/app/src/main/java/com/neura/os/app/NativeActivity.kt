@@ -4,10 +4,14 @@ import com.neura.os.BuildConfig
 import com.neura.os.R
 
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
@@ -17,6 +21,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
 import android.os.Parcelable
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
@@ -57,6 +62,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import com.neura.os.app.data.PhoneAction
 import com.neura.os.app.data.parseLocalDateTime
@@ -85,6 +91,7 @@ import com.neura.os.app.ui.SettingsScreen
 import com.neura.os.app.ui.SignInScreen
 import com.neura.os.app.ui.ToolsScreen
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.Locale
 
 /** The launcher: native chats, images, tools and settings. */
@@ -113,6 +120,12 @@ class NativeActivity : ComponentActivity(), Platform {
      * late IO result is dropped instead of touching a dead Activity. */
     private var updateCheckSeq = 0
     private var updateDialog: AlertDialog? = null
+    /** In-app update download (findings: truncated browser downloads):
+     * DownloadManager owns resume/retry across process death; the completion
+     * receiver verifies size + SHA-256 before the installer ever sees it. */
+    private var updateDownloadId: Long = -1L
+    private var updateDownloadInfo: UpdateInfo? = null
+    private var updateReceiver: BroadcastReceiver? = null
 
     private val photoPicker = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         val callback = onPhotos ?: return@registerForActivityResult
@@ -334,6 +347,16 @@ class NativeActivity : ComponentActivity(), Platform {
             // Dismiss is cleanup; a window that is already gone is fine.
         }
         updateDialog = null
+        updateReceiver?.let { receiver ->
+            try {
+                unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                // Already unregistered or never registered; cleanup only.
+            }
+            updateReceiver = null
+        }
+        updateDownloadId = -1L
+        updateDownloadInfo = null
         if (::voice.isInitialized) voice.release()
         if (::puter.isInitialized) puter.close()
         vm.puterDraw = null
@@ -459,30 +482,35 @@ class NativeActivity : ComponentActivity(), Platform {
         }
         val now = System.currentTimeMillis()
         if (!manual && now - vm.store.lastUpdateCheck < UPDATE_CHECK_THROTTLE_MS) return
+        // Automatic checks reuse a fresh in-memory result (findings: caching
+        // / network optimisation); manual checks always hit the network.
+        if (!manual && !isFinishing && !isDestroyed) {
+            when (val cached = UpdateCache.get(now)) {
+                is UpdateCheckResult.Available ->
+                    if (updateAvailable(cached.info, BuildConfig.VERSION_CODE)) {
+                        vm.store.lastUpdateCheck = now
+                        showUpdateDialog(cached.info)
+                        return
+                    }
+                is UpdateCheckResult.Current -> {
+                    vm.store.lastUpdateCheck = now
+                    return
+                }
+                else -> Unit
+            }
+        }
         vm.store.lastUpdateCheck = now
         val generation = ++updateCheckSeq
         vm.runOnIo {
             val result = fetchUpdateInfoResult(url, BuildConfig.VERSION_CODE)
+            if (!manual) UpdateCache.put(result)
             vm.runOnMain {
                 // Dropped when the Activity died or a newer check superseded
                 // this one (findings: cancellation / background-foreground
                 // lifecycle): never touch views after onDestroy.
                 if (generation != updateCheckSeq || isFinishing || isDestroyed) return@runOnMain
                 when (result) {
-                    is UpdateCheckResult.Available -> {
-                        val info = result.info
-                        try {
-                            updateDialog?.dismiss()
-                        } catch (e: Exception) {
-                        }
-                        updateDialog = AlertDialog.Builder(this)
-                            .setTitle(getString(R.string.update_title, info.versionName))
-                            .setMessage(getString(R.string.update_message, BuildConfig.VERSION_NAME))
-                            .setPositiveButton(R.string.update_download) { _, _ -> openLink(info.url) }
-                            .setNegativeButton(R.string.update_later, null)
-                            .setOnDismissListener { updateDialog = null }
-                            .show()
-                    }
+                    is UpdateCheckResult.Available -> showUpdateDialog(result.info)
                     is UpdateCheckResult.Current -> {
                         if (manual) toast(getString(R.string.update_current, BuildConfig.VERSION_NAME))
                     }
@@ -500,6 +528,181 @@ class NativeActivity : ComponentActivity(), Platform {
                     }
                 }
             }
+        }
+    }
+
+    private fun showUpdateDialog(info: UpdateInfo) {
+        try {
+            updateDialog?.dismiss()
+        } catch (e: Exception) {
+        }
+        updateDialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_title, info.versionName))
+            .setMessage(getString(R.string.update_message, BuildConfig.VERSION_NAME))
+            .setPositiveButton(R.string.update_download) { _, _ -> downloadUpdate(info) }
+            .setNegativeButton(R.string.update_later, null)
+            .setOnDismissListener { updateDialog = null }
+            .show()
+    }
+
+    /** Downloads the update with the system DownloadManager instead of the
+     * browser: it survives the app going to the background, retries on
+     * flaky networks, shows progress in the notification shade, and reports
+     * a definitive status -- the combination that fixes truncated APKs.
+     * Falls back to the browser when DownloadManager is unavailable. */
+    private fun downloadUpdate(info: UpdateInfo) {
+        if (!isUpdateDownloadUrl(info.url)) return
+        val manager = try {
+            getSystemService(DownloadManager::class.java)
+        } catch (e: Exception) {
+            null
+        }
+        if (manager == null) {
+            openLink(info.url)
+            return
+        }
+        // One pending update at a time: a second tap replaces the first, and
+        // any stale file is deleted so a short read is never mistaken for done.
+        try {
+            if (updateDownloadId >= 0) manager.remove(updateDownloadId)
+        } catch (e: Exception) {
+        }
+        val fileName = "neuraos-" + info.versionCode + ".apk"
+        try {
+            File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName).delete()
+        } catch (e: Exception) {
+        }
+        val request = try {
+            DownloadManager.Request(Uri.parse(info.url))
+                .setTitle(getString(R.string.update_title, info.versionName))
+                .setDescription(getString(R.string.update_downloading, info.versionName))
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setMimeType("application/vnd.android.package-archive")
+                .setAllowedOverMetered(true)
+                .setAllowedOverRoaming(false)
+                .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName)
+        } catch (e: Exception) {
+            openLink(info.url)
+            return
+        }
+        updateDownloadInfo = info
+        ensureUpdateReceiver()
+        val id = try {
+            manager.enqueue(request)
+        } catch (e: Exception) {
+            updateDownloadInfo = null
+            openLink(info.url)
+            return
+        }
+        updateDownloadId = id
+        toast(getString(R.string.update_downloading, info.versionName))
+    }
+
+    private fun ensureUpdateReceiver() {
+        if (updateReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                if (id != updateDownloadId) return
+                onUpdateDownloadComplete(id)
+            }
+        }
+        updateReceiver = receiver
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
+            }
+        } catch (e: Exception) {
+            updateReceiver = null
+        }
+    }
+
+    private fun onUpdateDownloadComplete(id: Long) {
+        val info = updateDownloadInfo
+        updateDownloadId = -1L
+        updateDownloadInfo = null
+        if (info == null) return
+        val manager = try {
+            getSystemService(DownloadManager::class.java)
+        } catch (e: Exception) {
+            null
+        }
+        val file = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "neuraos-" + info.versionCode + ".apk")
+        val success = if (manager == null) {
+            false
+        } else {
+            try {
+                manager.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
+                    cursor.moveToFirst() &&
+                        cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL
+                } ?: false
+            } catch (e: Exception) {
+                false
+            }
+        }
+        if (!success || !file.exists()) {
+            try {
+                file.delete()
+            } catch (e: Exception) {
+            }
+            if (!isFinishing && !isDestroyed) toast(getString(R.string.update_download_failed))
+            return
+        }
+        // Size + SHA-256 against the manifest (findings: APK validation): a
+        // truncated or tampered file is deleted here, never installed.
+        val verified = try {
+            verifyApkFile(file, info)
+        } catch (e: Exception) {
+            false
+        }
+        if (!verified) {
+            try {
+                file.delete()
+            } catch (e: Exception) {
+            }
+            if (!isFinishing && !isDestroyed) toast(getString(R.string.update_corrupt))
+            return
+        }
+        installUpdate(file)
+    }
+
+    private fun installUpdate(file: File) {
+        val uri = try {
+            FileProvider.getUriForFile(this, packageName + ".files", file)
+        } catch (e: Exception) {
+            if (!isFinishing && !isDestroyed) toast(getString(R.string.update_no_installer))
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            // The system installer re-verifies the APK signature: an update
+            // signed with any other key is refused there, whatever we checked.
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            toast(getString(R.string.update_no_installer))
+        } catch (e: SecurityException) {
+            // "Install unknown apps" is off for NeuraOS: point at the toggle.
+            toast(getString(R.string.update_allow_unknown))
+            openUnknownAppSources()
+        }
+    }
+
+    private fun openUnknownAppSources() {
+        try {
+            val intent = if (android.os.Build.VERSION.SDK_INT >= 26) {
+                Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+            } else {
+                Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+            }
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            // The toast already said what to do; no settings app is not fatal.
         }
     }
 

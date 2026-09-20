@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="shared" path="shared/" />
+    <!-- In-app update downloads (NativeActivity.downloadUpdate), served to
+         the system package installer with a one-time read grant. -->
+    <external-files-path name="updates" path="Download/" />
 </paths>

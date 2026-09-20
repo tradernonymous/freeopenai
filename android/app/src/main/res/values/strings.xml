@@ -40,6 +40,11 @@
     <string name="update_no_connection">No connection — check your network and try again.</string>
     <string name="update_server_error">The update server had a problem. Try again later.</string>
     <string name="update_bad_response">The update info looked wrong, so it was ignored. Try again later.</string>
+    <string name="update_downloading">Downloading update %1$s… watch the notification for progress.</string>
+    <string name="update_download_failed">Download failed. Check your connection and try again.</string>
+    <string name="update_corrupt">The download was incomplete or damaged, so it was deleted. Try again.</string>
+    <string name="update_no_installer">Downloaded, but no installer can open it.</string>
+    <string name="update_allow_unknown">Allow “Install unknown apps” for NeuraOS, then tap Download again.</string>
     <string name="update_unavailable">Update checks are off in this build.</string>
     <string name="puter_social_title">Use your Puter username instead</string>
     <string name="puter_social_message">Google, Apple and Microsoft block their sign-in buttons inside apps, so they cannot finish here. In this window, sign in to Puter with your Puter username (or email) and password. If your Puter account only has Google sign-in: open puter.com in Chrome, sign in with Google, then set a password under Settings, Account. The app server models (NVIDIA, OpenRouter and others) work without Puter.</string>

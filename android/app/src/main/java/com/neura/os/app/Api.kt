@@ -329,6 +329,8 @@ data class UpdateInfo(
     val url: String,
     val notes: String,
     val sha256: String? = null,
+    /** Exact APK size in bytes when CI emits it, else null (unverified). */
+    val size: Long? = null,
 )
 
 /** Hardening limits for the update manifest (findings: OOM / junk input). */
@@ -336,6 +338,10 @@ const val UPDATE_MANIFEST_MAX_BYTES = 64_000
 const val UPDATE_NOTES_MAX_CHARS = 2_000
 const val UPDATE_VERSION_NAME_MAX_CHARS = 32
 const val UPDATE_VERSION_CODE_MAX = 10_000_000
+/** A real release APK is tens of MB: anything outside this range in the
+ * manifest is junk (or a truncation signal at download time). */
+const val UPDATE_APK_MIN_BYTES = 1_000_000L
+const val UPDATE_APK_MAX_BYTES = 500_000_000L
 private const val UPDATE_REDIRECT_LIMIT = 5
 
 /** Hosts an update-manifest fetch may touch. version.json lives at
@@ -415,6 +421,90 @@ fun verifyBytesSha256(bytes: ByteArray, expectedHex: String?): Boolean {
     return diff == 0
 }
 
+/** True when [bytes] match every integrity signal the manifest carries for
+ * [info]: exact size (catches the truncated downloads users reported) and
+ * SHA-256 (catches corruption / tampering). Signals the manifest does not
+ * carry are skipped, never failed: an old version.json without sha256/size
+ * still verifies as "nothing known bad". */
+fun verifyApkBytes(bytes: ByteArray, info: UpdateInfo): Boolean {
+    val expectedSize = info.size
+    if (expectedSize != null && bytes.size.toLong() != expectedSize) return false
+    val expectedSha = info.sha256
+    if (expectedSha != null && !verifyBytesSha256(bytes, expectedSha)) return false
+    return true
+}
+
+/** Streaming twin of [verifyApkBytes] for the downloaded file: the APK is
+ * tens of MB, so it is hashed in 256 KB chunks instead of being held whole
+ * in memory (findings: memory/resource management). Size is checked first
+ * (cheap) so a truncated file never pays for a hash. */
+fun verifyApkFile(file: java.io.File, info: UpdateInfo): Boolean {
+    return try {
+        val expectedSize = info.size
+        if (expectedSize != null && file.length() != expectedSize) return false
+        val expectedSha = normalizeSha256Hex(info.sha256) ?: return true
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buf = ByteArray(262_144)
+            while (true) {
+                val read = input.read(buf)
+                if (read < 0) break
+                digest.update(buf, 0, read)
+            }
+        }
+        val actual = digest.digest()
+        val chars = CharArray(actual.size * 2)
+        val hex = "0123456789abcdef"
+        for (i in actual.indices) {
+            val v = actual[i].toInt() and 0xff
+            chars[i * 2] = hex[v ushr 4]
+            chars[i * 2 + 1] = hex[v and 0x0f]
+        }
+        val actualHex = String(chars)
+        var diff = 0
+        for (i in actualHex.indices) diff = diff or (actualHex[i].code xor expectedSha[i].code)
+        diff == 0
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/** Tiny thread-safe in-memory cache for the update manifest (findings:
+ * caching / network optimisation). Automatic cold-start checks reuse a
+ * fresh result instead of hitting the network every launch; manual
+ * "Check for updates" always bypasses it. Pure JVM so unit tests cover it. */
+object UpdateCache {
+    /** How long an automatic check trusts the cached outcome. */
+    const val TTL_MS = 15 * 60 * 1000L
+    private var cachedAt: Long = 0L
+    private var cached: UpdateCheckResult? = null
+
+    @Synchronized
+    fun get(now: Long = System.currentTimeMillis()): UpdateCheckResult? {
+        val result = cached ?: return null
+        if (now - cachedAt > TTL_MS) {
+            cached = null
+            return null
+        }
+        return result
+    }
+
+    @Synchronized
+    fun put(result: UpdateCheckResult, now: Long = System.currentTimeMillis()) {
+        // Failures are not cached: a tunnel's captive portal must not poison
+        // the next fifteen minutes of checks.
+        if (result is UpdateCheckResult.Failed) return
+        cached = result
+        cachedAt = now
+    }
+
+    @Synchronized
+    fun clear() {
+        cached = null
+        cachedAt = 0L
+    }
+}
+
 /** Parses version.json. Fail-closed: junk, off-host links, absurd versions,
  * or a malformed sha256 all yield null. The download link must be an https
  * GitHub /releases/download/ URL: the app only ever opens it in the
@@ -439,7 +529,15 @@ fun parseUpdateInfo(body: String?): UpdateInfo? {
         val sha = normalizeSha256Hex(obj.optString("sha256", "").ifEmpty { null })
         // A present-but-malformed digest fails closed: the manifest is junk.
         if (obj.has("sha256") && obj.optString("sha256", "").isNotEmpty() && sha == null) return null
-        UpdateInfo(code, cleanName, url, cleanNotes, sha)
+        // Exact APK size when CI emits it: must sit inside a plausible range.
+        // Present-but-absurd fails closed, like the digest above.
+        var size: Long? = null
+        if (obj.has("size")) {
+            val rawSize = obj.optLong("size", -1L)
+            if (rawSize < UPDATE_APK_MIN_BYTES || rawSize > UPDATE_APK_MAX_BYTES) return null
+            size = rawSize
+        }
+        UpdateInfo(code, cleanName, url, cleanNotes, sha, size)
     } catch (e: Exception) {
         null
     }
