@@ -117,6 +117,15 @@ jobs:
           name: neuraos-apk
           path: ${{ runner.temp }}
       - run: test -s "$RUNNER_TEMP/neuraos.apk"
+      # GitHub-hosted runners pre-set ANDROID_AVD_HOME to a nonstandard path,
+      # but this pinned emulator-runner insists the AVD lives at
+      # ~/.android/avd (it appends hw config there). Align the env so
+      # avdmanager, the action, and the emulator all agree on one AVD home;
+      # otherwise the boot dies with "Directory nonexistent".
+      - name: Align the AVD home for the emulator action
+        run: |
+          mkdir -p "$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
       - name: Boot the emulator and launch the app
         id: smoke
         timeout-minutes: 25
@@ -125,7 +134,7 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 2048
           script: |
             adb install -r "$RUNNER_TEMP/neuraos.apk"
             adb logcat -c
