@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, type StreamFrame } from '../api';
 import { renderMarkdown } from '../markdown';
+// UMD module: loaded for its side effect, read off globalThis.
+import '../chats.js';
+
+const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 
 export interface Msg {
   role: 'user' | 'assistant';
@@ -68,11 +72,10 @@ interface ProviderRow {
 }
 
 export default function ChatScreen() {
+  // Parsed once. The active id is taken from the list this component already
+  // loaded; the old code read and parsed localStorage a second time here.
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions());
-  const [activeId, setActiveId] = useState<string>(() => {
-    const saved = loadSessions();
-    return saved.length ? saved[0].id : '';
-  });
+  const [activeId, setActiveId] = useState<string>(() => sessions[0]?.id ?? '');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [models, setModels] = useState<Array<{ id: string; free?: string }>>([]);
   const [limits, setLimits] = useState<any>(null);
@@ -86,6 +89,22 @@ export default function ChatScreen() {
   const stickToBottom = useRef(true);
 
   const active = sessions.find((s) => s.id === activeId) || sessions[0] || null;
+
+  // A session id can outlive its session (pruned on save, or displaced by an
+  // import), which left the screen on a fallback chat while activeId pointed at
+  // a ghost -- so History or "open chat" could resurrect an empty screen. Keep
+  // the id and the list in agreement.
+  useEffect(() => {
+    if (!sessions.length) return;
+    if (!sessions.some((s) => s.id === activeId)) setActiveId(sessions[0].id);
+  }, [sessions, activeId]);
+
+  // An import rewritten localStorage: reload what is on screen.
+  useEffect(() => {
+    const onChanged = () => setSessions(loadSessions());
+    window.addEventListener(chats.CHATS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(chats.CHATS_CHANGED_EVENT, onChanged);
+  }, []);
 
   const persist = useCallback((next: ChatSession[]) => {
     setSessions(next);
@@ -107,9 +126,13 @@ export default function ChatScreen() {
         const chat = (Array.isArray(rows) ? rows : []).filter((p: any) => p.kind !== 'image' && p.configured);
         setProviderRows(chat);
         setSessions((prev) => {
-          // A saved chat pointing at a provider that is gone falls back to the first.
+          // A saved chat pointing at a provider that is gone falls back to the
+          // first one -- and the fallback is written back, so a restart does
+          // not bring the dead provider id along.
           const ids = new Set(chat.map((p: any) => p.id));
-          return prev.map((s) => (!s.provider || !ids.has(s.provider) ? { ...s, provider: chat[0]?.id || '' } : s));
+          const next = prev.map((s) => (!s.provider || !ids.has(s.provider) ? { ...s, provider: chat[0]?.id || '' } : s));
+          saveSessions(next);
+          return next;
         });
       })
       .catch(() => setProviderRows([]));
@@ -129,8 +152,12 @@ export default function ChatScreen() {
         const list = (Array.isArray(rows) ? rows : [])
           .map((r: any) => ({ id: String(r.id || r), free: r && r.freeTier ? r.freeTier.limitText || '' : '' }));
         setModels(list);
-        setSessions((prev) => prev.map((s) =>
-          s.id === active.id && !list.some((m) => m.id === s.model) ? { ...s, model: list[0]?.id || '' } : s));
+        setSessions((prev) => {
+          const next = prev.map((s) =>
+            s.id === active.id && !list.some((m) => m.id === s.model) ? { ...s, model: list[0]?.id || '' } : s);
+          saveSessions(next);
+          return next;
+        });
       })
       .catch(() => { if (!gone) setModels([]); });
     return () => { gone = true; };
@@ -299,17 +326,21 @@ export default function ChatScreen() {
   // Build mode: the message becomes a real remote build session.
   const startBuild = async (plan: string) => {
     if (!active) return;
+    // The staged attachment rides the build as it rides a chat turn, and the
+    // chip is cleared: a build used to leave it sitting there forever.
+    const fullPlan = attached ? `${plan}\n\n--- attached ---\n${attached}` : plan;
     setSending(true);
     setStreamError('');
+    if (attached) setAttached('');
     try {
-      const session: any = await api.buildRun({ plan });
+      const session: any = await api.buildRun({ plan: fullPlan });
       const note: Msg = {
         role: 'assistant',
         content: `Build **${session.id}** started (${session.status}). Watch it live in **Builds** — approvals appear there.`,
         ts: Date.now(),
       };
       patchSession(active.id, {
-        messages: [...active.messages, { role: 'user', content: plan, ts: Date.now() } as Msg, note],
+        messages: [...active.messages, { role: 'user', content: fullPlan, ts: Date.now() } as Msg, note],
         draft: '',
         title: active.messages.length === 0 ? plan.slice(0, 48) : active.title,
       });

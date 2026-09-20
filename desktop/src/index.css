@@ -192,6 +192,18 @@ html, body, #root {
   font-weight: 600;
 }
 
+/* What the release published: the installer's name and size, with its sha256
+   on hover, so the user can see what they are about to download. */
+.update-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+}
+
 .update-banner button {
   background: transparent;
   border: 0;
@@ -1131,6 +1143,11 @@ button.primary:hover:not(:disabled) {
   word-break: break-word;
   color: var(--text-2);
   margin: 0;
+}
+
+/* stderr, a non-zero exit code, or the command failing to run at all. */
+.terminal-output.terminal-error {
+  color: var(--danger, #ef4444);
 }
 
 .terminal-input-row {

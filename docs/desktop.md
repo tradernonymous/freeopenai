@@ -36,8 +36,14 @@ The window is drawn by Microsoft's WebView2 runtime. Machines without it used to
 - the **installer** installs the runtime on first setup (`webviewInstallMode: downloadBootstrapper`), and
 - the app itself checks the registry keys at startup and shows a message box with [the download link](https://go.microsoft.com/fwlink/p/?LinkId=2124703) if the runtime is still missing.
 
-A crash log lives at `C:\Users\Public\freeai4u-crash.log` for anything else that goes wrong before the window exists.
+A crash log catches anything else that goes wrong before the window exists. It lives next to the app's own data (`%LOCALAPPDATA%\FreeAI4U\logs\freeai4u-crash.log`, or the Tauri log directory once the app is up) and is capped at 256 KB — a crash loop replaces it rather than filling the disk. The error dialog names the exact file.
+
+Closing the window hides the app to the tray; **Quit** (tray menu) is a clean exit through Tauri, so the window position is saved and the WebView2 child processes are reaped.
+
+## Updates
+
+CI writes `desktop-version.json` into the `desktop-latest` release — the real version plus a `sha256` and byte size for every artifact, taken from the files it just built. The app fetches that file (three attempts with backoff, straight from the release CDN rather than the rate-limited GitHub API) and offers the update only when the published version is **strictly newer** than the running one. The banner names the installer, its size, and its sha256 on hover; dismissing it silences that version until a newer one appears.
 
 ## How it is built
 
-[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`: config integrity, version agreement, and that every route the frontend calls exists on the server), builds the Tauri app on `windows-latest`, and publishes the NSIS installer, MSI and portable exe to the `desktop-latest` release.
+[`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.

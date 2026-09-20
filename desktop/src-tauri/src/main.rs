@@ -11,18 +11,70 @@ use tauri::{
 };
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
 mod save;
 use tauri::generate_handler;
 
-const CRASH_LOG: &str = "C:/Users/Public/freeai4u-crash.log";
-const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+const CRASH_FILE: &str = "freeai4u-crash.log";
+// A crash loop must not fill the disk: past this size the log is replaced, not
+// appended to.
+const CRASH_LOG_MAX_BYTES: u64 = 256 * 1024;
+const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/?LinkId=2124703";
+
+// The log lives in the app's own directory, not in a shared public folder:
+// that location is not writable in a locked-down profile (so the "no silent
+// deaths" promise failed exactly when it was needed) and crash text should not
+// land somewhere every account can read. Set from Tauri once the app exists;
+// the value below is the fallback for a failure that happens before that.
+static CRASH_LOG: Mutex<Option<PathBuf>> = Mutex::new(None);
+// Set only by the tray Quit: the close handler hides the window (tray-style),
+// so it has to be able to tell a close from a quit.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+fn crash_log_path() -> PathBuf {
+    if let Ok(guard) = CRASH_LOG.lock() {
+        if let Some(path) = guard.as_ref() {
+            return path.clone();
+        }
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("FreeAI4U")
+        .join("logs")
+        .join(CRASH_FILE)
+}
+
+fn set_crash_log_path(path: PathBuf) {
+    if let Ok(mut guard) = CRASH_LOG.lock() {
+        *guard = Some(path);
+    }
+}
 
 fn log_crash(msg: &str) {
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(CRASH_LOG) {
+    let path = crash_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > CRASH_LOG_MAX_BYTES {
+            let _ = std::fs::write(
+                &path,
+                format!("[{}] log rotated ({} bytes)\n", chrono::Utc::now().to_rfc3339(), meta.len()),
+            );
+        }
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "[{}] {}", chrono::Utc::now().to_rfc3339(), msg);
     }
+}
+
+fn crash_log_hint() -> String {
+    crash_log_path().display().to_string()
 }
 
 /// Reads the Registry for the WebView2 runtime the same way the loader does:
@@ -75,8 +127,16 @@ fn main() {
         .invoke_handler(generate_handler![save::save_file_dialog])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        // Registered for the frontend's future use; today the app stores its
+        // settings in localStorage. It must NOT be given a config map here:
+        // this plugin version rejects one and the app panics at startup.
         .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
+            // Now that Tauri knows its own directories, the crash log belongs
+            // with the rest of the app's data.
+            if let Ok(dir) = app.path().app_log_dir() {
+                set_crash_log_path(dir.join(CRASH_FILE));
+            }
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
@@ -107,7 +167,12 @@ fn main() {
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
-                        std::process::exit(0);
+                        // A clean exit through Tauri, not a raw process kill:
+                        // the shutdown runs, so the window-state plugin persists
+                        // the window position and the WebView2 children are
+                        // reaped instead of being orphaned.
+                        QUITTING.store(true, Ordering::SeqCst);
+                        app.exit(0);
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -128,7 +193,13 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                window.hide().unwrap();
+                // Closing the window hides it (the app lives in the tray) --
+                // except while quitting, when the close must go through so
+                // Tauri's own shutdown can run.
+                if QUITTING.load(Ordering::SeqCst) {
+                    return;
+                }
+                let _ = window.hide();
                 api.prevent_close();
             }
             _ => {}
@@ -146,8 +217,9 @@ fn fatal_error(msg: &str) {
         .set_title("FreeAI4U Desktop")
         .set_level(rfd::MessageLevel::Error)
         .set_description(&format!(
-            "FreeAI4U failed to start: {}\n\nA note was appended to C:/Users/Public/freeai4u-crash.log -- include it if you report this.",
-            msg
+            "FreeAI4U failed to start: {}\n\nA note was appended to:\n{}\n\nInclude it if you report this.",
+            msg,
+            crash_log_hint()
         ))
         .show();
 }

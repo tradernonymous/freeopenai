@@ -50,6 +50,34 @@ jobs:
         with:
           name: FreeAI4U-Desktop-MSI
           path: desktop/src-tauri/target/release/bundle/msi/*.msi
+      # The app's update check reads this file instead of guessing a version out
+      # of asset names: it carries the real version and a sha256 + size for every
+      # artifact, taken from the files this job just built.
+      - name: Write update metadata (version + sha256 + size)
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $paths = @()
+          $paths += Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*.exe
+          $paths += Get-ChildItem desktop/src-tauri/target/release/bundle/msi/*.msi
+          $paths += Get-Item desktop/src-tauri/target/release/freeai4u-desktop.exe
+          $artifacts = @()
+          foreach ($p in $paths) {
+            $artifacts += [ordered]@{
+              name   = $p.Name
+              sha256 = (Get-FileHash $p.FullName -Algorithm SHA256).Hash.ToLower()
+              size   = $p.Length
+            }
+          }
+          $meta = [ordered]@{
+            version   = $version
+            builtAt   = (Get-Date).ToUniversalTime().ToString('o')
+            commit    = '${{ github.sha }}'
+            artifacts = $artifacts
+          }
+          $json = $meta | ConvertTo-Json -Depth 6
+          Set-Content -Path desktop/src-tauri/target/release/desktop-version.json -Value $json -Encoding utf8
+          Get-Content desktop/src-tauri/target/release/desktop-version.json
       - name: Delete old release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,5 +93,6 @@ jobs:
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/msi/*.msi
             desktop/src-tauri/target/release/freeai4u-desktop.exe
+            desktop/src-tauri/target/release/desktop-version.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

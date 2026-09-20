@@ -239,8 +239,13 @@ export const api = {
 
   // workspace (Build runs commands here; WORKSPACE_RUN gates it server-side)
   workspaceFiles: () => request('/api/workspace/files'),
-  workspaceRun: (command: string, path?: string) =>
-    request('/api/workspace/run', { method: 'POST', body: JSON.stringify({ command, ...(path ? { path } : {}) }) }),
+  // The engine reads `cwd`; the field this used to send was `path`, which no
+  // route reads, so a session's directory was never actually applied.
+  workspaceRun: (command: string, cwd?: string) =>
+    request('/api/workspace/run', {
+      method: 'POST',
+      body: JSON.stringify({ command, ...(cwd && cwd !== '.' ? { cwd } : {}) }),
+    }),
   workspaceRead: (path: string) => request(`/api/workspace/read?path=${encodeURIComponent(path)}`),
 
   // github tools (OAuth account connected on the server)

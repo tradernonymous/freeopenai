@@ -26,7 +26,7 @@
     }
   },
   "productName": "FreeAI4U Desktop",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "identifier": "com.freeai4u.desktop",
   "app": {
     "windows": [

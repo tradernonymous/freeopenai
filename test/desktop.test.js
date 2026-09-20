@@ -182,3 +182,52 @@ test('the frontend still builds (tsc + vite), so CI compiles what it ships', () 
   assert.equal(pkg.scripts.build, 'tsc && vite build');
   assert.equal(pkg.scripts['tauri:build'], 'tauri build');
 });
+
+// ---- Phase 0 hardening: one test per fixed defect ------------------------
+
+test('the crash log lives in the app directory, is capped, and is named in the dialog', () => {
+  const main = read('src-tauri', 'src', 'main.rs');
+  assert.ok(!main.includes('C:/Users/Public'),
+    'a public, not-always-writable path defeats the "no silent deaths" promise');
+  assert.match(main, /LOCALAPPDATA|app_log_dir/, 'it follows the user profile (or Tauri app dir)');
+  assert.match(main, /CRASH_LOG_MAX_BYTES/, 'a crash loop must not fill the disk');
+  assert.match(main, /log rotated|create_dir_all/, 'rotation + a created directory');
+  assert.match(main, /crash_log_hint/, 'the error dialog points at the real file');
+});
+
+test('quitting is a clean exit, and only quitting closes the window', () => {
+  const main = read('src-tauri', 'src', 'main.rs');
+  assert.ok(!main.includes('std::process::exit'),
+    'process::exit skips window-state persistence and orphans WebView2 children');
+  assert.match(main, /QUITTING\.store/, 'the quit path raises the flag');
+  assert.match(main, /app\.exit\(0\)/, 'and exits through Tauri');
+  assert.match(main, /QUITTING\.load[\s\S]{0,200}prevent_close/,
+    'the close handler still hides (tray-style) unless the app is quitting');
+});
+
+test('the save dialog derives its filters from the file, and always offers all files', () => {
+  const save = read('src-tauri', 'src', 'save.rs');
+  assert.match(save, /fn extension_for/, 'the extension comes from the name/mime');
+  assert.match(save, /extension_for\(&file_name, &mime\)/, 'and is actually used');
+  assert.match(save, /add_filter\("All files"/, 'a wrong guess cannot make a file unsaveable');
+  assert.doesNotMatch(save, /let _ = mime;/, 'mime is no longer discarded');
+});
+
+test('terminal results are matched by identity, and the output shown is the real one', () => {
+  const term = read('src', 'components', 'Terminal.tsx');
+  assert.match(term, /h\.id === id/, 'a result lands on the entry that asked for it');
+  assert.doesNotMatch(term, /h\.cmd === cmd/, 'the by-value match is gone');
+  assert.doesNotMatch(term, /res\.output/, 'the engine never sends `output`');
+  assert.match(term, /res\?\.stdout|res\.stdout/, 'stdout reaches the screen');
+  assert.match(term, /stderr|exitCode/, 'so does stderr and the exit code');
+  assert.doesNotMatch(term, /useState\('\.'\)/, 'the decorative cwd is gone');
+});
+
+test('provider and model fallbacks are persisted, not just shown', () => {
+  const chat = read('src', 'screens', 'ChatScreen.tsx');
+  const providerEffect = chat.slice(chat.indexOf('// ---- load engine catalogue'));
+  assert.match(providerEffect, /saveSessions\(next\)/,
+    'a fallback the user never sees again must survive a restart');
+  assert.match(providerEffect, /provider: chat\[0\]\?\.id \|\| ''/, 'the fallback itself is unchanged');
+  assert.match(chat, /startBuild[\s\S]{0,400}setAttached\(''\)/, 'a build consumes the staged attachment');
+});

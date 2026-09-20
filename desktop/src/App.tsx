@@ -14,6 +14,14 @@ import Terminal from './components/Terminal';
 import SessionManager from './components/SessionManager';
 import './index.css';
 import { APP_VERSION } from './version';
+// UMD modules load for their side effect and are picked up off globalThis.
+import './update.js';
+import './chats.js';
+
+const update: typeof import('./update.js') = (globalThis as any).FreeAI4UUpdate;
+const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
+
+const DISMISSED_KEY = 'freeai4u.updateDismissed';
 
 type View = 'chat' | 'design' | 'images' | 'build' | 'library' | 'files' | 'settings';
 type RightPanel = 'builds' | 'knowledge' | 'none';
@@ -21,7 +29,7 @@ type RightPanel = 'builds' | 'knowledge' | 'none';
 export default function App() {
   const [view, setView] = useState<View>('chat');
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<import('./update.js').VersionPayload | null>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
@@ -69,22 +77,24 @@ export default function App() {
     if (view === 'settings') checkAuth();
   }, [view, checkAuth]);
 
+  // The release publishes desktop-version.json (version + sha256 + size per
+  // artifact). Reading that instead of guessing a version out of asset names
+  // means a build-numbered or renamed file cannot misreport, and a DOWN-dated
+  // release is not an update. The fetch retries with backoff, and a failure
+  // leaves the banner hidden instead of throwing.
   useEffect(() => {
+    let cancelled = false;
     const checkUpdate = async () => {
+      const found = await update.fetchVersion({ fetchImpl: fetch });
+      if (cancelled || !found || !update.isNewer(found.version, APP_VERSION)) return;
       try {
-        const res = await fetch('https://api.github.com/repos/tradernonymous/freeopenai/releases/tags/desktop-latest');
-        if (!res.ok) return;
-        const data = await res.json();
-        // The tag is 'desktop-latest' (a moving label), so the version has
-        // to come from the asset names themselves: FreeAI4U.Desktop_2.1.1_x64-setup.exe.
-        const assets: string[] = (data.assets || []).map((a: any) => String(a.name || ''));
-        const m = assets.join(' ').match(/(\d+\.\d+\.\d+)/);
-        if (m && m[1] !== APP_VERSION) setUpdateAvailable(true);
-      } catch {}
+        if (localStorage.getItem(DISMISSED_KEY) === found.version) return;
+      } catch { /* no storage: show it anyway */ }
+      setUpdateInfo(found);
     };
     checkUpdate();
     const interval = setInterval(checkUpdate, 1000 * 60 * 60);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
@@ -111,28 +121,40 @@ export default function App() {
 
   const gate = loginRequired === true && !signedIn;
 
+  // The anchor is in the document for the click and the object URL is revoked
+  // afterwards; both were skipped before.
   const exportChats = () => {
-    const blob = new Blob([localStorage.getItem('freeai4u.chats') || '[]'], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'freeai4u-chats.json';
-    a.click();
+    const text = localStorage.getItem('freeai4u.chats') || '[]';
+    setImportMsg(chats.downloadJson('freeai4u-chats.json', text)
+      ? 'Exported freeai4u-chats.json.'
+      : 'Export failed: this window has no download surface.');
   };
 
+  // Validated entries, newest copy of each id wins, and the 60 kept are the 60
+  // most recently updated -- so importing old chats can never evict the new.
   const importChats = (file: File) => {
     file.text().then((text) => {
       try {
         const incoming = JSON.parse(text);
-        if (!Array.isArray(incoming)) throw new Error('not a chat export');
+        const list = Array.isArray(incoming) ? incoming : incoming?.sessions;
+        if (!Array.isArray(list)) throw new Error('not a chat export');
         const raw = JSON.parse(localStorage.getItem('freeai4u.chats') || '[]');
-        const byId = new Map<string, any>();
-        for (const s of [...raw, ...incoming]) if (s && s.id) byId.set(s.id, s);
-        localStorage.setItem('freeai4u.chats', JSON.stringify(byId.size ? [...byId.values()].slice(-60) : []));
-        setImportMsg('Imported. Open the Library to see them.');
+        const result = chats.merge(raw, incoming, chats.MAX_SESSIONS);
+        localStorage.setItem('freeai4u.chats', JSON.stringify(result.sessions));
+        window.dispatchEvent(new CustomEvent(chats.CHATS_CHANGED_EVENT));
+        setImportMsg(chats.summary(result));
       } catch (err) {
         setImportMsg('Import failed: ' + (err as Error).message);
       }
     });
+  };
+
+  const installer = update.installerFor(updateInfo);
+  const dismissUpdate = () => {
+    try {
+      if (updateInfo) localStorage.setItem(DISMISSED_KEY, updateInfo.version);
+    } catch { /* best effort */ }
+    setUpdateInfo(null);
   };
 
   return (
@@ -154,13 +176,20 @@ export default function App() {
           showKnowledge={rightPanel === 'knowledge'}
         />
         <main className="main">
-          {updateAvailable && (
+          {updateInfo && (
             <div className="update-banner">
-              <span>Update available</span>
-              <a href="https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest" target="_blank" rel="noreferrer">
+              <span>Update available: v{updateInfo.version} (this build is v{APP_VERSION})</span>
+              {installer && (
+                <span className="update-meta"
+                  title={installer.sha256 ? `sha256 ${installer.sha256}` : undefined}>
+                  {installer.name}
+                  {installer.size ? ` · ${update.humanSize(installer.size)}` : ''}
+                </span>
+              )}
+              <a href={update.desktopUrl()} target="_blank" rel="noreferrer">
                 Download
               </a>
-              <button onClick={() => setUpdateAvailable(false)}>✕</button>
+              <button onClick={dismissUpdate}>✕</button>
             </div>
           )}
           {serverOk === false && (
