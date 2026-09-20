@@ -55,19 +55,18 @@ jobs:
   # Phase 4: Progress tracking UI tests
   maestro:
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 35
-          ndk-version: r27b
+          packages: platform-tools platforms;android-35 system-images;android-35;default;x86_64
           emulator: true
       - name: Create and start emulator
         run: |
@@ -96,4 +95,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: maestro-reports
-          path: build/reports/maestro/
+          path: .maestro/build/reports/
