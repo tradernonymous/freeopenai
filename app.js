@@ -8721,3 +8721,131 @@ function updateNavActive(btn) {
         }
 
         function refreshPage() { showStatus('info', 'Refreshing...'); location.reload(); }
+// ============================================================
+// PHASE 1: Service Worker Registration
+// ============================================================
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/sw.js')
+            .then(function(reg) { console.log('SW registered:', reg.scope); })
+            .catch(function(err) { console.log('SW registration failed:', err); });
+    });
+}
+
+// ============================================================
+// PHASE 1: Command Palette (Ctrl+K)
+// ============================================================
+var paletteCommands = [
+    { id: 'new-chat', icon: 'fa-plus', title: 'New Chat', desc: 'Start a fresh conversation', shortcut: 'Ctrl+N', action: function() { startNewConversation(); } },
+    { id: 'models', icon: 'fa-microchip', title: 'Models', desc: 'Browse available AI models', shortcut: 'Ctrl+M', action: function() { switchViewFromDrawer('models'); } },
+    { id: 'settings', icon: 'fa-cog', title: 'Settings', desc: 'Configure NeuraOS', shortcut: 'Ctrl+,', action: function() { switchViewFromDrawer('settings'); } },
+    { id: 'gallery', icon: 'fa-images', title: 'Gallery', desc: 'View generated images', shortcut: 'Ctrl+G', action: function() { switchViewFromDrawer('gallery'); } },
+    { id: 'build', icon: 'fa-hammer', title: 'Build', desc: 'Build mode', shortcut: 'Ctrl+B', action: function() { switchViewFromDrawer('build'); } },
+    { id: 'share', icon: 'fa-share', title: 'Share Chat', desc: 'Create a shareable link', shortcut: 'Ctrl+Shift+S', action: function() { shareConversation(); } },
+    { id: 'help', icon: 'fa-question', title: 'Help', desc: 'How to use NeuraOS', shortcut: 'Ctrl+/', action: function() { toggleHelp(); } },
+    { id: 'theme', icon: 'fa-moon', title: 'Toggle Theme', desc: 'Switch dark/light mode', shortcut: 'Ctrl+Shift+T', action: function() { toggleThemeMenu(event); } },
+    { id: 'export-pdf', icon: 'fa-file-pdf', title: 'Export as PDF', desc: 'Save chat as PDF', shortcut: '', action: function() { exportChatPdf(); } },
+    { id: 'clear-history', icon: 'fa-trash', title: 'Clear History', desc: 'Delete all conversations', shortcut: '', action: function() { clearAllHistory(); } }
+];
+
+var paletteSelectedIndex = 0;
+
+function openPalette() {
+    var overlay = document.getElementById('paletteOverlay');
+    var input = document.getElementById('paletteInput');
+    if (!overlay || !input) return;
+    
+    overlay.hidden = false;
+    input.value = '';
+    input.focus();
+    paletteSelectedIndex = 0;
+    renderPalette('');
+}
+
+function closePalette() {
+    var overlay = document.getElementById('paletteOverlay');
+    if (overlay) overlay.hidden = true;
+}
+
+function renderPalette(query) {
+    var list = document.getElementById('paletteList');
+    if (!list) return;
+    
+    var q = (query || '').toLowerCase().trim();
+    var filtered = q
+        ? paletteCommands.filter(function(cmd) { 
+            return cmd.title.toLowerCase().indexOf(q) !== -1 || 
+                   cmd.desc.toLowerCase().indexOf(q) !== -1; })
+        : paletteCommands;
+    
+    var html = '';
+    for (var i = 0; i < filtered.length; i++) {
+        var cmd = filtered[i];
+        var selectedClass = i === paletteSelectedIndex ? ' selected' : '';
+        html += '<div class="palette-item' + selectedClass + '" data-index="' + i + '" onclick="executePaletteItem(' + i + ')">';
+        html += '<div class="palette-item-icon"><i class="fas ' + cmd.icon + '"></i></div>';
+        html += '<div class="palette-item-text">';
+        html += '<div class="palette-item-title">' + cmd.title + '</div>';
+        html += '<div class="palette-item-desc">' + cmd.desc + '</div>';
+        html += '</div>';
+        if (cmd.shortcut) {
+            html += '<div class="palette-item-shortcut">' + cmd.shortcut + '</div>';
+        }
+        html += '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function executePaletteItem(index) {
+    var input = document.getElementById('paletteInput');
+    var q = input ? input.value.toLowerCase().trim() : '';
+    var filtered = q
+        ? paletteCommands.filter(function(cmd) { 
+            return cmd.title.toLowerCase().indexOf(q) !== -1 || 
+                   cmd.desc.toLowerCase().indexOf(q) !== -1; })
+        : paletteCommands;
+    
+    if (filtered[index]) {
+        closePalette();
+        filtered[index].action();
+    }
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+    // Ctrl+K or Cmd+K: open palette
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        openPalette();
+    }
+    
+    // Escape: close palette
+    if (e.key === 'Escape') {
+        closePalette();
+    }
+    
+    // Arrow keys in palette
+    var overlay = document.getElementById('paletteOverlay');
+    if (overlay && !overlay.hidden) {
+        var input = document.getElementById('paletteInput');
+        var q = input ? input.value.toLowerCase().trim() : '';
+        var filtered = q
+            ? paletteCommands.filter(function(cmd) { 
+                return cmd.title.toLowerCase().indexOf(q) !== -1 || 
+                       cmd.desc.toLowerCase().indexOf(q) !== -1; })
+            : paletteCommands;
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            paletteSelectedIndex = Math.min(paletteSelectedIndex + 1, filtered.length - 1);
+            renderPalette(q);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            paletteSelectedIndex = Math.max(paletteSelectedIndex - 1, 0);
+            renderPalette(q);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            executePaletteItem(paletteSelectedIndex);
+        }
+    }
+});

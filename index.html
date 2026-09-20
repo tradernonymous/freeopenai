@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>NeuraOS | Chat</title>
+    <link rel="manifest" href="manifest.json">
     <script src="https://js.puter.com/v2/"></script>
     <script src="tool-call-text.js"></script>
     <script src="chatlib.js"></script>
@@ -19,13 +20,15 @@
     <script src="command-state.js"></script>
     <script src="hub.js" defer></script>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="phase1-zen.css">
     <!-- After the inline styles so the mode switch and hub panels can build on them. -->
     <link rel="stylesheet" href="hub.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
 </head>
-<body>
+<body class="zen-mode">
     <!-- Top Navigation Bar -->
-    <nav class="top-nav" role="navigation" aria-label="Main navigation">
+        <!-- Top Navigation Bar - Zen Mode -->
+    <nav class="top-nav zen-nav" role="navigation" aria-label="Main navigation">
         <div class="top-nav-brand">
             <i class="fas fa-brain"></i>
             <span>NeuraOS</span>
@@ -83,21 +86,8 @@
         <div class="chat-wrapper">
             <div class="view active" id="viewChat">
                 <div class="chat-shell">
-                    <aside class="history-sidebar" id="historySidebar" aria-label="Chat history">
-                        <div class="history-head">
-                            <span>Chats</span>
-                            <div class="history-head-actions">
-                                <button class="icon-btn" type="button" onclick="copyConversation(this)" title="Copy this whole chat" aria-label="Copy this whole chat">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                                </button>
-                                <button class="icon-btn" type="button" onclick="startNewConversation()" title="New chat" aria-label="New chat">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="history-list" id="historyList"></div>
-                    </aside>
-                    <div class="history-scrim" id="historyScrim" onclick="toggleHistory(false)"></div>
+                    
+                    
                 <div class="chat-card">
                     <div class="chat-tabs" id="chatTabs" hidden></div>
                     <div class="chat-bar">
@@ -398,15 +388,7 @@
             </div>
 
             <div class="view" id="viewModels">
-                <div class="chat-bar">
-                    <div class="chat-bar-title"><span>Models</span></div>
-                    <div class="chat-bar-actions">
-                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                            <span class="signed-in-dot"></span>
-                        </button>
-                    </div>
-                </div>
+                
                 <div class="settings-body">
                     <input type="text" class="model-dropdown-search models-search" id="modelCardSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelCards(this.value)">
                     <div class="models-list" id="modelsList"></div>
@@ -414,15 +396,7 @@
             </div>
 
             <div class="view" id="viewSettings">
-                <div class="chat-bar">
-                    <div class="chat-bar-title"><span>Settings</span></div>
-                    <div class="chat-bar-actions">
-                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                            <span class="signed-in-dot"></span>
-                        </button>
-                    </div>
-                </div>
+                
                 <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
                     <button class="settings-nav-btn" type="button" data-section="model" onclick="jumpToSettingsSection('model')">Model</button>
                     <button class="settings-nav-btn" type="button" data-section="chat" onclick="jumpToSettingsSection('chat')">Chat</button>
@@ -576,15 +550,7 @@
                 </div>
             </div>
             <div class="view" id="viewGallery">
-                <div class="chat-bar">
-                    <div class="chat-bar-title"><span>Gallery</span></div>
-                    <div class="chat-bar-actions">
-                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                            <span class="signed-in-dot"></span>
-                        </button>
-                    </div>
-                </div>
+                
                 <div class="settings-body">
                     <p class="settings-hint" id="galleryEmpty">Images you generate appear here, newest first.</p>
                     <div class="gallery-grid" id="galleryGrid"></div>
@@ -592,15 +558,7 @@
             </div>
 
             <div class="view" id="viewDesign">
-                <div class="chat-bar">
-                    <div class="chat-bar-title"><span>Design</span></div>
-                    <div class="chat-bar-actions">
-                        <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                            <span class="signed-in-dot"></span>
-                        </button>
-                    </div>
-                </div>
+                
                 <div class="settings-body">
                     <div class="settings-row">
                         <div>
