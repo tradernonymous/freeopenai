@@ -81,7 +81,7 @@ test('every preference setter survives a browser that refuses storage', () => {
 });
 
 test('preferences go through the guard, and the transcript does not', () => {
-  const script = HTML.slice(HTML.indexOf('function rememberPreference'));
+  const script = HTML.slice(APP_JS.indexOf('function rememberPreference'));
   // Only writeConversations may call setItem directly, because losing history is
   // a real loss: it evicts pictures and then old chats rather than shrugging.
   const direct = [...script.matchAll(/localStorage\.setItem\(([^;]*)\)/g)].map((m) => m[1]);

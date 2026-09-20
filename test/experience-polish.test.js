@@ -171,14 +171,14 @@ test('a picture opens with Enter or Space, not only with a click', () => {
 });
 
 test('every control shares one focus ring and one press', () => {
-  const ring = HTML.match(/\.hero-card:focus-visible, [^{]*\{[^}]*\}/);
+  const ring = CSS.match(/\.hero-card:focus-visible, [^{]*\{[^}]*\}/);
   assert.ok(ring, 'the shared focus ring is gone -- re-point this test');
   for (const selectors of ['.hero-start:focus-visible', '.drawer-nav-btn:focus-visible', '.dl-menu button:focus-visible', '.theme-menu button:focus-visible', '.gallery-tile:focus-visible', '.message-image:focus-visible', '.history-item:focus-visible']) {
     assert.ok(ring[0].includes(selectors), `${selectors} has hover but no focus state`);
   }
   assert.match(ring[0], /box-shadow: var\(--glow\)/);
 
-  const press = HTML.match(/\.hero-card:active,[^{]*\{[^}]*\}/);
+  const press = CSS.match(/\.hero-card:active,[^{]*\{[^}]*\}/);
   assert.ok(press, 'the press feedback is gone -- re-point this test');
   assert.match(press[0], /transform: translateY\(1px\)/);
   for (const selectors of ['.icon-btn:active', '.icon-btn-text:active', '.drawer-nav-btn:active', '.composer-send:active:not\(:disabled\)']) {

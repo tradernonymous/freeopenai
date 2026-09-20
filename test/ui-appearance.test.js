@@ -25,7 +25,7 @@ test('the palette is the neutral ladder, not white on black', () => {
 
   // The composer is the one control always in reach, so it is lifted off the
   // transcript rather than sitting on the same grey as it.
-  const composer = HTML.match(/\.composer \{[^}]*\}/);
+  const composer = CSS.match(/\.composer \{[^}]*\}/);
   assert.ok(composer, '.composer is gone -- re-point this test');
   assert.match(composer[0], /background: var\(--surface-2\)/);
 });
@@ -52,7 +52,7 @@ test('the appearance toggle is reachable at every size, including the smallest p
 test('the picker names the three choices rather than cycling through five', () => {
   // A const, not a function, so it is read from the page text rather than
   // through sourceOf's function lookup.
-  const at = HTML.indexOf('const THEME_OPTIONS = [');
+  const at = APP_JS.indexOf('const THEME_OPTIONS = [');
   assert.ok(at > 0, 'THEME_OPTIONS is gone -- re-point this test');
   const options = HTML.slice(at, HTML.indexOf('];', at));
   assert.match(options, /id: 'auto', label: 'System'/);
@@ -103,7 +103,7 @@ test('a picture can be saved from the message and from the lightbox', () => {
   // An <a download> can only hand back the bytes it was given, so the lightbox
   // anchor had to become a button over the re-encoder.
   assert.doesNotMatch(HTML, /<a id="lightboxDownload"/, 'the lightbox download went back to an anchor');
-  assert.match(HTML, /<button id="lightboxDownload"[\s\S]{0,80}onclick="toggleImageDownloadMenu\(event, lightboxImg\.src, lightboxImg\.alt\)"/);
+  assert.match(CSS, /<button id="lightboxDownload"[\s\S]{0,80}onclick="toggleImageDownloadMenu\(event, lightboxImg\.src, lightboxImg\.alt\)"/);
   const tools = sourceOf('appendImageTools');
   assert.match(tools, /toggleImageDownloadMenu\(event, src, promptText\)/, 'the image row needs a way to save without opening it first');
 });

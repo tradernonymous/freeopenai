@@ -26,6 +26,8 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
 // The panel's open/close/tab machinery is extracted together, because the
 // interesting rules are the ones between them: that opening draws the section it
@@ -485,7 +487,7 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   // control every turn needs was behind a panel.
   assert.match(panel, /bottom: var\(--panel-floor, 10px\)/);
   assert.match(HTML, /function syncPanelFloor\(\)/, 'nothing measures the composer');
-  const floor = HTML.slice(HTML.indexOf('function syncPanelFloor()'), HTML.indexOf('function watchPanelFloor()'));
+  const floor = HTML.slice(APP_JS.indexOf('function syncPanelFloor()'), APP_JS.indexOf('function watchPanelFloor()'));
   assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
   assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
   assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
@@ -556,7 +558,7 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // way would spend the allowance before anyone touched anything.
   assert.match(HTML, /let drawWithPuter = localStorage\.getItem\(IMAGE_PUTER_KEY\) === '1';/);
   assert.match(HTML, /onclick="startImageTurn\(\)"/);
-  const hero = HTML.slice(HTML.indexOf('function startImageTurn()'), HTML.indexOf('function startPlanTurn()'));
+  const hero = HTML.slice(APP_JS.indexOf('function startImageTurn()'), APP_JS.indexOf('function startPlanTurn()'));
   assert.match(hero, /if \(!imageMode\) toggleImageMode\(\);/);
 });
 
@@ -590,15 +592,15 @@ test('the reasoning summary can be switched off, and the setting reaches old rep
   assert.match(HTML, /document\.getElementById\('reasoningCheck'\)\.checked = reasoningVisible/);
   // Both renderers consult it, so a reply that arrives while it is off leaves
   // no scratchpad behind...
-  const strip = HTML.slice(HTML.indexOf('function setReasoningStrip'), HTML.indexOf('function setReasoningContent'));
+  const strip = HTML.slice(APP_JS.indexOf('function setReasoningStrip'), APP_JS.indexOf('function setReasoningContent'));
   assert.match(strip, /!text \|\| !reasoningVisible/);
-  const content = HTML.slice(HTML.indexOf('function setReasoningContent'), HTML.indexOf('// Puter streams reasoning'));
+  const content = HTML.slice(APP_JS.indexOf('function setReasoningContent'), HTML.indexOf('// Puter streams reasoning'));
   assert.match(content, /!text \|\| !reasoningVisible/);
   // ...but the text is still recorded, so switching it on shows the reasoning of
   // replies that already happened rather than only the next one.
   assert.match(strip, /if \(text\) el\.dataset\.rawReasoning = text;/);
   assert.match(content, /if \(text\) el\.dataset\.rawReasoning = text;/);
-  const toggle = HTML.slice(HTML.indexOf('function setReasoningVisible'), HTML.indexOf('// Ticking a row goes through'));
+  const toggle = HTML.slice(APP_JS.indexOf('function setReasoningVisible'), HTML.indexOf('// Ticking a row goes through'));
   assert.match(toggle, /querySelectorAll\('\.message\.bot'\)/);
 });
 
@@ -606,14 +608,14 @@ test('the skills panel records what applied, per conversation', () => {
   // Written on the turn, from what actually rode along -- not from what was
   // pinned, which would claim credit for skills the router never used.
   assert.match(HTML, /logSkillsUsed\(activeConversationId, activeSkills\)/);
-  const log = HTML.slice(HTML.indexOf('function logSkillsUsed'), HTML.indexOf('function renderSkillRail'));
+  const log = HTML.slice(APP_JS.indexOf('function logSkillsUsed'), APP_JS.indexOf('function renderSkillRail'));
   assert.match(log, /pinned: !!skill\.pinned/);
   assert.match(log, /turns: prev\.turns \+ 1/);
   // Every path that changes which chat is open redraws it, from one place.
   assert.match(CSS, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
   // A skill that is no longer installed cannot be pinned, so tapping it drops
   // the row rather than offering something that cannot work.
-  const tap = HTML.slice(HTML.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
+  const tap = HTML.slice(APP_JS.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
   assert.match(tap, /if \(isPinned\) \{ removePinnedSkill\(name\); return; \}/);
   assert.match(tap, /no longer installed/);
   // But an empty catalogue is not a missing skill: a chat that never needed a

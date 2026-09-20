@@ -39,6 +39,6 @@ test('the page still binds Enter and the send button to sendMessage', () => {
   // The keyboard path and the button path are separate; both must reach the
   // same function, or one input dies while tests on the other stay green.
   assert.match(HTML, /onkeydown="handleKeyDown\(event\)"/, 'the textarea lost its key handler');
-  assert.match(HTML, /e\.key === 'Enter' && !e\.shiftKey[\s\S]{0,80}sendMessage\(\)/, 'Enter no longer calls sendMessage');
-  assert.match(HTML, /id="sendButton"[\s\S]{0,200}?onclick="isTyping \? stopGeneration\(\) : sendMessage\(\)"/, 'the send button no longer calls sendMessage');
+  assert.match(CSS, /e\.key === 'Enter' && !e\.shiftKey[\s\S]{0,80}sendMessage\(\)/, 'Enter no longer calls sendMessage');
+  assert.match(CSS, /id="sendButton"[\s\S]{0,200}?onclick="isTyping \? stopGeneration\(\) : sendMessage\(\)"/, 'the send button no longer calls sendMessage');
 });

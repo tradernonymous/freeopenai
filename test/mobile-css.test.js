@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // The one prelude that names a small screen. A landscape phone is normally
 // wider than 640px -- 844x390 is typical -- so keying the ergonomic fixes to
@@ -15,8 +16,8 @@ const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 // and the JS reads the same string.
 const SMALL_CONDITION = '(max-width: 640px), (max-height: 520px) and (orientation: landscape)';
 const SMALL_PRELUDE = '@media ' + SMALL_CONDITION;
-const SMALL = HTML.slice(HTML.indexOf(SMALL_PRELUDE), HTML.indexOf('@media (max-width: 380px)'));
-const LANDSCAPE = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
+const SMALL = CSS.slice(CSS.indexOf(SMALL_PRELUDE), CSS.indexOf('@media (max-width: 380px)'));
+const LANDSCAPE = CSS.slice(CSS.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
 
 // Every `selector { ... }` pair inside a media block, so an assertion can ask
 // about a rule rather than about a slice of text that a reorder would move.
@@ -40,7 +41,7 @@ test('the composer area never pads the bottom safe-area inset the body already p
   // body { padding-bottom: env(safe-area-inset-bottom) } plus the same inset
   // again on .chat-input-area doubled the dead zone under the composer on
   // every phone with a home indicator.
-  const blocks = [...HTML.matchAll(/\.chat-input-area\s*\{[^}]*\}/g)].map((m) => m[0]);
+  const blocks = [...CSS.matchAll(/\.chat-input-area\s*\{[^}]*\}/g)].map((m) => m[0]);
   assert.ok(blocks.length >= 3, 'expected the base rule plus both media overrides -- re-point this test');
   for (const block of blocks) {
     assert.doesNotMatch(
@@ -59,11 +60,11 @@ test('CSS and JS name the same small screen, and the JS adds nothing of its own'
   // cover over the chat. It drifted before by carrying a (hover: none) test the
   // CSS does not have, which is how a short landscape window got an overlay
   // that started open.
-  const declared = HTML.match(/const SMALL_SCREEN_QUERY = '([^']+)'/);
+  const declared = APP_JS.match(/const SMALL_SCREEN_QUERY = '([^']+)'/);
   assert.ok(declared, 'SMALL_SCREEN_QUERY is gone -- re-point this test');
   assert.equal(declared[1], SMALL_CONDITION, 'the JS condition and the CSS prelude have drifted apart');
 
-  const fn = CSS.match(/function isNarrowScreen\(\)\s*\{[\s\S]*?\n        \}/);
+  const fn = APP_JS.match(/function isNarrowScreen\(\)\s*\{[\s\S]*?\n        \}/);
   assert.ok(fn, 'isNarrowScreen is gone -- re-point this test');
   assert.match(fn[0], /matchMedia\(SMALL_SCREEN_QUERY\)/, 'isNarrowScreen must read the shared condition');
   assert.doesNotMatch(fn[0], /hover:\s*none/, 'the CSS has no pointer test here, so the JS must not invent one');

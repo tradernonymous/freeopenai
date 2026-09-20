@@ -10,6 +10,8 @@ const hub = require('../hub.js');
 const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+const appJs = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const js = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'hub.css'), 'utf8');
 
@@ -79,7 +81,7 @@ test('the page loads the hub and hands it what it needs', () => {
 });
 
 test('picking a mode directly has the same effects as cycling to it', () => {
-  const setter = html.slice(html.indexOf('function setChatMode('), html.indexOf('window.NeuraOSPage'));
+  const setter = html.slice(appJs.indexOf('function setChatMode('), html.indexOf('window.NeuraOSPage'));
   assert.match(setter, /isValidMode\(id\)/, 'an unknown mode is ignored');
   assert.match(setter, /rememberPreference\('freeopenaiMode'/);
   assert.match(setter, /updateModeChip\(\)/);

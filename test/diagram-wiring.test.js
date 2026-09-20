@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const { HTML, sourceOf, assertScannerCanRead, assertSandboxCovers, loadFromIndex } = require('./helpers/index-html.js');
 
 function realDiagramTypes() {
-  const at = HTML.indexOf('const MERMAID_TYPES = [');
+  const at = APP_JS.indexOf('const MERMAID_TYPES = [');
   assert.ok(at > 0, 'MERMAID_TYPES is gone -- re-point this test');
   const body = HTML.slice(at, HTML.indexOf('];', at));
   return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);

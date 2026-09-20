@@ -12,7 +12,7 @@ test('the three icon buttons are one rule, and it uses the control radius', () =
   // .icon-btn, .menu-trigger-btn and .modal-close were three copies of the same
   // seven declarations, which is how a dialog's close button drifts away from
   // the button beside it in the bar.
-  const base = HTML.match(/\.icon-btn, \.menu-trigger-btn, \.modal-close \{[^}]*\}/);
+  const base = CSS.match(/\.icon-btn, \.menu-trigger-btn, \.modal-close \{[^}]*\}/);
   assert.ok(base, 'the icon buttons no longer share one rule -- re-point this test');
   assert.match(base[0], /width: 32px; height: 32px/);
   assert.match(base[0], /border-radius: var\(--ctl-r\)/);
@@ -20,7 +20,7 @@ test('the three icon buttons are one rule, and it uses the control radius', () =
 });
 
 test('a labelled button is the same control as a chip, only wider', () => {
-  const labelled = HTML.match(/\.icon-btn-text \{[^}]*\}/);
+  const labelled = CSS.match(/\.icon-btn-text \{[^}]*\}/);
   assert.ok(labelled, '.icon-btn-text is gone -- re-point this test');
   for (const token of ['height: var(--ctl-h)', 'border-radius: var(--ctl-r)', 'background: var(--ctl-bg)', 'border: 1px solid var(--ctl-edge)']) {
     assert.ok(labelled[0].includes(token), `.icon-btn-text must draw ${token} from the shared control tokens`);
@@ -30,12 +30,12 @@ test('a labelled button is the same control as a chip, only wider', () => {
 test('the reasoning is legible, and its summary is a real control', () => {
   // 7px reasoning text and a 9px summary were strays from a smaller type scale;
   // the summary is what you tap to open the scratchpad.
-  const text = HTML.match(/\.reasoning-text \{[^}]*\}/);
+  const text = CSS.match(/\.reasoning-text \{[^}]*\}/);
   assert.ok(text, '.reasoning-text is gone -- re-point this test');
   const textSize = Number((text[0].match(/font-size:\s*([\d.]+)px/) || [])[1]);
   assert.ok(textSize >= 10, `reasoning text is ${textSize}px, which is not readable`);
 
-  const summary = HTML.match(/\.message-reasoning > summary \{[^}]*\}/);
+  const summary = CSS.match(/\.message-reasoning > summary \{[^}]*\}/);
   assert.ok(summary, 'the reasoning summary is gone -- re-point this test');
   const summarySize = Number((summary[0].match(/font-size:\s*([\d.]+)px/) || [])[1]);
   assert.ok(summarySize >= 11, `the summary that opens it is ${summarySize}px`);
@@ -48,7 +48,7 @@ test('a user bubble is themed, not hard-coded white', () => {
   assert.match(light, /--bubble-user:/, 'the light theme must say what a bubble is');
   assert.match(light, /--bubble-edge:/);
 
-  const bubble = HTML.match(/\.message\.user \{[^}]*\}/);
+  const bubble = CSS.match(/\.message\.user \{[^}]*\}/);
   assert.ok(bubble, '.message.user is gone -- re-point this test');
   assert.match(bubble[0], /background: var\(--bubble-user\)/);
   assert.match(bubble[0], /border: 1px solid var\(--bubble-edge\)/);
@@ -58,7 +58,7 @@ test('the chat bar runs no backdrop-filter it cannot see through', () => {
   // The bar set a translucent background and a blur, then overrode the
   // background two lines later -- so every frame of a scrolling transcript paid
   // for a compositing pass that tinted nothing.
-  const bar = HTML.match(/\.chat-bar \{[^}]*\}/);
+  const bar = CSS.match(/\.chat-bar \{[^}]*\}/);
   assert.ok(bar, '.chat-bar is gone -- re-point this test');
   assert.doesNotMatch(bar[0], /backdrop-filter\s*:/, 'the blur was the whole cost, and nothing can see through the bar');
   assert.match(bar[0], /background: var\(--bg-elevated\)/);
@@ -111,8 +111,8 @@ test('the rail scrolls to the named heading', () => {
 
 test('the transcript is a window inside the app frame, and a phone gets the screen', () => {
   // Edge to edge it read as "the page" rather than as a conversation with a size.
-  assert.match(HTML, /#viewChat \{ padding: 10px; \}/, 'the chat view lost its inset');
-  assert.match(HTML, /#viewChat \.chat-card \{ border-radius: var\(--r-lg\); box-shadow: var\(--lift\); \}/);
+  assert.match(CSS, /#viewChat \{ padding: 10px; \}/, 'the chat view lost its inset');
+  assert.match(CSS, /#viewChat \.chat-card \{ border-radius: var\(--r-lg\); box-shadow: var\(--lift\); \}/);
 
   // The small-screen layer drops it again: a phone's transcript wants every pixel.
   const small = HTML.slice(HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {'));
@@ -120,21 +120,21 @@ test('the transcript is a window inside the app frame, and a phone gets the scre
 
   // And the card must never clip: the model picker and the attach menu hang
   // below the composer, and a rounded overflow:hidden card would cut them off.
-  const card = HTML.match(/\.chat-card \{[^}]*\}/);
+  const card = CSS.match(/\.chat-card \{[^}]*\}/);
   assert.ok(card, '.chat-card is gone -- re-point this test');
   assert.match(card[0], /overflow: visible/);
 });
 
 test('the way back to the newest output tracks the reading column', () => {
-  const pill = HTML.match(/\.scroll-bottom \{[^}]*\}/);
+  const pill = CSS.match(/\.scroll-bottom \{[^}]*\}/);
   assert.ok(pill, '.scroll-bottom is gone -- re-point this test');
   // Anchored to the measure: on a wide screen the column is centred, so a pill
   // at the window's right edge floats nowhere near the text it returns you to.
   assert.match(pill[0], /right: max\(16px, calc\(\(100% - var\(--measure\)\) \/ 2 \+ 16px\)\)/);
   assert.match(pill[0], /display: none/);
-  assert.match(HTML, /\.scroll-bottom\.visible \{ display: inline-flex; \}/, 'the pill needs a state the wiring can turn on');
+  assert.match(CSS, /\.scroll-bottom\.visible \{ display: inline-flex; \}/, 'the pill needs a state the wiring can turn on');
   // It sits above the composer, which is the element it is positioned against.
-  const area = HTML.match(/\.chat-input-area \{[^}]*\}/);
+  const area = CSS.match(/\.chat-input-area \{[^}]*\}/);
   assert.ok(area, '.chat-input-area is gone -- re-point this test');
   assert.match(area[0], /position: relative/);
 });
@@ -142,7 +142,7 @@ test('the way back to the newest output tracks the reading column', () => {
 test('restoring a saved chat does not animate every bubble in', () => {
   // Building a long conversation is a two-hundred-element slide-in for content
   // the reader has already read.
-  assert.match(HTML, /\.chat-messages\.no-anim \.message \{ animation: none; \}/);
+  assert.match(CSS, /\.chat-messages\.no-anim \.message \{ animation: none; \}/);
   const restore = sourceOf('renderActiveConversation');
   assert.match(restore, /classList\.add\('no-anim'\)/);
   assert.match(restore, /requestAnimationFrame\(\(\) => chatMessages\.classList\.remove\('no-anim'\)\)/, 'the class has to come off before the next message animates');
@@ -152,7 +152,7 @@ test('the busy row names the step instead of three dots and silence', () => {
   // The dots say "busy", which is the same for a two-second lookup and a stuck
   // provider; the label says what is happening.
   assert.match(HTML, /class="typing-label" id="typingLabel"/);
-  assert.match(HTML, /\.typing-label \{[^}]*\}/, 'the label has no rule, so it cannot truncate on a phone');
+  assert.match(CSS, /\.typing-label \{[^}]*\}/, 'the label has no rule, so it cannot truncate on a phone');
   assert.match(sourceOf('setActivity'), /getElementById\('typingLabel'\)/);
   // The tool loop names the step it is running...
   assert.match(sourceOf('runChatWithTools'), /setActivity\(line\)/);
