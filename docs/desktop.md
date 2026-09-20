@@ -59,6 +59,27 @@ Closing the window hides the app to the tray; **Quit** (tray menu) is a clean ex
 
 CI writes `desktop-version.json` into the `desktop-latest` release — the real version plus a `sha256` and byte size for every artifact, taken from the files it just built. The app fetches that file (three attempts with backoff, straight from the release CDN rather than the rate-limited GitHub API) and offers the update only when the published version is **strictly newer** than the running one. The banner names the installer, its size, and its sha256 on hover; dismissing it silences that version until a newer one appears.
 
+The fetch runs **through the shell**, not the webview: a page may not read a release asset (`objects.githubusercontent.com` sends no `Access-Control-Allow-Origin`), which is why earlier builds never showed the banner even though the release published correct metadata. For the same reason the banner's **Download and install** button downloads the installer through the shell, checks the published `sha256` while it streams, and only then runs it — a mismatch deletes the file and reports it. In a plain browser (no shell) the button opens the release page instead, which is the honest fallback.
+
+## The shell's network edge
+
+Every "we cannot reach it" failure in this app had one shape: work a webview is not allowed to do, being done inside the webview. `remote_get` and `remote_download` (`src-tauri/src/net.rs`) do it in Rust instead, under rules a page cannot bend:
+
+| Rule | Why |
+| :-- | :-- |
+| https anywhere on the allowlist; `http` only on loopback | a local llama.cpp or sd.cpp server is the only plain-http thing this app talks to |
+| Every redirect hop is checked (redirects are followed by hand) | a release download redirects to `objects.githubusercontent.com`; reqwest's own policy would follow one to a host the allowlist never saw |
+| `sha256` verified while streaming; a mismatch deletes the file | integrity that is checked, not just published |
+| A download with no published digest reports `verified: false` | trust-on-first-use, labelled as such rather than dressed up |
+| Only a file inside the app's own downloads folder can be executed | the installer command is not a general "run this path" |
+| The file name is sanitised to a base name | a name cannot choose its own path |
+
+`src/net-policy.js` is the frontend's copy of the same rules, so a URL can be refused with a readable sentence *before* it crosses the boundary. `test/desktop-net.test.js` asserts the two host lists are identical, so they cannot drift.
+
+## Diagnostics
+
+Settings has a **Copy diagnostics** button. It copies a short report — build version, engine address, what the last engine answer meant, OS/arch, WebView2 version, where the data and cache directories are, and the tail of the crash log — built by `src/diagnostics.js` from facts the shell gathers (`src-tauri/src/diag.rs`). It is safe to paste: query strings are dropped from addresses and anything shaped like `hf_…`, `sk-…` or `Bearer …` is redacted. A failure should not need a screenshot.
+
 ## Code map
 
 Each concern has one owner, and the shell (App.tsx) composes rather than implements.
@@ -76,13 +97,26 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/theme.ts` | The theme value, its key, and applying it |
 | `src/run-result.js` | An engine run response turned into the terminal's display block |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
+| `src/main.tsx` | The boot guard: a start failure paints its own message into `#root` instead of leaving an empty window (and only while `#root` is empty, so a running app is never replaced) |
+| `src/bridge.ts` | The one place that talks to the Rust shell (`hasShell`, `remoteGet`, `downloadVerified`, `runInstaller`, `diagnosticsFacts`) |
+| `src/net-policy.js` | The frontend's copy of the shell's network allowlist, and the sentence explaining a refusal |
+| `src/diagnostics.js` | The `Copy diagnostics` text, and the redaction that makes it safe to paste |
+| `src-tauri/src/net.rs` | The network edge: the allowlist, hand-followed redirects, verified downloads, running a downloaded installer |
+| `src-tauri/src/diag.rs` | The facts the diagnostics report is built from |
 | `src-tauri/src/main.rs` | Wiring: boot checks, tray, window, plugins, commands |
 | `src-tauri/src/crash.rs` | Where a failure is recorded: path, size cap, rotation, hint |
 | `src-tauri/src/webview2.rs` | The runtime the window needs, and what to tell a user missing it |
 | `src-tauri/src/save.rs` | The native save dialog and its derived filters |
 
-The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read off `globalThis`) are the ones that carry rules; `node --test` runs them directly, so the same code paths the app uses are the ones the tests check. The shell's Rust rules are asserted from the shell sources as a set (`test/desktop.test.js`), so moving a rule between modules is not a test break.
+The pure modules (`.js` with a `.d.ts`, loaded for their side effect and read off `globalThis`) are the ones that carry rules; `node --test` runs them directly, so the same code paths the app uses are the ones the tests check.
+
+> [!IMPORTANT]
+> Those modules publish their global **unconditionally**, and must keep doing so. The traditional UMD wrapper assigns the global only in the branch taken when it cannot see CommonJS — and inside a Vite bundle it *does* see a `module` object (the interop helper leaves one in scope), so the global was never set. The app then died on its first read of one: a window painted in the app's background colour, with nothing in it, while `vite dev` worked perfectly. `test/desktop-umd.test.js` runs every one of these modules the way the bundle runs it — a `module` in scope, no `require` — so this cannot come back quietly. The shell's Rust rules are asserted from the shell sources as a set (`test/desktop.test.js`), so moving a rule between modules is not a test break.
 
 ## How it is built
 
 [`desktop/`](../desktop/) is a Tauri 2 + React (Vite + TypeScript) app. The Rust shell (`src-tauri/`) owns the window, tray and the WebView2 check; the React frontend owns the screens and talks to the engine through [`src/api.ts`](../desktop/src/api.ts) — the same routes the web app uses. CI ([`desktop.yml`](../.github/workflows/desktop.yml)) runs the desktop tests (`node --test test/desktop.test.js`, `test/desktop-update.test.js`, `test/desktop-chats.test.js`: config integrity, version agreement, the update-check rules, the chat import/export merge, and that every route the frontend calls exists on the server), builds the Tauri app on `windows-latest`, writes `desktop-version.json`, and publishes the NSIS installer, MSI, portable exe and that metadata file to the `desktop-latest` release.
+
+## Upgrade roadmap
+
+[`desktop-premium-plan.md`](./desktop-premium-plan.md) is the master plan for the next nine phases: the Rust network edge and a working updater, the premium shell pass, local-first files and terminal, llama.cpp + GGUF local models, Sign in with Hugging Face and the Hub browser, Hugging Face inference providers, the local approval-gated coding agent, the Agent Skills knowledge pack, and local images / parallel agents / fine-tuning. It also records what each reference repo (freebuff, codebuff-swe-bench, evalbuff, stagehand, opentui, unsloth and its forks, stable-diffusion.cpp, huggingface.js / skills / huggingface_hub) contributes to which phase.

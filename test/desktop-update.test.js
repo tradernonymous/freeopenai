@@ -167,3 +167,56 @@ test('the app fetches that file instead of regexing asset names', () => {
     'and so is the rate-limited API call');
   assert.match(shell, /useUpdateCheck\(\)/, 'App composes it');
 });
+
+// ---- installing an update, not just linking to one ----------------------
+
+test('the artifact URL is the release CDN, on a host the shell allows', () => {
+  const url = update.artifactUrl(undefined, 'FreeAI4U.Desktop_2.4.0_x64-setup.exe');
+  assert.equal(
+    url,
+    'https://github.com/tradernonymous/freeopenai/releases/download/desktop-latest/FreeAI4U.Desktop_2.4.0_x64-setup.exe',
+  );
+  const policy = require('../desktop/src/net-policy.js');
+  assert.equal(policy.isAllowed(url), true, 'the shell must be able to fetch it');
+  assert.equal(update.artifactUrl(undefined, ''), '');
+});
+
+test('an install plan checks the digest only when the release published one', () => {
+  const digest = 'a'.repeat(64);
+  const verified = update.installPlan({
+    installer: { name: 'setup.exe', sha256: digest.toUpperCase(), size: 5_400_000 },
+  });
+  assert.equal(verified.sha256, digest, 'the digest is normalised to lowercase hex');
+  assert.equal(verified.verified, true);
+  assert.equal(verified.size, 5_400_000);
+
+  const unverifiable = update.installPlan({ installer: { name: 'setup.exe', sha256: '', size: 10 } });
+  assert.equal(unverifiable.sha256, '', 'nothing to check against');
+  assert.equal(unverifiable.verified, false, 'and it is never CLAIMED as verified');
+
+  const short = update.installPlan({ installer: { name: 'setup.exe', sha256: 'abc123', size: 10 } });
+  assert.equal(short.verified, false, 'a truncated hash is not a hash');
+
+  assert.equal(update.installPlan({ installer: null }), null);
+  assert.equal(update.installPlan({}), null);
+});
+
+test('the download runs through the shell, so CORS cannot block it', () => {
+  const hook = read('desktop', 'src', 'useUpdateCheck.ts');
+  assert.match(hook, /hasShell\(\)/, 'the hook knows whether a shell is present');
+  assert.match(hook, /shellFetch/, 'the metadata fetch goes through the shell');
+  assert.match(hook, /downloadVerified/, 'so does the download, which is hashed as it streams');
+  assert.match(hook, /netPolicy\.refusalReason/, 'a URL is refused before it is handed to the shell');
+  assert.match(hook, /runInstaller/, 'and the installer is started by the shell');
+  const bridge = read('desktop', 'src', 'bridge.ts');
+  assert.match(bridge, /'remote_download'/);
+  assert.match(bridge, /'remote_get'/);
+  assert.match(bridge, /'run_installer'/);
+});
+
+test('the banner offers the install, not only a link', () => {
+  const shell = read('desktop', 'src', 'App.tsx');
+  assert.match(shell, /installUpdate/, 'the banner calls it');
+  assert.match(shell, /installing/, 'and shows which phase it is in');
+  assert.match(shell, /verified/, 'and whether the digest was checked');
+});

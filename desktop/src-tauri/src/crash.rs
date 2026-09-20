@@ -68,3 +68,21 @@ pub fn log(msg: &str) {
 pub fn hint() -> String {
     path().display().to_string()
 }
+
+/// Current size, or 0 when nothing has ever been recorded.
+pub fn bytes() -> u64 {
+    std::fs::metadata(path()).map(|meta| meta.len()).unwrap_or(0)
+}
+
+/// The last `max_bytes` of the log, so a diagnostics bundle can carry what went
+/// wrong without carrying the whole history. Reads from the end: a log that hit
+/// its cap is exactly the case where reading it all would be slowest.
+pub fn tail(max_bytes: usize) -> String {
+    let file = path();
+    let content = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(_) => return String::new(),
+    };
+    let start = content.len().saturating_sub(max_bytes);
+    String::from_utf8_lossy(&content[start..]).to_string()
+}

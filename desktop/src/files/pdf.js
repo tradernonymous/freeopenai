@@ -8,8 +8,12 @@
 // a raw deflate stream, so the browser/node raw inflate inside zip.js
 // handles it once the wrapper bytes are stripped.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./zip.js'));
-  else root.FreePdf = factory(root.FreeZip);
+  // Real CommonJS only -- see office.js: in a bundle `module` exists but
+  // `require` does not, so zip comes from the global zip.js publishes.
+  var isCjs = typeof module === 'object' && module.exports && typeof require === 'function';
+  var api = factory(isCjs ? require('./zip.js') : root && root.FreeZip);
+  if (isCjs) module.exports = api;
+  if (root) root.FreePdf = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (zip) {
   'use strict';
 

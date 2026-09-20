@@ -32,7 +32,17 @@ type RightPanel = 'builds' | 'knowledge' | 'none';
 export default function App() {
   const [view, setView] = useState<View>('chat');
   const [theme, setTheme] = useState<Theme>(readTheme);
-  const { info: updateInfo, installer, dismiss: dismissUpdate, humanSize, releaseUrl } = useUpdateCheck();
+  const {
+    info: updateInfo,
+    installer,
+    dismiss: dismissUpdate,
+    humanSize,
+    releaseUrl,
+    installState,
+    installError,
+    downloaded,
+    install: installUpdate,
+  } = useUpdateCheck();
   const [showFiles, setShowFiles] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
@@ -171,14 +181,32 @@ export default function App() {
                   {installer.size ? ` · ${humanSize(installer.size)}` : ''}
                 </span>
               )}
+              {/* In the shell this downloads, checks the published sha256 and runs
+                  the installer; in a browser it opens the release page. Without the
+                  first, the integrity data CI publishes could never be used. */}
+              <button className="update-install" onClick={installUpdate} disabled={installState === 'downloading' || installState === 'installing'}>
+                {installState === 'downloading' && 'Downloading…'}
+                {installState === 'installing' && 'Installing…'}
+                {installState === 'idle' && 'Download and install'}
+                {installState === 'error' && 'Try again'}
+              </button>
               <a href={releaseUrl} target="_blank" rel="noreferrer">
-                Download
+                Download manually
               </a>
               <button onClick={dismissUpdate}>✕</button>
             </div>
           )}
           {banner && (
             <div className="server-banner">{banner}</div>
+          )}
+          {installState === 'error' && installError && (
+            <div className="server-banner">Update failed: {installError}</div>
+          )}
+          {installState === 'installing' && downloaded && (
+            <div className="server-banner">
+              Installed {downloaded.name}{' '}
+              {downloaded.verified ? '(sha256 verified)' : '(no digest published by the release)'}
+            </div>
           )}
           <div className="main-content">
             <div className="primary-pane">
@@ -196,7 +224,12 @@ export default function App() {
                   {view === 'build' && <BuildScreen />}
                   {view === 'library' && <LibraryScreen />}
                   {view === 'files' && <FilesScreen />}
-                  {view === 'settings' && <SettingsScreen onConnectionChanged={checkAuth} />}
+                  {view === 'settings' && (
+                    <SettingsScreen
+                      onConnectionChanged={checkAuth}
+                      diagnosticsState={shell.reason + (signedIn ? ' · signed in' : ' · signed out')}
+                    />
+                  )}
                 </>
               )}
             </div>

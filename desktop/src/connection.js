@@ -13,8 +13,11 @@
 // UMD like the repo's other shared modules: node gets module.exports, the
 // bundled app gets the global.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeAI4UConnection = factory();
+  // Unconditional global publish -- see chats.js for why the traditional
+  // fallback-branch UMD shape breaks in a Vite production bundle.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeAI4UConnection = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   // The kinds, and what each one means:
   //   ok           it worked

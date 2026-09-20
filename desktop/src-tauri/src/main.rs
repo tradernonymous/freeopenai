@@ -3,7 +3,8 @@
 // This file is wiring only: boot checks, the tray, the window, and which
 // plugins and commands exist. Each concern with rules of its own lives next to
 // it -- crash.rs (where a failure is recorded), webview2.rs (the runtime the
-// window needs), save.rs (the native save dialog).
+// window needs), save.rs (the native save dialog), net.rs (the network edge a
+// webview cannot be), diag.rs (the facts behind Copy diagnostics).
 //
 // Release builds carry windows_subsystem="windows": a GUI app must never
 // open a console window (the "black terminal flash" on launch).
@@ -17,6 +18,8 @@ use tauri::{
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod crash;
+mod diag;
+mod net;
 mod save;
 mod webview2;
 use tauri::generate_handler;
@@ -43,7 +46,22 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .invoke_handler(generate_handler![save::save_file_dialog])
+        // Registered first: a second launch must focus the window that exists
+        // rather than build a second tray icon and a second app object.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .invoke_handler(generate_handler![
+            save::save_file_dialog,
+            net::remote_get,
+            net::remote_download,
+            net::run_installer,
+            diag::diagnostics
+        ])
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         // Registered for the frontend's future use; today the app stores its

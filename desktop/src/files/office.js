@@ -4,8 +4,14 @@
 // functions on bytes and strings -- no DOM, no fetch -- so node:test can
 // exercise them and the WebView bundle runs the same code.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./zip.js'));
-  else root.FreeOffice = factory(root.FreeZip);
+  // Real CommonJS only. In a Vite bundle `module` exists (the CommonJS interop
+  // object) but `require` does not, so the dependency is taken from the global
+  // that zip.js publishes -- which is why the frontend imports zip.js for its
+  // side effect before this file.
+  var isCjs = typeof module === 'object' && module.exports && typeof require === 'function';
+  var api = factory(isCjs ? require('./zip.js') : root && root.FreeZip);
+  if (isCjs) module.exports = api;
+  if (root) root.FreeOffice = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (zip) {
   'use strict';
 

@@ -13,8 +13,17 @@
 // UMD like the repo's other shared modules: node gets module.exports, the
 // bundled app gets the global.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeAI4UChats = factory();
+  // Published to the global UNCONDITIONALLY, and to module.exports when node
+  // is asking. The traditional UMD shape that assigns the API only in the
+  // fallback branch -- the one that runs when node is NOT detected -- is unsound
+  // once a bundler is involved: Vite's CommonJS interop leaves a `module`
+  // object in scope, so the wrapper takes the CommonJS branch and the global
+  // is never set. That is exactly how a production build shipped a window
+  // that drew its background colour and nothing else -- dev worked, the bundle
+  // died on the first read of these globals.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeAI4UChats = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   var MAX_SESSIONS = 60;
   // Fired after an import so a mounted Chat screen reloads what it is showing.

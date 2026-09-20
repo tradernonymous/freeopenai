@@ -42,6 +42,9 @@ jobs:
           test/desktop-chats.test.js
           test/desktop-connection.test.js
           test/desktop-onboarding.test.js
+          test/desktop-umd.test.js
+          test/desktop-net.test.js
+          test/desktop-diagnostics.test.js
       - name: Build Tauri app
         working-directory: desktop
         run: npm run tauri:build

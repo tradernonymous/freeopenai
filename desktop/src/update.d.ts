@@ -15,8 +15,22 @@ export declare const VERSION_FILE: string;
 export declare const DEFAULT_ATTEMPTS: number;
 export declare const DEFAULT_BASE_DELAY_MS: number;
 export declare const MAX_DELAY_MS: number;
+export interface InstallPlan {
+  name: string;
+  url: string;
+  /** Empty when the release published no usable digest. */
+  sha256: string;
+  size: number;
+  /** True only when the digest will actually be checked after download. */
+  verified: boolean;
+}
 export declare function versionUrl(repo?: string): string;
 export declare function desktopUrl(repo?: string): string;
+export declare function artifactUrl(repo: string | undefined, name: string): string;
+export declare function installPlan(options: {
+  repo?: string;
+  installer: UpdateArtifact | null;
+}): InstallPlan | null;
 export declare function parseVersion(value: unknown): number[] | null;
 export declare function compareVersions(a: unknown, b: unknown): number | null;
 export declare function isNewer(remote: unknown, local: unknown): boolean;

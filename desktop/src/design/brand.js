@@ -6,8 +6,11 @@
 // UMD like the repo's other shared modules (share-memory.js, provider-routing.js):
 // node gets module.exports, the browser build imports it through Vite.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeAI4UBrand = factory();
+  // Unconditional global publish -- see chats.js for why the traditional
+  // fallback-branch UMD shape breaks in a Vite production bundle.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeAI4UBrand = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 

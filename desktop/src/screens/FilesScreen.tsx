@@ -3,6 +3,9 @@ import { api } from '../api';
 // UMD modules load for their side effect and are picked up off globalThis
 // -- the same pattern the design engine uses (rollup cannot see named
 // exports through a UMD wrapper).
+// zip.js first: office.js and pdf.js take their deflate implementation from the
+// global it publishes, and in a bundle that global must exist before they run.
+import '../files/zip.js';
 import '../files/office.js';
 import '../files/pdf.js';
 import { saveFile } from '../files/save';

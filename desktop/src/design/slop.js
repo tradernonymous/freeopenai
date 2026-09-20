@@ -3,8 +3,11 @@
 // analysis -- regexes over the artifact -- so it runs in tests and in the app
 // unchanged, and every finding names its fix rather than just its sin.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeAI4USlop = factory();
+  // Unconditional global publish -- see chats.js for why the traditional
+  // fallback-branch UMD shape breaks in a Vite production bundle.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeAI4USlop = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 

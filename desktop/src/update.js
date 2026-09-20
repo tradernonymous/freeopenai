@@ -18,8 +18,11 @@
 // UMD like the repo's other shared modules: node gets module.exports, the
 // bundled app gets the global.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeAI4UUpdate = factory();
+  // Unconditional global publish -- see chats.js for why the traditional
+  // fallback-branch UMD shape breaks in a Vite production bundle.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeAI4UUpdate = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   var DEFAULT_REPO = 'tradernonymous/freeopenai';
   var VERSION_FILE = 'desktop-version.json';
@@ -34,6 +37,35 @@
 
   function desktopUrl(repo) {
     return 'https://github.com/' + (repo || DEFAULT_REPO) + '/releases/tag/desktop-latest';
+  }
+
+  // Where one artifact of the latest release is downloaded from. Same host as
+  // the metadata (github.com), which the shell's allowlist permits; the CDN it
+  // redirects to is allowed too.
+  function artifactUrl(repo, name) {
+    var clean = String(name == null ? '' : name).trim();
+    if (!clean) return '';
+    return 'https://github.com/' + (repo || DEFAULT_REPO) +
+      '/releases/download/desktop-latest/' + encodeURIComponent(clean);
+  }
+
+  // What an install would do, decided here so it is testable: the URL, the
+  // digest we can actually check, and whether this download will be verified at
+  // all. A release that publishes only a file name gets a download that is
+  // recorded but never CLAIMED as verified.
+  function installPlan(options) {
+    var opts = options || {};
+    var installer = opts.installer || null;
+    if (!installer || !installer.name) return null;
+    var digest = String(installer.sha256 || '').trim().toLowerCase();
+    var usable = /^[0-9a-f]{64}$/.test(digest);
+    return {
+      name: installer.name,
+      url: artifactUrl(opts.repo, installer.name),
+      sha256: usable ? digest : '',
+      size: Number(installer.size) || 0,
+      verified: usable,
+    };
   }
 
   // "2.2.1" -> [2,2,1]. A leading "v", a "-rc1" suffix and "+build" metadata
@@ -170,6 +202,8 @@
     MAX_DELAY_MS: MAX_DELAY_MS,
     versionUrl: versionUrl,
     desktopUrl: desktopUrl,
+    artifactUrl: artifactUrl,
+    installPlan: installPlan,
     parseVersion: parseVersion,
     compareVersions: compareVersions,
     isNewer: isNewer,

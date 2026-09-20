@@ -4,8 +4,11 @@
 // browser's CompressionStream('deflate-raw') otherwise, so the same module
 // runs in node:test and in the WebView.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.FreeZip = factory();
+  // Unconditional global publish -- see chats.js for why the traditional
+  // fallback-branch UMD shape breaks in a Vite production bundle.
+  var api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  if (root) root.FreeZip = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 

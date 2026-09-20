@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
+import DiagnosticsCard from '../components/DiagnosticsCard';
 
 // Settings: everything the engine can tell us about itself.
 //
@@ -11,9 +12,11 @@ import ConnectionCard from '../components/ConnectionCard';
 interface Props {
   /** The address or the session changed: the shell has to re-probe. */
   onConnectionChanged?: () => void;
+  /** What the shell last concluded about the engine, in the diagnostics report. */
+  diagnosticsState?: string;
 }
 
-export default function SettingsScreen({ onConnectionChanged }: Props) {
+export default function SettingsScreen({ onConnectionChanged, diagnosticsState }: Props) {
   const [providers, setProviders] = useState<any[]>([]);
   const [limits, setLimits] = useState<any>(null);
   const [memory, setMemory] = useState<Array<any>>([]);
@@ -110,6 +113,8 @@ export default function SettingsScreen({ onConnectionChanged }: Props) {
               ))}
             </div>
           </section>
+
+          <DiagnosticsCard state={diagnosticsState} />
         </main>
       </div>
     </div>
