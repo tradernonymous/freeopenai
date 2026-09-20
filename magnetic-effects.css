@@ -1,0 +1,279 @@
+/* ============================================================
+   PHASE 4: Magnetic Hover Effects & Micro-Animations CSS
+   ============================================================ */
+
+/* ---- Magnetic Elements ---- */
+.magnetic-element {
+    transition: transform 0.2s ease;
+}
+
+/* ---- Ripple Effect ---- */
+.magnetic-ripple {
+    position: absolute;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(34, 211, 238, 0.3);
+    transform: translate(-50%, -50%);
+    animation: rippleExpand 0.6s ease-out forwards;
+    pointer-events: none;
+}
+
+@keyframes rippleExpand {
+    0% {
+        width: 0;
+        height: 0;
+        opacity: 1;
+    }
+    100% {
+        width: 200px;
+        height: 200px;
+        opacity: 0;
+    }
+}
+
+/* ---- Focus Animation ---- */
+.magnetic-focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.3);
+    animation: focusPulse 2s ease-in-out infinite;
+}
+
+@keyframes focusPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.1);
+    }
+}
+
+/* ---- Hover Transitions ---- */
+.hero-card,
+.hero-start,
+.provider-health-card,
+.diff-line {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+/* ---- Button Press Effect ---- */
+button:active {
+    transform: scale(0.98);
+}
+
+/* ---- Card Hover Lift ---- */
+.hero-card:hover,
+.provider-health-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* ---- Primary Button Glow ---- */
+.composer-send:hover,
+.diff-accept-all:hover,
+.preview-action-btn:hover {
+    box-shadow: 0 0 24px rgba(34, 211, 238, 0.4);
+}
+
+/* ---- Icon Spin on Hover ---- */
+.icon-btn:hover i,
+.top-nav-link:hover i {
+    animation: iconSpin 0.3s ease;
+}
+
+@keyframes iconSpin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(10deg);
+    }
+}
+
+/* ---- Gradient Shift on Hover ---- */
+.top-nav-brand:hover i {
+    animation: gradientShift 2s ease infinite;
+}
+
+@keyframes gradientShift {
+    0%, 100% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+}
+
+/* ---- Smooth Page Transitions ---- */
+.view {
+    animation: viewFadeIn 0.3s ease;
+}
+
+@keyframes viewFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ---- Loading Spinner ---- */
+.loading-spinner {
+    animation: spinnerRotate 1s linear infinite;
+}
+
+@keyframes spinnerRotate {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* ---- Pulse Animation ---- */
+.pulse {
+    animation: pulseGlow 2s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* ---- Slide In Animations ---- */
+.slide-in-left {
+    animation: slideInLeft 0.3s ease;
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.slide-in-right {
+    animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.slide-in-up {
+    animation: slideInUp 0.3s ease;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ---- Scale Animations ---- */
+.scale-in {
+    animation: scaleIn 0.2s ease;
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ---- Bounce Animation ---- */
+.bounce {
+    animation: bounce 0.5s ease;
+}
+
+@keyframes bounce {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+/* ---- Shake Animation (for errors) ---- */
+.shake {
+    animation: shake 0.5s ease;
+}
+
+@keyframes shake {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    25% {
+        transform: translateX(-5px);
+    }
+    75% {
+        transform: translateX(5px);
+    }
+}
+
+/* ---- Glow Animation ---- */
+.glow {
+    animation: glow 2s ease-in-out infinite;
+}
+
+@keyframes glow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(34, 211, 238, 0.5);
+    }
+    50% {
+        box-shadow: 0 0 20px rgba(34, 211, 238, 0.8);
+    }
+}
+
+/* ---- Float Animation ---- */
+.float {
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+/* ---- Responsive Adjustments ---- */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
