@@ -13,8 +13,6 @@ const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
-const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the palette is the neutral ladder, not white on black', () => {
   const root = HTML.slice(HTML.indexOf(':root {'), HTML.indexOf('html[data-theme="light"] {'));
