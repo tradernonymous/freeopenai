@@ -104,6 +104,10 @@ jobs:
   # then dies the moment the OS starts it. BLOCKING on purpose: a red smoke
   # aborts the workflow and nothing is published. (Re-run the job if the
   # emulator flakes; shipping a crash is worse than a rare manual re-run.)
+  # Note: GitHub-hosted Linux runners have NO KVM, so the emulator boots in
+  # software mode -- the AOSP API-29 image instead of API-34 google_apis for
+  # that reason (both cover the minSdk; the lighter image actually finishes
+  # booting here).
   smoke:
     needs: build
     runs-on: ubuntu-latest
@@ -131,10 +135,11 @@ jobs:
         timeout-minutes: 25
         uses: reactivecircus/android-emulator-runner@1b48cf25bcdcd1c835908e340039354ff983978a
         with:
-          api-level: 34
+          api-level: 29
           arch: x86_64
-          target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 2048
+          target: default
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
           script: |
             adb install -r "$RUNNER_TEMP/neuraos.apk"
             adb logcat -c
