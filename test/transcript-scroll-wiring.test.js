@@ -20,6 +20,7 @@ const path = require('node:path');
 // The resize/rotation policy now lives in the transcript module, so its source
 // is read there rather than from the page.
 const TRANSCRIPT_MODULE = fs.readFileSync(path.join(__dirname, '..', 'transcript-controller.js'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 const NAMES = [
   'updateScrollBottomPill',
