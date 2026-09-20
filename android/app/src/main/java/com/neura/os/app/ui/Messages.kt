@@ -544,7 +544,7 @@ fun DataUrlThumb(url: String, sizeDp: Int) {
     // Decoded on a background dispatcher: decoding inside composition blocked
     // the UI thread for every photo in a bubble or the composer.
     val bitmap by androidx.compose.runtime.produceState<ImageBitmap?>(null, url) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        val decoded: ImageBitmap? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             try {
                 val bytes = java.util.Base64.getDecoder().decode(url.substringAfter(","))
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
@@ -552,6 +552,7 @@ fun DataUrlThumb(url: String, sizeDp: Int) {
                 null
             }
         }
+        value = decoded
     }
     val shown = bitmap
     if (shown != null) {
