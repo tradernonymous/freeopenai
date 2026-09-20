@@ -51,4 +51,18 @@
     <string name="process_text_label">Ask NeuraOS</string>
     <string name="device_control_label">NeuraOS device control</string>
     <string name="device_control_description">Lets a chat you approve read what\'s on screen and tap or scroll things by their label, only after you tap Approve on that specific action in the chat. Off by default; turn it off here any time.</string>
+    <string name="library_search_hint">Search personas, prompts, skills</string>
+    <string name="library_browse">Browse</string>
+    <string name="library_skills">Skills</string>
+    <string name="library_skills_subtitle">%1$d installed · pin with /skill</string>
+    <string name="library_personas">Personas</string>
+    <string name="library_prompts">Prompts</string>
+    <string name="library_prompts_subtitle">%1$d · type / in chat</string>
+    <string name="library_gallery">Gallery</string>
+    <string name="library_gallery_subtitle">%1$d image(s)</string>
+    <string name="library_commands">Commands</string>
+    <string name="library_no_matches">No matches</string>
+    <string name="library_no_matches_hint">Try a different search.</string>
+    <string name="library_action_chat">Chat</string>
+    <string name="library_action_use">Use</string>
 </resources>

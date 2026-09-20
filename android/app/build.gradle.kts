@@ -97,7 +97,11 @@ android {
     }
 
     lint {
-        abortOnError = false
+        // Release builds fail on lint *errors* again (warnings still pass).
+        // The old softer setting let a full lintRelease stay advisory and
+        // drift; the one known-fatal detector (NullSafeMutableLiveData on
+        // Kotlin 2.1.x) is suppressed in lint.xml.
+        abortOnError = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -154,5 +158,7 @@ dependencies {
     testImplementation(libs.junit)
     // Navigation 3 serialization for type-safe routes.
     implementation(libs.androidx.serialization.json)
-    // Coil for image loading in the image studio.
+    // Studio images are decoded in-app from stored data URLs (loadBitmap in
+    // AppViewModel), so no Coil dependency is pulled in. If remote image URLs
+    // are ever added, that is the moment to add Coil -- not before.
 }

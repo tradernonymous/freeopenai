@@ -164,12 +164,52 @@ fun parseSessionCookie(setCookie: String?, name: String = "fo_auth"): String? {
     return null
 }
 
+/** Retried a bounded number of times: a phone on wifi/4G drops packets, and
+ * "could not reach" from a flaky link is worth one more try with a short
+ * backoff. Server-decided failures -- an [ApiException], e.g. a wrong
+ * password or a throttle -- are never retried, only transport failures are. */
+const val DEFAULT_NETWORK_ATTEMPTS = 3
+
+/** Linear pacing for the [catchCount]th transport failure (1-based): 250ms,
+ * then 500, 750. A pure function so the policy is unit-tested on the JVM. */
+fun networkBackoffMs(catchCount: Int, baseMs: Long = 250L): Long =
+    catchCount.coerceAtLeast(1) * baseMs
+
+/** Runs [block], retrying only transport-level failures ([ApiException]
+ * passes straight through), up to [attempts] total tries. Every retry sleeps
+ * [backoffMs] paced linearly by [networkBackoffMs]; when the budget is spent
+ * the failure is reported as an unreachable server. */
+internal fun <T> retryNetwork(attempts: Int, backoffMs: Long = 250L, block: () -> T): T {
+    require(attempts >= 1) { "attempts must be >= 1" }
+    var catchCount = 0
+    while (true) {
+        try {
+            return block()
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: Exception) {
+            catchCount++
+            if (catchCount >= attempts) {
+                throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
+            }
+            try {
+                Thread.sleep(networkBackoffMs(catchCount, backoffMs))
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
+            }
+        }
+    }
+}
+
 /** Thin client for this repo's own server routes only. The only credential it
  * ever holds is the fo_auth session cookie this deployment issued after a
  * username/password login. */
 class ChatApi(
     private val baseUrl: String,
-    private val opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+    private val opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+    private val attempts: Int = DEFAULT_NETWORK_ATTEMPTS,
+    private val backoffMs: Long = 250L,
 ) {
     var sessionCookie: String? = null
 
@@ -185,7 +225,9 @@ class ChatApi(
 
     /** Username/password login against /api/login. Returns the session value
      * to store; throws ApiException carrying the server's own refusal. */
-    fun login(username: String, password: String): String {
+    fun login(username: String, password: String): String = retryNetwork(attempts, backoffMs) { loginOnce(username, password) }
+
+    private fun loginOnce(username: String, password: String): String {
         var conn: HttpURLConnection? = null
         try {
             conn = opener(URL(baseUrl + "/api/login"))
@@ -218,10 +260,6 @@ class ChatApi(
             val setCookie = conn.getHeaderField("Set-Cookie")
             return parseSessionCookie(setCookie)
                 ?: throw ApiException("Signed in, but no session came back. Try again.")
-        } catch (e: ApiException) {
-            throw e
-        } catch (e: Exception) {
-            throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
         } finally {
             conn?.disconnect()
         }
@@ -249,7 +287,9 @@ class ChatApi(
     /** GET /api/session: whether the stored session still stands, and who it
      * is. A renewed cookie, when the server sends one, lands in renewedCookie.
      * 401 (or a redirect to the login page) surfaces as authRequired. */
-    fun session(): SessionState {
+    fun session(): SessionState = retryNetwork(attempts, backoffMs) { sessionOnce() }
+
+    private fun sessionOnce(): SessionState {
         var conn: HttpURLConnection? = null
         renewedCookie = null
         try {
@@ -272,10 +312,6 @@ class ChatApi(
             renewedCookie = parseSessionCookie(conn.getHeaderField("Set-Cookie"))
             val user = obj.optString("user", "")
             return SessionState(obj.optBoolean("gate", false), if (user.isEmpty()) null else user)
-        } catch (e: ApiException) {
-            throw e
-        } catch (e: Exception) {
-            throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
         } finally {
             conn?.disconnect()
         }
