@@ -314,20 +314,132 @@ fun lockDue(enabled: Boolean, unlocked: Boolean, backgroundedAt: Long, now: Long
 
 // --- Update check -------------------------------------------------------------
 
-/** What CI publishes next to the APK in the apk-latest release. */
-data class UpdateInfo(val versionCode: Int, val versionName: String, val url: String, val notes: String)
+/** What CI publishes next to the APK in the apk-latest release.
+ *
+ * [sha256] is the hex SHA-256 of the published APK when CI emits it
+ * (version.json gains a "sha256" field). Older manifests have none: null
+ * means "unverified", never "valid". The in-app flow only ever opens the
+ * URL in the browser -- Android's own package installer re-verifies the
+ * signing certificate on install -- so the digest is defence-in-depth for
+ * any future in-app downloader, not a gate the dialog enforces today.
+ */
+data class UpdateInfo(
+    val versionCode: Int,
+    val versionName: String,
+    val url: String,
+    val notes: String,
+    val sha256: String? = null,
+)
 
-/** Parses version.json. The download link must be an https GitHub URL: the
- * app only ever opens it in the browser, but a tampered file must not be
- * able to send the phone anywhere else. */
+/** Hardening limits for the update manifest (findings: OOM / junk input). */
+const val UPDATE_MANIFEST_MAX_BYTES = 64_000
+const val UPDATE_NOTES_MAX_CHARS = 2_000
+const val UPDATE_VERSION_NAME_MAX_CHARS = 32
+const val UPDATE_VERSION_CODE_MAX = 10_000_000
+private const val UPDATE_REDIRECT_LIMIT = 5
+
+/** Hosts an update-manifest fetch may touch. version.json lives at
+ * github.com/.../releases/download/..., which answers with a redirect to an
+ * objects.githubusercontent.com (or release-assets) host. Anything else is
+ * refused, so a tampered UPDATE_URL cannot send the phone elsewhere. */
+private val UPDATE_MANIFEST_HOSTS = setOf(
+    "github.com",
+    "www.github.com",
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+)
+
+private fun updateManifestHostAllowed(host: String?): Boolean {
+    if (host.isNullOrEmpty()) return false
+    val lower = host.lowercase()
+    if (lower in UPDATE_MANIFEST_HOSTS) return true
+    // Regional / future object-store fronts stay under this suffix.
+    return lower.endsWith(".githubusercontent.com")
+}
+
+/** True when [url] is an https URL on an update-manifest host. */
+fun isUpdateManifestUrl(url: String): Boolean {
+    return try {
+        val parsed = URL(url)
+        if (parsed.protocol.lowercase() != "https") return false
+        updateManifestHostAllowed(parsed.host.lowercase())
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/** True when [url] is an https GitHub release-download link: the only shape
+ * the update dialog ever opens. Requires the /releases/download/ path so a
+ * tampered manifest cannot point the phone at an arbitrary github.com page
+ * (issue, gist, phishing repo file). */
+fun isUpdateDownloadUrl(url: String): Boolean {
+    return try {
+        val parsed = URL(url)
+        if (parsed.protocol.lowercase() != "https") return false
+        if (parsed.host.lowercase() != "github.com") return false
+        parsed.path.contains("/releases/download/")
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/** Lower-case hex SHA-256 ([0-9a-f]{64}), or null when it is not one. */
+fun normalizeSha256Hex(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    val clean = raw.trim().lowercase()
+    if (clean.length != 64) return null
+    if (!clean.all { it in '0'..'9' || it in 'a'..'f' }) return null
+    return clean
+}
+
+/** Hex SHA-256 of [bytes]. */
+fun sha256Hex(bytes: ByteArray): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+    val chars = CharArray(digest.size * 2)
+    val hex = "0123456789abcdef"
+    for (i in digest.indices) {
+        val v = digest[i].toInt() and 0xff
+        chars[i * 2] = hex[v ushr 4]
+        chars[i * 2 + 1] = hex[v and 0x0f]
+    }
+    return String(chars)
+}
+
+/** Constant-time digest comparison (findings: APK signature verification). */
+fun verifyBytesSha256(bytes: ByteArray, expectedHex: String?): Boolean {
+    val expected = normalizeSha256Hex(expectedHex) ?: return false
+    val actual = sha256Hex(bytes)
+    if (actual.length != expected.length) return false
+    var diff = 0
+    for (i in actual.indices) diff = diff or (actual[i].code xor expected[i].code)
+    return diff == 0
+}
+
+/** Parses version.json. Fail-closed: junk, off-host links, absurd versions,
+ * or a malformed sha256 all yield null. The download link must be an https
+ * GitHub /releases/download/ URL: the app only ever opens it in the
+ * browser, but a tampered file must not be able to send the phone anywhere
+ * else. */
 fun parseUpdateInfo(body: String?): UpdateInfo? {
     if (body.isNullOrBlank()) return null
+    if (body.length > UPDATE_MANIFEST_MAX_BYTES + 1024) return null
     return try {
         val obj = JSONObject(body)
         val code = obj.optInt("versionCode", -1)
+        if (code <= 0 || code > UPDATE_VERSION_CODE_MAX) return null
         val url = obj.optString("url", "")
-        if (code <= 0 || httpsHost(url) != "github.com") return null
-        UpdateInfo(code, obj.optString("versionName", code.toString()), url, obj.optString("notes", ""))
+        if (!isUpdateDownloadUrl(url)) return null
+        val rawName = obj.optString("versionName", code.toString())
+        // Strip control chars a tampered manifest could hide in the dialog.
+        val cleanName = rawName.filter { !it.isISOControl() }.trim()
+            .take(UPDATE_VERSION_NAME_MAX_CHARS).ifEmpty { code.toString() }
+        val rawNotes = obj.optString("notes", "")
+        val cleanNotes = rawNotes.filter { !it.isISOControl() || it == '\n' }
+            .trim().take(UPDATE_NOTES_MAX_CHARS)
+        val sha = normalizeSha256Hex(obj.optString("sha256", "").ifEmpty { null })
+        // A present-but-malformed digest fails closed: the manifest is junk.
+        if (obj.has("sha256") && obj.optString("sha256", "").isNotEmpty() && sha == null) return null
+        UpdateInfo(code, cleanName, url, cleanNotes, sha)
     } catch (e: Exception) {
         null
     }
@@ -336,24 +448,152 @@ fun parseUpdateInfo(body: String?): UpdateInfo? {
 fun updateAvailable(info: UpdateInfo?, currentVersionCode: Int): Boolean =
     info != null && info.versionCode > currentVersionCode
 
+/** Why an update check produced no manifest. Surfaced to the UI so a manual
+ * "Check for updates" can say something actionable instead of one generic
+ * "try again later" (findings: user-friendly error messages). */
+enum class UpdateCheckFailure {
+    BAD_URL,
+    OFFLINE_OR_NETWORK,
+    HTTP_ERROR,
+    EMPTY_OR_TOO_LARGE,
+    MALFORMED,
+}
+
+sealed interface UpdateCheckResult {
+    data class Available(val info: UpdateInfo) : UpdateCheckResult
+    data object Current : UpdateCheckResult
+    data class Failed(val reason: UpdateCheckFailure) : UpdateCheckResult
+}
+
+/** Resolve one redirect hop for the manifest fetch. Returns the absolute
+ * target URL, or null when the hop must not be followed (no Location
+ * header, unparsable, off the allowlist, or a downgrade off https).
+ * Pure for unit tests. */
+fun resolveUpdateRedirect(currentUrl: String, location: String?): String? {
+    if (location.isNullOrBlank()) return null
+    return try {
+        val next = URL(URL(currentUrl), location)
+        if (next.protocol.lowercase() != "https") return null
+        if (!updateManifestHostAllowed(next.host.lowercase())) return null
+        next.toString()
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** Read at most [limit] bytes, returning null when the stream is longer
+ * (findings: OOM guard -- the old code read the whole body, then truncated).
+ * Always closes the stream. */
+fun readCappedBytes(stream: java.io.InputStream, limit: Int): ByteArray? {
+    stream.use { input ->
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val read = input.read(buf)
+            if (read < 0) break
+            total += read
+            if (total > limit) return null
+            out.write(buf, 0, read)
+        }
+        return out.toByteArray()
+    }
+}
+
+/** GET the update manifest with a detailed outcome. Null-on-failure callers
+ * should prefer [fetchUpdateInfo]; this is what the settings screen uses to
+ * tell "no connection" apart from "server said 404" apart from "junk file".
+ *
+ * Security: redirects are followed manually (max [UPDATE_REDIRECT_LIMIT])
+ * and only across [UPDATE_MANIFEST_HOSTS]; automatic redirect following is
+ * OFF so a compromised mirror cannot bounce the phone to an evil host.
+ * TLS itself is the system's (see network_security_config: HTTPS only,
+ * system anchors only; no cert pinning by deliberate decision -- short-lived
+ * CA certs rotate faster than a sideloaded build updates, and a stale pin
+ * bricks the app with no recovery path). */
+fun fetchUpdateInfoResult(
+    url: String,
+    currentVersionCode: Int = -1,
+    opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+): UpdateCheckResult {
+    if (!isUpdateManifestUrl(url)) return UpdateCheckResult.Failed(UpdateCheckFailure.BAD_URL)
+    var next: String? = url
+    var hops = 0
+    var conn: HttpURLConnection? = null
+    try {
+        while (next != null) {
+            try {
+                conn?.disconnect()
+            } catch (e: Exception) {
+                // Best effort; opening the next hop is what matters.
+            }
+            conn = try {
+                opener(URL(next))
+            } catch (e: Exception) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            }
+            conn.connectTimeout = 10000
+            conn.readTimeout = 15000
+            conn.instanceFollowRedirects = false
+            conn.useCaches = false
+            conn.setRequestProperty("Accept", "application/json")
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            val code = try {
+                conn.responseCode
+            } catch (e: java.net.SocketTimeoutException) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            } catch (e: java.io.IOException) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            } catch (e: Exception) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            }
+            if (code in 301..308) {
+                if (hops >= UPDATE_REDIRECT_LIMIT) return UpdateCheckResult.Failed(UpdateCheckFailure.MALFORMED)
+                val target = resolveUpdateRedirect(next, conn.getHeaderField("Location"))
+                    ?: return UpdateCheckResult.Failed(UpdateCheckFailure.MALFORMED)
+                next = target
+                hops++
+                continue
+            }
+            if (code !in 200..299) {
+                return if (code == 304 && currentVersionCode >= 0) UpdateCheckResult.Current
+                else UpdateCheckResult.Failed(UpdateCheckFailure.HTTP_ERROR)
+            }
+            val bytes = try {
+                readCappedBytes(conn.inputStream, UPDATE_MANIFEST_MAX_BYTES)
+            } catch (e: java.net.SocketTimeoutException) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            } catch (e: java.io.IOException) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            } catch (e: Exception) {
+                return UpdateCheckResult.Failed(UpdateCheckFailure.OFFLINE_OR_NETWORK)
+            } ?: return UpdateCheckResult.Failed(UpdateCheckFailure.EMPTY_OR_TOO_LARGE)
+            if (bytes.isEmpty()) return UpdateCheckResult.Failed(UpdateCheckFailure.EMPTY_OR_TOO_LARGE)
+            val info = parseUpdateInfo(String(bytes, Charsets.UTF_8))
+                ?: return UpdateCheckResult.Failed(UpdateCheckFailure.MALFORMED)
+            if (currentVersionCode >= 0 && !updateAvailable(info, currentVersionCode)) {
+                return UpdateCheckResult.Current
+            }
+            return UpdateCheckResult.Available(info)
+        }
+        return UpdateCheckResult.Failed(UpdateCheckFailure.MALFORMED)
+    } finally {
+        try {
+            conn?.disconnect()
+        } catch (e: Exception) {
+            // Disconnect is cleanup; the result is already decided.
+        }
+    }
+}
+
 /** GET the update manifest. Null on any failure: an update check never
  * interrupts the app. */
 fun fetchUpdateInfo(
     url: String,
     opener: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
 ): UpdateInfo? {
-    if (httpsHost(url) != "github.com") return null
-    var conn: HttpURLConnection? = null
-    return try {
-        conn = opener(URL(url))
-        conn.connectTimeout = 10000
-        conn.readTimeout = 15000
-        conn.setRequestProperty("Accept", "application/json")
-        if (conn.responseCode !in 200..299) return null
-        parseUpdateInfo(conn.inputStream.bufferedReader().use(BufferedReader::readText).take(64000))
-    } catch (e: Exception) {
-        null
-    } finally {
-        conn?.disconnect()
+    return when (val result = fetchUpdateInfoResult(url, -1, opener)) {
+        is UpdateCheckResult.Available -> result.info
+        else -> null
     }
 }
