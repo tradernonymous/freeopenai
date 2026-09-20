@@ -140,24 +140,11 @@ jobs:
           target: default
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
-          script: |
-            adb install -r "$RUNNER_TEMP/neuraos.apk"
-            adb logcat -c
-            adb shell am start -W -n com.neura.os/.app.NativeActivity
-            sleep 10
-            PID=$(adb shell pidof com.neura.os)
-            echo "app pid: $PID"
-            if [ -z "$PID" ]; then
-              echo '::error::The activity is not running after am start.'
-              exit 1
-            fi
-            adb logcat -d '*:E' | tee "$RUNNER_TEMP/error.log"
-            if grep -q 'FATAL EXCEPTION' "$RUNNER_TEMP/error.log"; then
-              echo '::error::The app crashed at launch — see the FATAL EXCEPTION stack above.'
-              exit 1
-            fi
-            adb shell uiautomator dump /sdcard/window_dump.xml >/dev/null 2>&1 || true
-            adb shell cat /sdcard/window_dump.xml 2>/dev/null | grep -o 'package="[^"]*"' | sort -u || true
+          # Single flat command let: the action executes the script: block by
+          # splicing it into its own shell, and embedded control flow
+          # (`if`/`fi`, `$(...)`) gets mangled on this runner. The real logic
+          # lives in a checked-in file so newlines and quoting survive.
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh" "$RUNNER_TEMP/neuraos.apk"
 
   # Only runs once the APK is built AND the smoke check passed. Recomputes the
   # manifest (sha256 + size) from the artifact it actually downloaded, so the
