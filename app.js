@@ -1,0 +1,8723 @@
+function updateNavActive(btn) {
+            document.querySelectorAll('.top-nav-link').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+        }
+        function showChatHistory() {
+            const dd = document.getElementById('chatHistoryDropdown');
+            if (dd) {
+                const src = document.getElementById('historyList');
+                const dst = document.getElementById('chatHistoryList');
+                if (src && dst) dst.innerHTML = src.innerHTML;
+                dd.classList.add('open');
+            }
+        }
+        function hideChatHistory() {
+            const dd = document.getElementById('chatHistoryDropdown');
+            if (dd) dd.classList.remove('open');
+        }
+
+function updateNavActive(btn) {
+            document.querySelectorAll('.top-nav-link').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+        }
+        function showChatHistory() {
+            const dd = document.getElementById('chatHistoryDropdown');
+            if (dd) {
+                const src = document.getElementById('historyList');
+                const dst = document.getElementById('chatHistoryList');
+                if (src && dst) dst.innerHTML = src.innerHTML;
+                dd.classList.add('open');
+            }
+        }
+        function hideChatHistory() {
+            const dd = document.getElementById('chatHistoryDropdown');
+            if (dd) dd.classList.remove('open');
+        }
+
+// Global state
+        let currentUser = null;
+        // Saved conversations, declared with the other state because
+        // initializeApp() runs further up this file than the functions using it.
+        const CONVERSATIONS_KEY = 'puterChatConversations';
+        const ACTIVE_CONVERSATION_KEY = 'puterChatActiveId';
+        const HISTORY_HIDDEN_KEY = 'puterChatHistoryHidden';
+        let conversations = [];
+        let activeConversationId = null;
+
+        let selectedModel = DEFAULT_MODEL;
+        // Reasoning effort. Empty means "send nothing", which is how the app
+        // behaved before the picker existed. Declared with the other state
+        // because initializeApp() runs further up the file than the functions
+        // that read it.
+        let selectedEffort = DEFAULT_EFFORT;
+        // Models that turned out to reject an effort setting at runtime, despite
+        // being on the capable list. Remembered for the session so one refusal
+        // doesn't become a refusal on every message. Declared up here because
+        // updateEffortPicker reads it during initializeApp().
+        const effortRejectedBy = new Set();
+        // Models a provider refused for this key. OpenRouter gates some of its
+        // free models to approved agentic apps, and nothing in the catalogue
+        // says which -- only trying finds out, so remember the answer.
+        const modelsRefusedBy = new Set();
+
+        // What counts as a small screen, written once and read by the CSS of
+        // the same name in this file. Declared with the rest of the state
+        // because the startup block decides whether a side panel begins closed
+        // before any of the functions below run.
+        const SMALL_SCREEN_QUERY = '(max-width: 640px), (max-height: 520px) and (orientation: landscape)';
+
+        // The one watcher that keeps the floating panel above the composer, and
+        // the flag that stops a second one being attached on every call.
+        let panelFloorObserver = null;
+        let panelFloorWatching = false;
+
+        // Which service answers. 'puter' needs no key; the others go through our
+        // own server, which holds the key.
+        let selectedProvider = PUTER_PROVIDER;
+        // Whether this deployment asks for a login of its own, read from
+        // /api/health. Declared with the rest of the state because the startup
+        // block below already renders a UI that depends on it.
+        let loginRequired = false;
+        let providerModels = [];
+        // Every model the provider publishes that can see, which is not the same
+        // list as the picker's: that one is capped at sixty rows so a catalogue of
+        // hundreds stays usable, and the read-back is not a picker. Asked of the
+        // capped list, "the cheapest eye" became "the first eye that happens to sit
+        // in the first sixty rows" -- an alphabetically-first flagship, on a
+        // gateway, where the cheap vision models rank below the cap.
+        let providerVision = [];
+        let providerInfo = {};
+
+        // Whether the chat should offer the GitHub tools to the model. Refreshed
+        // on load and whenever the connector's state changes.
+        let githubConnected = false;
+        // Whether this server runs shell commands at all, and the sentence to
+        // show why not when it does not. Asked once, like the GitHub connector,
+        // because it decides what the model is offered before the first turn.
+        let serverRunReady = false;
+        let serverRunReason = '';
+        let serverWorkspaceFiles = [];
+
+        // Saved memory lives here, with the other per-session state, because
+        // the init block reads it long before the bottom-of-page section that
+        // manages the Memory tab runs.
+// Share and memory keep their state in the ShareMemory module (share-memory.js);
+// the page holds only the instance and the DOM half.
+        // True only while a saved transcript is being re-drawn, so restored
+        // replies re-detect their memory chips without counting the redraw as
+        // a new use.
+        let restoringTranscript = false;
+
+        // The workspace is a flat map of path -> text, kept in this browser. It
+        // is deliberately not the server's disk: the deployment is shared and
+        // its container is rebuilt on every push, so files kept there would be
+        // visible to other people and gone by the morning. Declared up here with
+        // the rest of the page state, because the startup calls below already
+        // render it and `let` is not readable before its own line.
+        // Workspace files are per chat, like a coding agent's session directory:
+        // a new chat starts empty, opening a chat brings its files back, and
+        // deleting a chat deletes them. One map of chat id -> files, with the
+        // pre-per-chat build's flat store carried in under 'legacy' once.
+        const WORKSPACE_KEY = 'freeopenaiWorkspaceByChat';
+        const WORKSPACE_LEGACY_KEY = 'freeopenaiWorkspace';
+        let workspaceFiles = loadWorkspaceFiles();
+
+        // The task list, kept between chats in this browser for exactly the same
+        // reason. Unlike a commit or a file write it changes nothing outside the
+        // conversation, so it is not put to the user each time -- the list is
+        // visible and removable in Settings instead.
+        // The todo list is per chat for the same reason: a new chat resets the
+        // plan, and the old chat keeps what it had.
+        const TASK_KEY = 'freeopenaiTasksByChat';
+        const TASK_LEGACY_KEY = 'freeopenaiTasks';
+        let taskGraph = loadTaskGraph();
+
+        // Which skills have answered in each conversation, so the card beside the
+        // chat can say what this chat is actually running on. Per conversation
+        // and not global: "the router picked ponytail here" is a fact about this
+        // chat, and a shared counter would show a stranger's habits as yours.
+        const SKILL_USE_KEY = 'freeopenaiSkillUse';
+        let skillUseLog = loadSkillUseLog();
+
+        // The one panel over the chat -- skills, the plan, and whether the next
+        // message is read as a drawing -- remembers whether it was left open and
+        // which of its three sections was showing. One key each rather than one
+        // per card: the panel is one thing, and restoring half of it would open
+        // it on a section nobody chose.
+        const SESSION_HIDDEN_KEY = 'freeopenaiSessionHidden';
+        const SESSION_TAB_KEY = 'freeopenaiSessionTab';
+        const SESSION_TABS = ['skills', 'tasks', 'image', 'memory'];
+        let sessionTab = SESSION_TABS[0];
+
+        // Whether the reasoning summary is shown at all. On by default, because
+        // seeing what a reasoning model is doing is the reason to use one; off is
+        // for people who want the answer and nothing else.
+        const REASONING_KEY = 'freeopenaiReasoningHidden';
+        let reasoningVisible = localStorage.getItem(REASONING_KEY) !== '1';
+
+        // Whether a step that only has to read tool output may be sent somewhere
+        // cheaper than the model the user chose. On by default, because that is
+        // what a tool turn mostly is -- but a switch, because it is a real trade
+        // rather than a free win: NVIDIA's own benchmark has a stage router 30.5%
+        // cheaper for 3.3 points of accuracy.
+        const ROUTING_KEY = 'freeopenaiRoutingOff';
+        let routingMode = localStorage.getItem(ROUTING_KEY) === '1' ? 'off' : 'auto';
+
+        // Whether a drawing may spend Puter credits. Off, and off by default for
+        // a reason that is about money rather than quality: a Puter account gets
+        // a fixed monthly allowance that does not roll over, and images are the
+        // most expensive thing on it. Every other image provider here runs on a
+        // free key. So the allowance is kept for the pictures worth spending it
+        // on, and this switch is how one gets chosen.
+        const IMAGE_PUTER_KEY = 'freeopenaiDrawWithPuter';
+        let drawWithPuter = localStorage.getItem(IMAGE_PUTER_KEY) === '1';
+
+        // --- Modes & skills (opencode-style) ---
+        let selectedMode = isValidMode(localStorage.getItem('freeopenaiMode') || '')
+            ? localStorage.getItem('freeopenaiMode')
+            : DEFAULT_MODE;
+        let skillsCatalog = []; // { source, name, description } rows
+        let skillsEnabled = localStorage.getItem('freeopenaiSkills') !== '0';
+
+        // A checkbox in the session panel now, not a chip in the composer. It is
+        // a preference you set once, and it was sitting in the row of things you
+        // touch on every message.
+        function updateSkillsToggle() {
+            const box = document.getElementById('autoSkillsCheck');
+            if (!box) return;
+            box.checked = skillsEnabled;
+        }
+
+        // Remembering a preference is a courtesy, and a browser may refuse it:
+        // Safari in private mode throws on setItem, and a full quota throws
+        // everywhere. Losing a remembered model or mode costs nothing.
+        //
+        // Letting the throw escape costs plenty, because three of these run from
+        // inside failure handling -- a model being dropped after a 404, a provider
+        // suspended after a billing refusal, a model swapped for one that can read
+        // images. There the throw replaced the real error with a storage one and
+        // left the recovery half done: the variable reassigned, the switch never
+        // finished.
+        //
+        // The conversation does not come through here. It has its own path, which
+        // evicts pictures and then old chats rather than shrugging, because losing
+        // a preference is a shrug and losing history is a loss.
+        function rememberPreference(key, value) {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function setSkillsEnabled(on) {
+            skillsEnabled = !!on;
+            rememberPreference('freeopenaiSkills', skillsEnabled ? '1' : '0');
+            updateSkillsToggle();
+            showStatus('info', skillsEnabled ? 'Skills enabled for Plan and Build' : 'Skills disabled');
+            if (skillsEnabled && selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        function updateCommandState() {
+            const state = document.getElementById('commandState');
+            if (!state) return;
+            const value = NeuraOSCommandState.commandStateOf({ isTyping, imageMode, selectedMode });
+            state.dataset.state = value;
+            state.textContent = NeuraOSCommandState.commandStateLabel(value);
+            state.title = value === 'draw' ? 'Next message will be read as image work' : value === 'running' ? 'A response is being generated' : value === 'ready' ? 'Chat ready' : value.toUpperCase() + ' mode';
+        }
+
+        function updateModeChip() {
+            const chip = document.getElementById('modeChip');
+            const label = document.getElementById('modeChipLabel');
+            if (!chip || !label) return;
+            const meta = MODES.find((m) => m.id === selectedMode) || MODES[0];
+            chip.dataset.mode = meta.id;
+            label.textContent = meta.label;
+            chip.title = meta.desc;
+            updateCommandState();
+            if (window.NeuraOSHub) window.NeuraOSHub.syncMode(selectedMode);
+        }
+
+        function cycleMode() {
+            const idx = MODES.findIndex((m) => m.id === selectedMode);
+            selectedMode = MODES[(idx + 1) % MODES.length].id;
+            rememberPreference('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
+            if (selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        // Picking a mode directly (the Chat | Plan | Build switch), with the same
+        // side effects as cycling to it: the saved preference, the chip (which
+        // also syncs the switch) and the skill preload.
+        function setChatMode(id) {
+            if (!isValidMode(id) || id === selectedMode) return;
+            selectedMode = id;
+            rememberPreference('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc);
+            if (selectedMode !== 'chat') ensureSkillsLoaded();
+        }
+
+        // What hub.js may read and do. Top-level consts from chatlib.js are not
+        // properties of window, so they are handed over here explicitly.
+        window.NeuraOSPage = {
+            modes: MODES,
+            toolGroups: TOOL_GROUPS,
+            modeToolGroups: MODE_TOOL_GROUPS,
+            writeToolGroups: WRITE_TOOL_GROUPS,
+            chatCommands: CHAT_COMMANDS,
+            mode: () => selectedMode,
+            setMode: (id) => setChatMode(id),
+            chatId: () => activeConversationId || '',
+        };
+
+        // Skills you made yourself. They live in this browser rather than on
+        // the server: the deployment is shared and its container is rebuilt on
+        // every push, so a server-side copy would be both visible to other
+        // people and temporary -- the same reasoning as the workspace.
+        const USER_SKILLS_KEY = 'freeopenaiUserSkills';
+
+        function loadUserSkills() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(USER_SKILLS_KEY) || '[]');
+                return Array.isArray(raw) ? raw.filter((s) => s && s.name && s.body) : [];
+            } catch {
+                return [];
+            }
+        }
+
+        function saveUserSkills(list) {
+            try {
+                localStorage.setItem(USER_SKILLS_KEY, JSON.stringify(list));
+                return '';
+            } catch (e) {
+                return 'Could not save it in this browser: ' + e.message;
+            }
+        }
+
+        let userSkills = loadUserSkills();
+
+        function userSkillNamed(name) {
+            return userSkills.find((s) => s.name === String(name || '').toLowerCase()) || null;
+        }
+
+        // The whole library as the picker and the router see it: the installed
+        // catalogue with yours in front, so a name of yours wins over a remote
+        // one of the same name -- it is the one you wrote on purpose.
+        function withUserSkills(catalog) {
+            // Your own skills carry their text with them: the library's rows
+            // are name and description until use_skill fetches the body, but
+            // yours is already here and you wrote it to be applied.
+            const mine = userSkills.map((s) => ({ source: 'you', name: s.name, description: s.description, body: s.body, allowedTools: null, userOnly: false }));
+            const names = new Set(mine.map((s) => s.name));
+            return mine.concat((Array.isArray(catalog) ? catalog : []).filter((s) => !names.has(s.name)));
+        }
+
+        // Turns this conversation into a skill: the model writes it, the draft
+        // is checked, and only then is it kept. The check matters because a
+        // saved skill rides along in later prompts.
+        async function makeSkillFromChat() {
+            if (!messages.some((m) => m.role === 'assistant')) {
+                return 'There is nothing to make a skill from yet — do the work first, then run /makeskill.';
+            }
+            showStatus('info', 'Writing a skill from this chat…');
+            let text = '';
+            try {
+                const convo = buildConversation([{ role: 'user', content: SKILL_CREATOR_PROMPT }]);
+                const answer = await callModel(convo, {}, null);
+                text = extractMessageText(answer && answer.message) || '';
+            } catch (e) {
+                return 'The model could not write the skill: ' + e.message;
+            }
+            const { skill, error } = parseSkillDraft(text);
+            if (error) return error + '\n\nWhat it wrote:\n\n' + String(text).slice(0, 1500);
+            const next = addUserSkill(userSkills, skill);
+            const failed = saveUserSkills(next);
+            if (failed) return failed;
+            userSkills = next;
+            pinSkillForChat(skill.name);
+            renderSkillsList();
+            return 'Saved **' + skill.name + '** and pinned it to this chat.\n\n' + skill.description +
+                '\n\nIt is yours, kept in this browser. Type `/' + skill.name + '` in any chat to use it again.';
+        }
+
+        async function ensureSkillsLoaded() {
+            if (skillsCatalog.length) return withUserSkills(skillsCatalog);
+            try {
+                const res = await fetch('/api/skills');
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'failed');
+                skillsCatalog = Array.isArray(data) ? data : [];
+                renderSkillsList();
+                // Redrawn now that the catalogue can supply real names and
+                // sources: the rail is rendered before the library loads.
+                renderSkillRail();
+            } catch {
+                renderSkillsList('Skill library unreachable — continuing without skills');
+            }
+            return withUserSkills(skillsCatalog);
+        }
+
+        // Remembered so the picker can explain an empty library in the same words
+        // the settings panel uses, instead of inventing a second story.
+        let skillsStatusText = '';
+
+        function renderSkillsList(errText) {
+            const status = document.getElementById('skillsStatus');
+            const list = document.getElementById('skillsList');
+            if (errText) skillsStatusText = errText;
+            if (!status || !list) { renderSkillBar(); return; }
+            if (errText) { status.textContent = errText; return; }
+            const bySrc = {};
+            for (const s of skillsCatalog) (bySrc[s.source] = bySrc[s.source] || []).push(s.name);
+            skillsStatusText = skillsCatalog.length
+                ? skillsCatalog.length + ' skills installed across ' + Object.keys(bySrc).length + ' libraries — pinned ones apply in every mode, the rest are auto-picked in Plan & Build.'
+                : 'Skill library empty (GitHub unreachable at load).';
+            status.textContent = skillsStatusText;
+            renderSkillBar();
+            // The library may have arrived after the first keystrokes, so the
+            // offer is recomputed now that there is something to offer from.
+            updateSkillSuggestion();
+            renderSkillMenuOptions();
+            list.innerHTML = '';
+            for (const [src, names] of Object.entries(bySrc)) {
+                for (const name of names) {
+                    const chip = document.createElement('span');
+                    chip.className = 'skill-chip';
+                    const b = document.createElement('b');
+                    b.textContent = name;
+                    const srcSpan = document.createElement('span');
+                    srcSpan.className = 'skill-src';
+                    srcSpan.textContent = ' · ' + src.split('/')[0];
+                    chip.appendChild(b);
+                    chip.appendChild(srcSpan);
+                    chip.title = (skillsCatalog.find((s) => s.name === name) || {}).description || '';
+                    list.appendChild(chip);
+                }
+            }
+        }
+
+        // --- Skills pinned to the chat ---
+        //
+        // The router picks per request and forgets; these are the ones someone
+        // asked for by name, so they belong to the conversation. `/ponytail` on
+        // the first message is still applying on the ninth, in every mode, and it
+        // survives a reload because it is saved with the chat. A new chat starts
+        // with none of them, so a choice is never inherited by a conversation
+        // that did not make it.
+        let activeSkillNames = [];
+        // Skills this chat has said no to, so the same offer is not repeated at
+        // someone who has already declined it.
+        let activeSkillDismissals = [];
+        // What the app has learned about which skills this person reaches for:
+        // { name: { chats: [conversationId], lastAt } }, in storage rather than on
+        // one chat, because a habit is what survives between them.
+        let skillUsage = readSkillUsage();
+        // At most one offer at a time, and only while the composer is being typed in.
+        let pendingSkillSuggestion = null;
+        const SKILL_USAGE_KEY = 'freeopenaiSkillUsage';
+
+        function readSkillUsage() {
+            try {
+                return normalizeSkillUsage(JSON.parse(localStorage.getItem(SKILL_USAGE_KEY) || '{}'));
+            } catch {
+                return {};
+            }
+        }
+
+        function saveSkillUsage() {
+            try {
+                localStorage.setItem(SKILL_USAGE_KEY, JSON.stringify(skillUsage));
+            } catch {
+                // A full quota must not lose the chat; habits are a courtesy.
+            }
+        }
+
+        // Counted per chat, and only for deliberate pins. A skill the model
+        // loaded for itself is the app's doing, not a preference, and counting it
+        // would make the model's own choices suggest themselves back.
+        function rememberSkillHabit(name) {
+            const { usage } = recordSkillPin(skillUsage, name, activeConversationId);
+            skillUsage = usage;
+            saveSkillUsage();
+        }
+
+        function setActiveSkillNames(names) {
+            activeSkillNames = Array.isArray(names) ? names.filter(Boolean).map(String) : [];
+            renderSkillBar();
+            persistMessages();
+        }
+
+        // Loading a conversation is the only place the pinned set comes from:
+        // whatever is saved on the chat, or nothing at all for a fresh one.
+        function syncActiveSkillsFromConversation() {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            activeSkillNames = convo && Array.isArray(convo.skills) ? convo.skills.filter(Boolean).map(String) : [];
+            renderSkillBar();
+            // The skills card is per conversation, so every path that changes
+            // which chat is open -- a switch, a new chat, a reload -- redraws it
+            // here rather than in four call sites that would drift apart.
+            renderSkillRail();
+        }
+
+        // A declined offer belongs to the chat that declined it, and an offer
+        // computed for one chat must not follow you into the next.
+        function syncDismissedSuggestionsFromConversation() {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            activeSkillDismissals = convo && Array.isArray(convo.skillsDismissed) ? convo.skillsDismissed.filter(Boolean).map(String) : [];
+            pendingSkillSuggestion = null;
+            renderSkillBar();
+        }
+
+        // --- Offers built from what someone already chose ---
+        //
+        // Nothing is applied here. The chip is a question, and answering it is a
+        // click -- a skill that switched itself on would be spending prompt
+        // budget on every request of a chat that never asked for it.
+        function setSkillSuggestion(next) {
+            pendingSkillSuggestion = next || null;
+            renderSkillBar();
+        }
+
+        function updateSkillSuggestion() {
+            if (!skillsCatalog.length) {
+                if (pendingSkillSuggestion) setSkillSuggestion(null);
+                return;
+            }
+            setSkillSuggestion(suggestSkillFor(chatInput.value, skillsCatalog, skillUsage, {
+                active: activeSkillNames,
+                dismissed: activeSkillDismissals,
+            }));
+        }
+
+        // Scored as the composer is typed in rather than after sending, so that
+        // accepting the offer applies to the request being written -- an offer
+        // that arrives after the message it was for is worse than no offer.
+        let skillSuggestionTimer = null;
+        function scheduleSkillSuggestion() {
+            if (skillSuggestionTimer) clearTimeout(skillSuggestionTimer);
+            skillSuggestionTimer = setTimeout(() => {
+                skillSuggestionTimer = null;
+                updateSkillSuggestion();
+            }, 350);
+        }
+
+        function acceptSkillSuggestion() {
+            const name = pendingSkillSuggestion && pendingSkillSuggestion.skill && pendingSkillSuggestion.skill.name;
+            setSkillSuggestion(null);
+            if (name) pinSkillForChat(name);
+        }
+
+        function dismissSkillSuggestion() {
+            const name = pendingSkillSuggestion && pendingSkillSuggestion.skill && pendingSkillSuggestion.skill.name;
+            if (name && !activeSkillDismissals.some((n) => String(n).toLowerCase() === String(name).toLowerCase())) {
+                activeSkillDismissals = [...activeSkillDismissals, name];
+            }
+            setSkillSuggestion(null);
+            persistMessages();
+            if (name) showStatus('info', 'Not suggesting ' + name + ' in this chat');
+        }
+
+        function renderSkillBar() {
+            const bar = document.getElementById('skillBar');
+            if (!bar) return;
+            const suggestion = pendingSkillSuggestion;
+            bar.innerHTML = '';
+            if (!activeSkillNames.length && !suggestion) { bar.hidden = true; return; }
+            bar.hidden = false;
+            for (const name of activeSkillNames) {
+                const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === String(name).toLowerCase());
+                const chip = document.createElement('span');
+                chip.className = 'skill-pin';
+                const label = document.createElement('span');
+                label.textContent = name;
+                chip.appendChild(label);
+                const off = document.createElement('button');
+                off.type = 'button';
+                off.textContent = '×';
+                off.setAttribute('aria-label', 'Remove ' + name + ' from this chat');
+                off.addEventListener('click', (e) => { e.stopPropagation(); removePinnedSkill(name); });
+                chip.appendChild(off);
+                if (row && row.description) chip.title = row.description;
+                bar.appendChild(chip);
+            }
+            if (suggestion) bar.appendChild(buildSkillSuggestionChip(suggestion));
+            bar.title = activeSkillNames.length
+                ? 'Pinned to this chat (' + activeSkillNames.length + ' of ' + MAX_ACTIVE_SKILLS + ') — they apply to every request in it'
+                : '';
+        }
+
+        // An offer built from what someone did before, and it has to be said that
+        // way: a suggestion with no reason reads as the app being random.
+        function buildSkillSuggestionChip(suggestion) {
+            const chip = document.createElement('span');
+            chip.className = 'skill-suggest';
+            const label = document.createElement('span');
+            label.textContent = 'Try ' + suggestion.skill.name + '?';
+            chip.appendChild(label);
+            const why = 'You pinned this in ' + suggestion.chats + ' earlier chat(s)';
+            chip.title = suggestion.skill.description ? why + ' — ' + suggestion.skill.description : why;
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'skill-suggest-add';
+            add.textContent = 'Add';
+            add.setAttribute('aria-label', 'Add ' + suggestion.skill.name + ' to this chat');
+            add.addEventListener('click', (e) => { e.stopPropagation(); acceptSkillSuggestion(); });
+            chip.appendChild(add);
+            const no = document.createElement('button');
+            no.type = 'button';
+            no.textContent = '×';
+            no.setAttribute('aria-label', 'Do not suggest ' + suggestion.skill.name + ' in this chat');
+            no.addEventListener('click', (e) => { e.stopPropagation(); dismissSkillSuggestion(); });
+            chip.appendChild(no);
+            return chip;
+        }
+
+        function removePinnedSkill(name) {
+            setActiveSkillNames(deactivateSkill(activeSkillNames, name));
+            renderSkillMenuOptions();
+            showStatus('info', 'Skill off: ' + name);
+        }
+
+        // Adds a skill by name and says what happened, including when something
+        // had to give way: the cap is small on purpose, and a silent refusal
+        // would read as the app ignoring the request.
+        function pinSkillForChat(name) {
+            const wanted = String(name || '').trim().toLowerCase();
+            if (!wanted) return 'Which skill? `/skills` lists what is installed.';
+            const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === wanted);
+            if (!row) {
+                return 'No installed skill named "' + wanted + '". Open the Skills button to browse the ' + skillsCatalog.length + ' that are installed.';
+            }
+            const { names, dropped } = activateSkill(activeSkillNames, row.name);
+            if (names.length === activeSkillNames.length) {
+                showStatus('info', row.name + ' is already on');
+                return '"' + row.name + '" is already pinned to this chat.';
+            }
+            setActiveSkillNames(names);
+            rememberSkillHabit(row.name);
+            renderSkillMenuOptions();
+            showStatus('success', 'Skill on: ' + row.name);
+            const lines = ['"' + row.name + '" is pinned to this chat — it applies to every request here until you remove it or start a new chat.'];
+            if (dropped) lines.push('"' + dropped + '" was turned off to stay within ' + MAX_ACTIVE_SKILLS + '.');
+            return lines.join('\n\n');
+        }
+
+        // A skill the model loaded mid-turn is in use, so it is pinned for the
+        // rest of the chat: forgetting it would make the next turn fetch the same
+        // text again. Shown in the bar, where it can be removed.
+        function pinSkillQuietly(name) {
+            const row = skillsCatalog.find((s) => String(s.name).toLowerCase() === String(name || '').trim().toLowerCase());
+            if (!row) return false;
+            const before = activeSkillNames.length;
+            const { names, dropped } = activateSkill(activeSkillNames, row.name);
+            if (names.length === before) return false;
+            setActiveSkillNames(names);
+            renderSkillMenuOptions();
+            addMessage('system', 'Pinned "' + row.name + '" to this chat' + (dropped ? ' — turned off "' + dropped + '" to make room' : '') + '. It applies to every later request here; × on the chip removes it.');
+            return true;
+        }
+
+        // --- The skill picker ---
+        //
+        // A list inside the session panel rather than a floating dropdown. It
+        // was a popup anchored under a composer chip, positioned from the rect
+        // of a control that scrolls sideways on a phone -- and the panel it
+        // would have to anchor to is now the surface that holds it.
+        function renderSkillMenuOptions() {
+            skillMenuList.innerHTML = '';
+            if (!skillsCatalog.length) {
+                const empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = skillsStatusText || 'No skills installed — the skill library could not be loaded.';
+                skillMenuList.appendChild(empty);
+                return;
+            }
+            const pinned = activeSkillNames.map((n) => String(n).toLowerCase());
+            for (const row of skillsCatalog) {
+                const opt = document.createElement('button');
+                opt.type = 'button';
+                opt.className = 'model-option skill-option';
+                opt.dataset.skill = row.name;
+                const name = document.createElement('span');
+                name.className = 'model-name';
+                name.textContent = row.name;
+                opt.appendChild(name);
+                if (pinned.includes(String(row.name).toLowerCase())) {
+                    const on = document.createElement('span');
+                    on.className = 'skill-option-pin';
+                    on.textContent = 'on';
+                    opt.appendChild(on);
+                    opt.classList.add('active');
+                }
+                const desc = document.createElement('span');
+                desc.className = 'model-desc';
+                desc.textContent = row.source ? row.source.split('/').pop() : '';
+                opt.appendChild(desc);
+                if (row.description) opt.title = row.description;
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // A second click turns it off, so the picker is a toggle list
+                    // and not a one-way door.
+                    if (activeSkillNames.some((n) => String(n).toLowerCase() === String(row.name).toLowerCase())) removePinnedSkill(row.name);
+                    else pinSkillForChat(row.name);
+                    filterSkillOptions(skillSearch.value);
+                });
+                skillMenuList.appendChild(opt);
+            }
+        }
+
+        function filterSkillOptions(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            skillMenuList.querySelectorAll('.skill-option').forEach((opt) => {
+                const match = !needle || opt.textContent.toLowerCase().includes(needle);
+                opt.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = skillMenuList.querySelector('.model-dropdown-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = 'No skill matches that.';
+                skillMenuList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
+        }
+
+        // --- Commands ---
+        // Resolved against the installed skills, so `/ponytail` works when no
+        // command is named that. Anything unrecognised returns null and is sent
+        // as ordinary text: a message that merely starts with a slash is still a
+        // message, and swallowing it would be worse than any typo.
+        async function resolveComposerCommand(raw) {
+            if (!String(raw || '').trim().startsWith('/')) return null;
+            const catalog = await ensureSkillsLoaded();
+            const parsed = resolveChatCommand(raw, catalog.map((s) => s.name));
+            if (!parsed) return null;
+            if (parsed.kind === 'skill') { pinSkillForChat(parsed.name); return ''; }
+            if (parsed.kind === 'chain') { parsed.names.forEach((n) => pinSkillForChat(n)); return ''; }
+            if (parsed.name === 'help') return renderCommandsHelp();
+            if (parsed.name === 'skills') return renderSkillsCommandReply(activeSkillNames, catalog);
+            if (parsed.name === 'mode') return applyModeCommand(parsed.args);
+            if (parsed.name === 'clear') {
+                const wasEmpty = !messages.length;
+                startNewConversation();
+                return wasEmpty ? 'Already on a new chat.' : 'Started a new chat — this one stays in the sidebar.';
+            }
+            if (parsed.name === 'skill') return applySkillCommand(parsed.args);
+            if (parsed.name === 'compact') return applyCompactCommand(parsed.args);
+            if (parsed.name === 'doctor') return runDoctorCommand();
+            if (parsed.name === 'makeskill') return makeSkillFromChat();
+            return null;
+        }
+
+        // Health check in the claw-doctor / ecc-doctor spirit: providers that
+        // can answer, skills installed and pinned, and the current mode -- the
+        // three things that decide whether the next message can work at all.
+        // Reads page state through an optional env so the sandbox tests can
+        // drive it without a browser; the composer calls it bare.
+        async function runDoctorCommand(env) {
+            const f = env && typeof env.fetch === 'function' ? env.fetch : fetch;
+            const lines = ['Doctor'];
+            try {
+                const res = await f('/api/llm/providers');
+                const providers = await res.json();
+                const configured = providers.filter((p) => p && p.configured).map((p) => p.id);
+                lines.push('Providers: ' + configured.length + '/' + providers.length + ' configured' + (configured.length ? ' (' + configured.join(', ') + ')' : '') + '.');
+            } catch (error) {
+                lines.push('Providers: unreachable (' + (error && error.message ? error.message : error) + ').');
+            }
+            const skills = (env && Array.isArray(env.skills)) ? env.skills : ((typeof skillsCatalog !== 'undefined' && Array.isArray(skillsCatalog)) ? skillsCatalog : []);
+            const pinned = (env && Array.isArray(env.pinned)) ? env.pinned : ((typeof activeSkillNames !== 'undefined' && Array.isArray(activeSkillNames)) ? activeSkillNames : []);
+            lines.push('Skills: ' + skills.length + ' installed, ' + pinned.length + ' pinned to this chat.');
+            const mode = (env && typeof env.mode === 'string') ? env.mode : ((typeof selectedMode !== 'undefined' && typeof selectedMode === 'string') ? selectedMode : 'chat');
+            lines.push('Mode: ' + mode.toUpperCase() + '.');
+            return lines.join('\n');
+        }
+
+        function applySkillCommand(args) {
+            const text = String(args || '').trim();
+            if (!text) return renderSkillsCommandReply(activeSkillNames, skillsCatalog);
+            const off = /^off\b\s*(.*)$/i.exec(text);
+            if (off) {
+                const which = off[1].trim();
+                if (!which) {
+                    const had = activeSkillNames.length;
+                    setActiveSkillNames([]);
+                    renderSkillMenuOptions();
+                    return had ? 'Turned off every skill pinned to this chat.' : 'Nothing was pinned to this chat.';
+                }
+                const before = activeSkillNames.length;
+                setActiveSkillNames(deactivateSkill(activeSkillNames, which));
+                renderSkillMenuOptions();
+                return activeSkillNames.length === before ? '"' + which + '" was not pinned to this chat.' : 'Turned off "' + which + '".';
+            }
+            return pinSkillForChat(text.split(/\s+/)[0]);
+        }
+
+        function applyModeCommand(args) {
+            const wanted = String(args || '').trim().toLowerCase();
+            if (!isValidMode(wanted)) {
+                return 'Mode is one of: ' + MODES.map((m) => m.id).join(', ') + '. Currently ' + selectedMode + '.';
+            }
+            selectedMode = wanted;
+            rememberPreference('freeopenaiMode', selectedMode);
+            updateModeChip();
+            showStatus('info', 'Mode: ' + selectedMode.toUpperCase());
+            return 'Mode: ' + selectedMode.toUpperCase() + ' — ' + (MODES.find((m) => m.id === selectedMode) || {}).desc;
+        }
+
+        function applyCompactCommand(args) {
+            const wanted = String(args || '').trim().toLowerCase();
+            if (wanted === 'on') {
+                setCompactSession(true);
+                return 'Compact session on — the model now receives a short recent history. The visible chat is unchanged.';
+            }
+            if (wanted === 'off') {
+                setCompactSession(false);
+                return 'Compact session off — the full history is sent again.';
+            }
+            if (wanted === 'status' || !wanted) {
+                return 'Compact session is ' + (compactSession ? 'on' : 'off') + '. `/compact on` sends a short recent history to save tokens; the visible chat never changes.';
+            }
+            return 'Usage: /compact on | off | status';
+        }
+
+        async function runUseSkillTool(args) {
+            const name = String(args.name || '').trim();
+            if (!name) return 'Error: skill name is required';
+            const own = userSkillNamed(name);
+            if (own) {
+                pinSkillQuietly(own.name);
+                return own.body.slice(0, 12000);
+            }
+            try {
+                const res = await fetch('/api/skills/content?name=' + encodeURIComponent(name));
+                const data = await safeJson(res);
+                if (!res.ok) return 'Error: ' + (data.error || res.status);
+                // Loaded once, used for the rest of the chat.
+                pinSkillQuietly(name);
+                return String(data.body || '').slice(0, 12000);
+            } catch (e) {
+                return 'Error loading skill: ' + e.message;
+            }
+        }
+        // Set when GitHub handed back an account that was already connected.
+        let githubSameAccountNotice = '';
+        let messages = [];
+        // Stored picture id -> a URL this page can show, for the life of the
+        // page. A conversation entry keeps only the id (see image-store.js), so
+        // something has to hold the readable form between the index being read
+        // and the picture being drawn -- and this is it. Declared here rather
+        // than beside its users on purpose: startup reads history before the
+        // bottom of this script has run, and a `let` down there would be in its
+        // temporal dead zone exactly then.
+        let imageUrlById = new Map();
+
+        // One instance of the ShareMemory module: it owns the share link state
+        // and the memory facts, and the page renders whatever it reports. The
+        // module reads the conversation the way the server wrote it -- storage
+        // keys and pure helpers are injected, so the module needs no window.
+        const shareMemory = ShareMemory.create({
+            sharePayloadOf,
+            memoryFactsUsedIn,
+            shareImageDataUrlFactory,
+            makeCanvas: (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; },
+            loadImage: (src) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src; }),
+            fetchJson: async (url, init) => {
+                const res = await fetch(url, init);
+                return { ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) };
+            },
+            storage: localStorage,
+            imageUrlById,
+            onFacts: renderMemoryList,
+        });
+        let isTyping = false;
+        // A send is a turn the deployment pays for, and the button is not the
+        // only way in: Enter, a hero card and a double-click all reach
+        // sendMessage twice, and `isTyping` is set only after the first await --
+        // so two clicks in one tick each started a whole turn and the same
+        // message appeared twice. A timestamp rather than a flag, so there is
+        // no state to leave set.
+        const SEND_CLICK_WINDOW_MS = 400;
+        let lastSendAt = 0;
+        let usageCount = 0;
+        let pendingAttachment = null;
+        let puterReady = false;
+        let lastFocusedBeforeModal = null;
+        let imageMode = false;
+        let currentAbort = null;
+        let generationId = 0;
+        let autoRetryEnabled = true;
+        let compactNotices = false;
+        // On by default, because every provider this app ships a keyless tier for
+        // is free: a picker that leads with the free rows and hides the metered
+        // ones is the honest default for an app whose whole premise is free
+        // models. A paid provider the operator configured is one click away, and
+        // the grid says how many rows the setting is hiding.
+        let freeModelsOnly = true;
+        // Compact session: send a short recent history instead of the full one.
+        // A context policy for token spend, not a destructive operation -- the
+        // visible transcript is untouched. Persisted so it survives a reload,
+        // because "cheaper until I say otherwise" is the useful shape of it.
+        const COMPACT_KEY = 'freeopenaiCompactSession';
+        let compactSession = localStorage.getItem(COMPACT_KEY) === '1';
+        let turnStartedAt = 0;
+        // Theme tables live with the other state, not beside the functions
+        // that use them: applyTheme() runs during initializeApp(), so these
+        // must be initialized before that call or the whole init throws and
+        // setupEventListeners() never runs (dead picker, dead composer keys).
+        const THEMES = ['dark', 'light', 'tokyonight', 'gruvbox', 'green', 'auto'];
+        // The colour the browser paints its own chrome with, so the tab bar and
+        // the status bar match the app instead of framing it in black. These
+        // follow the palettes below rather than the old pure-white-on-black.
+        const THEME_META = { dark: '#212121', light: '#ffffff', tokyonight: '#1a1b26', gruvbox: '#282828', green: '#0d1512' };
+        const loadedScripts = {};
+        // Every attachment decision is in attachment-helpers.js, the script tag
+        // above: what a picked file becomes, whether its bytes are text, and what a
+        // picture may be sent as. Nothing here mirrors one of them -- a decision
+        // kept in two places is how the extension allowlist stayed alive after the
+        // picker stopped using it, and a fix in the wrong copy does nothing here.
+
+        // DOM elements
+        const chatMessages = document.getElementById('chatMessages');
+
+        // The page keeps the DOM half of the canvas: the frame, the picker
+        // rows, the toggle buttons. The state and decisions live in the
+        // CanvasArtifacts module (canvas-artifacts.js), injected with the
+        // seams below. Built here, before the boot sequence at the bottom of
+        // the script calls restoreCanvas() -- the same early-declaration rule
+        // the session state follows.
+        const canvasArtifacts = CanvasArtifacts.create({
+            localStorage,
+            doc: document,
+            chatMessages,
+            onOpenPane: () => { if (typeof toggleSessionPanel === 'function') toggleSessionPanel(false, false); },
+            onBlocks: () => renderCanvasPicker(),
+        });
+        // Where the transcript sits, and who is allowed to move it. The app used
+        // to write scrollTop = scrollHeight from ten places, nine of them
+        // unconditional -- a streaming reply dragged the reader back to the
+        // bottom every 40ms, and there was no "am I at the bottom?" state for a
+        // jump-to-newest control to read. The rules live in chatlib.js so they
+        // can be tested without a browser; this is the one place they touch the
+        // DOM.
+        let transcriptPinned = true;
+        let unreadWhileDetached = 0;
+        // The browser module is the state owner. The old local variables and
+        // branches below remain as a compatibility fallback for a cached page
+        // or a test harness that only loads chatlib.js.
+        const transcriptController = typeof NeuraOSTranscript !== 'undefined'
+            ? NeuraOSTranscript.createTranscriptController({
+                element: chatMessages,
+                pill: document.getElementById('scrollBottom'),
+                windowRef: window,
+                documentRef: document,
+                isTyping: () => isTyping,
+            })
+            : null;
+        if (transcriptController) transcriptController.attach();
+
+        function updateScrollBottomPill() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.updateScrollBottomPill();
+                return;
+            }
+            const pill = document.getElementById('scrollBottom');
+            if (!pill) return;
+            pill.classList.toggle('visible', !transcriptPinned);
+            const label = pill.querySelector('.scroll-bottom-label');
+            if (!label) return;
+            // A count answers the only question at that moment -- is it worth
+            // going back down -- so it is used whenever there is one to give.
+            label.textContent = unreadWhileDetached > 0
+                ? unreadWhileDetached + ' new'
+                : (isTyping ? 'New output' : 'Newest');
+        }
+
+        // Off-screen bubbles are laid out lazily, so the scroll height is still
+        // moving after a write that lands on a stale maximum -- which is how a
+        // jump to the newest output stops a few lines short. The second write is
+        // on the next frame, when the layout it depended on exists, and it
+        // re-checks the pin first so a reader who grabbed the scrollbar in
+        // between keeps their place.
+        function pinTranscriptToBottom() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.pinToBottom();
+                return;
+            }
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            if (typeof requestAnimationFrame !== 'function') return;
+            let tries = 0;
+            const settle = () => {
+                if (!transcriptPinned) return;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                const gap = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+                // Writing the maximum can itself reveal more layout above it,
+                // which moves the maximum. Repeat while it is still moving, with
+                // a hard stop so this can never spin.
+                if (gap > 4 && ++tries < 12) requestAnimationFrame(settle);
+            };
+            requestAnimationFrame(settle);
+        }
+
+        function setTranscriptPinned(pinned) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.setPinned(pinned);
+                return;
+            }
+            if (pinned === transcriptPinned) return;
+            transcriptPinned = pinned;
+            if (pinned) unreadWhileDetached = 0;
+            updateScrollBottomPill();
+        }
+
+        // Everything that lands in the transcript goes through here, so whether
+        // an arrival is allowed to drag the reader is a decision rather than an
+        // accident of which function appended it.
+        function appendToTranscript(el, source) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                return transcriptController.append(el, source);
+            }
+            const detached = !transcriptPinned;
+            chatMessages.appendChild(el);
+            if (detached && announcesUnread(source)) unreadWhileDetached += 1;
+            if (shouldFollowTranscript(source, transcriptPinned)) {
+                // A jump source moves the reader, so the state moves with them.
+                // The scroll event that would normally notice cannot run until
+                // after this function returns, and until it does the pill would
+                // sit there claiming output already on screen.
+                unreadWhileDetached = 0;
+                transcriptPinned = true;
+                pinTranscriptToBottom();
+            }
+            updateScrollBottomPill();
+            return el;
+        }
+
+        // Text growing inside a bubble that is already on screen: pinned keeps
+        // up with it, detached is left where the reader put it.
+        function scrollTranscript(source) {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.scroll(source);
+                return;
+            }
+            if (shouldFollowTranscript(source, transcriptPinned)) chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Back to the newest output, and out of the detached state.
+        function jumpToNewest() {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.jumpToNewest();
+                return;
+            }
+            unreadWhileDetached = 0;
+            transcriptPinned = true;
+            pinTranscriptToBottom();
+            updateScrollBottomPill();
+        }
+
+        // While a re-layout is settling. The layout itself fires scroll events,
+        // and a clamped scroll position reads as "the reader scrolled away" when
+        // nothing touched the scrollbar -- so those are ignored.
+        let layoutSettlingUntil = 0;
+
+        chatMessages.addEventListener('scroll', () => {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.handleScroll();
+                return;
+            }
+            const atBottom = transcriptAtBottom(chatMessages.scrollTop, chatMessages.scrollHeight, chatMessages.clientHeight);
+            if (atBottom) unreadWhileDetached = 0;
+            else if (Date.now() < layoutSettlingUntil) return;
+            setTranscriptPinned(atBottom);
+        });
+
+        // A rotation or a resized window re-lays the transcript out, and a reader
+        // who was pinned has no way to know it happened -- they just find
+        // themselves looking at the middle of an old reply. The pin is read
+        // before the re-layout, because afterwards the answer is the wrong one.
+        // The write waits for the layout it describes: the first resize event
+        // arrives before it.
+        let resizeSettle = 0;
+        window.addEventListener('resize', () => {
+            if (typeof transcriptController !== 'undefined' && transcriptController) {
+                transcriptController.handleResize();
+                return;
+            }
+            const wasPinned = transcriptPinned;
+            layoutSettlingUntil = Date.now() + 600;
+            if (resizeSettle) clearTimeout(resizeSettle);
+            resizeSettle = setTimeout(() => {
+                resizeSettle = 0;
+                if (wasPinned) {
+                    transcriptPinned = true;
+                    pinTranscriptToBottom();
+                }
+                updateScrollBottomPill();
+            }, 150);
+        });
+
+        // Keyboard-shrinks of the visual viewport (pinning the newest message
+        // above the keys, toggling the body's keyboard-open class) are owned by
+        // the transcript module, which attaches its own visualViewport listener.
+        const chatInput = document.getElementById('chatInput');
+        const sendButton = document.getElementById('sendButton');
+        const modelTrigger = document.getElementById('modelTrigger');
+        const modelDropdown = document.getElementById('modelDropdown');
+        const modelDropdownList = document.getElementById('modelDropdownList');
+        const modelSearch = document.getElementById('modelSearch');
+        const modelLabel = document.getElementById('modelLabel');
+        const emptyState = document.getElementById('emptyState');
+        const statusDot = document.getElementById('statusDot');
+        const statusMessage = document.getElementById('statusMessage');
+        const usageText = document.getElementById('usageText');
+        const helpOverlay = document.getElementById('helpOverlay');
+        const authButton = document.getElementById('authButton');
+        const authName = document.getElementById('authName');
+        const settingsAuthStatus = document.getElementById('settingsAuthStatus');
+        const settingsAuthButton = document.getElementById('settingsAuthButton');
+        const defaultModelSelect = document.getElementById('defaultModelSelect');
+        const modelsList = document.getElementById('modelsList');
+        const loadErrorBanner = document.getElementById('loadErrorBanner');
+        const loadErrorText = document.getElementById('loadErrorText');
+        const attachmentChip = document.getElementById('attachmentChip');
+        const attachmentName = document.getElementById('attachmentName');
+        const attachmentThumb = document.getElementById('attachmentThumb');
+        const attachmentCost = document.getElementById('attachmentCost');
+        const imageLightbox = document.getElementById('imageLightbox');
+        const lightboxImg = document.getElementById('lightboxImg');
+        const lightboxDownload = document.getElementById('lightboxDownload');
+        const drawerOverlay = document.getElementById('drawerOverlay');
+        const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
+        const attachTrigger = document.getElementById('attachTrigger');
+        const attachMenu = document.getElementById('attachMenu');
+        const skillMenuList = document.getElementById('skillMenuList');
+        const skillSearch = document.getElementById('skillSearch');
+        const skillBar = document.getElementById('skillBar');
+        const fileInput = document.getElementById('fileInput');
+        const views = {
+            chat: document.getElementById('viewChat'),
+            models: document.getElementById('viewModels'),
+            settings: document.getElementById('viewSettings'),
+            gallery: document.getElementById('viewGallery'),
+            design: document.getElementById('viewDesign'),
+        };
+
+        // Initialize
+        initializeApp();
+        setupEventListeners();
+        loadMessagesFromStorage();
+        refreshLoginRequirement();
+        renderWorkspaceFiles();
+        renderTaskList();
+        restoreSessionPanel();
+        restoreCanvas();
+        watchPanelFloor();
+        renderSkillRail();
+        loadMemoryFacts();
+        syncMemorySwitch();
+        document.getElementById('reasoningCheck').checked = reasoningVisible;
+        document.getElementById('routingCheck').checked = routingMode === 'auto';
+        designLoadTemplates();
+        applyAppLink();
+        window.addEventListener('hashchange', applyAppLink);
+
+        // The Android app's shortcuts and share sheet arrive as a fragment
+        // (see parseAppLink). It is cleared as soon as it is read, so a reload
+        // or a back step never replays it.
+        function applyAppLink() {
+            const link = parseAppLink(location.hash);
+            if (!link) return;
+            history.replaceState(null, '', location.pathname + location.search);
+            if (link.action === 'new') {
+                startNewConversation();
+            } else if (link.action === 'share') {
+                chatInput.value = chatInput.value ? chatInput.value + '\n\n' + link.text : link.text;
+                autoResize(chatInput);
+            }
+            chatInput.focus();
+        }
+
+        function initializeApp() {
+            if (typeof puter === 'undefined') {
+                showLoadError('Puter.js failed to load. Check your connection and reload.');
+                return;
+            }
+            puterReady = true;
+
+            if (puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
+                puter.auth.onAuthStateChanged((user) => {
+                    currentUser = user;
+                    updateAuthUI();
+                    // Signing in is what makes Puter a service that can draw, so
+                    // the status line is refreshed rather than left describing an
+                    // account the visitor has since changed.
+                    updateModelLabel();
+                });
+            }
+
+            const params = new URLSearchParams(location.search);
+            if (params.get('view') === 'settings') {
+                switchView('settings');
+                if (params.get('gh') === 'same') {
+                    // The click looked like it did nothing; explain why.
+                    githubSameAccountNotice = params.get('login') || '';
+                }
+                history.replaceState(null, '', location.pathname);
+            }
+
+            renderModelOptions();
+            setDrawWithPuter(drawWithPuter);
+            restoreHistoryVisibility();
+            loadUserPreferences();
+            loadLimitsHint();
+            updateModelLabel();
+            updateModeChip();
+            updateSkillsToggle();
+            updateAuthUI();
+            // Learn up front whether the GitHub tools should be offered to the
+            // model, rather than waiting for the user to open Settings.
+            refreshGithubStatus();
+            // Same again for the shell, and it matters more here: the server can
+            // refuse to have it at all (see WORKSPACE_RUN), and a tool that always
+            // answers "this is switched off" costs a round trip and a dialog the
+            // user has to decline for a setting they either turned on or did not.
+            refreshServerRunStatus();
+            loadProviders();
+            showStatus('success', 'Connected');
+        }
+
+        function showLoadError(msg) {
+            loadErrorText.textContent = msg;
+            loadErrorBanner.classList.add('visible');
+            showStatus('error', 'Puter.js not loaded');
+        }
+
+        // The dropdown shows the current provider's catalogue: the curated Puter
+        // list, or whatever the direct provider actually offers.
+        // Which model the picker should hold when the free-only setting is on and
+        // the wanted one is not free: the first row it is actually showing, so the
+        // composer can never name a model the list has no entry for. Pure, and
+        // tested, because "the selection is not in the list" is a state the rest of
+        // the page only half-handles.
+        function pickVisibleModel(rows, wanted) {
+            const list = Array.isArray(rows) ? rows : [];
+            if (!list.length) return wanted;
+            const shown = freeModelsOnly ? freeRowsOnly(list).rows : list;
+            if (!shown.length || shown.some((m) => m.id === wanted)) return wanted;
+            return shown[0].id;
+        }
+
+        // Every surface reads its rows from here -- the dropdown, the card grid
+        // and the default-model select -- which is why the free-only filter
+        // belongs at this one place rather than in each of them.
+        function activeModels() {
+            if (selectedProvider === PUTER_PROVIDER) return MODELS;
+            const rows = freeModelsOnly ? freeRowsOnly(providerModels).rows : providerModels;
+            return rows.map((m) => ({ id: m.id, name: m.id, desc: describeProviderModel(m) }));
+        }
+
+        // What the free-only setting is hiding, in words. An empty result is
+        // reported rather than obeyed: a provider whose whole catalogue reads as
+        // paid is a real thing to look at, and a picker with no rows and no
+        // reason is worse than showing what was filtered.
+        function hiddenModelRowsNote() {
+            if (!freeModelsOnly || selectedProvider === PUTER_PROVIDER) return '';
+            const { hidden, empty } = freeRowsOnly(providerModels);
+            if (empty) return 'No model here reads as free — showing all of them. Turn off "Free models only" to stop filtering.';
+            if (!hidden) return '';
+            return hidden + ' model' + (hidden === 1 ? '' : 's') + ' hidden by "Free models only"';
+        }
+
+        function renderModelOptions() {
+            modelDropdownList.innerHTML = '';
+            modelsList.innerHTML = '';
+            defaultModelSelect.innerHTML = '';
+
+            activeModels().forEach((m) => {
+                const opt = document.createElement('button');
+                opt.type = 'button';
+                opt.className = 'model-option' + (m.id === selectedModel ? ' active' : '');
+                opt.dataset.model = m.id;
+                opt.setAttribute('role', 'option');
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'model-name';
+                nameSpan.textContent = m.name;
+                const descSpan = document.createElement('span');
+                descSpan.className = 'model-desc';
+                descSpan.textContent = m.desc;
+                opt.appendChild(nameSpan);
+                opt.appendChild(descSpan);
+                opt.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectModel(m.id);
+                    closeModelDropdown();
+                    modelTrigger.focus();
+                });
+                modelDropdownList.appendChild(opt);
+
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = 'model-card' + (m.id === selectedModel ? ' active' : '');
+                card.dataset.model = m.id;
+                const cardName = document.createElement('span');
+                cardName.className = 'model-name';
+                cardName.textContent = m.name;
+                const cardDesc = document.createElement('span');
+                cardDesc.className = 'model-desc';
+                cardDesc.textContent = m.desc;
+                card.appendChild(cardName);
+                card.appendChild(cardDesc);
+                card.addEventListener('click', () => {
+                    selectModel(m.id);
+                    switchView('chat');
+                });
+                modelsList.appendChild(card);
+
+                const sel = document.createElement('option');
+                sel.value = m.id;
+                sel.textContent = m.name;
+                defaultModelSelect.appendChild(sel);
+            });
+
+            defaultModelSelect.value = selectedModel;
+            // A re-render rebuilds every card unhidden; the view's filter, if
+            // any, goes right back on so the grid does not forget what it showed.
+            const cardSearch = document.getElementById('modelCardSearch');
+            if (cardSearch) filterModelCards(cardSearch.value);
+            // Last, so the note sits under the rows it is about and cannot be
+            // picked: it is a paragraph, not a button.
+            const note = hiddenModelRowsNote();
+            if (note) {
+                const line = document.createElement('p');
+                line.className = 'models-note';
+                line.textContent = note;
+                modelsList.appendChild(line);
+            }
+        }
+
+        // The Models view is a card grid, and a grid with dozens of rows needs
+        // the same filter the dropdown already has: same substring rule, same
+        // empty note, same hidden attribute the CSS already respects.
+        function filterModelCards(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            modelsList.querySelectorAll('.model-card').forEach((card) => {
+                const match = !needle || card.textContent.toLowerCase().includes(needle);
+                card.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = modelsList.querySelector('.models-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'models-empty';
+                empty.textContent = 'No model matches that.';
+                modelsList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
+        }
+
+        function setupEventListeners() {
+            modelTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleModelDropdown();
+            });
+
+            modelTrigger.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openModelDropdown();
+                    focusModelOption(0);
+                }
+            });
+
+            attachTrigger.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openAttachMenu();
+                    focusAttachOption(0);
+                } else if (e.key === 'Escape' && attachMenu.classList.contains('open')) {
+                    e.preventDefault();
+                    closeAttachMenu();
+                }
+            });
+
+            modelDropdown.addEventListener('keydown', handleModelDropdownKeydown);
+            attachMenu.addEventListener('keydown', handleAttachMenuKeydown);
+
+            // A rotated phone or a resized window moves the trigger out from
+            // under the menu, which would leave it hanging in the wrong place.
+            window.addEventListener('resize', () => {
+                positionModelDropdown();
+                positionAttachMenu();
+            });
+            document.addEventListener('click', () => {
+                closeModelDropdown();
+                closeAttachMenu();
+                closeImageDownloadMenu();
+                closeThemeMenu();
+            });
+
+            // Escape puts the session panel away, the way it closes everything
+            // else this app opens. It yields to whatever is layered above it --
+            // a modal, the palette, or a reply that is still being generated,
+            // which Escape stops -- so one keystroke never means two things.
+            //
+            // Unlike a dropdown, a click elsewhere does not dismiss it: the plan
+            // is meant to be read while the work happens, and a panel that shut
+            // every time you clicked the chat would be no use for that. On a
+            // phone the scrim behind it is the tap-out.
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape' || isTyping) return;
+                if (document.querySelector('.modal-overlay.open')) return;
+                const palette = document.getElementById('paletteOverlay');
+                if (palette && !palette.hidden) return;
+                const shell = sessionShell();
+                if (!shell || shell.classList.contains('session-hidden')) return;
+                toggleSessionPanel(false);
+                e.preventDefault();
+            });
+
+            document.addEventListener('keydown', handleModalKeydown);
+
+            defaultModelSelect.addEventListener('change', () => selectModel(defaultModelSelect.value));
+
+            // Offers are scored while typing, debounced: one score per pause
+            // rather than one per keystroke, and still before the send.
+            chatInput.addEventListener('input', scheduleSkillSuggestion);
+        }
+
+        function switchView(name) {
+            Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
+            document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+            if (name === 'settings') {
+                refreshGithubStatus();
+                renderServerWorkspaceFiles();
+            }
+            if (name === 'gallery') renderGallery();
+            if (name === 'design') {
+                designLoadTemplates();
+                designListProjects();
+            }
+        }
+
+        function switchViewFromDrawer(name) {
+            switchView(name);
+            closeDrawer();
+        }
+
+        // The settings rail is navigation, not filtering: clicking a chip is a
+        // request to go there, so the named heading is brought to the top of the
+        // scrolling body rather than nudged into view.
+        function jumpToSettingsSection(slug) {
+            const heading = document.getElementById('settingsSection' + String(slug || '').charAt(0).toUpperCase() + String(slug || '').slice(1));
+            if (!heading || typeof heading.scrollIntoView !== 'function') return;
+            let reduced = false;
+            try {
+                reduced = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+                    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            } catch { /* a stub DOM with no matchMedia still gets the jump */ }
+            heading.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+        }
+
+        function toggleModelDropdown() {
+            if (modelDropdown.classList.contains('open')) closeModelDropdown();
+            else openModelDropdown();
+        }
+        // Sixty models is a lot to eyeball, so typing narrows the list. Only
+        // shown when there are enough entries for it to earn its space.
+        function filterModelOptions(query) {
+            const needle = String(query || '').trim().toLowerCase();
+            let shown = 0;
+            modelDropdownList.querySelectorAll('.model-option').forEach((opt) => {
+                const match = !needle || opt.textContent.toLowerCase().includes(needle);
+                opt.hidden = !match;
+                if (match) shown++;
+            });
+            let empty = modelDropdownList.querySelector('.model-dropdown-empty');
+            if (!shown && !empty) {
+                empty = document.createElement('p');
+                empty.className = 'model-dropdown-empty';
+                empty.textContent = 'No model matches that.';
+                modelDropdownList.appendChild(empty);
+            } else if (empty) {
+                empty.hidden = shown > 0;
+            }
+        }
+
+        // The menu is fixed to the viewport and placed from the trigger's real
+        // rect, so it stays whole however the composer is laid out -- and it
+        // opens upward, because below the composer there is only the edge of
+        // the screen.
+        function positionModelDropdown() {
+            if (!modelDropdown.classList.contains('open')) return;
+            const spot = placeDropdown(
+                modelTrigger.getBoundingClientRect(),
+                { width: window.innerWidth, height: window.innerHeight }
+            );
+            modelDropdown.style.width = spot.width + 'px';
+            modelDropdown.style.maxWidth = spot.width + 'px';
+            modelDropdown.style.maxHeight = spot.maxHeight + 'px';
+            modelDropdown.style.left = spot.left + 'px';
+            modelDropdown.style.right = 'auto';
+            modelDropdown.style.top = spot.openUp ? 'auto' : spot.top + 'px';
+            modelDropdown.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
+        }
+
+        function openModelDropdown() {
+            closeAttachMenu();
+            modelDropdown.classList.add('open');
+            const many = modelDropdownList.querySelectorAll('.model-option').length > 8;
+            modelSearch.hidden = !many;
+            modelSearch.value = '';
+            filterModelOptions('');
+            positionModelDropdown();
+            if (many) modelSearch.focus();
+            modelTrigger.setAttribute('aria-expanded', 'true');
+        }
+        function closeModelDropdown() {
+            modelDropdown.classList.remove('open');
+            modelTrigger.setAttribute('aria-expanded', 'false');
+        }
+
+        function focusModelOption(index) {
+            const opts = Array.from(modelDropdownList.querySelectorAll('.model-option:not([hidden])'));
+            if (!opts.length) return;
+            const i = ((index % opts.length) + opts.length) % opts.length;
+            opts[i].focus();
+        }
+
+        function handleModelDropdownKeydown(e) {
+            const opts = Array.from(modelDropdownList.querySelectorAll('.model-option:not([hidden])'));
+            const current = opts.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); focusModelOption(current + 1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); focusModelOption(current - 1); }
+            else if (e.key === 'Escape') { e.preventDefault(); closeModelDropdown(); modelTrigger.focus(); }
+        }
+
+        function selectModel(modelId) {
+            if (selectedProvider !== PUTER_PROVIDER) {
+                if (!providerModels.some((m) => m.id === modelId)) return;
+                selectedModel = modelId;
+                rememberPreference('provider:' + selectedProvider + ':model', modelId);
+                renderModelOptions();
+                updateModelLabel();
+                updateEffortPicker();
+                showStatus('success', 'Model: ' + modelId);
+                return;
+            }
+            if (!isValidModel(modelId)) return;
+            selectedModel = modelId;
+            modelDropdownList.querySelectorAll('.model-option:not([hidden])').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
+            modelsList.querySelectorAll('.model-card').forEach((card) => card.classList.toggle('active', card.dataset.model === modelId));
+            defaultModelSelect.value = modelId;
+            updateModelLabel();
+            updateEffortPicker();
+            saveUserPreferences();
+            showStatus('success', 'Model: ' + modelLabel.textContent);
+        }
+
+        function selectEffort(value) {
+            selectedEffort = isValidEffort(value) ? value : DEFAULT_EFFORT;
+            rememberPreference('puterChatEffort', selectedEffort);
+            showStatus('success', selectedEffort ? 'Effort: ' + selectedEffort : 'Effort: model default');
+        }
+
+        // The picker only exists for models that actually read the setting, so
+        // it can never sit on screen doing nothing.
+        function updateEffortPicker() {
+            const select = document.getElementById('effortSelect');
+            if (!select) return;
+            const capable = selectedProvider === PUTER_PROVIDER && supportsEffort(selectedModel) && !effortRejectedBy.has(selectedModel);
+            select.hidden = !capable;
+            if (!capable) return;
+            if (!select.options.length) {
+                // Just the level name: "Effort: extra high" doesn't fit a phone
+                // header, and a truncated "Effort: ..." tells the user nothing.
+                // The label lives in the select's title and aria-label instead.
+                const auto = document.createElement('option');
+                auto.value = '';
+                auto.textContent = 'Default';
+                auto.title = 'Let the model decide';
+                select.appendChild(auto);
+                EFFORT_LEVELS.forEach((level) => {
+                    const opt = document.createElement('option');
+                    opt.value = level.id;
+                    opt.textContent = level.name;
+                    opt.title = level.desc;
+                    select.appendChild(opt);
+                });
+            }
+            select.value = selectedEffort;
+            const chip = document.getElementById('effortChip');
+            if (chip) {
+                chip.hidden = !capable;
+                const level = EFFORT_LEVELS.find((l) => l.id === selectedEffort);
+                chip.textContent = selectedEffort && level ? level.name : 'auto';
+            }
+        }
+
+        function focusEffort() {
+            const select = document.getElementById('effortSelect');
+            if (select && !select.hidden && typeof select.focus === 'function') select.focus();
+            else showStatus('info', 'Effort applies to reasoning-capable Puter models');
+        }
+
+        function updateModelLabel() {
+            const model = activeModels().find((m) => m.id === selectedModel);
+            modelLabel.textContent = model ? model.name : selectedModel;
+        }
+
+        // A Puter account is needed for Puter itself, and only for a direct
+        // provider when the deployment has no login of its own to vouch for the
+        // visitor. The rule lives in chatlib.js so it can be tested.
+        function needsPuterLogin() {
+            return needsPuterAccount({ provider: selectedProvider, loginRequired });
+        }
+
+        async function refreshLoginRequirement() {
+            try {
+                const data = await safeJson(await fetch('/api/health'));
+                loginRequired = !!data.loginRequired;
+            } catch {
+                // Unreadable means unknown, and unknown keeps the stricter
+                // requirement rather than quietly opening the provider keys.
+                loginRequired = false;
+            }
+            updateAuthUI();
+        }
+
+        function updateAuthUI() {
+            const signedIn = !!currentUser;
+            const name = signedIn ? (currentUser.username || currentUser.email || currentUser.name || 'Signed in') : '';
+
+            authButton.title = signedIn ? 'Sign out' : 'Sign in';
+            authButton.setAttribute('aria-label', authButton.title);
+            authName.hidden = !signedIn;
+            authName.textContent = name;
+
+            settingsAuthStatus.textContent = signedIn
+                ? `Signed in as ${name}`
+                : (needsPuterLogin()
+                    ? 'Not signed in — required to chat'
+                    : 'Not signed in — not needed for ' + selectedProvider);
+            settingsAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
+
+            document.querySelectorAll('.menu-trigger-btn').forEach((btn) => btn.classList.toggle('signed-in', signedIn));
+        }
+
+        async function handleAuthClick() {
+            if (!puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
+            try {
+                if (currentUser) {
+                    if (typeof puter.auth.signOut === 'function') {
+                        await puter.auth.signOut();
+                        currentUser = null;
+                        updateAuthUI();
+                        showStatus('success', 'Signed out');
+                    } else {
+                        showStatus('error', 'Sign-out is not supported');
+                    }
+                } else if (typeof puter.auth.signIn === 'function') {
+                    await puter.auth.signIn();
+                    showStatus('success', 'Signed in');
+                } else {
+                    showStatus('error', 'Sign-in is not supported');
+                }
+            } catch (error) {
+                // Puter rejects a closed or cancelled sign-in window with a bare
+                // object (or nothing), which used to read "Auth failed: undefined".
+                const reason = (error && (error.message || error.error || error.msg)) || 'the Puter sign-in window closed before it finished';
+                showStatus('error', 'Puter sign-in failed: ' + reason);
+            }
+        }
+
+        // Every action that changes something outside this page asks here: a
+        // GitHub commit, a workspace write. "Always allow" is remembered per
+        // kind, so allowing a file write this session never quietly becomes
+        // permission to commit to a repository.
+        // A command is its own kind, so allowing a file write this session never
+        // quietly becomes permission to run whatever the model likes.
+        const alwaysAllow = { github: false, workspace: false, run: false };
+        let confirmResolver = null;
+        let confirmKind = '';
+
+        function askConfirm(kind, title, text) {
+            if (alwaysAllow[kind]) return Promise.resolve(true);
+            const overlay = document.getElementById('githubConfirmOverlay');
+            // The kind decides how the body is set: a command is shown as a
+            // command and a sentence as a sentence. One dialog, styled per kind,
+            // rather than two dialogs that drift apart.
+            overlay.dataset.kind = kind;
+            document.getElementById('githubConfirmTitle').textContent = title;
+            document.getElementById('githubConfirmText').textContent = text;
+            // The buttons name the decision they are offering. A shell command is
+            // not a file write, and the same "always" wording would promise two
+            // very different things: one edits a note, the other runs whatever the
+            // model asks for until the tab closes.
+            const labels = kind === 'run'
+                ? ['Run it', 'Always run commands this session']
+                : ['Allow once', 'Always allow this session'];
+            document.getElementById('confirmAllowBtn').textContent = labels[0];
+            document.getElementById('confirmAlwaysBtn').textContent = labels[1];
+            overlay.classList.add('open');
+            confirmKind = kind;
+            return new Promise((resolve) => { confirmResolver = resolve; });
+        }
+
+        function askGithubConfirm(text) {
+            return askConfirm('github', 'Commit to GitHub?', text);
+        }
+
+        function askWorkspaceConfirm(text) {
+            return askConfirm('workspace', 'Change a workspace file?', text);
+        }
+
+        function askRunConfirm(text) {
+            return askConfirm('run', 'Run this command on the server?', text);
+        }
+
+        function githubConfirmResolve(choice) {
+            document.getElementById('githubConfirmOverlay').classList.remove('open');
+            if (choice === 'always') alwaysAllow[confirmKind] = true;
+            if (confirmResolver) confirmResolver(choice !== 'cancel');
+            confirmResolver = null;
+            confirmKind = '';
+        }
+
+        async function refreshGithubStatus() {
+            try {
+                const res = await fetch('/api/github/status');
+                const data = await safeJson(res);
+                githubConnected = !!data.connected;
+                const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+                document.getElementById('githubDisconnectedRow').hidden = !!data.connected;
+                document.getElementById('githubConnectedPanel').hidden = !data.connected;
+                if (data.connected) {
+                    document.getElementById('githubConnectedHint').textContent =
+                        accounts.length === 1
+                            ? 'Connected as ' + accounts[0].login
+                            : accounts.length + ' accounts connected';
+                    renderGithubAccounts(accounts, data.canAddMore);
+                    if (githubSameAccountNotice) {
+                        const hint = document.getElementById('githubAddHint');
+                        hint.innerHTML =
+                            `<strong>Still just ${escapeHtml(githubSameAccountNotice)}.</strong> That account was picked again at ` +
+                            `GitHub. Click Add, then choose <em>Add another account</em> on GitHub's picker to sign in as ` +
+                            `someone else.`;
+                        githubSameAccountNotice = '';
+                    }
+                    githubLoadRepos();
+                }
+            } catch {
+                // Leave the disconnected state showing on network failure.
+            }
+        }
+
+        function renderGithubAccounts(accounts, canAddMore) {
+            const list = document.getElementById('githubAccountList');
+            list.innerHTML = '';
+            accounts.forEach((account) => {
+                const row = document.createElement('div');
+                row.className = 'github-account';
+                if (account.avatarUrl) {
+                    const img = document.createElement('img');
+                    img.src = account.avatarUrl;
+                    img.alt = '';
+                    row.appendChild(img);
+                }
+                const name = document.createElement('span');
+                name.className = 'gh-login';
+                name.textContent = account.login;
+                row.appendChild(name);
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.textContent = 'Remove';
+                remove.title = 'Disconnect ' + account.login;
+                remove.addEventListener('click', () => githubDisconnect(account.login));
+                row.appendChild(remove);
+                list.appendChild(row);
+            });
+            document.getElementById('githubAddAccountBtn').hidden = !canAddMore;
+        }
+
+        async function githubLoadRepos() {
+            const select = document.getElementById('githubRepoSelect');
+            try {
+                const res = await fetch('/api/github/repos');
+                const repos = await safeJson(res);
+                select.innerHTML = '';
+                const list = Array.isArray(repos) ? repos : [];
+                const multiAccount = new Set(list.map((r) => r.account)).size > 1;
+                list.forEach((r) => {
+                    const opt = document.createElement('option');
+                    opt.value = r.fullName;
+                    opt.dataset.account = r.account || '';
+                    opt.textContent = multiAccount && r.account ? `${r.fullName}  (${r.account})` : r.fullName;
+                    select.appendChild(opt);
+                });
+            } catch {
+                select.innerHTML = '<option>Could not load repos</option>';
+            }
+        }
+
+        async function githubDisconnect(login) {
+            const url = '/api/github/disconnect' + (login ? '?account=' + encodeURIComponent(login) : '');
+            await fetch(url, { method: 'POST' });
+            alwaysAllow.github = false;
+            githubConnected = false;
+            refreshGithubStatus();
+        }
+
+        function selectedRepoAccount() {
+            const select = document.getElementById('githubRepoSelect');
+            const opt = select.options[select.selectedIndex];
+            return (opt && opt.dataset.account) || '';
+        }
+
+        async function githubLoadFile() {
+            const repo = document.getElementById('githubRepoSelect').value;
+            const path = document.getElementById('githubPathInput').value.trim();
+            const statusEl = document.getElementById('githubActionStatus');
+            const contentEl = document.getElementById('githubFileContent');
+            if (!repo || !path) { statusEl.textContent = 'Pick a repo and enter a file path.'; return; }
+            statusEl.textContent = 'Loading...';
+            try {
+                const account = selectedRepoAccount();
+                const res = await fetch(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}` + (account ? '&account=' + encodeURIComponent(account) : ''));
+                const data = await safeJson(res);
+                if (!res.ok) { statusEl.textContent = data.error || 'Could not load file'; return; }
+                contentEl.value = data.content;
+                contentEl.dataset.sha = data.sha;
+                statusEl.textContent = 'Loaded ' + path;
+            } catch {
+                statusEl.textContent = 'Network error loading file.';
+            }
+        }
+
+        async function githubCommit() {
+            const repo = document.getElementById('githubRepoSelect').value;
+            const path = document.getElementById('githubPathInput').value.trim();
+            const content = document.getElementById('githubFileContent');
+            const message = document.getElementById('githubCommitMessage').value.trim() || `Update ${path}`;
+            const statusEl = document.getElementById('githubActionStatus');
+            if (!repo || !path) { statusEl.textContent = 'Pick a repo and enter a file path.'; return; }
+
+            const ok = await askGithubConfirm(`Commit "${path}" to ${repo}?`);
+            if (!ok) { statusEl.textContent = 'Commit cancelled.'; return; }
+
+            statusEl.textContent = 'Committing...';
+            try {
+                const res = await fetch('/api/github/file', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repo, path, content: content.value, message, sha: content.dataset.sha, account: selectedRepoAccount() }),
+                });
+                const data = await safeJson(res);
+                if (!res.ok) { statusEl.textContent = data.error || 'Commit failed'; return; }
+                content.dataset.sha = data.sha;
+                statusEl.textContent = 'Committed ' + path;
+            } catch {
+                statusEl.textContent = 'Network error committing file.';
+            }
+        }
+
+        // Executes one tool the model asked for, against our own /api/github/*
+        // routes. Always resolves to a string: the model reads failures as
+        // ordinary results and can correct itself, so throwing here would only
+        // break the loop that is trying to recover.
+        async function runGithubTool(name, args) {
+            try {
+                // Every tool that changes a repository is confirmed here, once,
+                // rather than inside each branch. A write added without its own
+                // dialog would otherwise commit without asking, and that is the
+                // one mistake this app cannot take back.
+                if (isGithubWriteTool(name)) {
+                    const approved = await askGithubConfirm(describeToolCall(name, args) + '?');
+                    if (!approved) return 'The user declined this. Do not try it again unless they ask.';
+                }
+                if (name === 'github_list_repos') {
+                    const res = await fetch('/api/github/repos');
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list repos');
+                    return JSON.stringify(data);
+                }
+
+                if (name === 'github_list_files') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const url = '/api/github/tree?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path || '') + branchParam(args) + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list path');
+                    return JSON.stringify(data);
+                }
+
+                if (name === 'github_read_file') {
+                    if (!args.repo || !args.path) return 'Error: repo and path are required.';
+                    const url = '/api/github/file?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path) + branchParam(args) + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not read file');
+                    // Remember the blob sha so a later commit to the same path
+                    // updates that exact version instead of being rejected.
+                    githubShaCache[shaKey(args)] = data.sha;
+                    return data.content;
+                }
+
+                if (name === 'github_search_code') {
+                    if (!args.repo || !args.query) return 'Error: repo and query are required.';
+                    const url = '/api/github/search?repo=' + encodeURIComponent(args.repo) +
+                        '&q=' + encodeURIComponent(args.query) + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not search the code');
+                    if (!data.length) return 'No code in ' + args.repo + ' matches "' + args.query + '".';
+                    return data
+                        .map((hit) => hit.path + (hit.line ? ':' + hit.line : '') + (hit.text ? ' — ' + hit.text : ''))
+                        .join('\n');
+                }
+
+                if (name === 'github_list_commits') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const url = '/api/github/commits?repo=' + encodeURIComponent(args.repo) +
+                        '&path=' + encodeURIComponent(args.path || '') + accountParam(args);
+                    const res = await fetch(url);
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list commits');
+                    if (!data.length) return 'No commits found in ' + args.repo + (args.path ? ' for ' + args.path : '') + '.';
+                    return data
+                        .map((c) => c.sha.slice(0, 7) + ' ' + (c.date || '').slice(0, 10) + ' ' + (c.author || '?') + ': ' + c.message)
+                        .join('\n');
+                }
+
+                if (name === 'github_delete_file') {
+                    if (!args.repo || !args.path) return 'Error: repo and path are required.';
+                    const res = await fetch('/api/github/file', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            path: args.path,
+                            message: args.message || ('Delete ' + args.path),
+                            branch: args.branch,
+                            account: args.account,
+                        }),
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'delete failed');
+                    delete githubShaCache[shaKey(args)];
+                    return 'Deleted ' + args.path + ' as ' + data.account + '. ' + data.commitUrl;
+                }
+
+                if (name === 'github_commit_file') {
+                    if (!args.repo || !args.path || typeof args.content !== 'string') {
+                        return 'Error: repo, path, and content are required.';
+                    }
+                    const res = await fetch('/api/github/file', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            path: args.path,
+                            content: args.content,
+                            message: args.message || ('Update ' + args.path),
+                            sha: githubShaCache[shaKey(args)],
+                            branch: args.branch,
+                            account: args.account,
+                        }),
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'commit failed');
+                    githubShaCache[shaKey(args)] = data.sha;
+                    return 'Committed as ' + data.account +
+                        (data.branch ? ' on ' + data.branch : '') + '. ' + data.commitUrl;
+                }
+
+                if (name === 'github_list_branches') {
+                    if (!args.repo) return 'Error: repo is required.';
+                    const res = await fetch('/api/github/branches?repo=' + encodeURIComponent(args.repo) + accountParam(args));
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list branches');
+                    if (!data.branches || !data.branches.length) {
+                        return args.repo + ' has no branches yet — it has no commits.';
+                    }
+                    return data.branches
+                        .map((b) => b.name + (b.isDefault ? ' (default)' : ''))
+                        .join('\n');
+                }
+
+                if (name === 'github_create_branch') {
+                    if (!args.repo || !args.branch) return 'Error: repo and branch are required.';
+                    const res = await fetch('/api/github/branch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            repo: args.repo,
+                            branch: args.branch,
+                            from: args.from,
+                            account: args.account,
+                        }),
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not create the branch');
+                    // An existing branch is the outcome the caller wanted, so
+                    // say so plainly rather than as a failure it might retry.
+                    if (data.existed) return 'Branch ' + data.branch + ' already exists in ' + data.repo + '.';
+                    return 'Created branch ' + data.branch + ' in ' + data.repo + ' from ' + data.from + '.';
+                }
+
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
+        async function runWebTool(name, args) {
+            try {
+                if (name === 'web_search') {
+                    if (!args.query || !String(args.query).trim()) return 'Error: query is required.';
+                    const res = await fetch('/api/llm/websearch?q=' + encodeURIComponent(String(args.query).trim().slice(0, 300)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'search failed');
+                    return JSON.stringify(data);
+                }
+                if (name === 'web_fetch') {
+                    if (!args.url) return 'Error: url is required.';
+                    const res = await fetch('/api/llm/fetch?url=' + encodeURIComponent(String(args.url)));
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'fetch failed');
+                    return 'Title: ' + (data.title || '(untitled)') + '\nURL: ' + data.url + '\n\n' + data.text;
+                }
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
+        // The active chat's files. Reading through this function means the
+        // tools always operate on the chat that is open; a chat with no files
+        // yet simply starts empty.
+        function activeWorkspace() {
+            const id = activeConversationId || 'legacy';
+            const current = workspaceFiles[id];
+            return current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+        }
+
+        function setActiveWorkspace(files) {
+            workspaceFiles = Object.assign({}, workspaceFiles);
+            workspaceFiles[activeConversationId || 'legacy'] = files;
+            saveWorkspaceFiles();
+        }
+
+        function loadWorkspaceFiles() {
+            try {
+                let parsed = {};
+                const raw = localStorage.getItem(WORKSPACE_KEY);
+                if (raw !== null) parsed = JSON.parse(raw) || {};
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.keys(parsed).length) {
+                    // The pre-per-chat build kept { path: text } under the old
+                    // key. Carry it in under 'legacy' rather than dropping it.
+                    parsed = JSON.parse(localStorage.getItem(WORKSPACE_LEGACY_KEY) || '{}') || {};
+                }
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+                // A flat map of strings is that same old shape however it is
+                // found: its values are files, not per-chat maps.
+                if (Object.keys(parsed).length && Object.keys(parsed).every((k) => typeof parsed[k] === 'string')) {
+                    return { legacy: sanitizeWorkspace(parsed) };
+                }
+                const clean = {};
+                for (const id of Object.keys(parsed)) {
+                    const files = parsed[id];
+                    if (!files || typeof files !== 'object' || Array.isArray(files)) continue;
+                    clean[id] = sanitizeWorkspace(files);
+                }
+                return clean;
+            } catch (e) {
+                console.error('Failed to read the saved workspace:', e);
+                return {};
+            }
+        }
+
+        // Paths re-checked on the way in: an entry written by an older build,
+        // or edited by hand, must not smuggle in a path the tools would
+        // refuse. The stored key is what the tools will look up, so a key that
+        // no longer normalises is dropped rather than renamed.
+        function sanitizeWorkspace(parsed) {
+            const clean = {};
+            for (const path of Object.keys(parsed)) {
+                if (normalizeWorkspacePath(path) === path && typeof parsed[path] === 'string') {
+                    clean[path] = parsed[path];
+                }
+            }
+            return clean;
+        }
+
+        function saveWorkspaceFiles() {
+            try {
+                localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspaceFiles));
+                // Migrated once: the old flat store has been carried in, so
+                // keeping it would leave two copies that drift apart.
+                if (localStorage.getItem(WORKSPACE_LEGACY_KEY) !== null) localStorage.removeItem(WORKSPACE_LEGACY_KEY);
+            } catch (e) {
+                // A full localStorage must not take the whole turn down with it.
+                showStatus('error', 'Could not save the workspace: ' + e.message);
+            }
+            renderWorkspaceFiles();
+        }
+
+        function formatChars(n) {
+            return n < 1000 ? n + ' characters' : (n / 1000).toFixed(1) + 'k characters';
+        }
+
+        function formatBytes(n) {
+            const bytes = Number(n) || 0;
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // What a run hands back, in the shape a terminal would: the exit code,
+        // then the two streams, then what the command left behind.
+        //
+        // The file list is the part that matters for the thing this was built
+        // for. A script that generates a PDF is only useful if the PDF can be
+        // fetched, so every file the workspace now holds is named with its size
+        // and the route that serves it: the user can click it in the answer, and
+        // the model can see that its file is really there rather than assuming it.
+        function formatRunResult(data) {
+            const lines = [];
+            if (data.timedOut) {
+                lines.push('Timed out after ' + Math.round((data.durationMs || 0) / 1000) + 's and was stopped — it was probably waiting on input or the network.');
+            } else {
+                lines.push('Exit code ' + (data.exitCode === null ? 'unknown' : data.exitCode) +
+                    ' after ' + Math.round((data.durationMs || 0) / 1000) + 's (' + (data.shell || 'sh') + ').');
+            }
+            if (data.stdout) lines.push('stdout:\n' + data.stdout + (data.stdoutTruncated ? '\n(stdout was cut off)' : ''));
+            if (data.stderr) lines.push('stderr:\n' + data.stderr + (data.stderrTruncated ? '\n(stderr was cut off)' : ''));
+            const files = Array.isArray(data.files) ? data.files : [];
+            if (files.length) {
+                lines.push('The server workspace now holds:\n' + files
+                    .map((file) => file.path + ' (' + formatBytes(file.bytes) + ') — /api/workspace/file?path=' + encodeURIComponent(file.path))
+                    .join('\n'));
+            }
+            return lines.length ? lines.join('\n\n') : 'The command ran and printed nothing.';
+        }
+
+        // The one tool that runs on the server rather than in this browser.
+        //
+        // Everything else the model reaches here is recoverable: this browser's
+        // own storage, or a repository the user connected. A command is not, which
+        // is why it goes through the same approval dialog every write does -- and
+        // why that dialog shows the command itself rather than describing it, and
+        // remembers "always allow" for commands separately from file writes.
+        async function runCommandTool(name, args) {
+            const command = String((args && args.command) || '').trim();
+            if (!command) return 'Error: command is required.';
+            // The command itself, not a description of it: the title asks the
+            // question, so the body is the thing being decided about.
+            const approved = await askRunConfirm(command);
+            if (!approved) return 'The user declined to run this. Do not try it again unless they ask.';
+            try {
+                const res = await fetch('/api/workspace/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, cwd: args.cwd || '' }),
+                });
+                const data = await safeJson(res);
+                if (!res.ok) return 'Error: ' + (data.error || 'the command could not be run');
+                // The panel's picture of the workspace is refreshed from the run
+                // itself, and anything this command added or changed is said out
+                // loud in the transcript. The model is told either way; the user
+                // is told only when there is something to go and fetch, because a
+                // script that generates a file is exactly the case where they
+                // would otherwise have to take the reply's word for it.
+                const before = new Map(serverWorkspaceFiles.map((file) => [file.path, file.bytes]));
+                serverWorkspaceFiles = Array.isArray(data.files) ? data.files : [];
+                const wrote = serverWorkspaceFiles.filter((file) => before.get(file.path) !== file.bytes);
+                if (wrote.length) {
+                    addMessage('system', 'Wrote ' + wrote
+                        .map((file) => file.path + ' (' + formatBytes(file.bytes) + ')')
+                        .join(', ') + ' — Settings → Server files');
+                }
+                return formatRunResult(data);
+            } catch (e) {
+                return 'Error: the command could not be sent — ' + e.message;
+            }
+        }
+
+        // What commands have produced, on the server rather than in this browser.
+        //
+        // Listed here because a script that generates a PDF is only as useful as
+        // the PDF is reachable, and this panel is the only place in the app that
+        // knows the server workspace exists. The files are the container's, so the
+        // hint says the one thing about them a user would otherwise discover the
+        // hard way: a redeploy takes them with it.
+        // Asking the server is what decides both of these: whether the shell is
+        // offered to the model, and what the panel lists. One request answers both
+        // so the two can never disagree about whether it is on.
+        async function refreshServerRunStatus() {
+            try {
+                const res = await fetch('/api/workspace/files');
+                const data = await safeJson(res);
+                serverRunReady = !!(data && data.enabled);
+                serverRunReason = (data && data.reason) || '';
+                serverWorkspaceFiles = Array.isArray(data && data.files) ? data.files : [];
+            } catch {
+                serverRunReady = false;
+                serverRunReason = 'The server workspace could not be read.';
+                serverWorkspaceFiles = [];
+            }
+            return serverRunReady;
+        }
+
+        // Opening the panel asks twice -- the view switch and the render both
+        // run -- and each pass clears the list before it awaits the server. Two
+        // passes in flight therefore each append their own rows, so the newest one
+        // takes the list and the older one drops out when it wakes up.
+        let serverFilesRender = 0;
+
+        async function renderServerWorkspaceFiles() {
+            const list = document.getElementById('serverWorkspaceFileList');
+            const status = document.getElementById('serverWorkspaceStatus');
+            if (!list || !status) return;
+            const token = ++serverFilesRender;
+            await refreshServerRunStatus();
+            if (token !== serverFilesRender) return;
+            list.innerHTML = '';
+            if (!serverRunReady) {
+                status.textContent = serverRunReason || 'The server workspace is not available.';
+                return;
+            }
+            const files = serverWorkspaceFiles;
+            if (!files.length) {
+                status.textContent = 'Empty. Ask for something to be written in Build mode — a script, a generated PDF, a report — and it appears here. A redeploy takes it with it.';
+                return;
+            }
+            status.textContent = files.length + ' file(s) written by commands on the server. A redeploy takes them with it.';
+            for (const file of files) {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const name = document.createElement('span');
+                name.className = 'workspace-name';
+                name.textContent = file.path;
+                const size = document.createElement('span');
+                size.className = 'workspace-size';
+                size.textContent = formatBytes(file.bytes);
+                const download = document.createElement('a');
+                download.className = 'icon-btn-text';
+                download.textContent = 'Download';
+                download.href = '/api/workspace/file?path=' + encodeURIComponent(file.path);
+                download.setAttribute('download', '');
+                row.append(name, size, download);
+                list.append(row);
+            }
+        }
+
+        // The model's view of the workspace. Reads answer directly; a write is
+        // put to the user first, and only a write that was approved is kept.
+        // In Build mode on a server that allows commands, the workspace tools act
+        // on the server folder the shell runs in: the file the model writes is
+        // the file its command runs, and git can commit it. Anywhere else the
+        // workspace is this browser's own.
+        function useServerWorkspace() {
+            return selectedMode === 'build' && serverRunReady;
+        }
+
+        async function serverWorkspaceCall(method, route, body) {
+            const res = await fetch(route, {
+                method,
+                headers: body ? { 'Content-Type': 'application/json' } : {},
+                body: body ? JSON.stringify(body) : undefined,
+            });
+            const data = await safeJson(res);
+            if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+            return data || {};
+        }
+
+        async function runServerWorkspaceTool(name, args) {
+            const p = (value) => encodeURIComponent(String(value == null ? '' : value));
+            try {
+                if (name === 'workspace_list_files') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/files');
+                    serverWorkspaceFiles = Array.isArray(data.files) ? data.files : [];
+                    const under = String(args.path || '').replace(/^\.?\/+|\/+$/g, '');
+                    const rows = serverWorkspaceFiles.filter((file) => !under || file.path === under || file.path.startsWith(under + '/'));
+                    if (!rows.length) return under ? 'No files under "' + under + '" on the server.' : 'The server workspace is empty.';
+                    return rows.map((file) => file.path + ' (' + formatBytes(file.bytes) + ')').join('\n');
+                }
+                if (name === 'workspace_read_file') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/read?path=' + p(args.path));
+                    return data.content;
+                }
+                if (name === 'workspace_search_files') {
+                    const data = await serverWorkspaceCall('GET', '/api/workspace/search?query=' + p(args.query) + '&path=' + p(args.path || ''));
+                    if (!data.matches || !data.matches.length) return 'No match in the server workspace.';
+                    return data.matches.map((m) => m.path + ':' + m.line + ': ' + m.text).join('\n') +
+                        (data.truncated ? '\n(stopped at ' + data.matches.length + ' matches)' : '');
+                }
+                if (name === 'workspace_write_file') {
+                    const content = String(args.content == null ? '' : args.content);
+                    const approved = await askWorkspaceConfirm('Write "' + String(args.path || '') + '" on the server (' + formatChars(content.length) + ')? run_command and git will see it there.');
+                    if (!approved) return 'The user declined this write. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('PUT', '/api/workspace/file', { path: args.path, content });
+                    return (data.created ? 'Created "' : 'Replaced "') + data.path + '" on the server (' + formatBytes(data.bytes) + ').';
+                }
+                if (name === 'workspace_edit_file') {
+                    const approved = await askWorkspaceConfirm('Change "' + String(args.path || '') + '" on the server (replace ' + formatChars(String(args.old_text || '').length) + ' with ' + formatChars(String(args.new_text || '').length) + ')?');
+                    if (!approved) return 'The user declined this edit. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('PATCH', '/api/workspace/file', { path: args.path, old_text: args.old_text, new_text: args.new_text, all: args.all === true });
+                    return 'Edited "' + data.path + '" on the server (' + data.replaced + ' replacement' + (data.replaced === 1 ? '' : 's') + ').';
+                }
+                if (name === 'workspace_delete_file') {
+                    const approved = await askWorkspaceConfirm('Delete "' + String(args.path || '') + '" from the server workspace? This cannot be undone.');
+                    if (!approved) return 'The user declined this delete. Do not try it again unless they ask.';
+                    const data = await serverWorkspaceCall('DELETE', '/api/workspace/file?path=' + p(args.path));
+                    return 'Deleted "' + data.path + '" from the server.';
+                }
+                return 'Error: unknown tool ' + name;
+            } catch (e) {
+                return 'Error: ' + e.message;
+            }
+        }
+
+        async function runWorkspaceTool(name, args) {
+            if (useServerWorkspace()) return runServerWorkspaceTool(name, args);
+            if (name === 'workspace_list_files') {
+                const listed = workspaceList(activeWorkspace(), args.path);
+                if (listed.error) return 'Error: ' + listed.error;
+                if (!listed.entries.length) {
+                    return listed.path ? 'No files under "' + listed.path + '".' : 'The workspace is empty.';
+                }
+                return listed.entries
+                    .map((entry) => entry.type === 'folder'
+                        ? entry.path + '/'
+                        : entry.path + ' (' + formatChars(entry.chars) + ')')
+                    .join('\n');
+            }
+            if (name === 'workspace_read_file') {
+                const read = workspaceRead(activeWorkspace(), args.path);
+                if (read.error) return 'Error: ' + read.error;
+                return read.content;
+            }
+            if (name === 'workspace_search_files') {
+                const found = workspaceSearch(activeWorkspace(), args.query, args.path);
+                if (found.error) return 'Error: ' + found.error;
+                if (!found.matches.length) {
+                    return found.root ? 'No match in "' + found.root + '".' : 'No match anywhere in the workspace.';
+                }
+                return found.matches
+                    .map((m) => m.path + ':' + m.line + ': ' + m.text)
+                    .join('\n') +
+                    (found.truncated ? '\n(stopped at ' + MAX_WORKSPACE_SEARCH_MATCHES + ' matches)' : '');
+            }
+            if (name === 'workspace_write_file') {
+                const written = workspaceWrite(activeWorkspace(), args.path, args.content);
+                // Size and path are known before asking, so the dialog can state
+                // exactly what will change instead of describing it vaguely.
+                if (written.error) return 'Error: ' + written.error;
+                const approved = await askWorkspaceConfirm(
+                    (written.created ? 'Create "' : 'Replace "') + written.path + '" in the workspace (' +
+                    formatChars(written.chars) + ')? Files here are stored in this browser only, and you can ' +
+                    'delete them from Settings.'
+                );
+                if (!approved) return 'The user declined this write. Do not try it again unless they ask.';
+                setActiveWorkspace(written.files);
+                return 'Wrote "' + written.path + '" (' + formatChars(written.chars) + '), ' +
+                    written.totalFiles + ' file(s) in the workspace.';
+            }
+            if (name === 'workspace_edit_file') {
+                // The edit is computed first so the dialog can say what it will
+                // do with the real numbers, and so a target that does not match
+                // anything is an answer rather than a question the user has to
+                // decide about.
+                const edited = workspaceEdit(activeWorkspace(), args.path, args.old_text, args.new_text, args.all === true);
+                if (edited.error) return 'Error: ' + edited.error;
+                const approved = await askWorkspaceConfirm(
+                    'Change "' + edited.path + '" in the workspace (' + edited.replaced + ' replacement' +
+                    (edited.replaced === 1 ? '' : 's') + ')? Files here are stored in this browser only.'
+                );
+                if (!approved) return 'The user declined this edit. Do not try it again unless they ask.';
+                setActiveWorkspace(edited.files);
+                return 'Edited "' + edited.path + '" (' + edited.replaced + ' replacement' +
+                    (edited.replaced === 1 ? '' : 's') + '), ' + edited.totalFiles + ' file(s) in the workspace.';
+            }
+            if (name === 'workspace_delete_file') {
+                const removed = workspaceDelete(activeWorkspace(), args.path);
+                if (removed.error) return 'Error: ' + removed.error;
+                const approved = await askWorkspaceConfirm(
+                    'Delete "' + removed.path + '" from the workspace? This cannot be undone.'
+                );
+                if (!approved) return 'The user declined this delete. Do not try it again unless they ask.';
+                setActiveWorkspace(removed.files);
+                return 'Deleted "' + removed.path + '", ' + removed.totalFiles + ' file(s) left in the workspace.';
+            }
+            return 'Error: unknown tool ' + name;
+        }
+
+        // One map of chat id -> graph, so each chat keeps its own plan. The
+        // pre-per-chat build stored a single graph under the old key; it is
+        // carried into whatever chat is open first rather than dropped.
+        function loadTaskGraph() {
+            try {
+                const raw = localStorage.getItem(TASK_KEY);
+                const map = raw === null ? {} : JSON.parse(raw);
+                if (map && typeof map === 'object' && !Array.isArray(map) && Object.keys(map).length) {
+                    const mine = map[activeConversationId];
+                    return mine ? normalizeTaskGraph(mine) : newTaskGraph();
+                }
+                const legacy = JSON.parse(localStorage.getItem(TASK_LEGACY_KEY) || 'null');
+                return legacy ? normalizeTaskGraph(legacy) : newTaskGraph();
+            } catch (e) {
+                console.error('Failed to read the saved task list:', e);
+                return newTaskGraph();
+            }
+        }
+
+        function saveTaskGraph() {
+            try {
+                const raw = localStorage.getItem(TASK_KEY);
+                const map = raw === null ? {} : JSON.parse(raw);
+                const all = map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+                all[activeConversationId || 'legacy'] = taskGraph;
+                localStorage.setItem(TASK_KEY, JSON.stringify(all));
+                if (localStorage.getItem(TASK_LEGACY_KEY) !== null) localStorage.removeItem(TASK_LEGACY_KEY);
+            } catch (e) {
+                showStatus('error', 'Could not save the task list: ' + e.message);
+            }
+            renderTaskList();
+        }
+
+        async function runTaskTool(name, args) {
+            if (name === 'task_list') return renderTaskGraphText(taskGraph);
+            if (name === 'task_add') {
+                const added = addTask(taskGraph, args);
+                if (added.error) return 'Error: ' + added.error;
+                taskGraph = added.graph;
+                saveTaskGraph();
+                return 'Added ' + added.task.id + ': ' + added.task.title + '. ' +
+                    taskGraph.tasks.length + ' task(s) on the list.';
+            }
+            if (name === 'task_update') {
+                const updated = setTaskStatus(taskGraph, args.id, args.status);
+                if (updated.error) return 'Error: ' + updated.error;
+                taskGraph = updated.graph;
+                saveTaskGraph();
+                return updated.task.id + ' is now ' + updated.task.status + ': ' + updated.task.title;
+            }
+            return 'Error: unknown tool ' + name;
+        }
+
+        // The mark on a row's status button. It reads as a checkbox because
+        // that is what it is; the three states a checkbox cannot express --
+        // being worked on, parked, finished -- are shown by the row it sits in.
+        function todoMark(status) {
+            if (status === 'done') return '✓';
+            if (status === 'doing') return '◐';
+            if (status === 'blocked') return '!';
+            return '';
+        }
+
+        function renderTaskList() {
+            const list = document.getElementById('todoList');
+            const count = document.getElementById('todoCount');
+            const status = document.getElementById('taskStatus');
+            const progress = document.getElementById('todoProgress');
+            const fill = document.getElementById('todoProgressFill');
+            const tasks = orderTodos(taskGraph);
+            const totals = todoProgress(taskGraph);
+
+            if (count) count.textContent = totals.total ? totals.done + '/' + totals.total : 'empty';
+            updateSessionSummary();
+            if (progress && fill) {
+                progress.setAttribute('aria-valuemax', String(totals.total));
+                progress.setAttribute('aria-valuenow', String(totals.done));
+                fill.style.width = totals.total ? (totals.done / totals.total) * 100 + '%' : '0%';
+            }
+            // The settings row keeps the count and points at the panel rather
+            // than repeating the list: two renderings of one list is two places
+            // for it to be wrong, and the panel is the one you can act on.
+            if (status) {
+                status.textContent = totals.total
+                    ? renderTodoSummary(taskGraph) + ' — kept in this browser only, private to this chat.'
+                    : 'Empty. The plan the model records shows up beside the chat as it works.';
+            }
+
+            if (!list) return;
+            list.innerHTML = '';
+            if (!tasks.length) {
+                const empty = document.createElement('div');
+                empty.className = 'todo-empty';
+                empty.textContent = 'No todos yet. In Plan and Build mode the model records its plan here before starting, and updates it as the work moves — so a later turn can pick the work up where it stopped. Tick a row to finish it, × to drop it.';
+                list.append(empty);
+                return;
+            }
+            for (const task of tasks) {
+                const row = document.createElement('div');
+                row.className = 'todo-row ' + task.status;
+                row.dataset.id = task.id;
+
+                const check = document.createElement('button');
+                check.type = 'button';
+                check.className = 'todo-check';
+                check.textContent = todoMark(task.status);
+                check.setAttribute('aria-label', task.status === 'done'
+                    ? 'Reopen ' + task.title
+                    : 'Mark done: ' + task.title);
+                check.title = task.status === 'done' ? 'Reopen' : 'Mark done';
+                check.onclick = () => uiSetTaskStatus(task.id, toggleTodoStatus(task.status));
+
+                const body = document.createElement('div');
+                body.className = 'todo-body';
+                const title = document.createElement('div');
+                title.className = 'todo-title';
+                title.textContent = task.title;
+                body.append(title);
+
+                const meta = document.createElement('div');
+                meta.className = 'todo-meta';
+                const id = document.createElement('span');
+                id.className = 'todo-id';
+                id.textContent = task.id;
+                meta.append(id);
+                if (task.status === 'doing' || task.status === 'blocked') {
+                    const state = document.createElement('span');
+                    state.textContent = task.status === 'doing' ? 'in progress' : 'blocked';
+                    meta.append(state);
+                }
+                if (task.dependsOn.length) {
+                    const after = document.createElement('span');
+                    after.className = 'todo-after';
+                    after.textContent = 'after ' + task.dependsOn.join(', ');
+                    meta.append(after);
+                }
+                body.append(meta);
+
+                if (task.detail) {
+                    const detail = document.createElement('div');
+                    detail.className = 'todo-detail';
+                    detail.textContent = task.detail;
+                    // The reason to record a detail is to pick the work up
+                    // later, so the row has to be able to show all of it.
+                    body.style.cursor = 'pointer';
+                    body.onclick = () => row.classList.toggle('open-detail');
+                    body.title = 'Show the full note';
+                    body.append(detail);
+                }
+
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'todo-remove';
+                remove.textContent = '×';
+                remove.title = 'Drop this todo';
+                remove.setAttribute('aria-label', 'Drop ' + task.title);
+                remove.onclick = () => deleteTask(task.id);
+
+                row.append(check, body, remove);
+                list.append(row);
+            }
+        }
+
+        // How far above the bottom of the shell a floating panel has to stop so
+        // that it never covers the composer.
+        //
+        // Measured rather than written into the stylesheet, because the composer
+        // is the one element whose height is not knowable ahead of time: it
+        // grows with the message being typed and with the chips that wrap above
+        // its input. A guessed inset is right until the first long draft, and a
+        // panel over Send reads as a panel while behaving as a wall.
+        function syncPanelFloor() {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            const composer = document.querySelector('#viewChat .composer');
+            if (!shell || !composer || typeof shell.getBoundingClientRect !== 'function') return;
+            const shellBox = shell.getBoundingClientRect();
+            const composerBox = composer.getBoundingClientRect();
+            if (!shellBox.height || !composerBox.height) return;
+            // Everything below the top of the composer is off limits, plus the
+            // same 10px the panels keep from every other edge.
+            const floor = Math.max(10, Math.round(shellBox.bottom - composerBox.top + 10));
+            shell.style.setProperty('--panel-floor', floor + 'px');
+        }
+
+        // The floor follows the composer, whatever moves it: a taller draft, the
+        // status line appearing, a rotation, or the composer being hidden.
+        function watchPanelFloor() {
+            syncPanelFloor();
+            const composer = document.querySelector('#viewChat .composer');
+            if (!composer) return;
+            if (typeof ResizeObserver === 'function' && !panelFloorObserver) {
+                panelFloorObserver = new ResizeObserver(() => syncPanelFloor());
+                panelFloorObserver.observe(composer);
+            }
+            if (typeof window !== 'undefined' && !panelFloorWatching) {
+                panelFloorWatching = true;
+                window.addEventListener('resize', syncPanelFloor);
+            }
+        }
+
+        // --- The session panel: the one surface over the chat ---
+        //
+        // Skills, the plan, and whether the next message is read as a drawing.
+        // They are one panel because they are one kind of fact: not settings of
+        // the app (those are behind the menu, in Settings) but the state of
+        // *this conversation*. Three surfaces became one, which is what lets the
+        // chat bar and the composer carry one control each instead of four
+        // between them.
+        function sessionShell() {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            return shell && typeof shell.classList.contains === 'function' ? shell : null;
+        }
+
+        // force true shows, false hides, undefined toggles. persist false is for
+        // restoring a stored choice, which must not be written back.
+        function toggleSessionPanel(force, persist = true) {
+            const shell = sessionShell();
+            if (!shell) return;
+            const hidden = force === undefined ? !shell.classList.contains('session-hidden') : !force;
+            shell.classList.toggle('session-hidden', hidden);
+            const panel = document.getElementById('sessionPanel');
+            const scrim = document.getElementById('sessionScrim');
+            if (panel) {
+                panel.setAttribute('aria-hidden', String(hidden));
+                if (typeof panel.toggleAttribute === 'function') panel.toggleAttribute('inert', hidden);
+                else if (hidden) panel.setAttribute('inert', '');
+                else if (typeof panel.removeAttribute === 'function') panel.removeAttribute('inert');
+            }
+            if (scrim) scrim.setAttribute('aria-hidden', String(hidden));
+            for (const [id, pressed] of [['sessionToggle', true], ['sessionChip', false]]) {
+                const btn = document.getElementById(id);
+                if (!btn) continue;
+                btn.setAttribute('aria-expanded', String(!hidden));
+                if (pressed) btn.setAttribute('aria-pressed', String(!hidden));
+            }
+            // Opening has to draw the section it opens on. The lists are kept up
+            // to date as the chat moves, but the picker is fetched on demand,
+            // and a pop-up showing whatever was in the DOM two chats ago is
+            // worse than one showing nothing. Opening also closes the canvas:
+            // the two right-hand panes cannot share a corner.
+            if (!hidden) {
+                showSessionTab(sessionTab, false);
+                renderSkillMenuOptions();
+                updateSessionSummary();
+                if (typeof toggleCanvas === 'function') toggleCanvas(false, false);
+                if (sessionTab === 'memory') loadMemoryFacts();
+            }
+            if (!persist) return;
+            try {
+                localStorage.setItem(SESSION_HIDDEN_KEY, hidden ? '1' : '');
+            } catch {
+                // A browser refusing storage shouldn't break the toggle itself.
+            }
+        }
+
+        // Which of the three sections is showing. The tab buttons and the panel's
+        // own `data-session-tab` both follow from it, so the markup and the CSS
+        // agree about what is open without either owning the answer.
+        function showSessionTab(tab, persist = true) {
+            const wanted = SESSION_TABS.includes(tab) ? tab : SESSION_TABS[0];
+            sessionTab = wanted;
+            const shell = sessionShell();
+            if (shell) shell.dataset.sessionTab = wanted;
+            for (const name of SESSION_TABS) {
+                const cap = name.charAt(0).toUpperCase() + name.slice(1);
+                const btn = document.getElementById('sessionTab' + cap);
+                const section = document.getElementById('sessionSection' + cap);
+                const on = name === wanted;
+                if (btn) btn.setAttribute('aria-pressed', String(on));
+                if (section) section.classList.toggle('active', on);
+            }
+            // Skills is the one section with something to fetch: a chat that
+            // never needed a skill never asked for the library, so the picker
+            // would otherwise open on an apology.
+            if (wanted === 'skills' && !skillsCatalog.length) {
+                ensureSkillsLoaded().then(() => {
+                    renderSkillMenuOptions();
+                    filterSkillOptions(skillSearch.value);
+                });
+            }
+            if (wanted === 'image' && typeof loadImageProviderReport === 'function') loadImageProviderReport();
+            // Memory follows the Image tab's lead: opening it re-reads the
+            // facts (another tab or device may have saved one) and re-renders
+            // the usage counts, so what it shows is never a stale snapshot.
+            if (wanted === 'memory' && typeof loadMemoryFacts === 'function') loadMemoryFacts();
+            if (!persist) return;
+            try {
+                localStorage.setItem(SESSION_TAB_KEY, wanted);
+            } catch {
+                // Private mode: the tab still changes, it just does not stick.
+            }
+        }
+
+        var imageProviderReportRequest = null;
+        function loadImageProviderReport() {
+            const report = document.getElementById('imageProviderReport');
+            const imageList = document.getElementById('imageProviderList');
+            const chatList = document.getElementById('chatProviderList');
+            const status = document.getElementById('imageProviderReportStatus');
+            const refresh = report && report.querySelector('button');
+            if (!report || !imageList || !chatList || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+            if (imageProviderReportRequest) return imageProviderReportRequest;
+            report.classList.add('is-loading');
+            report.setAttribute('aria-busy', 'true');
+            if (refresh) refresh.disabled = true;
+            if (status) {
+                status.textContent = 'Checking…';
+                status.dataset.state = 'loading';
+            }
+            const read = (url) => window.fetch(url, { cache: 'no-store' }).then((response) => {
+                if (!response.ok) throw new Error('status ' + response.status);
+                return response.json();
+            });
+            const renderRows = (list, rows, emptyText, detailFor, stateFor) => {
+                list.innerHTML = '';
+                rows.forEach((provider) => {
+                    const row = document.createElement('div');
+                    // One vocabulary across both tabs: green is a service that
+                    // answers, amber is one awaiting its variable. A dark slot
+                    // is a starting state the operator chose, not a fault --
+                    // red stays reserved for things that tried and failed.
+                    const ready = provider.ready === true || provider.configured === true;
+                    row.className = 'image-provider-row' + (ready ? ' ready' : ' setup');
+                    row.innerHTML = '<span class="image-provider-dot" aria-hidden="true"></span>'
+                        + '<span><span class="image-provider-name"></span><span class="image-provider-detail"></span></span>'
+                        + '<span class="image-provider-state"></span>';
+                    row.querySelector('.image-provider-name').textContent = provider.label || provider.id || 'Service';
+                    row.querySelector('.image-provider-detail').textContent = detailFor(provider);
+                    row.querySelector('.image-provider-state').textContent = stateFor(provider);
+                    list.appendChild(row);
+                });
+                if (!rows.length) list.innerHTML = '<div class="image-provider-report-empty">' + emptyText + '</div>';
+            };
+            imageProviderReportRequest = Promise.all([read('/api/llm/providers'), read('/api/llm/images/providers')]).then(([chatProviders, imageBody]) => {
+                // Every chat-kind provider is listed, not only the configured
+                // ones: a slot that has not been pointed at a gateway yet is
+                // the moment a new operator most needs to see it, with the
+                // variable that wakes it named on the row.
+                const chats = Array.isArray(chatProviders) ? chatProviders.filter((provider) => provider && (!provider.kind || provider.kind === 'chat')) : [];
+                const chatsReady = chats.filter((provider) => provider.configured).length;
+                const images = [imageBody && imageBody.browser].concat(imageBody && Array.isArray(imageBody.providers) ? imageBody.providers : []).filter(Boolean);
+                renderRows(chatList, chats, 'No server chat providers yet. Puter chat remains available in the browser.', (provider) => provider.note || 'Configured; models load when selected.', (provider) => provider.configured ? 'ready' : 'setup');
+                renderRows(imageList, images, 'No image services were reported.', (provider) => provider.ready
+                    ? (provider.model ? provider.model + (provider.edits && provider.edits !== 'none' ? ' · edits: ' + provider.edits : '') : 'ready')
+                    : (provider.reason || provider.note || 'Not configured'), (provider) => provider.ready ? 'ready' : 'setup');
+                if (status) {
+                    status.textContent = chatsReady + ' chat · ' + images.filter((provider) => provider.ready).length + ' image ready';
+                    status.dataset.state = 'ready';
+                }
+            }).catch(() => {
+                chatList.innerHTML = '<div class="image-provider-report-error">Could not check chat services.</div>';
+                imageList.innerHTML = '<div class="image-provider-report-error">Could not check image services. Try Refresh, or send a draw to see the provider’s exact error.</div>';
+                if (status) {
+                    status.textContent = 'Unavailable';
+                    status.dataset.state = 'error';
+                }
+            }).finally(() => {
+                report.classList.remove('is-loading');
+                report.setAttribute('aria-busy', 'false');
+                if (refresh) refresh.disabled = false;
+                imageProviderReportRequest = null;
+            });
+        }
+
+        function restoreSessionPanel() {
+            let stored = null;
+            let tab = null;
+            try {
+                stored = localStorage.getItem(SESSION_HIDDEN_KEY);
+                tab = localStorage.getItem(SESSION_TAB_KEY);
+            } catch {
+                stored = null;
+                tab = null;
+            }
+            if (SESSION_TABS.includes(tab)) sessionTab = tab;
+            showSessionTab(sessionTab, false);
+            // Closed by default, at every size. Floating over the conversation it
+            // is something you open; open-on-load would cover an answer nobody
+            // has read yet. A choice already made is still honoured.
+            const hidden = stored === null || stored === undefined ? true : stored === '1';
+            toggleSessionPanel(!hidden, false);
+        }
+
+        // Opening at a named section, for the two places that mean one rather
+        // than just "open the panel": the hero's "Add a skill" and the Settings
+        // row that points at the plan.
+        function openSessionPanel(tab) {
+            if (SESSION_TABS.includes(tab)) showSessionTab(tab);
+            toggleSessionPanel(true);
+        }
+
+        // The panel head, and the dot on the two buttons that open it.
+        //
+        // Both surfaces say the same thing, which is the point: the panel is
+        // closed most of the time, so "there is something in here" has to be
+        // legible without opening it. One dot replaced the two the two cards
+        // kept, which is one place to look and one place to be wrong.
+        function sessionSkillCount() {
+            const key = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            return Object.keys(skillUseLog[key] || {}).length;
+        }
+
+        function updateSessionSummary() {
+            const count = document.getElementById('sessionCount');
+            const badge = document.getElementById('sessionBadge');
+            const pinned = activeSkillNames.length;
+            const used = sessionSkillCount();
+            const totals = todoProgress(taskGraph);
+            const parts = [];
+            if (used) parts.push(used + ' skill' + (used === 1 ? '' : 's') + (pinned ? ', ' + pinned + ' pinned' : ''));
+            else if (pinned) parts.push(pinned + ' pinned');
+            if (totals.total) parts.push(totals.done + '/' + totals.total + ' tasks');
+            if (imageMode) parts.push('drawing');
+            if (drawWithPuter) parts.push('Puter images');
+            if (count) count.textContent = parts.length ? parts.join(' · ') : 'nothing on yet';
+            if (badge) badge.style.display = totals.open || pinned || imageMode || drawWithPuter ? '' : 'none';
+        }
+
+        // --- What this chat is actually running on ---
+        //
+        // The router's choices are invisible by design: a skill rides along as
+        // extra context and leaves no trace in the reply. Which is exactly why
+        // this log exists -- "it answered my question oddly" should be traceable
+        // to a method somebody, or something, switched on.
+        function loadSkillUseLog() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(SKILL_USE_KEY) || 'null');
+                if (!raw || typeof raw !== 'object') return {};
+                const out = {};
+                for (const [conversation, bucket] of Object.entries(raw)) {
+                    if (!bucket || typeof bucket !== 'object') continue;
+                    const clean = {};
+                    for (const [name, entry] of Object.entries(bucket)) {
+                        if (!name || !entry || typeof entry !== 'object') continue;
+                        clean[name] = {
+                            turns: Math.max(0, Number(entry.turns) || 0),
+                            pinned: !!entry.pinned,
+                            lastAt: Number(entry.lastAt) || 0,
+                        };
+                    }
+                    if (Object.keys(clean).length) out[conversation] = clean;
+                }
+                return out;
+            } catch (e) {
+                console.error('Failed to read the saved skill use:', e);
+                return {};
+            }
+        }
+
+        function persistSkillUseLog() {
+            try {
+                // Bounded by recency: this is a browser that may have years of
+                // conversations in it, and the card only ever asks about one.
+                const kept = Object.entries(skillUseLog)
+                    .sort((a, b) => Math.max(0, ...Object.values(b[1]).map((s) => s.lastAt)) - Math.max(0, ...Object.values(a[1]).map((s) => s.lastAt)))
+                    .slice(0, 20);
+                skillUseLog = Object.fromEntries(kept);
+                localStorage.setItem(SKILL_USE_KEY, JSON.stringify(skillUseLog));
+            } catch (e) {
+                // A browser refusing storage must not break the turn that
+                // recorded it.
+            }
+        }
+
+        // Called once per turn, with what actually rode along. Pinned skills are
+        // marked so the card can say which of them a person asked for and which
+        // one the router chose -- the distinction matters when deciding whether
+        // to switch the router off.
+        function logSkillsUsed(conversationId, skills) {
+            const id = String(conversationId == null || conversationId === '' ? 'unsaved' : conversationId);
+            const bucket = Object.assign({}, skillUseLog[id]);
+            const now = Date.now();
+            for (const skill of Array.isArray(skills) ? skills : []) {
+                const name = String((skill && skill.name) || '').trim().toLowerCase();
+                if (!name) continue;
+                const prev = bucket[name] || { turns: 0, pinned: false, lastAt: 0 };
+                bucket[name] = { turns: prev.turns + 1, pinned: !!skill.pinned, lastAt: now };
+            }
+            skillUseLog[id] = bucket;
+            persistSkillUseLog();
+            renderSkillRail();
+        }
+
+        function renderSkillRail() {
+            const list = document.getElementById('skillRailList');
+            if (!list) return;
+            const id = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            const bucket = skillUseLog[id] || {};
+            const rows = Object.entries(bucket).sort((a, b) =>
+                (Number(b[1].pinned) - Number(a[1].pinned)) || (b[1].turns - a[1].turns) || a[0].localeCompare(b[0]));
+            updateSessionSummary();
+            list.innerHTML = '';
+            if (!rows.length) {
+                const empty = document.createElement('div');
+                empty.className = 'rail-empty';
+                empty.textContent = 'Nothing yet. In Plan and Build mode the router picks skills per request and they show up here, marked automatic — so an odd answer can be traced to a method rather than guessed at.';
+                list.append(empty);
+                return;
+            }
+            for (const [name, entry] of rows) {
+                const row = document.createElement('div');
+                row.className = 'skill-row';
+                const top = document.createElement('div');
+                top.className = 'skill-row-top';
+                const label = document.createElement('span');
+                label.className = 'skill-row-name';
+                // The catalogue's own capitalisation when it is loaded, so this
+                // list and the picker agree about what the skill is called.
+                const installed = skillsCatalog.find((s) => String(s.name).toLowerCase() === name);
+                label.textContent = (installed && installed.name) || name;
+                const tag = document.createElement('span');
+                tag.className = 'skill-tag ' + (entry.pinned ? 'pinned' : 'auto');
+                tag.textContent = entry.pinned ? 'pinned' : 'auto';
+                top.append(label, tag);
+                const meta = document.createElement('div');
+                meta.className = 'skill-row-meta';
+                meta.textContent = 'applied to ' + entry.turns + ' request' + (entry.turns === 1 ? '' : 's');
+                row.append(top, meta);
+                if (installed) {
+                    row.title = (installed.source ? installed.source + ' — ' : '') +
+                        (entry.pinned ? 'pinned to this chat; tap to let it go' : 'picked automatically; tap to pin it to this chat');
+                } else if (!skillsCatalog.length) {
+                    // The library has not been fetched yet in this session -- the
+                    // card is drawn from what a turn recorded, which does not
+                    // need the catalogue. Claiming the skill is gone would be a
+                    // guess dressed as a fact.
+                    row.title = (entry.pinned ? 'Pinned to this chat' : 'Applied in this chat') + '; tap to pin it';
+                } else {
+                    row.title = 'Not in the installed library any more; tap to remove it';
+                }
+                row.onclick = () => toggleSkillFromRail(name, entry.pinned);
+                list.append(row);
+            }
+        }
+
+        // Drops a row from the card. Only reachable once the catalogue is known:
+        // a skill that is no longer installed cannot be pinned, and leaving the
+        // row there would offer something that cannot work.
+        function dropSkillUseRow(name) {
+            const key = String(activeConversationId == null || activeConversationId === '' ? 'unsaved' : activeConversationId);
+            const bucket = Object.assign({}, skillUseLog[key]);
+            delete bucket[String(name).toLowerCase()];
+            skillUseLog[key] = bucket;
+            persistSkillUseLog();
+            renderSkillRail();
+            showStatus('info', 'Removed ' + name + ' — it is no longer installed');
+        }
+
+        function toggleSkillFromRail(name, isPinned) {
+            if (isPinned) { removePinnedSkill(name); return; }
+            const wanted = String(name).toLowerCase();
+            if (skillsCatalog.some((s) => String(s.name).toLowerCase() === wanted)) { pinSkillForChat(name); return; }
+            // An empty catalogue is not a missing skill: this session may simply
+            // not have fetched the library yet, because a chat that never needed
+            // a skill never asks for one. Fetch it, then decide.
+            if (!skillsCatalog.length) {
+                ensureSkillsLoaded().then(() => {
+                    if (skillsCatalog.some((s) => String(s.name).toLowerCase() === wanted)) pinSkillForChat(name);
+                    else dropSkillUseRow(name);
+                });
+                return;
+            }
+            dropSkillUseRow(name);
+        }
+
+        // --- Sending a work step to a cheaper model, or not ---
+        //
+        // The rules live in chatlib (routeStep) so they can be tested without a
+        // page. This is the wiring: what the loop knows about a step, and what it
+        // does when the cheaper model turns out not to be able to take it.
+        function setRoutingEnabled(on) {
+            routingMode = on ? 'auto' : 'off';
+            try {
+                localStorage.setItem(ROUTING_KEY, routingMode === 'off' ? '1' : '');
+            } catch {
+                // Storage refusing must not break the setting itself.
+            }
+            const box = document.getElementById('routingCheck');
+            if (box) box.checked = routingMode === 'auto';
+            showStatus('info', routingMode === 'auto'
+                ? 'Tool-reading steps will use the cheapest model this provider lists'
+                : 'Every step of a turn uses ' + selectedModel);
+        }
+
+        // The models the current service lists. Puter's catalogue is the built-in
+        // one and never loads over the network, so providerModels is empty there
+        // and anything that ranks models has to read MODELS instead.
+        function routableModels() {
+            return selectedProvider === PUTER_PROVIDER ? MODELS : providerModels;
+        }
+
+        // The model to run the image planner on, or null to leave it where it is.
+        //
+        // The planner is a classifier: one message in, a few fields out. Sending
+        // it to a flagship pays the conversation's per-token price for a routing
+        // decision, and on Puter that is credits from an allowance that does not
+        // roll over. The user's own routing switch governs it, because it is the
+        // same trade it already describes.
+        function routeForPlanner() {
+            return routeClassifier({
+                mode: routingMode,
+                model: selectedModel,
+                models: routableModels(),
+                // Puter publishes no prices, so several of its models tie as
+                // "the small one"; the app's own default breaks that tie rather
+                // than whichever id sorts first.
+                preferred: selectedProvider === PUTER_PROVIDER ? DEFAULT_MODEL : '',
+                refused: refusedModelIds(modelsRefusedBy, selectedProvider),
+            });
+        }
+
+        // The model to ask for one step, or null to leave the step on the model
+        // the user chose. One function so the loop cannot disagree with itself
+        // about which steps are worth moving.
+        function routeForStep(stage, needsTools, needsVision) {
+            // A turn carrying an image stays where it is: the model was already
+            // switched to one that can read the picture, and a cheaper model that
+            // cannot is a failed turn rather than a saving.
+            if (needsVision) return null;
+            return routeStep({
+                stage,
+                mode: routingMode,
+                model: selectedModel,
+                models: providerModels,
+                needsTools,
+                refused: refusedModelIds(modelsRefusedBy, selectedProvider),
+            });
+        }
+
+        // Said once per turn, in the conversation rather than in a toast: a reply
+        // gives no sign that two models served it, and a switch the user never
+        // made must not be a secret. Once, because a line per step would bury the
+        // work under notes about the work.
+        function noteRouteOnce(route) {
+            if (!route || routeNotedThisTurn) return;
+            routeNotedThisTurn = true;
+            addMessage('system', describeRoute(route));
+        }
+
+        // --- The reasoning summary, on or off ---
+        function setReasoningVisible(on) {
+            reasoningVisible = !!on;
+            try {
+                localStorage.setItem(REASONING_KEY, reasoningVisible ? '' : '1');
+            } catch {
+                // Storage refusing must not break the setting itself.
+            }
+            // The control is made to agree with the state whoever changed it, so
+            // it can never claim the summary is on while it is off.
+            const box = document.getElementById('reasoningCheck');
+            if (box) box.checked = reasoningVisible;
+            // Applied to what is already on screen, not only to what comes next.
+            // A setting that appears to do nothing until the next reply reads as
+            // broken, and the text is still on the element either way.
+            for (const bubble of chatMessages.querySelectorAll('.message.bot')) {
+                const text = bubble.dataset.rawReasoning || '';
+                if (text) setReasoningContent(bubble, reasoningVisible ? text : '');
+            }
+            showStatus('info', reasoningVisible ? 'Reasoning summary on' : 'Reasoning summary off');
+        }
+
+        // Ticking a row goes through the same rule the model's task_update uses,
+        // so a task that is not ready yet cannot be marked done from the panel
+        // either -- the list would otherwise show a finished plan that is not.
+        function uiSetTaskStatus(id, status) {
+            const updated = setTaskStatus(taskGraph, id, status);
+            if (updated.error) {
+                showStatus('error', updated.error);
+                return false;
+            }
+            taskGraph = updated.graph;
+            saveTaskGraph();
+            return true;
+        }
+
+        function deleteTask(id) {
+            const next = normalizeTaskGraph(taskGraph);
+            next.tasks = next.tasks.filter((task) => task.id !== id)
+                // A dependency on a task that no longer exists would leave a
+                // task that can never be finished, so it goes with it.
+                .map((task) => Object.assign({}, task, {
+                    dependsOn: task.dependsOn.filter((dep) => dep !== id),
+                }));
+            taskGraph = next;
+            saveTaskGraph();
+        }
+
+        // clearTaskList() drops what is finished; clearTaskList(true) drops
+        // everything. Clearing a plan that is half done is the destructive one,
+        // so it is not the behaviour of the plain call.
+        function clearTaskList(all) {
+            const next = normalizeTaskGraph(taskGraph);
+            next.tasks = all ? [] : next.tasks.filter((task) => task.status !== 'done');
+            taskGraph = next;
+            saveTaskGraph();
+        }
+
+        function renderWorkspaceFiles() {
+            const list = document.getElementById('workspaceFileList');
+            const status = document.getElementById('workspaceStatus');
+            if (!list || !status) return;
+            const names = Object.keys(activeWorkspace()).sort();
+            list.innerHTML = '';
+            if (!names.length) {
+                status.textContent = 'Empty. An empty scratch space of text files the model can read and write, kept in this browser only.';
+                return;
+            }
+            status.textContent = names.length + ' file(s), stored in this browser only.';
+            for (const path of names) {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const name = document.createElement('span');
+                name.className = 'workspace-name';
+                name.textContent = path;
+                const size = document.createElement('span');
+                size.className = 'workspace-size';
+                size.textContent = formatChars(activeWorkspace()[path].length);
+                const download = document.createElement('button');
+                download.className = 'icon-btn-text';
+                download.textContent = 'Download';
+                download.onclick = () => downloadWorkspaceFile(path);
+                const remove = document.createElement('button');
+                remove.className = 'icon-btn-text danger';
+                remove.textContent = 'Delete';
+                remove.onclick = () => deleteWorkspaceFile(path);
+                row.append(name, size, download, remove);
+                list.append(row);
+            }
+        }
+
+        function downloadWorkspaceFile(path) {
+            const text = activeWorkspace()[path];
+            if (typeof text !== 'string') return;
+            // Through saveBlobAs, which revokes the URL on a later tick: the
+            // Android app fetches the blob back out of the page to save it, and
+            // a URL revoked in the same tick is gone before that fetch starts.
+            saveBlobAs(new Blob([text], { type: 'text/plain;charset=utf-8' }), path.split('/').pop());
+        }
+
+        function deleteWorkspaceFile(path) {
+            const current = activeWorkspace();
+            if (!Object.prototype.hasOwnProperty.call(current, path)) return;
+            const next = Object.assign({}, current);
+            delete next[path];
+            setActiveWorkspace(next);
+        }
+
+        const githubShaCache = {};
+
+        function accountParam(args) {
+            return args.account ? '&account=' + encodeURIComponent(args.account) : '';
+        }
+
+        // A file's sha depends on the repo and path, not on which account read
+        // it. Keying by account meant reading as one and committing as another
+        // silently lost the sha -- and the server now resolves it anyway, so
+        // this is only a way to save a lookup.
+        function branchParam(args) {
+            return args && args.branch ? '&branch=' + encodeURIComponent(args.branch) : '';
+        }
+
+        function shaKey(args) {
+            // Per branch. The same path on two branches is two different blobs,
+            // and reusing one sha for the other is a commit GitHub rejects as a
+            // conflict -- which reads as "someone changed the file", not as a
+            // cache bug.
+            return `${args.repo}:${args.branch || ''}:${args.path}`;
+        }
+
+        // Runs the model until it stops asking for tools, then hands back its
+        // final message. Each tool call is announced in the transcript so the
+        // user can see what the model touched.
+        async function loadProviders() {
+            const select = document.getElementById('providerSelect');
+            try {
+                const all = await safeJson(await fetch('/api/llm/providers'));
+                providerInfo = Object.fromEntries(all.map((p) => [p.id, p]));
+                const available = all.filter((p) => p.configured);
+                if (!available.length) {
+                    select.hidden = true;
+                    return;
+                }
+                select.innerHTML = '';
+                [{ id: PUTER_PROVIDER, label: 'Puter' }, ...available].forEach((provider) => {
+                    const opt = document.createElement('option');
+                    opt.value = provider.id;
+                    opt.textContent = provider.label;
+                    select.appendChild(opt);
+                });
+                const saved = localStorage.getItem('puterChatProvider');
+                selectedProvider = available.some((p) => p.id === saved) ? saved : PUTER_PROVIDER;
+                select.value = selectedProvider;
+                select.hidden = false;
+                if (selectedProvider !== PUTER_PROVIDER) await loadProviderModels();
+                renderModelOptions();
+                updateModelLabel();
+                updateEffortPicker();
+            } catch {
+                select.hidden = true;
+            }
+        }
+
+        async function selectProvider(id) {
+            selectedProvider = id;
+            rememberPreference('puterChatProvider', id);
+            if (id === PUTER_PROVIDER) {
+                providerModels = [];
+                providerVision = [];
+                selectedModel = isValidModel(localStorage.getItem('puterChatModel') || '')
+                    ? localStorage.getItem('puterChatModel')
+                    : DEFAULT_MODEL;
+            } else {
+                await loadProviderModels();
+            }
+            renderModelOptions();
+            updateModelLabel();
+            updateEffortPicker();
+            // Switching provider can change whether a Puter account is needed.
+            updateAuthUI();
+            showStatus('success', 'Provider: ' + id);
+        }
+
+        // Who draws, and with what.
+        //
+        // There used to be a second picker for images -- which service, and then
+        // which of its image models -- and it made the composer a row of six
+        // controls answering a question the model picker had already answered.
+        // Nothing picks an image service now: a picture goes to the server route,
+        // which asks the service the conversation is on first and walks its own
+        // order behind it. Puter is the one exception, and it is asked for by
+        // name -- see the Draw with Puter switch -- because it draws on the
+        // visitor's credits rather than the operator's key.
+        //
+        // Puter is asked only for the image model its published list names for
+        // the job: Sunburst to edit, Flare to draw. The conversation's model
+        // cannot stand in for one. Puter's images endpoint takes an image model,
+        // and the model picker here offers chat models, so offering the chat's
+        // model first bought a refused round trip on every draw somebody had
+        // asked Puter for. The route is where the chat's model is a *preference*
+        // -- and it decides that for itself, because a catalogue of model ids
+        // belongs to the service it came from.
+        function imageBackendsForTurn(options) {
+            return imageBackendOrder({
+                puterSignedIn: puterCanDraw(),
+                // Asked for by name, or not at all. What this used to read
+                // instead was which service the *conversation* was on, which
+                // made picking Puter for chat -- where it is cheap -- also mean
+                // paying Puter for every picture, where it is not.
+                puterChosen: drawWithPuter,
+                // A brush mask still forces the server route: Puter's image
+                // options have no mask field at all, so asking it first would
+                // silently ignore the region the user painted.
+                serverFirst: !!(options && options.mask),
+            });
+        }
+
+        // Providers whose account was refused outright. Kept for the session so
+        // one billing error doesn't become one per model.
+        const providersSuspended = new Set();
+
+        function suspendProvider(detail) {
+            if (providersSuspended.has(selectedProvider)) return;
+            providersSuspended.add(selectedProvider);
+            const label = (providerInfo[selectedProvider] && providerInfo[selectedProvider].label) || selectedProvider;
+            addMessage('system', `${label} refused the whole account, not just this model — every model there will fail until it's resolved. Switching back to Puter.`, { error: true });
+            selectProvider(PUTER_PROVIDER);
+            const select = document.getElementById('providerSelect');
+            if (select) select.value = PUTER_PROVIDER;
+        }
+
+        function providerLabel(id) {
+            if (id === PUTER_PROVIDER) return 'Puter';
+            return (providerInfo[id] && providerInfo[id].label) || id;
+        }
+
+        // The providers a turn may be moved to, in the order they are worth
+        // trying. Built from the server's own list rather than from the picker,
+        // which can only show one at a time.
+        function providerFailoverOrder() {
+            // Health rides along so the order is the one that costs least: a
+            // provider cooling down goes last, then one whose free tier is nearly
+            // spent, then by observed latency. With nothing measured yet this is
+            // exactly the order the picker shows.
+            return failoverProviderOrder(Object.values(providerInfo || {}), {
+                puterUsable: puterCanDraw(),
+                health: providerHealthMap(),
+            });
+        }
+
+        // Per provider, what this server has measured: the last status, the
+        // observed latency, and how long it asked to be left alone. A provider
+        // with no entry is unknown rather than fine, which is how
+        // providerRouteScore in chatlib reads it.
+        function providerHealthMap() {
+            const map = {};
+            Object.values(providerInfo || {}).forEach((p) => {
+                if (p && p.id && p.health) map[p.id] = p.health;
+            });
+            return map;
+        }
+
+        // Health and free-tier usage come from the endpoint the picker already
+        // uses, at most once a minute: cheap, no model call, and it is what lets
+        // the app say "this provider is out of allowance" before the user finds
+        // out mid-task.
+        let providerHealthFetchedAt = 0;
+        const providerHealthNotesShown = new Set();
+
+        async function refreshProviderHealth() {
+            if (Date.now() - providerHealthFetchedAt < 60000) return;
+            providerHealthFetchedAt = Date.now();
+            try {
+                const all = await safeJson(await fetch('/api/llm/providers'));
+                if (!Array.isArray(all)) return;
+                all.forEach((p) => {
+                    if (p && p.id && providerInfo[p.id]) {
+                        providerInfo[p.id] = { ...providerInfo[p.id], freeTier: p.freeTier, health: p.health };
+                    }
+                });
+            } catch { /* a health read that fails changes nothing */ }
+        }
+
+        // Said once per distinct message, because the two states it reports move
+        // on their own: a cooldown ticks down and a daily count only climbs, so
+        // repeating a line the user has already read is noise, while a line whose
+        // numbers have changed is news. The point of it is to arrive *before* the
+        // allowance or the cooldown costs a turn, not after.
+        async function noteProviderHealth() {
+            await refreshProviderHealth();
+            const info = providerInfo[selectedProvider];
+            if (!info) return;
+            const notes = [];
+            if (info.health && info.health.cooling) {
+                notes.push(providerLabel(selectedProvider) + ' is cooling down for another ' + Math.ceil(info.health.cooldownMs / 1000) + 's after a rate limit.');
+            }
+            const tier = info.freeTier;
+            if (tier && tier.cap && typeof tier.share === 'number' && tier.share >= 0.8) {
+                notes.push(providerLabel(selectedProvider) + ': about ' + tier.callsToday + ' of ' + tier.cap + ' free calls used today' + (tier.text ? ' (' + tier.text + ')' : '') + '.');
+            }
+            const text = notes.join(' ');
+            if (!text || providerHealthNotesShown.has(text)) return;
+            providerHealthNotesShown.add(text);
+            addMessage('system', text);
+        }
+
+        // The provider's own words, short enough to sit inside a sentence.
+        function failureReasonText(error) {
+            const text = String((error && (error.message || error)) || 'it stopped answering')
+                .replace(/\s+/g, ' ')
+                .trim();
+            return text.length > 160 ? text.slice(0, 157) + '…' : text;
+        }
+
+        // Moves the request in flight onto another configured provider, so a
+        // provider dying half-way through does not take a turn that was already
+        // paid for with it.
+        //
+        // Returns the provider it moved to, or null when there is nowhere left
+        // to go -- the caller then reports the original failure rather than a
+        // fallback that also failed. A provider that is configured but lists no
+        // chat models is skipped rather than becoming the reason.
+        async function moveTurnToNextProvider(blocked, error) {
+            const order = providerFailoverOrder();
+            for (let hop = 0; hop < MAX_PROVIDER_FAILOVERS; hop++) {
+                const next = nextFailoverProvider(order, [], blocked);
+                if (!next) return null;
+                // Marked before the attempt, so a provider that fails to load
+                // cannot be picked again on the next hop.
+                blocked.add(next);
+                const from = providerLabel(selectedProvider);
+                await selectProvider(next);
+                if (!providerModels.length) {
+                    addMessage('system', 'Skipped ' + providerLabel(next) + ' — it lists no chat models.');
+                    continue;
+                }
+                addMessage(
+                    'system',
+                    from + ' could not continue this request (' + failureReasonText(error) + ') — moving it to ' +
+                        providerLabel(next) + ' rather than losing the steps already done.'
+                );
+                return next;
+            }
+            return null;
+        }
+
+        // Takes a refused model out of circulation for the session and moves to
+        // one that works, so the next message doesn't repeat the failure. The
+        // move stays inside the refused model's family when a sibling is still
+        // usable — answering a Sonnet pick with Opus read as the app ignoring
+        // the choice, so a cross-family jump happens only when the family has
+        // nothing left. detail (the upstream's own words) is announced in the
+        // transcript: a toast is gone in seconds and a mid-conversation switch
+        // the user never chose must be visible where the conversation is.
+        // Returns the model it moved to, or null when the provider has nothing
+        // left -- which is the caller's signal to report the failure, not retry it.
+        function forgetRefusedModel(modelId, detail) {
+            if (!modelId || modelsRefusedBy.has(selectedProvider + ':' + modelId)) return null;
+            modelsRefusedBy.add(selectedProvider + ':' + modelId);
+            providerModels = providerModels.filter((m) => m.id !== modelId);
+            const next = nearestUsableModel(providerModels, refusedModelIds(modelsRefusedBy, selectedProvider), modelId);
+            if (next) {
+                selectedModel = next;
+                rememberPreference('provider:' + selectedProvider + ':model', selectedModel);
+                const why = typeof detail === 'string' && detail ? ' — ' + detail : '';
+                addMessage('system', modelId + ' refused (' + resummarizeRefusal(detail) + '), so the app switched to ' + next + why, { error: false });
+                showStatus('info', 'Switched to ' + selectedModel);
+            }
+            renderModelOptions();
+            updateModelLabel();
+            return next;
+        }
+
+        // The same bookkeeping for a *routed* model, without the part that moves
+        // the user's choice. A step's model refusing is worth remembering --
+        // routing to it again would repeat the failure -- but it was never what
+        // the user picked, so it must not change what they are talking to.
+        function forgetRoutedModel(modelId, detail) {
+            if (!modelId) return;
+            modelsRefusedBy.add(selectedProvider + ':' + modelId);
+            providerModels = providerModels.filter((m) => m.id !== modelId);
+            renderModelOptions();
+            updateModelLabel();
+            addMessage('system', modelId + ' refused a routed step (' + resummarizeRefusal(detail) + ') — that step goes back to ' + selectedModel + '.');
+        }
+
+        // One short line for the transcript: the upstream's message is often a
+        // long JSON-ish blob, and the family fact is what the user needs.
+        function resummarizeRefusal(detail) {
+            const text = typeof detail === 'string' ? detail : '';
+            const m = text.match(/model_not_found|not found|not available|access denied|unavailable/i);
+            return m ? m[0] : 'upstream refused it';
+        }
+
+        // An attached image rides inside the message array for the direct
+        // providers, so the turn has to go to a model that can read it. Moving
+        // the picker is the same move the app already makes when a model
+        // refuses. Returns the model to use, or null when this provider has
+        // none -- which the caller reports rather than sending the picture to
+        // be ignored.
+        function insistOnImageModel() {
+            const capable = modelForImage(providerModels, selectedModel);
+            if (!capable) return null;
+            if (capable !== selectedModel) {
+                selectedModel = capable;
+                rememberPreference('provider:' + selectedProvider + ':model', selectedModel);
+                showStatus('info', 'Switched to ' + selectedModel + ' — it can read images');
+                renderModelOptions();
+                updateModelLabel();
+            }
+            return capable;
+        }
+
+        // The chat endpoint refuses bodies over 1MB and the attach menu allows
+        // images up to 8MB, so the picture is re-encoded at the largest size
+        // that still fits. Shrinking a step at a time beats guessing one
+        // setting that suits both a screenshot and a photo.
+        async function imageDataUrlForRequest(file) {
+            let bitmap;
+            try {
+                bitmap = await createImageBitmap(file);
+            } catch (error) {
+                console.error('Could not read the image:', error);
+                return null;
+            }
+            try {
+                let edge = MAX_IMAGE_EDGE;
+                let quality = 0.85;
+                for (let attempt = 0; attempt < 5; attempt++) {
+                    const url = renderScaledImage(bitmap, edge, quality);
+                    if (isSendableImageUrl(url) && url.length <= MAX_IMAGE_DATA_URL_CHARS) return url;
+                    edge = Math.round(edge * 0.75);
+                    quality = Math.max(0.5, quality - 0.1);
+                }
+                return null;
+            } catch (error) {
+                console.error('Could not resize the image:', error);
+                return null;
+            } finally {
+                if (bitmap.close) bitmap.close();
+            }
+        }
+
+        function renderScaledImage(bitmap, maxEdge, quality) {
+            const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', quality);
+        }
+
+        // The catalogue comes from the provider itself, so it can't go stale.
+        async function loadProviderModels() {
+            try {
+                const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(selectedProvider));
+                const data = await safeJson(res);
+                if (!res.ok) throw new Error(data.error || 'Could not list models');
+                const listed = usableChatModels(data);
+                providerModels = listed.filter((m) => !modelsRefusedBy.has(selectedProvider + ':' + m.id));
+                // Uncapped, because the read-back is choosing one model rather than
+                // offering a list: the cap was hiding exactly the models it needs.
+                providerVision = usableChatModels(data, Infinity).filter((m) => m.vision === true);
+                // Every single model ruled out is not a catalogue problem, it is
+                // a session that met an outage. Offering them again is the only
+                // honest answer: the memory exists to stop repeating one
+                // failure, not to hold a provider hostage to a bad ten minutes,
+                // and an empty picker here says "this provider has no models",
+                // which is untrue and leaves a page reload as the only way out.
+                if (!providerModels.length && listed.length) {
+                    for (const m of listed) modelsRefusedBy.delete(selectedProvider + ':' + m.id);
+                    providerModels = listed;
+                    showStatus('info', 'Offering ' + listed.length + ' model(s) again that this session had ruled out');
+                }
+                if (!providerModels.length) throw new Error(noChatModelsReason());
+                const remembered = localStorage.getItem('provider:' + selectedProvider + ':model');
+                // providerModels is already sorted free-and-capable first, so
+                // the head of the list is the sensible default.
+                selectedModel = providerModels.some((m) => m.id === remembered) ? remembered : providerModels[0].id;
+                // A remembered model that the free-only filter hides would leave
+                // the composer naming a model with no row to reselect it from, so
+                // the choice moves to the first row the picker is actually showing.
+                const visible = pickVisibleModel(providerModels, selectedModel);
+                if (visible !== selectedModel) {
+                    showStatus('info', 'Switched to ' + visible + ' — the model this provider last used is not on its free tier');
+                    selectedModel = visible;
+                }
+            } catch (err) {
+                providerModels = [];
+                providerVision = [];
+                const reason = providerInfo[selectedProvider] && providerInfo[selectedProvider].kind !== 'chat'
+                    ? noChatModelsReason()
+                    : 'Could not load models: ' + err.message;
+                showStatus('error', reason);
+                // An empty dropdown reads as a bug; the message is the point.
+                addMessage('system', reason, { error: true });
+            }
+
+        }
+
+        // Some services in the picker aren't language models at all. When one
+        // returns nothing usable, say what it actually is rather than leaving
+        // a blank list and "No model matches that".
+        function noChatModelsReason() {
+            const info = providerInfo[selectedProvider];
+            if (info && info.note) return info.note;
+            return 'This provider returned no chat models.';
+        }
+
+        // One call site for "ask a model", so the rest of the app doesn't care
+        // which service is answering. askModel is the model routed for this one
+        // step, or null to use the model the user chose.
+        async function callModel(convo, extra = {}, signal = null, askModel = null) {
+            if (selectedProvider === PUTER_PROVIDER) {
+                // askModel is honoured here too. It used to be ignored on this
+                // branch, so every routed step ran on the model the user chose --
+                // on the one provider where a step is paid for in credits from a
+                // fixed monthly allowance, which is where routing was worth most.
+                return chatWithEffortFallback(askModel || selectedModel, (opts) =>
+                    puter.ai.chat(convo, { ...opts, ...extra })
+                );
+            }
+            // A refusal is about one model, not the request, so the same turn can
+            // be answered by the next one. Bounded, because a provider whose
+            // whole list refuses must report the failure rather than crawl it.
+            for (let attempt = 0; attempt <= MAX_MODEL_REFUSAL_RETRIES; attempt++) {
+                // Read the model per attempt: a refusal moves selectedModel on,
+                // and the payload has to follow it or the retry repeats the very
+                // request that just failed. A routed step is different -- it is
+                // not the user's choice and must not follow anything, so it
+                // either succeeds or fails back to the chosen model.
+                const modelId = askModel || selectedModel;
+                // Tools go only to models that accept them; sending them to one
+                // that doesn't is a request that can only fail.
+                const chosen = providerModels.find((m) => m.id === modelId);
+                const payload = { model: modelId, messages: convo, ...extra };
+                if (payload.tools && chosen && chosen.tools === false) {
+                    delete payload.tools;
+                    showStatus('info', 'This model has no tool support — GitHub steps are unavailable on it');
+                }
+                // A transient answer — 429 from a free tier, a 5xx from a busy
+                // upstream, or no response at all — deserves one more gentle try
+                // before the message is shown. The server already retried with
+                // backoff, so the page adds exactly this one, exactly here.
+                const send = () => fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    ...(signal ? { signal } : {}),
+                });
+                const retryWait = () => new Promise((resolve, reject) => {
+                    if (signal?.aborted) { reject(abortError()); return; }
+                    const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                    signal?.addEventListener('abort', () => {
+                        clearTimeout(timer);
+                        reject(abortError());
+                    }, { once: true });
+                });
+                let res;
+                try {
+                    res = await send();
+                } catch (fetchErr) {
+                    // No answer came back at all — a dropped connection. Same
+                    // treatment as a rate limit: wait and try once more.
+                    if (!autoRetryEnabled || signal?.aborted) throw fetchErr;
+                    showStatus('info', 'No answer from the provider — waiting a moment, then retrying');
+                    await retryWait();
+                    res = await send();
+                }
+                let data = await safeJson(res);
+                if (data.parseFailed) {
+                    const err = new Error(data.error);
+                    err.parseFailed = true;
+                    err.statusCode = res.status;
+                    err.modelId = modelId;
+                    err.providerId = selectedProvider;
+                    throw err;
+                }
+                // A spent allowance (Ollama Cloud's monthly cap, the Antigravity
+                // proxy's Quota Exhausted) answers 429 but no wait ever fixes
+                // it — retrying re-spends the time for the same answer.
+                const quotaSpent = isQuotaExhausted(
+                    typeof data.error === 'string' ? data.error : (data.error && data.error.message) || '');
+                if (autoRetryEnabled && isRetryableStatus(res.status) && !quotaSpent) {
+                    showStatus('info', isRateLimitError(data.error)
+                        ? 'The provider is rate limiting — waiting a moment, then retrying'
+                        : 'The provider answered with a server error — waiting a moment, then retrying');
+                    await retryWait();
+                    res = await send();
+                    data = await safeJson(res);
+                }
+                if (res.ok) return normalizeProviderReply(data);
+                // 404 belongs here too: NVIDIA lists models an account may not
+                // have access to and answers "Not found for account" for them,
+                // which is a refusal of that model rather than a broken request.
+                const detail = data.error || 'Request failed (' + res.status + ')';
+                if (isModelScopedRefusal(res.status, detail, modelId)) {
+                    if (askModel) {
+                        // The step's model refused, not the user's. Take it out of
+                        // circulation and throw it marked, so the loop puts this
+                        // one step back on the chosen model instead of reporting
+                        // the turn as failed. Moving the picker here would answer
+                        // a refusal by silently switching what the user is using.
+                        forgetRoutedModel(modelId, typeof detail === 'string' ? detail : JSON.stringify(detail));
+                        const routedErr = new Error(detail);
+                        routedErr.statusCode = res.status;
+                        routedErr.modelId = modelId;
+                        routedErr.providerId = selectedProvider;
+                        routedErr.routed = true;
+                        throw routedErr;
+                    }
+                    // Drop it from the picker and move to one that answers.
+                    const next = forgetRefusedModel(modelId, typeof detail === 'string' ? detail : JSON.stringify(detail));
+                    if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
+                } else if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    // Account-level refusals apply to every model, so removing
+                    // them one at a time would spend a failed request per model.
+                    suspendProvider(detail);
+                }
+                // Name the model that actually refused. forgetRefusedModel has
+                // already moved the selection on, so the message has to explain
+                // the failure rather than the recovery.
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                err.modelId = modelId;
+                err.providerId = selectedProvider;
+                throw err;
+            }
+        }
+
+        // Stream a direct-provider reply as SSE, rendering each chunk into a
+        // bubble as it arrives. Returns { text, reasoning } when complete.
+        async function streamProviderChat(convo, renderer, signal, bubble) {
+            // Resolve the response before rendering anything. A refusal comes
+            // back on the headers, so re-sending this turn to the next model
+            // never leaves a half-written answer on screen.
+            let res = null;
+            for (let attempt = 0; attempt <= MAX_MODEL_REFUSAL_RETRIES; attempt++) {
+                const modelId = selectedModel;
+                const chosen = providerModels.find((m) => m.id === modelId);
+                const payload = { model: modelId, messages: convo, stream: true };
+                if (payload.tools && chosen && chosen.tools === false) delete payload.tools;
+                res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal,
+                });
+                // The server already retried a rate limit or 5xx with backoff;
+                // here the page gives a transient answer exactly one more try
+                // before settling for the report below.
+                if (!res.ok && autoRetryEnabled && isRetryableStatus(res.status)) {
+                    const probe = await res.text().catch(() => '');
+                    // A spent allowance is not coming back on any wait: report
+                    // it now rather than re-sending the same dying request.
+                    if (isQuotaExhausted(probe)) {
+                        const err = new Error(errorDetailFromBody(probe) || 'Request failed (' + res.status + ')');
+                        err.statusCode = res.status;
+                        err.modelId = modelId;
+                        err.providerId = selectedProvider;
+                        throw err;
+                    }
+                    showStatus('info', isRateLimitError(probe)
+                        ? 'The provider is rate limiting — waiting a moment, then retrying'
+                        : 'The provider answered with a server error — waiting a moment, then retrying');
+                    await new Promise((resolve, reject) => {
+                        if (signal?.aborted) { reject(abortError()); return; }
+                        const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                        signal?.addEventListener('abort', () => {
+                            clearTimeout(timer);
+                            reject(abortError());
+                        }, { once: true });
+                    });
+                    res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                        signal,
+                    });
+                }
+                if (res.ok) break;
+                // The server reports a failed stream as an SSE frame and a failed
+                // plain request as JSON, so read the body as text and take the
+                // detail from either shape. Reading it as JSON only both lost the
+                // provider's own words and threw on a body of `null`.
+                const detail = errorDetailFromBody(await res.text().catch(() => '')) || 'Request failed (' + res.status + ')';
+                if (isModelScopedRefusal(res.status, detail, modelId)) {
+                    const next = forgetRefusedModel(modelId, detail);
+                    if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
+                } else if (res.status === 403 || res.status === 402 || res.status === 404) {
+                    suspendProvider(detail);
+                }
+                const err = new Error(detail);
+                err.statusCode = res.status;
+                err.modelId = modelId;
+                err.providerId = selectedProvider;
+                throw err;
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const part of parseSseChunk(lines.join('\n'))) {
+                    if (part === '[DONE]') break;
+                    if (part && part.error) throw new Error(part.error);
+                    if (part && part.partial) {
+                        // The server hit its deadline after tokens had already
+                        // reached the page. finalizePartial keeps what is on
+                        // screen (the spend already happened) and attaches the
+                        // reason, instead of discarding it and inviting a
+                        // resend that re-spends the same tokens.
+                        renderer.flush();
+                        finalizePartial(bubble, renderer, part.notice);
+                        return true;
+                    }
+                    const delta = part?.choices?.[0]?.delta;
+                    if (delta) {
+                        renderer.appendReasoning(delta.reasoning_content || delta.reasoning || delta.thinking || '');
+                        renderer.appendText(delta.content || '');
+                    }
+                    const usage = part && part.usage;
+                    if (usage) {
+                        renderer.usage = (renderer.usage || 0) + (usage.completion_tokens || usage.total_tokens || 0);
+                        // Read from the cache is the whole point of keeping the
+                        // front of the request stable, so it is counted rather
+                        // than guessed at -- and a miss reports zero.
+                        renderer.cached = (renderer.cached || 0) + cachedTokensFromUsage(usage);
+                    }
+                }
+            }
+            renderer.flush();
+        }
+
+        // Everything the model needs to answer this turn: how to behave, what has
+        // been said already, and the new message. `messages` already holds the
+        // live user turn by the time this runs, so history is taken up to it.
+        //
+        // The request is ordered so the part that never changes sits at the front
+        // and the part that changes every turn sits at the end. Providers bill the
+        // prompt again on every call, and the only piece they can reuse is the
+        // unchanged prefix. The task list and the active skills used to sit in the
+        // system message, which meant the very first block differed on nearly every
+        // turn -- so nothing behind it could be reused and the whole conversation
+        // was re-read at full price each time. Now the system message is identical
+        // unless the mode changes, and the volatile half rides on the live user
+        // turn, after everything a provider is able to cache.
+        function buildConversation(outgoing, activeSkills = null) {
+            const skills = activeSkills && activeSkills.length ? renderSkillsPrompt(activeSkills) : '';
+            // Memory rides with the volatile context on the live turn, after
+            // everything a provider caches, so the system line stays identical
+            // and a saved fact never enters the stored history.
+            const memory = shareMemory.onForChat(activeConversationId) ? memoryPromptFor(shareMemory.factsList()) : '';
+            const turnContext = [memory, renderTaskGraphPrompt(taskGraph), skills].filter(Boolean).join('\n\n');
+            const system = [SYSTEM_PROMPT, modePrompt(selectedMode), workspacePrompt(useServerWorkspace())].filter(Boolean).join('\n\n');
+            return [
+                { role: 'system', content: system },
+                // Compact session swaps the budget, not the conversation: same
+                // rebuild, fewer turns, so the request is cheaper without the
+                // visible chat ever changing.
+                ...(compactSession ? compactChatHistory(messages.slice(0, -1)) : buildChatHistory(messages.slice(0, -1))),
+                {
+                    role: 'user',
+                    content: turnContext
+                        ? outgoing + '\n\n---\nContext for this request (not written by the user):\n' + turnContext
+                        : outgoing,
+                },
+            ];
+        }
+
+        // Build the options for a chat call in one place, so the effort setting
+        // can't be sent to a model that doesn't take it.
+        function chatOptions(chatModel, extra = {}) {
+            const opts = { model: chatModel, ...extra };
+            if (selectedEffort && supportsEffort(chatModel) && !effortRejectedBy.has(chatModel)) {
+                opts.reasoning_effort = selectedEffort;
+            }
+            return opts;
+        }
+
+        // Runs a chat call, and if the model refuses the effort setting, drops
+        // it and tries once more rather than failing the message.
+        async function chatWithEffortFallback(chatModel, call) {
+            try {
+                return await call(chatOptions(chatModel));
+            } catch (error) {
+                if (!selectedEffort || effortRejectedBy.has(chatModel) || !isEffortUnsupportedError(error)) throw error;
+                effortRejectedBy.add(chatModel);
+                updateEffortPicker();
+                showStatus('info', 'This model rejects an effort setting — retrying without it');
+                return call(chatOptions(chatModel));
+            }
+        }
+
+        // One place that maps a tool name to its runner, so the loop can decide
+        // what to run together without repeating the dispatch three times.
+        // Every runner answers with a string -- its own failures included -- so a
+        // wave of them can be awaited together without one rejection losing the
+        // rest.
+        function runToolCall(name, args) {
+            // The mode's surface is enforced where the tools are offered, which is
+            // the version the model can see -- but a call can still arrive: a turn
+            // resumed from another mode carries its own conversation, and a model
+            // that has seen the tool before may reach for it from memory. Refusing
+            // it here costs one string and makes the promise true either way.
+            if (modeBlocksWrite(selectedMode, name)) {
+                return Promise.resolve(modeWriteRefusal(selectedMode, name));
+            }
+            if (isGithubTool(name)) return runGithubTool(name, args);
+            if (isWebTool(name)) return runWebTool(name, args);
+            if (isRunTool(name)) return runCommandTool(name, args);
+            if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
+            if (isTaskTool(name)) return runTaskTool(name, args);
+            if (isUseSkillTool(name)) return runUseSkillTool(args);
+            if (name === MEMORY_TOOL.function.name) return runMemoryTool(args);
+            return Promise.resolve('Error: unknown tool ' + name);
+        }
+
+        // Tool results already paid for while answering the current question.
+        //
+        // A tool loop re-asks the same thing more often than it looks -- the same
+        // file, the same search, the same listing -- and every repeat is a billed
+        // request for an answer that is already in the conversation. Keying the
+        // memo by the question makes a retry of a failed turn replay the lookups
+        // it already paid for, rather than buying them all a second time, while a
+        // genuinely new question starts from nothing.
+        let toolMemo = new Map();
+        let toolMemoKey = '';
+
+        function toolMemoFor(question) {
+            const key = String(question == null ? '' : question);
+            if (key !== toolMemoKey) {
+                toolMemo.clear();
+                toolMemoKey = key;
+            }
+            return toolMemo;
+        }
+
+        // An answered question no longer needs its lookups: the next question
+        // must not read a stale file through a memo left over from this one.
+        function releaseToolMemo() {
+            toolMemo.clear();
+            toolMemoKey = '';
+        }
+
+        // Reads remembered past the question that paid for them, one memory per
+        // conversation. A follow-up about a file should not buy that file again,
+        // and by the time it is asked the history the file was read into may
+        // have been trimmed away for weight, leaving the model no choice but to
+        // ask. createReadMemory holds the rules that keep that honest: a write
+        // forgets what it touched, a read expires, and a reused answer says how
+        // old it is.
+        //
+        // It lives in memory rather than in storage: a reload is a fine time to
+        // stop trusting a file read twenty minutes ago.
+        let readMemory = null;
+        let readMemoryOwner = '';
+
+        function readMemoryFor(conversationId) {
+            const id = String(conversationId == null ? '' : conversationId);
+            if (!readMemory || id !== readMemoryOwner) {
+                readMemory = createReadMemory();
+                readMemoryOwner = id;
+            }
+            return readMemory;
+        }
+
+        // A turn that stopped part-way has already paid for everything in it:
+        // the model calls that decided what to look up, and the lookups
+        // themselves. Throwing that away and asking the same question from the
+        // start is the most expensive thing this app can do, so the conversation
+        // so far is kept and can be carried back into the loop.
+        const PENDING_TURN_KEY = 'freeopenaiPendingTurn';
+        // Only worth resuming while its lookups are still likely true: a file
+        // read half an hour ago may well have changed since.
+        const PENDING_TURN_TTL_MS = 30 * 60 * 1000;
+
+        function readPendingTurn() {
+            try {
+                const stored = parsePendingTurn(localStorage.getItem(PENDING_TURN_KEY) || '');
+                if (!stored) return null;
+                if (!stored.at || Date.now() - stored.at > PENDING_TURN_TTL_MS) {
+                    clearPendingTurn();
+                    return null;
+                }
+                return stored;
+            } catch {
+                return null;
+            }
+        }
+
+        function writePendingTurn(question, convo) {
+            const json = serializePendingTurn({
+                question: question,
+                convo: convo,
+                steps: pendingTurnStepCount(convo),
+                at: Date.now(),
+            });
+            // Too large to store, or nothing to store: the retry still works, it
+            // just starts the tool work again.
+            if (!json) return null;
+            try {
+                localStorage.setItem(PENDING_TURN_KEY, json);
+            } catch {
+                return null;
+            }
+            return json;
+        }
+
+        function clearPendingTurn() {
+            try {
+                localStorage.removeItem(PENDING_TURN_KEY);
+            } catch {
+                /* nothing to clear */
+            }
+        }
+
+        // Carries a restored turn's answers into the memo, so continuing does not
+        // buy the same file reads a second time. The remembered reads are seeded
+        // too, with what each answer was about, so a write during the rest of the
+        // turn still forgets the answers it made wrong.
+        function seedToolMemo(memo, convo, remembered = null) {
+            const records = toolCallRecords(convo);
+            const seen = new Set();
+            for (const record of records) {
+                if (!record.key || seen.has(record.key)) continue;
+                seen.add(record.key);
+                if (!memo.has(record.key)) memo.set(record.key, record.result);
+                if (remembered) remembered.remember(record.name, record.args, record.key, record.result);
+            }
+            return seen.size;
+        }
+
+        // What to say when a tool loop stops part-way: the steps already paid
+        // for are kept, and Retry carries on from them.
+        function noteInterruptedTurn(question, convo) {
+            if (!convo || !hasToolWork(convo)) return false;
+            if (!writePendingTurn(question, convo)) return false;
+            const steps = pendingTurnStepCount(convo);
+            // The button rides on the notice itself: there is no reply to put
+            // one under, and the steps are only kept so they can be continued.
+            addMessage(
+                'system',
+                'Kept ' + steps + ' completed tool step(s) — Retry continues from here instead of starting over.',
+                { retryText: question }
+            );
+            return true;
+        }
+
+        // Turn-scoped routing state. routeNotedThisTurn is the one note a turn
+        // gets; escalateNextStep means the cheaper model showed it could not use
+        // what it asked for, so the next step goes back to the chosen model;
+        // toolResultsSeen is what makes a round a *work* step rather than the
+        // plan or the answer.
+        let routeNotedThisTurn = false;
+        let escalateNextStep = false;
+        let toolResultsSeen = 0;
+        let escalatedBlankThisTurn = false;
+        // The model that actually produced the reply, which is not always the one
+        // that was picked: the status bar has to name the one that answered.
+        let lastReplyModel = null;
+
+        async function runChatWithTools(convo, chatModel, tools = GITHUB_TOOLS, signal = null, memo = null, remembered = null, needsVision = false) {
+            // Only one nudge per message: if asking plainly doesn't produce an
+            // answer, asking again won't either.
+            let nudged = false;
+            // Only one todo nudge per message too. The list is the plan of
+            // record, so a reply that arrives with tasks still open is not
+            // finished work -- but a model that refuses to reconcile twice is
+            // not going to on the third ask, and the user is waiting.
+            let todoNudged = false;
+            // Whether this turn wrote to the list at all. A model that never
+            // touched it is not working from it, so an old task left open from
+            // an earlier conversation must not interrupt an answer about
+            // something else.
+            let todosTouched = false;
+            // Counted across the whole turn, not per round: a model that repeats
+            // one call round after round only ever shows one repeat per round, so
+            // a per-round count could never reach the threshold.
+            const memoHits = new Map();
+            const maxRounds = toolRoundsForMode(selectedMode);
+            for (let round = 0; round < maxRounds; round++) {
+                if (signal?.aborted) throw abortError();
+                // Which part of the turn this call is, and whether a cheaper model
+                // should take it. escalateNextStep is read here and cleared, so a
+                // flag set by the previous step moves exactly one step and cannot
+                // accumulate into a whole turn running on the wrong model.
+                const stage = callStage({ round, toolsOffered: tools.length > 0, toolResults: toolResultsSeen });
+                const route = escalateNextStep ? null : routeForStep(stage, tools.length > 0, needsVision);
+                escalateNextStep = false;
+                const askModel = route ? route.model : null;
+                noteRouteOnce(route);
+                let response;
+                try {
+                    response = await callModel(convo, { tools }, signal, askModel);
+                } catch (err) {
+                    // Some endpoints reject the tools shape outright or answer
+                    // non-JSON. A plain call still answers; tools were a bonus,
+                    // not the request.
+                    if (round === 0 && tools.length && isToolsRejection(err)) {
+                        showStatus('info', 'This model takes no tools — answering directly');
+                        tools = [];
+                        response = await callModel(convo, {}, signal);
+                    } else if (askModel && err && err.routed) {
+                        // The cheaper model refused *this step* -- it is out of
+                        // circulation now, and forgetRoutedModel has already said
+                        // so -- so the step goes back to the chosen model rather
+                        // than ending a turn that is already paid for. Only a
+                        // refusal lands here: a transport failure belongs to the
+                        // provider, and the retry and failover paths exist for it.
+                        response = await callModel(convo, { tools }, signal, null);
+                    } else throw err;
+                }
+                let message = (response && response.message) || null;
+                if (signal?.aborted) throw abortError();
+                let calls = extractToolCalls(message);
+                if (!calls.length && tools.length) {
+                    // A tool call written as text is a tool call: run it, and
+                    // keep the markup out of the transcript.
+                    const written = textToolCalls(message, tools);
+                    if (written.length) {
+                        calls = written;
+                        message = withTextToolCalls(message, written);
+                    }
+                }
+                if (!calls.length) {
+                    const blank = !extractMessageText(message) && !extractMessageReasoning(message);
+                    const routedFailure = askModel ? routedStepFailure({ empty: blank }) : '';
+                    // A routed step that came back with nothing is a step the
+                    // cheaper model could not take. The chosen model is asked
+                    // instead, rather than nudging a model that has just shown it
+                    // is out of its depth -- once per turn, so a hard question
+                    // cannot ping-pong between the two.
+                    if (routedFailure && !escalatedBlankThisTurn) {
+                        escalatedBlankThisTurn = true;
+                        escalateNextStep = true;
+                        addMessage('system', askModel + ' ' + routedFailure + ' on a tool step — asking ' + selectedModel + ' instead.');
+                        continue;
+                    }
+                    // A model that ran its tools and then said nothing has the
+                    // answer in hand and simply stopped short. One more call,
+                    // tools withheld, usually produces it -- and reporting an
+                    // empty reply instead wastes everything already paid for.
+                    // A reply that is all thinking and no answer is the same
+                    // stop-short, whether the model ran out of room or forgot
+                    // to write the answer; it gets the same single nudge.
+                    const thoughtOnly = !blank && !extractMessageText(message);
+                    if ((blank || thoughtOnly) && !nudged) {
+                        nudged = true;
+                        convo.push(toConversationMessage(message));
+                        convo.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
+                        continue;
+                    }
+                    // A final answer with its own plan still open. Recording a
+                    // plan and finishing one are different habits, and the gap
+                    // is invisible in prose: "done, all sorted" reads as
+                    // complete while three todos sit unticked beside it.
+                    const openTodos = todoReportNudge(taskGraph, { touched: todosTouched });
+                    if (openTodos && !todoNudged && extractMessageText(message)) {
+                        todoNudged = true;
+                        convo.push(toConversationMessage(message));
+                        convo.push({ role: 'user', content: openTodos });
+                        continue;
+                    }
+                    // The reply is in hand: record which model wrote it, because a
+                    // routed step can be the one that answers and the status bar
+                    // must not credit the picker's choice for it.
+                    lastReplyModel = askModel || selectedModel;
+                    return { message, response, finishReason: response && response.finishReason };
+                }
+                // A status change is the model saying it is working from the
+                // list rather than prose, which is what arms the check above.
+                if (calls.some((call) => isTaskWriteTool(((call && call.function) || {}).name))) {
+                    todosTouched = true;
+                }
+
+                // Only role/content/tool_calls may go back; the rest of the
+                // reply object is metadata the provider rejects.
+                convo.push(toConversationMessage(message));
+                // Everything this round will do is listed before any of it runs,
+                // so a wave of lookups reads as one step rather than three that
+                // queued up behind each other.
+                for (const call of calls) {
+                    const fn = (call && call.function) || {};
+                    const line = describeToolCall(fn.name, parseToolArgs(fn.arguments));
+                    addMessage('system', line);
+                    // So a long tool round reads as progress rather than a hang.
+                    setActivity(line);
+                }
+                const plan = planToolCalls(calls);
+                const results = new Array(calls.length);
+                // Everything already asked and answered while working on this
+                // question comes out of the memo instead of being paid for a
+                // second time, and a call repeated inside one round is run once
+                // rather than once per copy. A write benefits most: the same
+                // commit asked for twice runs once, which is the difference
+                // between a duplicate and a saved repository.
+                const answeredFrom = new Map();
+                const roundFirstIndex = new Map();
+                const pending = [];
+                // Which of this round's answers came out of memory instead of
+                // being asked for again, and how old each one was -- the note has
+                // to reach the model, not just the transcript.
+                const rememberedHere = new Map();
+                let reused = 0;
+                let reusedEarlier = 0;
+                let repeated = 0;
+                // Arguments that are not usable JSON. parseToolArgs has to swallow
+                // that to keep the turn alive, which is exactly why it has to be
+                // noticed here: the call runs with {} and the result reads as the
+                // tool's answer.
+                let unusableArguments = false;
+                for (let i = 0; i < calls.length; i++) {
+                    const fn = calls[i].function || {};
+                    if (toolArgsUnusable(fn.arguments)) unusableArguments = true;
+                    const key = toolCallKey(fn.name, parseToolArgs(fn.arguments));
+                    if (!key) { pending.push(i); continue; }
+                    if (memo && memo.has(key)) {
+                        results[i] = memo.get(key);
+                        const hits = (memoHits.get(key) || 0) + 1;
+                        memoHits.set(key, hits);
+                        reused += 1;
+                        if (hits >= MAX_REPEATED_TOOL_CALLS) repeated += 1;
+                        continue;
+                    }
+                    // Nothing in this question, but the same read may have been
+                    // paid for by an earlier one: a follow-up about a file usually
+                    // opens by reading that file again, and an answer already
+                    // given is not worth buying twice while it is still true.
+                    const recalled = remembered ? remembered.recall(key) : null;
+                    if (recalled) {
+                        results[i] = recalled.result;
+                        if (memo) memo.set(key, recalled.result);
+                        rememberedHere.set(i, recalled.note);
+                        reusedEarlier += 1;
+                        continue;
+                    }
+                    if (roundFirstIndex.has(key)) {
+                        answeredFrom.set(i, roundFirstIndex.get(key));
+                        reused += 1;
+                        continue;
+                    }
+                    roundFirstIndex.set(key, i);
+                    pending.push(i);
+                }
+                if (reused) {
+                    addMessage('system', 'Reused ' + reused + ' earlier tool result(s) instead of repeating the call');
+                }
+                if (reusedEarlier) {
+                    addMessage('system', 'Reused ' + reusedEarlier + ' result(s) from earlier in this conversation instead of asking for them again');
+                }
+                // Reads that do not depend on each other go out together: three
+                // files used to cost three round trips. Anything that writes is
+                // left to run in turn, because two writes at once is a race and
+                // one of them would silently win.
+                const stillPending = (index) => pending.indexOf(index) !== -1;
+                for (const batch of batchIndices(plan.concurrent.filter(stillPending))) {
+                    if (signal?.aborted) throw abortError();
+                    if (batch.length > 1) showStatus('info', 'Looking up ' + batch.length + ' things at once');
+                    const done = await Promise.all(batch.map(async (index) => {
+                        const fn = calls[index].function || {};
+                        return [index, await runToolCall(fn.name, parseToolArgs(fn.arguments))];
+                    }));
+                    for (const [index, result] of done) results[index] = result;
+                }
+                for (const index of plan.serial) {
+                    if (signal?.aborted) throw abortError();
+                    if (!stillPending(index)) continue;
+                    const fn = calls[index].function || {};
+                    results[index] = await runToolCall(fn.name, parseToolArgs(fn.arguments));
+                }
+                // A duplicate in this round borrows the result of the copy that
+                // actually ran.
+                for (const [copy, source] of answeredFrom) results[copy] = results[source];
+                // Kept for the rest of this question. Only calls that produced
+                // something are stored, so a skipped one leaves no trace.
+                if (memo) {
+                    for (let i = 0; i < calls.length; i++) {
+                        if (results[i] === undefined) continue;
+                        const fn = calls[i].function || {};
+                        const args = parseToolArgs(fn.arguments);
+                        const key = toolCallKey(fn.name, args);
+                        if (key) memo.set(key, results[i]);
+                        // And, for a read, past this question: a write instead
+                        // forgets every remembered answer it may have made wrong,
+                        // which is why the two halves are one call.
+                        if (key && remembered) remembered.record(fn.name, args, key, results[i], memo);
+                    }
+                }
+                // Said in the conversation rather than in a toast, because the
+                // next round reads the conversation and a toast is what it never
+                // sees.
+                if (repeated) convo.push({ role: 'user', content: REPEATED_TOOL_CALL_NOTICE });
+                // A routed step that asked again for something it already has, or
+                // that sent arguments the tools cannot use, is a step the cheaper
+                // model is not managing. The next step goes back to the chosen
+                // model -- which is the one that has to make sense of this result,
+                // so re-asking the failed step now would only spend a second call
+                // on the same failure.
+                const stepFailure = askModel
+                    ? routedStepFailure({ repeatedCall: repeated > 0, badArguments: unusableArguments })
+                    : '';
+                if (stepFailure) {
+                    escalateNextStep = true;
+                    addMessage('system', askModel + ' ' + stepFailure + ' — the next step goes back to ' + selectedModel + '.');
+                }
+                // Recorded in the order the model asked for, not the order they
+                // finished, so every tool_call_id still has its own result -- and
+                // clipped, because every later round of this turn re-sends it.
+                for (let i = 0; i < calls.length; i++) {
+                    if (signal?.aborted) throw abortError();
+                    // A remembered answer carries its age, in the result the model
+                    // reads: it is the one that has to decide whether to ask again.
+                    const note = rememberedHere.get(i) || '';
+                    convo.push({ role: 'tool', tool_call_id: calls[i].id, content: clipToolResult(note + String(results[i])) });
+                }
+                // Counted for the next round: this is what makes it a *work* step
+                // with something to read rather than the plan or the answer.
+                toolResultsSeen += calls.length;
+            }
+            // Out of rounds. Everything read so far is still in `convo` and was
+            // paid for, so spend one more call -- without tools, so it can't
+            // start another chain -- to turn it into an answer instead of
+            // discarding it.
+            convo.push({ role: 'user', content: TOOL_ROUNDS_EXHAUSTED_PROMPT });
+            const summary = await callModel(convo, {}, signal);
+            // Tools are withheld here, so this call is never routed: the summary
+            // comes from the model the user chose.
+            lastReplyModel = selectedModel;
+            return {
+                message: (summary && summary.message) || null,
+                response: summary,
+                finishReason: summary && summary.finishReason,
+                exhausted: true,
+            };
+        }
+
+        // No PDF library: every browser already writes one from a print, and on
+        // a phone it lands in the share sheet as "Save to Files".
+        function exportChatPdf() {
+            closeDrawer();
+            if (!messages.length) {
+                showStatus('error', 'Nothing to save yet');
+                return;
+            }
+            // Print styles only emit the active view, so make sure it's the chat.
+            switchView('chat');
+            // Let the drawer finish closing, or it prints over the transcript.
+            setTimeout(() => window.print(), 250);
+        }
+
+        async function appSignOut() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+            } finally {
+                location.href = '/login.html';
+            }
+        }
+
+        // Kept as the drawer's "New chat" entry point. It no longer destroys
+        // anything -- the previous conversation stays in the sidebar.
+        function newChat() {
+            startNewConversation();
+        }
+
+        function clearAllHistory() {
+            if (!confirm('Delete every saved chat? This cannot be undone.')) return;
+            conversations = [];
+            try {
+                localStorage.removeItem(WORKSPACE_KEY);
+                localStorage.removeItem(TASK_KEY);
+                localStorage.removeItem(WORKSPACE_LEGACY_KEY);
+                localStorage.removeItem(TASK_LEGACY_KEY);
+            } catch { /* nothing to clear */ }
+            activeConversationId = newConversationId();
+            messages = [];
+            usageCount = 0;
+            updateUsageDisplay();
+            renderActiveConversation();
+            writeConversations();
+            showStatus('success', 'All chats deleted');
+        }
+
+        function sendPrompt(promptText) {
+            if (!promptText?.trim()) return;
+            chatInput.value = promptText;
+            autoResize(chatInput);
+            sendMessage();
+        }
+
+        function retryMessage(userText, isImageRetry) {
+            if (isImageRetry && !imageMode) toggleImageMode();
+            if (!isImageRetry && imageMode) toggleImageMode();
+            sendPrompt(userText);
+        }
+
+        // What shape the words in the composer will be drawn at.
+        //
+        // The size a request carries is read out of the prompt, and the only
+        // place that showed it was the status line *after* the picture arrived --
+        // one turn too late to do anything about, which is exactly how "I asked
+        // for a size and got a square" survived being noticed. This is the same
+        // reading, shown while it can still be changed.
+        //
+        // Two things keep it honest. It appears only for a turn the app would
+        // treat as image work, which is the same question the request asks before
+        // it sends a size anywhere; and with a *picture* attached it reads only a
+        // spelled-out size, because an attached picture is what forces the turn to
+        // be an edit and an edit ignores shape words. A hint that offered a shape
+        // the request would not send would be worse than no hint at all.
+        //
+        // The one case it cannot know is a chat that already shows a picture and
+        // has nothing attached: that turn may be an edit (a shape word dropped) or
+        // a generation (a shape word read). It reads words there -- which is the
+        // reading a composer with nothing attached most often wants -- and says
+        // that this one is conditional, because a promise the request may not keep
+        // is the exact failure the hint exists to prevent. A *spelled* size is
+        // never conditional: both readings send that one, so the hint can promise
+        // it outright.
+        function imageAttachmentIsPending() {
+            return !!(pendingAttachment && pendingAttachment.kind === 'image');
+        }
+
+        function imageSizeIsConditional(size) {
+            return !!(size && size.words) && !pendingAttachment && !!lastImageInMessages(messages, storedImageUrl);
+        }
+
+        function imageWorkIsPossible(text) {
+            if (!text) return false;
+            return !!pendingAttachment || imageAction(text, imageAttachmentIsPending(), imageMode) !== 'chat';
+        }
+
+        function updateImageSizeHint() {
+            const hint = document.getElementById('sizeHint');
+            // The panel shows the same reading while it is open, so the size of
+            // the picture you are about to ask for is visible in the place that
+            // also holds the switch that decides whether it is drawn at all.
+            const shape = document.getElementById('sessionImageShape');
+            if (!hint && !shape) return;
+            const text = chatInput ? String(chatInput.value || '') : '';
+            const size = imageWorkIsPossible(text)
+                ? imageSizeFromPrompt(text, { words: !imageAttachmentIsPending() })
+                : null;
+            const pixels = size ? imageSizeBody(size) : '';
+            const conditional = imageSizeIsConditional(size);
+            if (shape) {
+                shape.textContent = size
+                    ? 'These words are drawn at ' + size.label + ' — ' + pixels + '.'
+                        + (conditional ? ' A picture is already on screen, so this turn may edit it instead — and an edit keeps the shape it already has.' : '')
+                    : 'No shape named — the service picks.';
+            }
+            if (!hint) return;
+            if (!size) {
+                hint.hidden = true;
+                hint.textContent = '';
+                hint.removeAttribute('title');
+                return;
+            }
+            hint.textContent = size.label;
+            // The shape first, then the size it is asked for at: the shape is the
+            // part the app now delivers even when a service draws something else
+            // and it is cut to fit (see reframeToRequestedShape), so it is the
+            // part the hint can promise. The panel says the same sentence, in the
+            // same order, beside the switch that decides whether it is drawn.
+            hint.title = 'Drawn at ' + size.label + ' — ' + pixels + (conditional
+                ? ', if this makes a new picture: an edit of the one on screen keeps its own shape'
+                : '. Name a shape ("16:9", "1024x1024") to change it');
+            hint.setAttribute('aria-label', 'Image size ' + size.label + ', drawn at ' + pixels
+                + (conditional ? ' if this makes a new picture' : ''));
+            hint.hidden = false;
+        }
+
+        // A labelled switch in the session panel rather than an icon in the
+        // composer. The composer loses a control and the setting gains a name,
+        // which is the trade this surface makes everywhere: what you touch every
+        // message stays in the composer, what you decide once does not.
+        function setImageMode(on) {
+            imageMode = !!on;
+            const box = document.getElementById('imageModeSwitch');
+            if (box) box.checked = imageMode;
+            chatInput.placeholder = imageMode ? 'Describe an image to generate...' : 'Ask anything...';
+            // The switch decides whether a turn is image work, and that decides
+            // whether the size in these words is going to be used at all.
+            updateImageSizeHint();
+            updateSessionSummary();
+            updateCommandState();
+        }
+
+        function toggleImageMode() { setImageMode(!imageMode); }
+
+        function setDrawWithPuter(on) {
+            drawWithPuter = !!on;
+            rememberPreference(IMAGE_PUTER_KEY, drawWithPuter ? '1' : '');
+            const box = document.getElementById('imagePuterSwitch');
+            if (box) box.checked = drawWithPuter;
+            updateSessionSummary();
+        }
+
+        // The three first-run starters on the hero.
+        //
+        // Each one turns its subject on and puts the cursor where the next
+        // keystroke goes. A card that only described image mode would leave the
+        // reader to find the toggle; a card that turns it on has taught it by
+        // the time the first picture comes back. The status line says what
+        // changed, because a chip lighting up in the composer is a small enough
+        // change to miss from the middle of the screen.
+        function startImageTurn() {
+            if (!imageMode) toggleImageMode();
+            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
+            showStatus('info', 'Image mode on — describe the picture you want');
+        }
+
+        function startPlanTurn() {
+            if (selectedMode !== 'plan') {
+                selectedMode = 'plan';
+                rememberPreference('freeopenaiMode', selectedMode);
+                updateModeChip();
+            }
+            // Plan mode carries skills, so the library is fetched now rather than
+            // mid-first-request.
+            ensureSkillsLoaded();
+            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
+            showStatus('info', 'Plan mode — it investigates and proposes a plan, and changes nothing');
+        }
+
+        // Opening the picker waits on the skill library, which is a network fetch
+        // that can take seconds — so the wait is announced before it starts
+        // rather than after it ends. Without this, the first thing a new reader
+        // sees on clicking "Add a skill" is nothing at all.
+        async function startSkillBrowse() {
+            showStatus('info', 'Loading the skill library…');
+            try {
+                await ensureSkillsLoaded();
+            } catch (error) {
+                showStatus('error', 'The skill library could not be opened — try again in a moment');
+                console.error('Skill library failed to load:', error);
+                return;
+            }
+            openSessionPanel('skills');
+            const count = skillsCatalog.length;
+            if (count) showStatus('success', `${count} skills — pick one to pin it to this chat`);
+            else showStatus('error', skillsStatusText || 'The skill library is empty — set GITHUB_TOKEN to raise GitHub\'s hourly limit');
+        }
+
+        function setComposerBusy(busy) {
+            isTyping = busy;
+            updateCommandState();
+            sendButton.disabled = false;
+            if (busy) {
+                sendButton.textContent = '■';
+                sendButton.classList.add('stop');
+                sendButton.setAttribute('aria-label', 'Stop generation');
+            } else {
+                sendButton.disabled = !chatInput.value.trim();
+                sendButton.textContent = '→';
+                sendButton.classList.remove('stop');
+                sendButton.setAttribute('aria-label', 'Send message');
+            }
+        }
+
+        function abortError() {
+            const error = new Error('Generation stopped');
+            error.name = 'AbortError';
+            return error;
+        }
+
+        function isActiveRun(runId, controller) {
+            return runId === generationId && controller && !controller.signal.aborted;
+        }
+
+        function releaseRun(controller) {
+            // A stopped request can finish after a new request has started. It
+            // must not clear the newer request's controller or stop button.
+            if (currentAbort === controller) {
+                currentAbort = null;
+                setComposerBusy(false);
+            }
+        }
+
+        // The run a tapped control starts: the four things the composer sets up
+        // before an image request, so a retry started from a note is a turn like
+        // any other -- the stop button stops it and the composer is busy while it
+        // runs. The runner itself releases it when it ends.
+        function startImageRun() {
+            const controller = new AbortController();
+            const runId = ++generationId;
+            currentAbort = controller;
+            setComposerBusy(true);
+            showTypingIndicator();
+            return { runId, controller };
+        }
+
+        function stopGeneration() {
+            if (!isTyping) return;
+            generationId += 1;
+            currentAbort?.abort();
+            removeTypingIndicator();
+            setComposerBusy(false);
+            showStatus('info', 'Generation stopped');
+        }
+
+        function createStreamRenderer(bubble) {
+            let full = '';
+            let reasoning = '';
+            let renderTimer = null;
+            let cadence = STREAM_RENDER_MIN_MS;
+            let writing = false;
+            function scheduleFlush() {
+                if (renderTimer) return;
+                renderTimer = setTimeout(() => {
+                    renderTimer = null;
+                    const startedAt = Date.now();
+                    setMessageContent(bubble, full);
+                    if (reasoning) setReasoningStrip(bubble, reasoning);
+                    scrollTranscript('follow');
+                    // Every flush re-renders the whole reply, so the cost of one
+                    // grows with the reply; the interval follows that cost.
+                    cadence = nextStreamCadence(Date.now() - startedAt, cadence);
+                }, cadence);
+            }
+            return {
+                appendText(chunk) {
+                    if (!chunk) return;
+                    full += chunk;
+                    // The dots say "busy", which is the same for a two-second
+                    // lookup and a stuck provider; the label says what is
+                    // happening, and this is when the writing starts.
+                    if (!writing) { writing = true; setActivity('Writing the reply…'); }
+                    scheduleFlush();
+                },
+                appendReasoning(chunk) { if (chunk) { reasoning += chunk; scheduleFlush(); } },
+                flush() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } setMessageContent(bubble, full); if (reasoning) setReasoningStrip(bubble, reasoning); scrollTranscript('follow'); },
+                abort() { if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; } },
+                get full() { return full; },
+                get reasoning() { return reasoning; },
+            };
+        }
+
+        async function sendMessage() {
+            const raw = chatInput.value.trim();
+            if (!raw || isTyping) return;
+            if (Date.now() - lastSendAt < SEND_CLICK_WINDOW_MS) return;
+            lastSendAt = Date.now();
+            // Only a turn that actually needs Puter is held up by Puter: a
+            // direct provider was previously unreachable without a Puter
+            // account, which its own error named as a Puter problem.
+            if (needsPuterLogin() && !puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
+            if (needsPuterLogin() && puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
+                // Said once. Every Send while it stands used to add another copy
+                // of this line, so a user who tried twice got a transcript of the
+                // same refusal -- and the advice named an icon that is not on
+                // screen: the sign-in lives in the chat drawer's footer, and the
+                // provider menu is the way past Puter entirely.
+                const notice = 'Puter needs an account before it can answer. Sign in with the account button in the chat drawer, or pick another provider in the model menu.';
+                const last = messages[messages.length - 1];
+                if (!last || last.type !== 'system' || last.content !== notice) addMessage('system', notice, { error: true });
+                return;
+            }
+
+            // A command is answered here and never sent to a model: there is
+            // nothing to bill for opening the skill picker. Anything that is not
+            // a command falls through and is sent as the message it is.
+            const commandReply = await resolveComposerCommand(raw);
+            if (commandReply !== null) {
+                addMessage('user', raw);
+                chatInput.value = '';
+                chatInput.style.height = '36px';
+                updateImageSizeHint();
+                if (commandReply) addMessage('system', commandReply);
+                persistMessages();
+                return;
+            }
+
+            // Attachment state must be read before the image decision: these
+            // consts are declared above imageAction on purpose — using a let/
+            // const before its declaration is a ReferenceError (the TDZ), and
+            // that exact bug once made Enter and the send button dead.
+            const attachedImageFile = pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.file : null;
+            const hadAttachment = !!pendingAttachment;
+            let outgoing = raw;
+            if (pendingAttachment && pendingAttachment.kind === 'text') {
+                outgoing += `\n\n--- Attached: ${pendingAttachment.name} ---\n${pendingAttachment.content}`;
+            }
+
+            // The deterministic half of the decision, from chatlib: an attached
+            // image makes any image request an edit of that image, never a fresh
+            // text-to-image generation -- which is how "change the color of my
+            // car" drew a poster of a car instead of editing the picture. The
+            // model's own reading is asked for below and may only sharpen this.
+            const forcedByToggle = !!imageMode;
+            const fallbackAction = imageAction(raw, !!attachedImageFile, imageMode);
+            // The newest picture this chat already shows, which is what a follow-up
+            // like "now make it look warmer" is about. Without it multi-turn
+            // editing is impossible: no image service hands a model a picture the
+            // client cannot name, and re-attaching your own output by hand is not
+            // something anyone does.
+            const previousImage = lastImageInMessages(messages, storedImageUrl);
+            if (imageMode) toggleImageMode();
+
+            addMessage('user', raw);
+            clearAttachment();
+            // The offer belonged to the text being written, and that text has
+            // been sent: leaving the chip up would offer a skill for the next
+            // message on the evidence of the last one.
+            setSkillSuggestion(null);
+            chatInput.value = '';
+            chatInput.style.height = '36px';
+            updateImageSizeHint();
+            setComposerBusy(true);
+            const runId = ++generationId;
+            const controller = new AbortController();
+            currentAbort = controller;
+            showTypingIndicator();
+            // Held so a failure can keep what the tool loop already paid for.
+            let inFlightConvo = null;
+
+            // The planner is consulted only for a turn that could plausibly be
+            // image work -- something attached, a picture already in the chat, a
+            // plain-language draw request, or the image toggle -- so an ordinary
+            // chat message never pays for the extra call. Its answer is best
+            // effort: no plan means the keyword decision stands.
+            //
+            // The picture already in the chat is the whole reason "now make the
+            // sky pink" can become an edit: no keyword reads that as one, so
+            // leaving this gate on the keywords alone sent a follow-up about the
+            // picture on screen to a vision chat that could only describe it.
+            let plan = null;
+            if (fallbackAction !== 'chat' || attachedImageFile || previousImage) {
+                setActivity('Reading the request…');
+                try {
+                    plan = await planImageTurn(raw, {
+                        hasImage: !!attachedImageFile,
+                        hasPreviousImage: !!previousImage,
+                        signal: controller.signal,
+                    });
+                } catch (error) {
+                    if (error && error.name === 'AbortError') {
+                        removeTypingIndicator();
+                        showStatus('info', 'Stopped');
+                        releaseRun(controller);
+                        return;
+                    }
+                    // A planner that failed for any other reason is no plan: the
+                    // keyword decision below is still a good answer.
+                    plan = null;
+                }
+                if (!isActiveRun(runId, controller)) return;
+            }
+            const actionTaken = resolveImageAction(fallbackAction, plan, {
+                hasImage: !!attachedImageFile,
+                hasPreviousImage: !!previousImage,
+                forced: forcedByToggle,
+            });
+            // What the image model is told. The planner's rewrite is the prompt
+            // the image model receives, ChatGPT style, because "make it warmer"
+            // reaches a text-to-image model with nothing to warm; the user's own
+            // words are the fallback whenever there is no rewrite.
+            const imagePrompt = plan && plan.prompt ? plan.prompt : raw;
+
+            if (actionTaken === 'edit') {
+                if (attachedImageFile) {
+                    let source = '';
+                    try {
+                        source = await imageEditSource(attachedImageFile, controller.signal);
+                    } catch (error) {
+                        removeTypingIndicator();
+                        if (error && error.name === 'AbortError') {
+                            showStatus('info', 'Stopped');
+                            releaseRun(controller);
+                            return;
+                        }
+                        // Drawing a fresh picture here would be the exact bug this
+                        // path exists to prevent, so it reports instead.
+                        const detail = String((error && error.message) || error);
+                        showStatus('error', 'Failed: ' + detail);
+                        addMessage('system', 'Error editing image: ' + detail, { error: true });
+                        releaseRun(controller);
+                        return;
+                    }
+                    if (!isActiveRun(runId, controller)) return;
+                    await sendImageEdit(imagePrompt, source, runId, controller, { sizeFrom: raw, request: raw });
+                    return;
+                }
+                // No attachment, so the edit is of the picture this chat already
+                // shows. Named on screen, so the result is not a surprise.
+                if (previousImage) {
+                    addMessage('system', 'Editing the last image in this chat.');
+                    await sendImageEdit(imagePrompt, previousImage.url, runId, controller, { sourceLabel: 'the last image', sizeFrom: raw, request: raw });
+                    return;
+                }
+            }
+            if (actionTaken === 'generate') {
+                await sendImageGeneration(imagePrompt, runId, controller, { sizeFrom: raw, request: raw });
+                return;
+            }
+
+            try {
+            usageCount++;
+            updateUsageDisplay();
+            turnStartedAt = Date.now();
+            // Fresh turn, fresh routing state: a flag left over from the last turn
+            // would move a step of this one for no reason.
+            routeNotedThisTurn = false;
+            escalateNextStep = false;
+            toolResultsSeen = 0;
+            escalatedBlankThisTurn = false;
+            lastReplyModel = null;
+            maybeWarnAboutCost();
+            // What the server already knows about the provider this turn is about
+            // to use -- a cooldown, or a free tier close to its cap -- said before
+            // the turn rather than by the failure it causes.
+            noteProviderHealth().catch(() => {});
+
+                const chatModel = attachedImageFile && !isVisionCapable(selectedModel) ? DEFAULT_VISION_MODEL : selectedModel;
+
+                // Tool calls need a message array to carry results back, so any
+                // turn with tools goes through the loop (non-streaming). Web
+                // research rides every turn with no account; repo tools join
+                // when GitHub is connected. An image attachment keeps the plain
+                // path since the image argument has no place in a message array.
+                if (!attachedImageFile) {
+                    // The mode decides the surface, not the prompt: Plan is
+                    // read-only because the write tools are not in the request at
+                    // all, which is the one version of "this mode changes nothing"
+                    // that holds against a model with a tool in front of it.
+                    const offered = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
+                    if (githubConnected) offered.push(...GITHUB_TOOLS);
+                    // Only when this server actually runs them. The refusal below
+                    // is still there for a server that changes its mind mid-session.
+                    if (serverRunReady) offered.push(...RUN_TOOLS);
+                    // Remembering is offered whenever the chat has it on (the
+                    // default): the model only writes a fact it was given or
+                    // asked to keep, and the Memory tab is where it is undone.
+                    if (shareMemory.onForChat(activeConversationId)) offered.push(MEMORY_TOOL);
+                    let tools = toolsForMode(selectedMode, offered);
+                    // Skills ride along: whatever this chat pinned, plus what the
+                    // router picks when auto-skills are on and the mode allows it.
+                    // A pinned skill applies in Chat mode too -- that is the point
+                    // of pinning it -- so the catalogue is loaded whenever either
+                    // half could produce something. A plain chat with nothing
+                    // pinned never touches the library.
+                    let activeSkills = null;
+                    const learnedSkills = learnedSkillNames(skillUsage);
+                    if (activeSkillNames.length || learnedSkills.length || (skillsEnabled && selectedMode !== 'chat')) {
+                        const catalog = await ensureSkillsLoaded();
+                        if (activeSkillNames.length && !catalog.length) {
+                            addMessage('system', 'The skill library could not be loaded, so the pinned skills are not applying to this request.');
+                        }
+                        activeSkills = skillsForTurn({
+                            mode: selectedMode,
+                            skillsEnabled,
+                            requestText: outgoing,
+                            active: activeSkillNames,
+                            catalog,
+                        });
+                        if (activeSkills.length) {
+                            // A skill that declares allowed-tools narrows the
+                            // turn to those function names (union across
+                            // declaring skills; the rest abstain). Filtered
+                            // before use_skill joins, so the loader itself is
+                            // never filtered out.
+                            tools = filterToolsBySkills(tools, activeSkills);
+                            // The loader is a tool like any other, so the mode's
+                            // surface decides it: Chat mode runs pinned skills
+                            // without offering the model a way to go shopping for
+                            // more, and Plan and Build can browse the library.
+                            if (modeAllowsTool(selectedMode, USE_SKILL_TOOL.function.name)) tools.push(USE_SKILL_TOOL);
+                            logSkillsUsed(activeConversationId, activeSkills);
+                        }
+                    }
+                    // A turn that stopped part-way can be picked back up: the
+                    // question is the same, so the lookups already paid for are
+                    // still the right ones. Anything else starts clean, and drops
+                    // whatever the previous question left behind.
+                    const stored = readPendingTurn();
+                    const resuming = stored && stored.question === raw ? stored : null;
+                    if (stored && !resuming) clearPendingTurn();
+                    let turnConvo = resuming ? resuming.convo : buildConversation(outgoing, activeSkills);
+                    const memo = toolMemoFor(raw);
+                    const remembered = readMemoryFor(activeConversationId);
+                    if (resuming) {
+                        // One continuation line, however many times it is resumed.
+                        const last = turnConvo[turnConvo.length - 1];
+                        if (!last || last.content !== RESUME_CONTINUATION_PROMPT) {
+                            turnConvo.push({ role: 'user', content: RESUME_CONTINUATION_PROMPT });
+                        }
+                        // Rebuilt from the conversation, so the steps already done
+                        // are not bought a second time -- even after a reload.
+                        seedToolMemo(memo, turnConvo, remembered);
+                        addMessage('system', 'Resuming the interrupted request — ' + resuming.steps + ' tool step(s) already done');
+                    }
+                    inFlightConvo = turnConvo;
+                    // A provider that dies half-way through takes a paid-for turn
+                    // with it, so the same request is carried to another one
+                    // rather than ending in an error the user cannot act on.
+                    const blockedProviders = new Set([selectedProvider, ...providersSuspended]);
+                    let outcome = null;
+                    let hops = 0;
+                    while (!outcome) {
+                        try {
+                            outcome = await runChatWithTools(turnConvo, selectedModel, tools, controller.signal, memo, remembered, !!attachedImageFile);
+                        } catch (turnError) {
+                            if (controller.signal.aborted || (turnError && turnError.name === 'AbortError')) throw turnError;
+                            // Recorded before anything moves: a failure has to name
+                            // the provider it actually happened on, not the one the
+                            // request was carried to afterwards.
+                            if (turnError && !turnError.providerId) turnError.providerId = selectedProvider;
+                            hops += 1;
+                            // Only failures another provider could plausibly answer:
+                            // an outage, a spent allowance, a refused account. A model
+                            // that refused is a model problem, and the walker inside
+                            // callModel has already tried its siblings.
+                            const worthy = isFailoverWorthyFailure(
+                                turnError && turnError.message,
+                                turnError && turnError.statusCode,
+                                turnError && turnError.modelId
+                            );
+                            const moved = hops <= MAX_PROVIDER_FAILOVERS && worthy
+                                ? await moveTurnToNextProvider(blockedProviders, turnError)
+                                : null;
+                            if (!moved) throw turnError;
+                            // A model without tool support cannot be handed a
+                            // conversation full of tool calls, so the work already
+                            // done is folded into text it can read.
+                            const nowChosen = providerModels.find((m) => m.id === selectedModel);
+                            if (nowChosen && nowChosen.tools === false) {
+                                turnConvo = flattenToolTurn(turnConvo);
+                                tools = [];
+                                inFlightConvo = turnConvo;
+                                addMessage('system', 'The model now answering cannot call tools, so the steps already done were folded into the request as text.');
+                            }
+                        }
+                    }
+                    const { message, exhausted, finishReason } = outcome;
+                    if (!isActiveRun(runId, controller)) return;
+                    if (activeSkills && activeSkills.length) {
+                        addMessage('system', 'Skills applied: ' + activeSkills.map((s) => s.name).join(', '));
+                    }
+                    removeTypingIndicator();
+                    if (exhausted) {
+                        addMessage('system', `Reached ${toolRoundsForMode(selectedMode)} tool steps, so it stopped there and summarised. Ask a follow-up to carry on.`);
+                    }
+                    const reasoning = extractMessageReasoning(message);
+                    let text = extractMessageText(message);
+                    if (!text) {
+                        // Some reasoning models put everything in the thinking
+                        // field and leave content empty. That is an answer, so
+                        // show it rather than reporting nothing.
+                        text = reasoning || explainEmptyReply(message, finishReason);
+                    }
+                    addMessage('bot', text, {
+                        retryText: raw,
+                        attachmentLost: hadAttachment,
+                        reasoning: text === reasoning ? '' : reasoning,
+                    });
+                    noteTurnStats(text.length);
+                    releaseToolMemo();
+                    clearPendingTurn();
+                    showStatus('success', 'Sent');
+                    return;
+                }
+
+                // Direct providers stream via SSE so the user sees text arrive
+                // token-by-token rather than waiting for the full reply.
+                if (selectedProvider !== PUTER_PROVIDER) {
+                    // An image has to be carried in the message array here, and
+                    // only a model that can read it should get the turn.
+                    let convo = buildConversation(outgoing);
+                    // Held outside the branch below, because a hop to another
+                    // provider has to rebuild the turn with the same picture.
+                    let imageUrl = null;
+                    if (attachedImageFile) {
+                        imageUrl = await imageDataUrlForRequest(attachedImageFile);
+                        if (!imageUrl) {
+                            removeTypingIndicator();
+                            addMessage('system', 'That image could not be sent here — try a smaller one.', { error: true });
+                            return;
+                        }
+                        if (!insistOnImageModel()) {
+                            removeTypingIndicator();
+                            addMessage('system', `No model on ${selectedProvider} can read images. Remove the picture, or switch provider.`, { error: true });
+                            return;
+                        }
+                        convo = withImageTurn(convo, imageUrl, outgoing);
+                    }
+                    // An image turn is the one path that cannot use the agent
+                    // loop, and it was also the one path with no rescue: a
+                    // provider that died here ended the turn outright, so a photo
+                    // attached to a request that met a spent free tier lost the
+                    // work while an identical text turn would have been carried
+                    // to another provider. Same hop, same bookkeeping.
+                    let bubble = null;
+                    let renderer = null;
+                    let partial = null;
+                    const blockedProviders = new Set([selectedProvider, ...providersSuspended]);
+                    for (let hop = 0; hop <= MAX_PROVIDER_FAILOVERS; hop++) {
+                        bubble = createBotBubble();
+                        renderer = createStreamRenderer(bubble);
+                        try {
+                            partial = await streamProviderChat(convo, renderer, controller.signal, bubble);
+                            break;
+                        } catch (error) {
+                            removeTypingIndicator();
+                            renderer.abort();
+                            // Aborted or failed with no content — discard the empty bubble.
+                            if (!renderer.full && bubble.parentNode) bubble.remove();
+                            if (error.name === 'AbortError' || !isActiveRun(runId, controller)) {
+                                showStatus('info', 'Generation stopped');
+                                return;
+                            }
+                            // The test the tool loop already applies: an outage, a
+                            // spent allowance or a refused account belongs to
+                            // another provider, while a refused model does not.
+                            if (!isFailoverWorthyFailure(error.message, error.statusCode, error.modelId)) throw error;
+                            const moved = await moveTurnToNextProvider(blockedProviders, error);
+                            if (!moved) throw error;
+                            // The next provider has its own catalogue, so the
+                            // model that answers is a different one -- and the
+                            // picture has to be readable there too.
+                            if (!insistOnImageModel()) throw new Error(providerLabel(moved) + ' has no model that can read images.');
+                            convo = withImageTurn(buildConversation(outgoing), imageUrl, outgoing);
+                        }
+                    }
+                    if (!isActiveRun(runId, controller)) {
+                        renderer.abort();
+                        if (bubble.parentNode) bubble.remove();
+                        return;
+                    }
+                    removeTypingIndicator();
+                    // A partial ending already finalized its bubble and set
+                    // the status; finalizing again would double the message.
+                    if (partial) {
+                        noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
+                        return;
+                    }
+                    finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length, renderer.usage || 0, renderer.cached || 0);
+                    showStatus('success', 'Sent');
+                    return;
+                }
+
+                // Puter streaming path.
+                const response = await chatWithEffortFallback(chatModel, (opts) =>
+                    attachedImageFile
+                        // An image rides as its own argument, which has no
+                        // place in a message array, so that stays single.
+                        ? puter.ai.chat(outgoing, attachedImageFile, { ...opts, stream: true })
+                        : puter.ai.chat(buildConversation(outgoing), { ...opts, stream: true })
+                );
+                if (!isActiveRun(runId, controller)) return;
+                removeTypingIndicator();
+
+                if (response && typeof response[Symbol.asyncIterator] === 'function') {
+                    const bubble = createBotBubble();
+                    const renderer = createStreamRenderer(bubble);
+                    for await (const part of response) {
+                        if (!isActiveRun(runId, controller)) {
+                            renderer.abort();
+                            if (bubble.parentNode) bubble.remove();
+                            return;
+                        }
+                        const think = extractReasoning(part);
+                        renderer.appendReasoning(think);
+                        const isReasoningPart = part && typeof part !== 'string' && (part.type === 'reasoning' || part.type === 'thinking');
+                        const chunk = typeof part === 'string' ? part : (!isReasoningPart && part && part.text) || '';
+                        renderer.appendText(chunk);
+                    }
+                    renderer.flush();
+                    finalizeMessage(bubble, renderer.full, raw, hadAttachment, renderer.reasoning);
+                    noteTurnStats(renderer.full.length);
+                } else {
+                    const text = typeof response === 'string'
+                        ? response
+                        : extractMessageText(response.message)
+                          || response.text
+                          || extractMessageReasoning(response.message)
+                          || explainEmptyReply(response.message, response.finishReason);
+                    const reasoning = extractMessageReasoning(response && response.message);
+                    addMessage('bot', text, { retryText: raw, attachmentLost: hadAttachment, reasoning });
+                    noteTurnStats(text.length);
+                }
+
+                showStatus('success', 'Sent');
+            } catch (error) {
+                removeTypingIndicator();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    // Stopping is not failing: the lookups already done are still
+                    // worth keeping, so Retry carries on from here rather than
+                    // paying for them again.
+                    noteInterruptedTurn(raw, inFlightConvo);
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
+                console.error('Chat request failed:', error);
+                // The credit advice is about Puter's allowance specifically. Shown
+                // for a Nara or OpenRouter failure it sends the user to the
+                // wrong dashboard entirely, which is what it did.
+                if ((error.providerId || selectedProvider) === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                    showStatus('error', 'Out of Puter credits');
+                    addMessage('system', outOfCreditsAdvice(), { error: true });
+                } else {
+                    // Name the provider and model that actually failed. Reading
+                    // the current selection here named a model the app never
+                    // called, because a refusal moves the picker before throwing.
+                    showStatus('error', 'Failed: ' + error.message);
+                    const failedOn = (error.providerId || selectedProvider) + '/' + (error.modelId || selectedModel);
+                    addMessage('system', `Error (${failedOn}): ` + error.message, { error: true });
+                }
+                // After the failure itself, so the state of the work kept reads
+                // as the answer to it.
+                noteInterruptedTurn(raw, inFlightConvo);
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
+        // Running out of credits isn't a fault to debug, so say what happened
+        // and what actually reduces the burn.
+        function outOfCreditsAdvice() {
+            return [
+                "Your Puter account is out of credits, so the model didn't run.",
+                '',
+                'Puter bills whoever is signed in, not this app. Check the balance at puter.com/dashboard under Usage.',
+                '',
+                'What costs the most, in order:',
+                '- Top-tier models (Claude Opus 5, GPT-6 Astra) versus Haiku, Nano or 4o Mini',
+                '- High and extra-high reasoning effort versus the default',
+                '- GitHub work in chat, where every step the model takes is another request',
+            ].join('\n');
+        }
+
+        // Warned once per combination, so it informs without nagging.
+        const costWarningsShown = new Set();
+
+        function maybeWarnAboutCost() {
+            const warning = estimateCostWarning(selectedModel, selectedEffort, githubConnected);
+            if (!warning || costWarningsShown.has(warning)) return;
+            costWarningsShown.add(warning);
+            showStatus('info', warning);
+        }
+
+        // Which image models each kind of work is asked of, and at what quality,
+        // is named once in chatlib (imageModelsFor / IMAGE_QUALITY) so the page,
+        // the server defaults and the tests cannot drift apart.
+
+        function puterCanDraw() {
+            return typeof puter !== 'undefined' && !!puter.ai &&
+                (!puter.auth || typeof puter.auth.isSignedIn !== 'function' || puter.auth.isSignedIn());
+        }
+
+        // The one small model call that decides what an image-ish turn is and
+        // writes the prompt the image model receives. ChatGPT does both of those
+        // with the model, and that is the difference that matters here: "make the
+        // sky purple" matched no verb-and-noun pair in the keyword rules, so with
+        // a photo attached it fell through to a vision answer *about* the photo
+        // and never reached an image model at all.
+        //
+        // Best effort by design. Any failure -- a provider that rejects the
+        // shape, a timeout, prose instead of JSON -- returns null and leaves the
+        // deterministic decision in charge, which is what the keyword rules are
+        // for. The picture is not attached to this call: the planner reads the
+        // request, and a planner that needed a vision model would switch the user
+        // off their chosen model to decide something a sentence already says.
+        async function planImageTurn(text, context = {}) {
+            const lines = [
+                context.hasImage ? 'The user attached a picture to this message.' : 'The user attached no picture to this message.',
+                context.hasPreviousImage
+                    ? 'A picture the assistant drew earlier is already on screen in this chat.'
+                    : 'No earlier picture exists in this chat.',
+                context.mask ? 'The user also painted a region of the picture to change.' : '',
+                '',
+                'The request:',
+                text,
+            ].filter((line) => line !== '');
+            try {
+                const convo = [
+                    { role: 'system', content: IMAGE_PLANNER_PROMPT },
+                    { role: 'user', content: lines.join('\n') },
+                ];
+                // A planner that fails is no plan and the keyword decision
+                // stands, so a cheap model here risks nothing the caller does not
+                // already handle.
+                const route = routeForPlanner();
+                const response = await callModel(convo, {}, context.signal || null, route ? route.model : null);
+                return parseImagePlan(extractMessageText((response && response.message) || null));
+            } catch (error) {
+                if (error && error.name === 'AbortError') throw error;
+                return null;
+            }
+        }
+
+        // The prompt the image model will actually be given: the planner's
+        // rewrite when there is one, and the user's own words when there is not.
+        // A planner that answers without a prompt is not a reason to send an
+        // empty one.
+        async function plannedImagePrompt(text, context = {}) {
+            const plan = await planImageTurn(text, context);
+            return plan && plan.prompt ? plan.prompt : text;
+        }
+
+        // The source for an image edit. An attachment is re-encoded to fit the
+        // endpoint; the request always carries the source, so the model is
+        // never asked to imagine what "the attached image" looked like.
+        async function imageEditSource(attachedFile, signal) {
+            if (!attachedFile) throw new Error('no image to edit');
+            const dataUrl = await imageDataUrlForRequest(attachedFile);
+            if (!dataUrl) throw new Error('that image could not be read — try a smaller one');
+            return dataUrl;
+        }
+
+        // What Puter is asked for, per kind of work.
+        //
+        // An edit and a generation are different requests, not the same one with
+        // an extra field. Edits carry the source picture through input_images,
+        // which Puter's docs name as the field that routes a request through the
+        // image *edit* endpoint; the single-image shorthand (input_image) is one
+        // step removed from that guarantee, and a shorthand that quietly fell
+        // back to text-to-image would hand back a plausible new picture where an
+        // edit was asked for -- a failure that looks like success, which is the
+        // worst kind. quality is set explicitly because Puter draws at "low"
+        // when nothing asks for better, and nothing did.
+        // The size a request was drawn at is asked for through `ratio`, which is
+        // the one size field every Puter image provider documents. A pixel pair
+        // is not: each provider has its own vocabulary there, and an option one
+        // of them does not recognise is a failed draw rather than an ignored
+        // setting -- which is why the width/height a Together model would take is
+        // not sent to the OpenAI and Gemini models it would break.
+        function puterImageArgs(kind, opts, sourceDataUrl) {
+            const args = { model: opts.model, quality: opts.quality };
+            if (opts.ratio) args.ratio = opts.ratio;
+            if (kind === 'edit') args.input_images = [sourceDataUrl];
+            return args;
+        }
+
+        // Whether the picture is the shape that was asked for -- measured, not
+        // assumed.
+        //
+        // This is the other half of reading a size out of the prompt: a service
+        // that rounds 3:2 onto a square grid used to leave the user holding a
+        // square with nothing on screen saying they had asked for anything else.
+        // Puter hands back an element whose natural size is already known; the
+        // route's answer has to be read, which costs one decode of a picture the
+        // browser is about to show anyway.
+        async function noteDrawnSize(outcome, size, src, natural) {
+            if (!size || !outcome) return;
+            const measured = natural && natural.width ? natural : await imageDimensionsOf(src);
+            const said = describeDrawnSize(size, measured.width, measured.height);
+            if (said && !outcome.notes.includes(said)) outcome.notes.push(said);
+        }
+
+        // The picture the request described, cut out of the picture that came
+        // back.
+        //
+        // The shape is the one part of an image request a layout cannot work
+        // around: a square is not a banner, and no later step can give it back.
+        // Every service is asked for the shape and some ignore it, which used to
+        // be the end of the promise -- the app measured the result, said "drawn
+        // 1:1" on the status line and handed over the square. A 1024x1024 drawing
+        // for a 16:9 request already contains a 1024x576 picture, so that picture
+        // is cut out here and the sentence says which shape the picture now has
+        // rather than only the shape it arrived as.
+        //
+        // Nothing is upscaled and nothing is padded, so a service that draws
+        // small still draws small -- it just draws the shape that was asked for.
+        // The cut is made once, in the format the picture arrived in, and only
+        // when there is a cut to make: everything downstream (the transcript, the
+        // gallery, all three downloads, the PDF page) then measures the same
+        // picture, which is why this belongs here and not in each of them. When
+        // the cut cannot be made the original is kept untouched, because a square
+        // picture beats no picture.
+        async function reframeToRequestedShape(url, size, outcome) {
+            if (!url || !size || !outcome) return url;
+            const drawn = await imageDimensionsOf(url);
+            const cut = reframePlan(size, drawn.width, drawn.height);
+            if (!cut) {
+                // The right shape already, or too small a sliver to cut: say what
+                // it is, which is all that could be done before.
+                await noteDrawnSize(outcome, size, url, drawn);
+                return url;
+            }
+            try {
+                // No matte: the cut is written back in the format it arrived in,
+                // so a transparent PNG stays one instead of being flattened onto
+                // white to satisfy a JPEG it is not going to become.
+                const framed = await canvasFromImage(url, false, cut);
+                const jpeg = /^image\/jpeg$/.test(framed.type);
+                const shaped = framed.canvas.toDataURL(jpeg ? 'image/jpeg' : 'image/png', 0.95);
+                if (!shaped) throw new Error('the cut produced nothing');
+                // The sentence replaces whatever the route said about size: the
+                // shape it named is not the shape this picture has now, and both
+                // at once would be two sentences about one answer. Replaced in
+                // place, because this array may be the caller's -- assigning a
+                // filtered copy over it would report a size swap nobody reads.
+                const kept = outcome.notes.filter((note) => !/^asked for .+ draws /.test(note));
+                outcome.notes.splice(0, outcome.notes.length, ...kept);
+                outcome.notes.push(describeDrawnSize(size, drawn.width, drawn.height, cut));
+                return shaped;
+            } catch {
+                // A cut that could not be made is a size that could not be
+                // delivered, and that is still worth saying out loud.
+                await noteDrawnSize(outcome, size, url, drawn);
+                return url;
+            }
+        }
+
+        // One place that produces an image, so the composer, the variations
+        // button and the brush editor cannot drift apart.
+        //
+        // The conversation's own service draws first, then the other one: a
+        // request for a picture is still a request to whoever is answering the
+        // chat, and without that second backend a chat on a direct provider had
+        // no way to draw at all -- it reported Puter's "not signed in", which
+        // names the wrong problem entirely.
+        //
+        // A painted brush mask reverses that order, because a mask is the one
+        // thing only the server route can express -- Puter's image options have
+        // no mask field at all. That is what made the brush editor look broken to
+        // anyone signed in to Puter and holding no Nara key: it went straight at
+        // the route, and the route refused for want of a model alias. When the
+        // route does refuse, the brush is dropped and Puter is asked without it
+        // rather than returning no picture at all -- and the caller is told, on
+        // options.notes, so the drop is a sentence on screen instead of a
+        // silent difference in the result.
+        async function imageSourceFrom(kind, promptText, sourceDataUrl, signal, opts) {
+            const options = opts || {};
+            // Where the caller's notes and the drawing service's name go. The
+            // caller's own `outcome` is preferred so the object it reads after
+            // this returns is the one that was written to -- a report that lands
+            // on a copy nobody reads is the same as no report at all.
+            const outcome = options.outcome && Array.isArray(options.outcome.notes) ? options.outcome : options;
+            if (!Array.isArray(outcome.notes)) outcome.notes = [];
+            const errors = { puterError: '', serverError: '', refused: false };
+            const order = imageBackendsForTurn(options);
+            // The size the prompt asks for, read here because there is no size
+            // control to read it from: "a 16:9 banner" is how the request is
+            // written, and a request that carries no dimensions is answered with
+            // each service's own default, which is the square nobody asked for.
+            //
+            // An edit reads only what was spelled out. Shape words are left to
+            // generations, because "make the poster blue" is about a picture that
+            // already exists and reshaping it would crop what was not asked about.
+            //
+            // Read from the user's own words when the caller passes them, because
+            // the prompt that reaches the image model may be the planner's rewrite
+            // of it -- and a rewrite that drops the ratio is not a reason to draw
+            // something else. This is also the text the composer's size hint reads,
+            // so what the hint promises and what the request sends cannot disagree.
+            let size = imageSizeFromPrompt(options.sizeFrom || promptText, { words: kind !== 'edit' });
+            // For edits, when no size is spelled out, preserve the source image's
+            // own dimensions -- "make the sky purple" is about a picture that
+            // already exists, and reshaping it would crop what was not asked about.
+            // A generation with no dimensions falls through to the service default
+            // (a square nobody asked for); an edit never should.
+            if (kind === 'edit' && !size && sourceDataUrl) {
+                try {
+                    const dims = await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+                        img.onerror = () => reject(new Error('could not measure source'));
+                        img.src = sourceDataUrl;
+                    });
+                    if (dims.width >= 64 && dims.height >= 64) {
+                        size = {
+                            id: 'source',
+                            label: imageRatioLabel(dims.width, dims.height),
+                            width: dims.width,
+                            height: dims.height,
+                            ratio: { w: dims.width, h: dims.height },
+                        };
+                    }
+                } catch { /* service default is the only fallback left */ }
+            }
+            // Which service the conversation is on, when it is not Puter. Sent as a
+            // preference rather than a pin: the route asks that service first and
+            // keeps the rest of its order behind it, so a model that turns out not
+            // to draw is one free 400 rather than a dead end.
+            const chatOnServer = selectedProvider !== PUTER_PROVIDER;
+            for (const backend of order) {
+                if (backend === 'puter') {
+                    if (options.mask && errors.serverError) {
+                        outcome.notes.push('the brush mask was dropped — Puter cannot take one');
+                    }
+                    for (const model of imageModelsFor(kind)) {
+                        try {
+                            const args = puterImageArgs(kind, { model, quality: IMAGE_QUALITY, ratio: imageRatioBody(size) }, sourceDataUrl);
+                            const imgEl = await puter.ai.txt2img(promptText, args);
+                            if (imgEl && imgEl.src) {
+                                outcome.drewWith = 'Puter';
+                                // The element is what Puter drew; sizes it cannot
+                                // honour are fixed on the way out, exactly as they
+                                // are for the route.
+                                return [await reframeToRequestedShape(imgEl.src, size, outcome)];
+                            }
+                            errors.puterError = 'returned no image';
+                        } catch (error) {
+                            if (error && error.name === 'AbortError') throw error;
+                            errors.puterError = String((error && error.message) || error);
+                            // Two answers are the same for every model, so asking
+                            // the rest can only buy them again: a spent account,
+                            // and a prompt the service refuses. The refusal is the
+                            // one worth naming, because no retry fixes it and the
+                            // user is the only one who can reword it.
+                            if (isModerationRefusal(error)) { errors.refused = true; break; }
+                            if (isOutOfCreditsError(errors.puterError) || isAccountLevelFailure(errors.puterError, '')) break;
+                        }
+                    }
+                    // A refusal ends the whole chain, not just Puter's turn: the
+                    // next service is being asked the same question, and paying
+                    // an operator's key to hear it refused again is the opposite
+                    // of what the sentence on screen is telling the user to do.
+                    if (errors.refused) break;
+                    continue;
+                }
+                try {
+                    // quality rides along on purpose: the server route fronts an
+                    // OpenAI-shaped images API, where it is the documented way to
+                    // ask for something better than the tier the alias defaults
+                    // to, and Puter is already being asked for the same thing.
+                    const body = kind === 'edit'
+                        ? { prompt: promptText, image: sourceDataUrl, quality: IMAGE_QUALITY, ...(options.mask ? { mask: options.mask } : {}) }
+                        : { prompt: promptText, quality: IMAGE_QUALITY, ...(options.count && options.count > 1 ? { n: options.count } : {}) };
+                    const wantedSize = imageSizeBody(size);
+                    if (wantedSize) body.size = wantedSize;
+                    if (chatOnServer) {
+                        body.preferProvider = selectedProvider;
+                        body.model = selectedModel;
+                    }
+                    const res = await fetch(kind === 'edit' ? '/api/llm/images/edits' : '/api/llm/images/generations', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                        signal,
+                    });
+                    const data = await safeJson(res);
+                    if (!res.ok) throw new Error(data.error || 'the image route refused the request');
+                    const urls = imageUrlsFrom(data);
+                    if (!urls.length) throw new Error('the image route returned no image');
+                    // Which service drew, and any caveat it had to report (a
+                    // dropped brush mask). Both are the server's answers to
+                    // questions the user asked with a request, so they are said
+                    // out loud rather than inferred from the picture.
+                    outcome.drewWith = data.providerLabel || (chatOnServer ? selectedProvider : '') || 'the server';
+                    if (Array.isArray(data.notes)) data.notes.forEach((note) => {
+                        if (!outcome.notes.includes(note)) outcome.notes.push(note);
+                    });
+                    // Every picture the route returns, not just the first: a
+                    // variation set drawn the wrong shape is wrong in all of it.
+                    const shaped = [];
+                    for (const url of urls) shaped.push(await reframeToRequestedShape(url, size, outcome));
+                    return shaped;
+                } catch (error) {
+                    if (error && error.name === 'AbortError') throw error;
+                    errors.serverError = String((error && error.message) || error);
+                    if (isModerationRefusal(error)) { errors.refused = true; break; }
+                }
+            }
+            // A refusal is the prompt's fault, so the message says what to change
+            // rather than naming backends that were never broken.
+            if (errors.refused) throw new Error(IMAGE_REFUSAL_ADVICE);
+            throw new Error(imageFailureMessage(
+                { ...errors, puterAvailable: !drawWithPuter && puterCanDraw() },
+                kind === 'edit' ? 'edit' : 'generate'
+            ));
+        }
+
+        // An attached image plus an edit request goes here, not to txt2img and
+        // not to a vision chat: those are the two paths that produced a poster
+        // of the car instead of a recoloured one. options.mask is the painted
+        // brush region, and options.notes collects what the caller has to say
+        // about the backend that answered.
+        async function editImageSource(promptText, source, signal, options) {
+            const opts = options || {};
+            const notes = Array.isArray(opts.notes) ? opts.notes : [];
+            const sourceDataUrl = await imageSourceForRequest(source);
+            const urls = await imageSourceFrom('edit', promptText, sourceDataUrl, signal, {
+                mask: opts.mask || '',
+                notes,
+                sizeFrom: opts.sizeFrom,
+                outcome: opts.outcome,
+            });
+            return urls[0];
+        }
+
+        // The picture an edit is sent with, in the one form the route can read.
+        //
+        // It takes a data URL or a link and nothing else, and a picture this
+        // chat already shows is neither: it is a blob: URL, an object URL over
+        // the bytes in the picture index that only this page can read. So "make
+        // the sky pink" on the picture from the last turn answered "Invalid
+        // source image — expected a data URL or an http(s) link" -- the one
+        // thing the server could not do anything else about. Reading the bytes
+        // back here also carries the type the picture was stored with, so a
+        // JPEG does not go out labelled PNG. An attachment is already a data
+        // URL and a link is passed through untouched.
+        async function imageSourceForRequest(src) {
+            const url = String(src || '');
+            // Only the store's own object URLs need it, so only those are read
+            // back: a data URL and a link are already in the form the route
+            // takes, and anything else is passed along as it always was.
+            if (!/^blob:/i.test(url)) return url;
+            let blob;
+            try {
+                blob = await (await fetch(url)).blob();
+            } catch {
+                throw new Error('that picture can no longer be read here — attach it again to edit it');
+            }
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            if (!bytes.length) throw new Error('that picture has no bytes stored — attach it again to edit it');
+            // Chunked because an argument list has a length limit: one call with
+            // a megabyte of bytes throws "too many arguments".
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+            return 'data:' + imageMediaType({ mime_type: blob.type }) + ';base64,' + btoa(binary);
+        }
+
+        // What the status line says about a picture that arrived: which service
+        // drew it, and anything it had to report about itself (a brush mask it
+        // could not take). One sentence, in the one place a user looks after
+        // pressing send -- the alternative is a picture with no provenance and a
+        // caveat nobody ever read.
+        function imageOutcomeStatus(base, outcome) {
+            const parts = [];
+            if (outcome && outcome.drewWith) parts.push(outcome.drewWith);
+            if (outcome && Array.isArray(outcome.notes)) parts.push(...outcome.notes);
+            return parts.length ? base + ' — ' + parts.join('; ') : base;
+        }
+
+        // A picture's status, in the one place that decides whether it stays.
+        //
+        // With a note it is an explanation -- a shape that came back different and
+        // was cut to the one that was asked for, a brush mask the service could not
+        // take -- so it holds until the next message. Without one it is a
+        // confirmation, and a confirmation should get out of the way.
+        function showImageOutcome(base, outcome) {
+            const noted = !!(outcome && Array.isArray(outcome.notes) && outcome.notes.length);
+            showStatus(noted ? 'info' : 'success', imageOutcomeStatus(base, outcome), noted ? 0 : undefined);
+        }
+
+        // The source is prepared by the caller because there are two of them: the
+        // picture that was attached, and the picture this chat already shows
+        // ("now make it look realistic"). The backend chain does not care which.
+        async function sendImageEdit(promptText, source, runId = generationId, controller = currentAbort, options = {}) {
+            let bubble = null;
+            let filled = false;
+            const outcome = { notes: [] };
+            const label = options.sourceLabel ? ' (edit of ' + options.sourceLabel + ')' : ' (edit of your image)';
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const url = await editImageSource(promptText, source, controller.signal, { mask: options.mask, notes: outcome.notes, sizeFrom: options.sizeFrom, outcome });
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
+                removeTypingIndicator();
+                fillImageBubble(bubble, promptText + label, url);
+                filled = true;
+                // A caveat is not a success, and a success is not a caveat: the
+                // mask being dropped is worth saying without pretending it did not
+                // happen, which is why the two are not the same sentence.
+                showImageOutcome('Edited image ready', outcome);
+                // Detached on purpose: the run is released below and the composer
+                // goes back to the reader while the picture is read back.
+                // An edit's fix is an edit of the same source, with everything the
+                // request carried -- the size preference and, for the brush, the
+                // mask -- so a corrected picture is still the edit that was asked
+                // for rather than a drawing of the same words.
+                void checkDrawingAgainstRequest(bubble, url, options.request, promptText, (difference) => {
+                    const run = startImageRun();
+                    return sendImageEdit(imageCheckFixPrompt(promptText, difference), source, run.runId, run.controller, options);
+                });
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Edit stopped');
+                    return;
+                }
+                console.error('Image edit failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error editing image: ' + msg, { error: true });
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
+        async function generateImageSource(promptText, signal, options) {
+            const opts = options || {};
+            const urls = await imageSourceFrom('generate', promptText, '', signal, {
+                count: opts.count || 1,
+                notes: opts.notes,
+                sizeFrom: opts.sizeFrom,
+                outcome: opts.outcome,
+            });
+            return urls[0];
+        }
+
+        // Several pictures for one prompt. The server route takes a count (the
+        // OpenAI-compatible images API caps it at ten, and some upstreams cap it
+        // at one), so whatever comes back short is drawn again the way a single
+        // picture always was. Puter has no count at all, which is why the top-up
+        // is a loop rather than a second parameter.
+        async function generateImageSources(promptText, count, signal, options) {
+            const opts = options || {};
+            const wanted = Math.max(1, Math.min(4, Number(count) || 1));
+            const urls = await imageSourceFrom('generate', promptText, '', signal, {
+                count: wanted,
+                notes: opts.notes,
+                sizeFrom: opts.sizeFrom,
+                outcome: opts.outcome,
+            });
+            while (urls.length < wanted) {
+                urls.push(await generateImageSource(promptText, signal, { outcome: opts.outcome }));
+            }
+            return urls.slice(0, wanted);
+        }
+
+        async function sendImageGeneration(promptText, runId = generationId, controller = currentAbort, options = {}) {
+            let bubble = null;
+            let filled = false;
+            const outcome = { notes: [] };
+            const startedAt = Date.now();
+            try {
+                usageCount++;
+                updateUsageDisplay();
+
+                bubble = createImageBubble();
+                const imageSrc = await generateImageSource(promptText, controller.signal, { sizeFrom: options.sizeFrom, outcome });
+
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
+                removeTypingIndicator();
+                fillImageBubble(bubble, promptText, imageSrc);
+                filled = true;
+                // A caveat is not a success and a success is not a caveat, which is
+                // the split `showImageOutcome` makes for every path: the size a
+                // service actually drew is worth saying without dressing it as a
+                // clean win, and worth leaving on screen to be read.
+                showImageOutcome('Image ready', outcome);
+                // The fix repeats this request with the reviewer's difference folded
+                // into the prompt, and the same size preference, so a corrected
+                // picture comes back in the shape that was asked for.
+                void checkDrawingAgainstRequest(bubble, imageSrc, options.request, promptText, (difference) => {
+                    const run = startImageRun();
+                    return sendImageGeneration(imageCheckFixPrompt(promptText, difference), run.runId, run.controller, options);
+                });
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
+                console.error('Image generation failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                // A failure inside two seconds never showed work — say so, so
+                // "no animation" reads as "instant refusal" (usually credits).
+                const instant = Date.now() - startedAt < 2000 ? 'The request failed instantly (often credits or access): ' : '';
+                if (isModerationRefusal(error)) {
+                    // A refusal is a decision, not a fault, and it names nothing
+                    // technical: the one useful sentence is what to change.
+                    showStatus('error', 'Refused');
+                    addMessage('system', IMAGE_REFUSAL_ADVICE, { error: true });
+                } else if (selectedProvider === PUTER_PROVIDER && isOutOfCreditsError(error)) {
+                    addMessage('system', outOfCreditsAdvice(), { error: true });
+                } else if (isAccountLevelFailure(msg, '')) {
+                    addMessage('system', 'Image billing refused the account: ' + msg, { error: true });
+                } else {
+                    showStatus('error', 'Failed: ' + msg);
+                    addMessage('system', 'Error generating image: ' + instant + msg, { error: true });
+                }
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
+        // A bot bubble that starts as a forge overlay and is filled when the
+        // image arrives, ChatGPT style. Nothing persists until the fill lands.
+        //
+        // There is no timer in here and no elapsed count: the animation is CSS
+        // plus one stagger, so the overlay costs nothing to keep on screen and
+        // has no interval to leak if a removal path forgets it. clearHoloForge
+        // stays the single way out, which is what keeps that promise cheap.
+        const FORGE_WORDS = ['Composing', 'Rendering', 'Refining', 'Resolving'];
+
+        function createHoloForge(ariaLabel) {
+            const forge = document.createElement('div');
+            forge.className = 'holo-forge';
+            forge.setAttribute('role', 'status');
+            forge.setAttribute('aria-label', ariaLabel || 'Generating image…');
+            const grid = document.createElement('div');
+            grid.className = 'holo-forge__grid';
+            const rings = document.createElement('div');
+            rings.className = 'holo-forge__rings';
+            for (let i = 0; i < 3; i++) rings.appendChild(document.createElement('i'));
+            const beam = document.createElement('div');
+            beam.className = 'holo-forge__beam';
+            const motes = document.createElement('div');
+            motes.className = 'holo-forge__motes';
+            const core = document.createElement('div');
+            core.className = 'holo-forge__core';
+            const label = document.createElement('div');
+            label.className = 'holo-forge__label';
+            // Decorative: the container already says it is generating, so a
+            // screen reader gets one announcement rather than four stage names.
+            const words = document.createElement('span');
+            words.className = 'holo-forge__words';
+            words.setAttribute('aria-hidden', 'true');
+            for (const word of FORGE_WORDS) {
+                const step = document.createElement('i');
+                step.textContent = word;
+                words.appendChild(step);
+            }
+            label.appendChild(words);
+            forge.appendChild(grid);
+            forge.appendChild(rings);
+            forge.appendChild(beam);
+            forge.appendChild(motes);
+            forge.appendChild(core);
+            forge.appendChild(label);
+            return forge;
+        }
+
+        function clearHoloForge(scope) {
+            (scope || document).querySelectorAll('.holo-forge').forEach((f) => {
+                f.remove();
+            });
+        }
+
+        function discardTransientBubble(el) {
+            if (!el) return;
+            clearHoloForge(el);
+            if (el.parentNode) el.remove();
+        }
+
+        function createImageBubble() {
+            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            el.appendChild(createHoloForge('Generating image…'));
+            appendToTranscript(el, 'follow');
+            return el;
+        }
+
+        // The model that reads a drawing back: the cheapest this service lists that
+        // can actually see, or nothing when it lists none, which leaves the note
+        // absent rather than guessed. Puter's "catalogue" is the built-in list and
+        // names its vision models rather than describing them, so capability is
+        // asked the two ways the rest of the page asks it.
+        function imageCheckModel() {
+            const sees = (model) => (selectedProvider === PUTER_PROVIDER ? isVisionCapable(model.id) : acceptsImages(model));
+            // Puter's catalogue is the built-in list, so there is nothing beyond it
+            // to offer; a server provider's whole catalogue is what was just read.
+            const list = selectedProvider === PUTER_PROVIDER ? routableModels() : providerVision;
+            return NeuraOSProviderRouting.cheapestVisionModel(list, { acceptsImages: sees });
+        }
+
+        function appendImageCheckNote(el, check, fixWith) {
+            const note = document.createElement('div');
+            note.className = check.matches ? 'image-check' : 'image-check missed';
+            // The verdict in its own span, so the button can sit beside it without
+            // becoming part of what the note says.
+            const said = document.createElement('span');
+            said.textContent = check.matches
+                ? 'Checked: this looks like what you asked for.'
+                : 'Checked: ' + check.missed;
+            note.appendChild(said);
+            // Only a difference has something to redraw, and only the path that
+            // drew this picture can draw it again: the folded prompt goes back
+            // through the runner that produced it, so fixing a masked edit is still
+            // that masked edit rather than a fresh drawing.
+            if (!check.matches && typeof fixWith === 'function') note.appendChild(imageCheckFixButton(check.missed, fixWith));
+            // Directly under the prompt it is about: the picture, the words that
+            // drew it, whether they met the request, then the buttons.
+            const caption = el.querySelector('.image-caption');
+            if (caption && caption.parentNode === el) el.insertBefore(note, caption.nextSibling);
+            else el.appendChild(note);
+            scrollTranscript('follow');
+        }
+
+        // The one-tap fix: spend on the tap and nothing else.
+        //
+        // The note is written by a check nobody asked for, so the note must not be
+        // what spends anything. The tap is the consent, one tap is one render, and
+        // the button is dead while that render runs -- a second tap is a second
+        // picture billed to the same doubt. It comes back afterwards, because a
+        // fix that missed too is a fair reason to try again.
+        function imageCheckFixButton(missed, fixWith) {
+            const fix = document.createElement('button');
+            fix.type = 'button';
+            // The caption's own small control, so a button on a muted 12px line
+            // looks like the one already sitting on the line above it.
+            fix.className = 'caption-copy';
+            fix.textContent = 'Fix it';
+            fix.title = 'Redraw with this difference built into the prompt';
+            fix.setAttribute('aria-label', fix.title);
+            fix.addEventListener('click', async () => {
+                if (fix.disabled) return;
+                fix.disabled = true;
+                fix.textContent = 'Fixing…';
+                try {
+                    await fixWith(missed);
+                } catch (error) {
+                    // The runner reports its own failures in the transcript; all
+                    // this owes the tap is a button that can be tried again.
+                    console.error('Fix redraw failed:', error);
+                }
+                fix.disabled = false;
+                fix.textContent = 'Fix it';
+            });
+            return fix;
+        }
+
+        // Whether the picture met the request, asked of a model that can see it.
+        //
+        // Detached from the turn: the picture is on screen and already paid for, so
+        // nothing awaits this. Best effort in every direction -- no model that can
+        // see, a refusal, an answer that is not one of the two verdicts -- leaves no
+        // note rather than a guess.
+        async function checkDrawingAgainstRequest(el, src, requestText, promptText, fixWith) {
+            const model = imageCheckModel();
+            if (!model || !isSendableImageUrl(src)) return;
+            let answer;
+            try {
+                const response = await callModel([
+                    { role: 'system', content: IMAGE_CHECK_PROMPT },
+                    { role: 'user', content: [
+                        { type: 'text', text: imageCheckQuestion(requestText, promptText) },
+                        { type: 'image_url', image_url: { url: src } },
+                    ] },
+                ], {}, null, model);
+                answer = parseImageCheck(extractMessageText((response && response.message) || null));
+            } catch {
+                // A check that could not be made is not a failed turn, and saying so
+                // would put an error beside a picture that arrived fine.
+                return;
+            }
+            // A bubble discarded while the check was in flight is a verdict with
+            // nowhere to go, and the one way this can be called off.
+            if (answer && el.parentNode) appendImageCheckNote(el, answer, fixWith);
+        }
+
+        function buildImageWrap(src, promptText) {
+            const wrap = document.createElement('div');
+            wrap.className = 'message-image-wrap';
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'message-image';
+            img.alt = promptText;
+            img.loading = 'lazy';
+            makeImageOpener(img, src, promptText);
+            // A picture finishing is new output: follow it only if the reader
+            // is already at the bottom.
+            img.addEventListener('load', () => { scrollTranscript('follow'); });
+            wrap.appendChild(img);
+            return wrap;
+        }
+
+        // A generated picture arrives as a data: or blob: URL -- the whole image
+        // inside the string -- and history kept only http(s) links, so every one
+        // of them was dropped the moment it was saved. The bubble showed the
+        // picture (it was still in memory) while the gallery, which reads saved
+        // history, had nothing but the "[Generated image: ...]" text.
+        //
+        // The bytes now go to the picture index (see image-store.js) at the size
+        // they were drawn, and the conversation carries an id. That is what makes
+        // a reopened chat show the picture that was asked for rather than a
+        // 1024px re-encode of it -- which is what the Download menu was being
+        // handed, and why it reported "Save at 1024 x 576" back to somebody who
+        // had asked for 1536x864.
+        //
+        // Storing is deliberately off the critical path: the reader is already
+        // looking at the picture. The message entry exists first, so a failure to
+        // store costs the picture in history -- which the gallery already knows
+        // how to explain -- and never the message itself.
+        async function storeGeneratedImages(entry, urls, promptText) {
+            const wanted = urls.filter((u) => storedImagePlan(u) !== 'skip');
+            if (!wanted.length) return;
+            const stored = [];
+            for (const url of wanted) {
+                if (storedImagePlan(url) === 'remote') {
+                    // The bytes were never ours; re-encoding saves nothing.
+                    stored.push({ url, prompt: promptText });
+                    continue;
+                }
+                const kept = await keepFullSizeImage(url, promptText);
+                if (kept) { stored.push(kept); continue; }
+                // No index, or it refused the write: the compact inline copy is
+                // still better than losing the picture, and the size it was
+                // saved at is stated on screen before anything is downloaded.
+                const compact = await compactImageForStorage(url);
+                if (compact) stored.push({ url: compact, prompt: promptText, compact: true });
+            }
+            if (!stored.length) return;
+            entry.images = stored;
+            persistMessages();
+            renderGallery();
+        }
+
+        // The picture's own bytes, at the size it was drawn, as an entry that
+        // names them. Null when there is no index to put them in or the write
+        // failed, which is what sends the caller to the compact path.
+        //
+        // The URL is deliberately *not* kept on the entry: an entry with an id
+        // has to stay a few dozen bytes, or the thing this replaced comes back on
+        // the next persist. It goes in imageUrlById instead, so a chat switched
+        // away from and back within this session draws from memory.
+        async function keepFullSizeImage(url, promptText) {
+            if (!imageStoreAvailable()) return null;
+            try {
+                const res = await fetch(url);
+                if (!res.ok) return null;
+                const blob = await res.blob();
+                if (!blob || !blob.size) return null;
+                const id = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+                if (!(await putImageBytes(id, blob))) return null;
+                imageUrlById.set(id, url);
+                return { id, prompt: promptText, bytes: blob.size, type: blob.type || 'image/png' };
+            } catch {
+                return null;
+            }
+        }
+
+        // What a stored entry can be shown with: its own URL when it has one (a
+        // link from somewhere else, or an inline copy this page made), and the
+        // index otherwise.
+        function storedImageUrl(im) {
+            if (!im) return '';
+            if (typeof im.url === 'string' && im.url) return im.url;
+            return im.id ? imageUrlById.get(String(im.id)) || '' : '';
+        }
+
+        // Turn every stored id into something the DOM can show, before anything
+        // draws one. Every conversation, not just the open one, because the
+        // Gallery shows them all and each is one indexed read either way.
+        //
+        // A picture whose bytes are gone keeps no URL, which is the same state
+        // the transcript already has a card for, so nothing new has to explain
+        // it.
+        async function hydrateStoredImages() {
+            const pending = new Map();
+            const keep = new Set();
+            conversations.forEach((c) => (c.messages || []).forEach((m) => (m.images || []).forEach((im) => {
+                if (!im || !im.id) return;
+                const key = String(im.id);
+                keep.add(key);
+                // Keyed by id, not listed: the same picture can be on screen in
+                // two chats, and it is one read and one URL either way.
+                if (!im.url && !pending.has(key)) pending.set(key, im);
+            })));
+            if (!pending.size && !keep.size) return;
+            await Promise.all([...pending.entries()].map(async ([key, im]) => {
+                if (imageUrlById.has(key)) return;
+                const blob = await readImageBytes(key);
+                if (!blob) return;
+                // An object URL over a data: URL on purpose: this walks every
+                // picture in every chat, and a data: URL is the whole image as a
+                // string in the heap. The browser keeps these alive for the life
+                // of the page and frees them with it.
+                try {
+                    imageUrlById.set(key, URL.createObjectURL(blob));
+                } catch { /* no URL for it: it reads as unavailable, which is true of it here */ }
+                if (im.bytes === undefined && blob.size) im.bytes = blob.size;
+            }));
+            // Bytes nothing names any more, trimmed out of history by the picture
+            // cap or by a full-quota strip. pruneImageBytes refuses an empty keep
+            // set, so a history that failed to read cannot empty the index.
+            await pruneImageBytes(keep);
+        }
+
+        // Downscale to a size worth storing, then walk the quality down until the
+        // string fits. Returns '' when the bytes cannot be read or no quality
+        // fits, and the caller keeps the placeholder text in that case.
+        function compactImageForStorage(url) {
+            return new Promise((resolve) => {
+                let settled = false;
+                const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+                try {
+                    const img = new Image();
+                    img.onload = () => {
+                        try {
+                            const width = img.naturalWidth || 0;
+                            const height = img.naturalHeight || 0;
+                            if (!width || !height) return done('');
+                            const scale = Math.min(1, STORED_IMAGE_MAX_EDGE / Math.max(width, height));
+                            const canvas = document.createElement('canvas');
+                            canvas.width = Math.max(1, Math.round(width * scale));
+                            canvas.height = Math.max(1, Math.round(height * scale));
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx) return done('');
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            for (const quality of [0.72, 0.6, 0.5, 0.4, 0.3]) {
+                                const out = canvas.toDataURL('image/jpeg', quality);
+                                if (out && out.length <= STORED_IMAGE_MAX_CHARS) return done(out);
+                            }
+                            return done('');
+                        } catch { done(''); }
+                    };
+                    img.onerror = () => done('');
+                    img.src = url;
+                } catch { done(''); }
+            });
+        }
+
+        function finishImageContent(el, promptText, urls) {
+            clearHoloForge(el);
+            el.querySelectorAll('.img-shimmer').forEach((s) => s.remove());
+            el.dataset.rawContent = `[Generated image: ${promptText}]`;
+            el.querySelectorAll('.message-image-wrap').forEach((wrap) => wrap.remove());
+            const good = urls.filter((u) => typeof u === 'string' && u);
+            good.forEach((u) => el.appendChild(buildImageWrap(u, promptText)));
+            const caption = document.createElement('div');
+            caption.className = 'image-caption';
+            const label = document.createElement('span');
+            label.textContent = promptText;
+            const cp = document.createElement('button');
+            cp.type = 'button';
+            cp.className = 'caption-copy';
+            cp.textContent = 'Copy prompt';
+            cp.setAttribute('aria-label', 'Copy image prompt');
+            cp.addEventListener('click', () => copyText(promptText, null));
+            caption.appendChild(label);
+            caption.appendChild(cp);
+            el.appendChild(caption);
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, good[0] || '', promptText);
+            const entry = { type: 'bot', content: `[Generated image: ${promptText}]`, timestamp: Date.now() };
+            messages.push(entry);
+            persistMessages();
+            scrollTranscript('follow');
+            // No await: the picture is on screen, and storing it is not the
+            // reader's problem. Whatever could not be stored stays a
+            // placeholder naming its prompt.
+            storeGeneratedImages(entry, good, promptText);
+        }
+
+        function fillImageBubble(el, promptText, src) {
+            finishImageContent(el, promptText, [src]);
+        }
+
+        function appendImageTools(el, src, promptText) {
+            const bar = document.createElement('div');
+            bar.className = 'message-actions';
+            const vary = document.createElement('button');
+            vary.type = 'button';
+            vary.className = 'icon-btn-text';
+            vary.textContent = 'Vary';
+            vary.setAttribute('aria-label', 'Generate 2 variations');
+            vary.addEventListener('click', () => sendImageVariations(promptText));
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'icon-btn-text';
+            edit.textContent = 'Edit';
+            edit.setAttribute('aria-label', 'Edit this image');
+            edit.addEventListener('click', () => openImageEdit(src, promptText));
+            // Saving lives here as well as in the lightbox: reaching the lightbox
+            // first is one tap too many when the picture is right there.
+            const dl = document.createElement('div');
+            dl.className = 'dl';
+            const save = document.createElement('button');
+            save.type = 'button';
+            save.className = 'icon-btn-text';
+            save.textContent = 'Download';
+            save.setAttribute('aria-label', 'Download this image');
+            save.setAttribute('aria-haspopup', 'menu');
+            save.setAttribute('aria-expanded', 'false');
+            save.addEventListener('click', (event) => toggleImageDownloadMenu(event, src, promptText));
+            dl.appendChild(save);
+            bar.appendChild(vary);
+            bar.appendChild(edit);
+            bar.appendChild(dl);
+            el.appendChild(bar);
+        }
+
+        let imageConfirmResolver = null;
+        function askImageConfirm(title, text) {
+            document.getElementById('imageConfirmTitle').textContent = title;
+            document.getElementById('imageConfirmText').textContent = text;
+            document.getElementById('imageConfirmOverlay').classList.add('open');
+            return new Promise((resolve) => { imageConfirmResolver = resolve; });
+        }
+        function closeImageConfirm(choice) {
+            document.getElementById('imageConfirmOverlay').classList.remove('open');
+            if (imageConfirmResolver) imageConfirmResolver(choice === true);
+            imageConfirmResolver = null;
+        }
+
+        async function sendImageVariations(promptText) {
+            const ok = await askImageConfirm('Generate 2 variations?', `"${promptText}" — two extra image generations will run.`);
+            if (!ok) return;
+            const { runId, controller } = startImageRun();
+            let bubble = null;
+            const made = [];
+            const outcome = { notes: [] };
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                bubble = createImageBubble();
+                const second = createHoloForge('Generating variation…');
+                bubble.appendChild(second);
+                // One request where the backend can take a count, topped up one at
+                // a time where it cannot -- the difference between two billed
+                // renders and one, for the same two pictures.
+                const urls = await generateImageSources(promptText, 2, controller.signal, { outcome });
+                for (let i = 0; i < urls.length; i++) {
+                    if (!isActiveRun(runId, controller)) throw abortError();
+                    const imageSrc = urls[i];
+                    made.push(imageSrc);
+                    const shimmers = bubble.querySelectorAll('.holo-forge');
+                    const wrap = buildImageWrap(imageSrc, promptText);
+                    if (shimmers[i]) {
+                        const t = Number(shimmers[i].dataset.holoTimer);
+                        if (t) clearInterval(t);
+                        shimmers[i].replaceWith(wrap);
+                    } else {
+                        bubble.appendChild(wrap);
+                    }
+                }
+                removeTypingIndicator();
+                finishImageContent(bubble, promptText + ' (variations)', made);
+                showImageOutcome('Variations ready', outcome);
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble) {
+                    if (made.length && isActiveRun(runId, controller)) {
+                        finishImageContent(bubble, promptText + ' (variations)', made);
+                    } else {
+                        clearHoloForge(bubble);
+                        if (bubble.parentNode) bubble.remove();
+                    }
+                }
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Generation stopped');
+                    return;
+                }
+                console.error('Image variations failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error generating variations: ' + msg, { error: true });
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
+        // Every picture in a response, not just the first: an OpenAI-compatible
+        // images endpoint answers `n` requests with n entries, and reading only
+        // data[0] would silently deliver one picture where several were paid for.
+        function imageUrlsFrom(data) {
+            const list = data && Array.isArray(data.data) ? data.data : [];
+            return list
+                .map((item) => {
+                    if (!item) return '';
+                    if (item.url) return item.url;
+                    if (item.b64_json) return 'data:' + imageMediaType(item) + ';base64,' + item.b64_json;
+                    return '';
+                })
+                .filter(Boolean);
+        }
+
+        async function copyLightboxImage() {
+            const src = lightboxImg.src;
+            try {
+                const res = await fetch(src);
+                const blob = await res.blob();
+                await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+                showStatus('success', 'Image copied');
+            } catch {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(src)
+                        .then(() => showStatus('success', 'Image URL copied'))
+                        .catch(() => showStatus('error', 'Copy failed'));
+                } else {
+                    showStatus('error', 'Copy failed');
+                }
+            }
+        }
+
+        // Mask editor state. editState.mask is black with the painted region
+        // in white; editState.img keeps the source element for clearing.
+        let editState = null;
+        let maskBrush = 24;
+
+        function openImageEdit(src, promptText) {
+            closeImageLightbox();
+            editState = null;
+            const canvas = document.getElementById('maskCanvas');
+            const promptInput = document.getElementById('imageEditPrompt');
+            promptInput.value = '';
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                try {
+                    const scale = Math.min(1, 640 / img.naturalWidth);
+                    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    const mask = document.createElement('canvas');
+                    mask.width = w;
+                    mask.height = h;
+                    const mctx = mask.getContext('2d');
+                    mctx.fillStyle = '#000';
+                    mctx.fillRect(0, 0, w, h);
+                    editState = { img, mask, painted: false, prompt: promptText || '' };
+                    attachMaskPainting(canvas);
+                    document.getElementById('imageEditOverlay').classList.add('open');
+                    promptInput.focus();
+                } catch (e) {
+                    showStatus('error', 'Cannot prepare that image for editing: ' + e.message);
+                }
+            };
+            img.onerror = () => showStatus('error', 'Cannot load that image for editing (external hosts may block it).');
+            img.src = src;
+        }
+
+        function attachMaskPainting(canvas) {
+            if (canvas.dataset.paintWired) return;
+            canvas.dataset.paintWired = '1';
+            const pos = (e) => {
+                const r = canvas.getBoundingClientRect();
+                const p = (e.touches && e.touches[0]) || e;
+                return [(p.clientX - r.left) * (canvas.width / r.width), (p.clientY - r.top) * (canvas.height / r.height)];
+            };
+            const paint = (e) => {
+                if (!editState) return;
+                e.preventDefault();
+                const [x, y] = pos(e);
+                const dctx = canvas.getContext('2d');
+                dctx.fillStyle = 'rgba(244,63,94,.55)';
+                dctx.beginPath();
+                dctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                dctx.fill();
+                const mctx = editState.mask.getContext('2d');
+                mctx.fillStyle = '#fff';
+                mctx.beginPath();
+                mctx.arc(x, y, maskBrush / 2, 0, Math.PI * 2);
+                mctx.fill();
+                editState.painted = true;
+            };
+            let down = false;
+            canvas.addEventListener('pointerdown', (e) => { down = true; paint(e); });
+            canvas.addEventListener('pointermove', (e) => { if (down) paint(e); });
+            canvas.addEventListener('pointerup', () => { down = false; });
+            canvas.addEventListener('pointerleave', () => { down = false; });
+        }
+
+        function setMaskBrush(px) {
+            maskBrush = px;
+            showStatus('info', 'Brush: ' + px + 'px');
+        }
+
+        function clearMask() {
+            const canvas = document.getElementById('maskCanvas');
+            if (!canvas || !editState) return;
+            canvas.getContext('2d').drawImage(editState.img, 0, 0, canvas.width, canvas.height);
+            const mctx = editState.mask.getContext('2d');
+            mctx.fillStyle = '#000';
+            mctx.fillRect(0, 0, canvas.width, canvas.height);
+            editState.painted = false;
+        }
+
+        function closeImageEdit() {
+            document.getElementById('imageEditOverlay').classList.remove('open');
+            editState = null;
+        }
+
+        function editImageDataUrl() {
+            if (!editState) return '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = editState.img.naturalWidth;
+                c.height = editState.img.naturalHeight;
+                c.getContext('2d').drawImage(editState.img, 0, 0);
+                return c.toDataURL('image/png');
+            } catch {
+                return '';
+            }
+        }
+
+        // The painted mask, at the size of the picture it describes.
+        //
+        // editState.mask is deliberately small -- the canvas the brush paints on
+        // is capped at 640px so a stroke is a stroke and not a hairline -- and it
+        // used to be sent exactly as painted. A 640px mask beside a 3000px photo
+        // is a mask for a different picture, which a service can only read as a
+        // mistake (at best it is refused; at worst it lands on the wrong region).
+        function editMaskDataUrl() {
+            if (!editState || !editState.painted) return '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = editState.img.naturalWidth;
+                c.height = editState.img.naturalHeight;
+                c.getContext('2d').drawImage(editState.mask, 0, 0, c.width, c.height);
+                return c.toDataURL('image/png');
+            } catch {
+                return '';
+            }
+        }
+
+        async function submitImageEdit() {
+            const typed = document.getElementById('imageEditPrompt').value.trim();
+            if (!typed) { showStatus('error', 'Describe the edit first'); return; }
+            if (!editState) { showStatus('error', 'Image is not ready yet'); return; }
+            const srcData = editImageDataUrl();
+            if (!srcData) { showStatus('error', 'That image host blocks editing (canvas is locked).'); return; }
+            const maskData = editMaskDataUrl();
+            closeImageEdit();
+            await runBrushEdit(typed, srcData, maskData);
+        }
+
+        // The brush edit itself, from the run it opens to the note it writes.
+        //
+        // A second attempt arrives as `fixedPrompt` -- the reviewer's difference
+        // folded into the prompt that drew the picture -- so a fix repeats the
+        // request instead of re-planning it, keeps the mask it was painted with,
+        // and is checked against the same words as the attempt it replaces.
+        async function runBrushEdit(typed, srcData, maskData, fixedPrompt = '') {
+            const { runId, controller } = startImageRun();
+            let bubble = null;
+            let filled = false;
+            const outcome = { notes: [] };
+            try {
+                usageCount++;
+                updateUsageDisplay();
+                setActivity('Reading the request…');
+                // The brush editor asks the image model the same way the composer
+                // does. Two paraphrases of one request is two different pictures:
+                // "add horns" typed into the brush box and "add horns" typed into
+                // the composer used to reach the model in different words.
+                const prompt = fixedPrompt || await plannedImagePrompt(typed, {
+                    hasImage: true,
+                    hasPreviousImage: false,
+                    mask: !!maskData,
+                    signal: controller.signal,
+                });
+                if (!isActiveRun(runId, controller)) return;
+                bubble = createImageBubble();
+                // Through the shared backend chain, so a signed-in Puter user with
+                // no Nara key gets a picture instead of "NARA_IMAGE_MODEL": the
+                // brush used to go straight at the server route, which was the
+                // whole reason a mask edit produced nothing for those accounts.
+                const url = await editImageSource(prompt, srcData, controller.signal, { mask: maskData, notes: outcome.notes, outcome });
+                if (!isActiveRun(runId, controller)) {
+                    discardTransientBubble(bubble);
+                    return;
+                }
+                removeTypingIndicator();
+                fillImageBubble(bubble, prompt + ' (edit)', url);
+                filled = true;
+                showImageOutcome('Edit ready', outcome);
+                // A brush edit is read back, deliberately. An edit is a request
+                // like any other, and the words typed here are the request -- so
+                // the question is the same one a drawing is asked.
+                //
+                // It matters most on this path, because this is where the app can
+                // quietly deliver something else: the mask is a file part or it is
+                // nothing, so a service that takes a reference edits the whole
+                // picture and says so only in the notes. A picture that came back
+                // without the region is exactly the case a second pair of eyes is
+                // for.
+                //
+                // What the reviewer is not shown is the mask, so its verdict is
+                // about the whole picture against those words -- and a "MISSED"
+                // here can describe a part of the picture nobody asked about. That
+                // is tolerable because the note only ever speaks: it recites an
+                // observation beside the Edit button and redraws nothing. Leaving
+                // it out would be worse, because no note is also what "the check
+                // could not be made" looks like, and this is the one path where
+                // that ambiguity is expensive.
+                void checkDrawingAgainstRequest(bubble, url, typed, prompt, (difference) =>
+                    runBrushEdit(typed, srcData, maskData, imageCheckFixPrompt(prompt, difference)));
+            } catch (error) {
+                removeTypingIndicator();
+                if (bubble && !filled) clearHoloForge(bubble);
+                if (bubble && !filled && bubble.parentNode) bubble.remove();
+                if (error && (error.name === 'AbortError' || !isActiveRun(runId, controller))) {
+                    showStatus('info', 'Edit stopped');
+                    return;
+                }
+                console.error('Image edit failed:', error);
+                const msg = String((error && (error.message || error)) || 'Unknown error');
+                showStatus('error', 'Failed: ' + msg);
+                addMessage('system', 'Error editing image: ' + msg, { error: true });
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
+        // A picture that opens is a control, whether or not it is a button.
+        // Click-only left every image in the app unreachable from a keyboard,
+        // and the lightbox is where saving, copying and editing live -- so the
+        // one route to all three was mouse-only.
+        function makeImageOpener(el, src, promptText) {
+            el.tabIndex = 0;
+            el.setAttribute('role', 'button');
+            el.setAttribute('aria-label', 'Open image: ' + (promptText || 'generated image'));
+            el.addEventListener('click', () => openImageLightbox(src, promptText));
+            el.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+                event.preventDefault();
+                openImageLightbox(src, promptText);
+            });
+        }
+
+        function openImageLightbox(src, altText) {
+            lastFocusedBeforeModal = document.activeElement;
+            lightboxImg.src = src;
+            lightboxImg.alt = altText || 'Generated image';
+            imageLightbox.classList.add('open');
+            const first = imageLightbox.querySelector('.icon-btn-text');
+            if (first && typeof first.focus === 'function') first.focus();
+        }
+
+        function closeImageLightbox() {
+            closeImageDownloadMenu();
+            imageLightbox.classList.remove('open');
+            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
+        }
+
+        // --- Saving a picture -------------------------------------------------
+        //
+        // Every format goes through a canvas at the picture's own pixel size.
+        // That is not an implementation detail: re-encoding to a fixed square is
+        // exactly how a picture drawn at 1536x1024 ends up in the downloads
+        // folder as a 1024x1024, so the render is a pass-through and the menu
+        // prints the true dimensions before you commit to a save.
+        //
+        // A canvas is also the only route to the bytes at all when the picture
+        // arrived as a data: URL, and the only way JPG and PDF can exist beside
+        // PNG. PDF embeds that same JPEG untouched rather than re-encoding it,
+        // because an image that has already been through one lossy pass should
+        // not take a second one on the way to the printer.
+        function imageDimensionsOf(src) {
+            return new Promise((resolve) => {
+                const probe = new Image();
+                probe.onload = () => resolve({ width: probe.naturalWidth || 0, height: probe.naturalHeight || 0 });
+                probe.onerror = () => resolve({ width: 0, height: 0 });
+                probe.src = src;
+            });
+        }
+
+        // The picture drawn onto a canvas that is exactly as big as it is. The
+        // matte is for the formats with no alpha channel: without it, a
+        // transparent PNG would come back as black boxes.
+        //
+        // A cut, when one is given, takes that rectangle instead of the whole
+        // picture and makes the canvas the rectangle's size -- so the output is
+        // the region at its own scale, never the region inside the original
+        // frame. Only the drawing path ever passes one; a download wants the
+        // picture it was handed. The blob's type rides back with it so the caller
+        // can write the result out in the format it arrived in.
+        async function canvasFromImage(src, needMatte, cut) {
+            const response = await fetch(src);
+            if (!response.ok) throw new Error(`the picture could not be re-read (${response.status})`);
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            try {
+                const img = await new Promise((resolve, reject) => {
+                    const probe = new Image();
+                    probe.onload = () => resolve(probe);
+                    probe.onerror = () => reject(new Error('that picture could not be decoded'));
+                    probe.src = objectUrl;
+                });
+                const width = img.naturalWidth || 0;
+                const height = img.naturalHeight || 0;
+                if (!width || !height) throw new Error('that picture reported no size');
+                const outWidth = cut ? cut.width : width;
+                const outHeight = cut ? cut.height : height;
+                const canvas = document.createElement('canvas');
+                canvas.width = outWidth;
+                canvas.height = outHeight;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) throw new Error('this browser cannot re-encode a picture');
+                if (needMatte) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, outWidth, outHeight);
+                }
+                if (cut) ctx.drawImage(img, cut.x, cut.y, cut.width, cut.height, 0, 0, outWidth, outHeight);
+                else ctx.drawImage(img, 0, 0);
+                return { canvas, width: outWidth, height: outHeight, type: blob.type || '' };
+            } finally {
+                URL.revokeObjectURL(objectUrl);
+            }
+        }
+
+        function canvasToBlob(canvas, type, quality) {
+            return new Promise((resolve) => {
+                try {
+                    canvas.toBlob((blob) => resolve(blob || null), type, quality);
+                } catch { resolve(null); }
+            });
+        }
+
+        async function imageBlobForDownload(src, formatId) {
+            const format = imageDownloadFormat(formatId);
+            const { canvas, width, height } = await canvasFromImage(src, format.id !== 'png');
+            if (format.id === 'png') {
+                const blob = await canvasToBlob(canvas, 'image/png');
+                if (!blob) throw new Error('this browser could not encode a PNG');
+                return { blob, width, height, format };
+            }
+            const jpeg = await canvasToBlob(canvas, 'image/jpeg', 0.92);
+            if (!jpeg) throw new Error('this browser could not encode a JPG');
+            if (format.id === 'jpg') return { blob: jpeg, width, height, format };
+            const pdf = buildImagePdf(new Uint8Array(await jpeg.arrayBuffer()), width, height);
+            return { blob: new Blob([pdf], { type: 'application/pdf' }), width, height, format };
+        }
+
+        function saveBlobAs(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.rel = 'noopener';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            // Revoked on a later turn of the loop: revoking in the same tick can
+            // cancel the download in some browsers.
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        }
+
+        async function downloadImage(src, promptText, formatId) {
+            closeImageDownloadMenu();
+            const format = imageDownloadFormat(formatId);
+            try {
+                showStatus('info', `Preparing ${format.label}…`);
+                const { blob, width, height } = await imageBlobForDownload(src, format.id);
+                saveBlobAs(blob, imageDownloadFilename(promptText, format.id, width, height));
+                showStatus('success', `${format.label} saved at ${width} × ${height}`);
+            } catch (error) {
+                console.error('Image download failed:', error);
+                const message = String((error && error.message) || error);
+                // A picture hosted on another site cannot be read into a canvas
+                // without CORS, and no amount of retrying changes that. It can
+                // still be handed to the browser, which is better than a refusal
+                // -- the status line just says the format was not converted.
+                if (/^https?:/i.test(src)) {
+                    const link = document.createElement('a');
+                    link.href = src;
+                    link.download = imageDownloadFilename(promptText, format.id, 0, 0);
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    showStatus('info', `This picture is hosted elsewhere, so it opens as-is instead of converting to ${format.label}`);
+                    return;
+                }
+                showStatus('error', `Could not save: ${message}`);
+            }
+        }
+
+        function closeImageDownloadMenu() {
+            document.querySelectorAll('.dl-menu').forEach((menu) => {
+                if (menu.hidden) return;
+                menu.hidden = true;
+                const trigger = menu.parentElement && menu.parentElement.querySelector('button[aria-haspopup="menu"]');
+                if (trigger) trigger.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        function imageDownloadMenuHtml() {
+            return IMAGE_DOWNLOAD_FORMATS.map((format) => `<button type="button" role="menuitem"><b>${escapeHtml(format.label)}</b><span>${escapeHtml(format.hint)}</span></button>`).join('');
+        }
+
+        async function toggleImageDownloadMenu(event, src, promptText) {
+            if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+            const trigger = event && event.currentTarget ? event.currentTarget : null;
+            if (!trigger) return;
+            const wrap = trigger.closest('.dl') || trigger.parentElement;
+            if (!wrap) return;
+            const open = wrap.querySelector('.dl-menu');
+            const wasOpen = !!open && !open.hidden;
+            closeImageDownloadMenu();
+            if (wasOpen) return;
+            const menu = open || document.createElement('div');
+            if (!open) {
+                menu.className = 'dl-menu';
+                menu.setAttribute('role', 'menu');
+                wrap.appendChild(menu);
+            }
+            // The true size, read from the picture itself. If a size was asked
+            // for and the engine ignored it, this line is where that shows.
+            const size = await imageDimensionsOf(src);
+            const head = document.createElement('div');
+            head.className = 'dl-menu-head';
+            head.textContent = size.width && size.height ? `Save at ${size.width} × ${size.height}` : 'Save this picture';
+            menu.innerHTML = imageDownloadMenuHtml();
+            menu.insertBefore(head, menu.firstChild);
+            menu.hidden = false;
+            trigger.setAttribute('aria-expanded', 'true');
+            const first = menu.querySelector('button');
+            if (first && typeof first.focus === 'function') first.focus();
+            menu.querySelectorAll('button').forEach((row, index) => {
+                row.addEventListener('click', () => downloadImage(src, promptText, IMAGE_DOWNLOAD_FORMATS[index].id));
+            });
+        }
+
+        function setMessageContent(el, content) {
+            el.dataset.rawContent = content;
+            const textEl = el.querySelector('.message-text');
+            textEl.innerHTML = renderMarkdownLite(content);
+            textEl.querySelectorAll('pre').forEach((pre) => {
+                // The renderer tags fenced blocks with their language; surface
+                // it as a header chip, GitHub-style, beside the Copy button.
+                // textContent keeps a hostile language name inert.
+                if (pre.dataset && pre.dataset.lang) {
+                    const tag = document.createElement('span');
+                    tag.className = 'code-lang';
+                    tag.setAttribute('aria-hidden', 'true');
+                    tag.textContent = pre.dataset.lang;
+                    pre.insertBefore(tag, pre.firstChild);
+                }
+                // An HTML block can show itself: the preview runs the snippet
+                // in an opaque-origin frame (sandbox without same-origin), so
+                // page script reaches neither this document nor its storage,
+                // and it only ever runs on an explicit tap. The Canvas button
+                // sends the same code to the persistent pane instead.
+                if (pre.dataset && pre.dataset.lang === 'html') {
+                    const view = document.createElement('button');
+                    view.type = 'button';
+                    view.className = 'code-preview-btn';
+                    view.textContent = 'Preview';
+                    view.setAttribute('aria-label', 'Preview this HTML in a sandbox');
+                    view.addEventListener('click', () => {
+                        const code = pre.querySelector('code');
+                        openHtmlPreview(code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(view);
+                    const canvas = document.createElement('button');
+                    canvas.type = 'button';
+                    canvas.className = 'code-canvas-btn';
+                    canvas.textContent = 'Canvas';
+                    canvas.setAttribute('aria-label', 'Open this HTML in the canvas');
+                    canvas.addEventListener('click', () => openCanvasForBlock(pre));
+                    pre.appendChild(canvas);
+                }
+                // A mermaid block can draw itself on tap. Rendering stays
+                // click-to-run (never on arrival), behind the diagram-type
+                // gate, with the code left in place whatever the outcome.
+                if (pre.dataset && pre.dataset.lang === 'mermaid') {
+                    const draw = document.createElement('button');
+                    draw.type = 'button';
+                    draw.className = 'code-diagram-btn';
+                    draw.textContent = 'Diagram';
+                    draw.setAttribute('aria-label', 'Render this diagram');
+                    draw.addEventListener('click', () => {
+                        if (pre._diagramHolder) {
+                            pre._diagramHolder.hidden = true;
+                            pre._diagramHolder.innerHTML = '';
+                            pre._diagramHolder = null;
+                            return;
+                        }
+                        const code = pre.querySelector('code');
+                        const holder = document.createElement('div');
+                        holder.className = 'diagram-wrap';
+                        holder.hidden = true;
+                        pre.parentNode.insertBefore(holder, pre.nextSibling);
+                        pre._diagramHolder = holder;
+                        renderDiagram(holder, code ? code.textContent : pre.textContent);
+                    });
+                    pre.appendChild(draw);
+                }
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'code-copy-btn';
+                btn.textContent = 'Copy';
+                btn.setAttribute('aria-label', 'Copy code');
+                btn.addEventListener('click', () => {
+                    const code = pre.querySelector('code');
+                    copyText(code ? code.textContent : pre.textContent, btn);
+                });
+                pre.appendChild(btn);
+            });
+            // A completed HTML block just landed on screen. Keep the canvas
+            // picker honest: blocks are only in the DOM once their closing
+            // fence arrives, so this runs once per block, never mid-stream.
+            if (textEl.querySelector('pre[data-lang="html"]')) collectCanvasBlocks();
+        }
+
+        // A sandboxed stage for HTML blocks: the frame carries sandbox without
+        // allow-same-origin, so it runs on an opaque origin -- no parent DOM,
+        // no cookies, no storage -- and the document is a snapshot, assigned
+        // once through the property (never an attribute, so there is no
+        // quoting to escape and nothing for a later pass to rewrite).
+        function openHtmlPreview(code) {
+            closeHtmlPreview();
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.id = 'htmlPreviewOverlay';
+            const dialog = document.createElement('div');
+            dialog.className = 'modal modal-wide';
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.setAttribute('aria-label', 'HTML preview');
+            const head = document.createElement('div');
+            head.className = 'modal-header';
+            const title = document.createElement('h3');
+            title.textContent = 'Preview';
+            const close = document.createElement('button');
+            close.className = 'modal-close';
+            close.setAttribute('aria-label', 'Close preview');
+            close.textContent = '×';
+            close.addEventListener('click', closeHtmlPreview);
+            head.appendChild(title);
+            head.appendChild(close);
+            const frame = document.createElement('iframe');
+            frame.className = 'html-preview-frame';
+            frame.setAttribute('sandbox', 'allow-scripts');
+            frame.setAttribute('title', 'Sandboxed HTML preview');
+            frame.srcdoc = String(code);
+            dialog.appendChild(head);
+            dialog.appendChild(frame);
+            overlay.appendChild(dialog);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeHtmlPreview();
+            });
+            document.body.appendChild(overlay);
+        }
+
+        function closeHtmlPreview() {
+            const overlay = document.getElementById('htmlPreviewOverlay');
+            if (overlay && typeof overlay.remove === 'function') overlay.remove();
+        }
+
+        const CANVAS_REACT_MARKER = CanvasArtifacts.REACT_MARKER;
+
+        // ---- thin delegates: the names the page's markup and code call ----
+
+        // Build the document a block runs in: a plain wrapper so a fragment
+        // renders, React + Babel for a block that opens with the react marker.
+        // The rule lives in the module; this is the name the page already calls.
+        function artifactDocument(code) { return canvasArtifacts.buildArtifactDocument(code); }
+
+        function renderCanvasArtifact(code) {
+            const frame = document.getElementById('canvasFrame');
+            if (!frame) return;
+            frame.srcdoc = artifactDocument(code);
+        }
+
+        function canvasShell() {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            return shell && typeof shell.classList.contains === 'function' ? shell : null;
+        }
+
+        function toggleCanvas(force, persist = true) {
+            canvasArtifacts.showPane(force, persist);
+            if (!(persist === false)) renderCanvasPicker();
+        }
+
+        function restoreCanvas() {
+            canvasArtifacts.restorePane();
+        }
+
+        function collectCanvasBlocks() {
+            canvasArtifacts.collectBlocks();
+        }
+
+        function renderCanvasPicker() {
+            const select = document.getElementById('canvasSelect');
+            const count = document.getElementById('canvasCount');
+            if (!select) return;
+            const blocks = canvasArtifacts.blocksList();
+            const canvasIndex = canvasArtifacts.currentIndex();
+            select.innerHTML = '';
+            if (!blocks.length) {
+                if (count) count.textContent = 'no blocks yet';
+                const opt = document.createElement('option');
+                opt.textContent = 'No HTML blocks in this chat yet';
+                opt.disabled = true;
+                select.appendChild(opt);
+            } else {
+                if (count) count.textContent = blocks.length + (blocks.length === 1 ? ' block' : ' blocks');
+                blocks.forEach((block, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.textContent = block.label;
+                    select.appendChild(opt);
+                });
+                select.value = String(canvasIndex);
+            }
+            // Closed, the pane is a cost without a viewer: keep the options in
+            // sync, but only render the frame once there is something looking
+            // at it.
+            const shell = canvasShell();
+            if (!(shell && shell.classList.contains('canvas-hidden'))) updateCanvasFrame();
+        }
+
+        function selectCanvasBlock(index) {
+            canvasArtifacts.selectBlock(index);
+            const select = document.getElementById('canvasSelect');
+            if (select) select.value = String(canvasArtifacts.currentIndex());
+            updateCanvasFrame();
+        }
+
+        function openSelectedCanvasBlock() {
+            const select = document.getElementById('canvasSelect');
+            if (!select || select.value === '') return;
+            selectCanvasBlock(Number(select.value));
+        }
+
+        function updateCanvasFrame() {
+            const blocks = canvasArtifacts.blocksList();
+            const at = canvasArtifacts.currentIndex();
+            const block = blocks.length ? blocks[at] : null;
+            const frame = document.getElementById('canvasFrame');
+            const select = document.getElementById('canvasSelect');
+            if (frame) {
+                frame.title = block ? block.label : 'Sandboxed artifact preview';
+                renderCanvasArtifact(block ? block.code : '');
+            }
+            if (select && blocks.length) select.value = String(at);
+        }
+
+        function openCanvasForBlock(pre) {
+            canvasArtifacts.openForPre(pre);
+            toggleCanvas(true);
+        }
+
+        // Diagrams, still behind a tap. Mermaid is vendored (vendor/mermaid,
+        // mermaid 12.0.0, MIT -- provenance and byte hashes in
+        // vendor/mermaid/SOURCES.json, closure assembled by
+        // tools/assemble-mermaid.js) rather than a CDN script: same-origin
+        // bytes with no supply-chain lookup at view time, and no offline
+        // breakage. The engine only ever loads on an explicit Diagram tap,
+        // only for a recognised diagram type, in strict mode -- and whatever
+        // the outcome, the code block it came from stays exactly where it was.
+        // NOTE: rendered SVG output has not yet been eyeballed in a browser;
+        // this branch stays unmerged until that happens.
+        const MERMAID_SRC = './vendor/mermaid/mermaid-12.0.0.mjs';
+        const MERMAID_TYPES = ['graph', 'flowchart', 'sequenceDiagram', 'pie', 'mindmap', 'timeline', 'journey', 'gitGraph', 'stateDiagram', 'stateDiagram-v2', 'classDiagram', 'classDiagram-v2', 'erDiagram', 'gantt', 'quadrantChart', 'requirementDiagram', 'c4Context', 'c4Container', 'c4Component', 'c4Dynamic', 'c4Deployment', 'kanban', 'sankey', 'block-beta'];
+
+        // The first content line names the diagram; config comments and blank
+        // lines do not. Anything else is prose, and prose must never spend a
+        // megabyte of engine download to be told it is not a diagram.
+        function mermaidDiagramType(code) {
+            const lines = String(code || '').split('\n');
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (!line || line.startsWith('%%')) continue;
+                const word = (line.match(/^[A-Za-z][\w-]*/) || [])[0] || '';
+                return MERMAID_TYPES.indexOf(word) !== -1 ? word : null;
+            }
+            return null;
+        }
+
+        let mermaidPromise = null;
+        function ensureMermaid() {
+            if (mermaidPromise) return mermaidPromise;
+            mermaidPromise = import(MERMAID_SRC).then((mod) => {
+                const api = mod.default || mod;
+                api.initialize({ startOnLoad: false, securityLevel: 'strict' });
+                return api;
+            });
+            mermaidPromise.catch(() => { mermaidPromise = null; });
+            return mermaidPromise;
+        }
+
+        async function renderDiagram(holder, code) {
+            const type = mermaidDiagramType(code);
+            if (!type) {
+                showStatus('error', 'That block is not a diagram this app draws -- the code stays as it is.');
+                return;
+            }
+            holder.innerHTML = '';
+            const note = document.createElement('div');
+            note.className = 'diagram-loading';
+            note.textContent = 'Drawing the ' + type + ' diagram…';
+            holder.appendChild(note);
+            holder.hidden = false;
+            let api;
+            try {
+                api = await ensureMermaid();
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'The diagram engine failed to load; the code is untouched.');
+                return;
+            }
+            try {
+                const id = 'freeai-diagram-' + Date.now() + '-' + Math.floor(Math.random() * 1000000);
+                const result = await api.render(id, code);
+                holder.innerHTML = '';
+                const wrap = document.createElement('div');
+                wrap.className = 'diagram-svg';
+                wrap.innerHTML = result.svg;
+                holder.appendChild(wrap);
+            } catch (error) {
+                holder.hidden = true;
+                showStatus('error', 'Mermaid could not draw that block; the code is untouched.');
+            }
+        }
+
+        // Reasoning models (Claude extended thinking, the GPT "pro reasoning" tiers)
+        // return their scratchpad separately from the answer. Show it in a
+        // collapsed <details> above the reply so it's there when wanted and out
+        // of the way otherwise. Text goes in via textContent, never innerHTML.
+        // While the model is still thinking: one line, the tail of it, moving.
+        // A scratchpad is only useful to someone watching, and what a watcher
+        // wants is the current thought, not the first one.
+        function setReasoningStrip(el, text) {
+            let strip = el.querySelector('.reasoning-strip');
+            // The text is recorded whether or not it is shown, so switching the
+            // summary on later reveals the reasoning of replies that already
+            // happened instead of only the next one.
+            if (text) el.dataset.rawReasoning = text;
+            if (!text || !reasoningVisible) {
+                if (strip) strip.remove();
+                return;
+            }
+            if (!el.dataset.reasoningStartedAt) el.dataset.reasoningStartedAt = String(Date.now());
+            if (!strip) {
+                strip = document.createElement('div');
+                strip.className = 'reasoning-strip';
+                const label = document.createElement('span');
+                label.className = 'reasoning-label';
+                label.textContent = 'Thinking';
+                const tail = document.createElement('span');
+                tail.className = 'reasoning-tail';
+                strip.append(label, tail);
+                el.insertBefore(strip, el.firstChild);
+            }
+            strip.querySelector('.reasoning-tail').textContent = reasoningTailLine(text);
+            el.dataset.rawReasoning = text;
+        }
+
+        // When the answer arrives the strip becomes the full scratchpad, folded
+        // away behind a summary that says how long it took and how much of it
+        // there is -- which is the part you need to decide whether to open it.
+        function setReasoningContent(el, text) {
+            const strip = el.querySelector('.reasoning-strip');
+            if (strip) strip.remove();
+            if (text) el.dataset.rawReasoning = text;
+            let box = el.querySelector('.message-reasoning');
+            if (!text || !reasoningVisible) {
+                if (box) box.remove();
+                el.dataset.reasoningSummary = '';
+                return;
+            }
+            const startedAt = Number(el.dataset.reasoningStartedAt || 0);
+            if (!box) {
+                box = document.createElement('details');
+                box.className = 'message-reasoning';
+                const summary = document.createElement('summary');
+                const body = document.createElement('div');
+                body.className = 'reasoning-text';
+                box.appendChild(summary);
+                box.appendChild(body);
+                el.insertBefore(box, el.firstChild);
+            }
+            const line = describeReasoning(text, { startedAt: startedAt, now: Date.now() });
+            box.querySelector('summary').textContent = line;
+            box.querySelector('.reasoning-text').textContent = text;
+            el.dataset.reasoningSummary = line;
+            el.dataset.rawReasoning = text;
+        }
+
+        // Puter streams reasoning as chunks tagged type: 'reasoning'; non-streaming
+        // replies carry it on message.reasoning. Normalize both to a plain string.
+        function extractReasoning(part) {
+            if (!part || typeof part === 'string') return '';
+            if (part.type === 'reasoning' || part.type === 'thinking') {
+                return part.text || part.thinking || part.reasoning || '';
+            }
+            return part.reasoning || '';
+        }
+
+        function buildMessageActions(retryText, isImageRetry, attachmentLost, forkIndex) {
+            const bar = document.createElement('div');
+            bar.className = 'message-actions';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'msg-action-btn';
+            copyBtn.type = 'button';
+            copyBtn.title = 'Copy';
+            copyBtn.setAttribute('aria-label', 'Copy message');
+            copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+            copyBtn.addEventListener('click', () => copyText(copyBtn.closest('.message').dataset.rawContent || '', copyBtn));
+            bar.appendChild(copyBtn);
+
+            // Forking starts here: a new chat keeps everything through the
+            // message this button sits under, so an alternate continuation
+            // begins exactly where the reader decided the source thread left
+            // the useful path.
+            if (Number.isInteger(forkIndex)) {
+                const forkBtn = document.createElement('button');
+                forkBtn.className = 'msg-action-btn';
+                forkBtn.type = 'button';
+                forkBtn.title = 'Fork from here';
+                forkBtn.setAttribute('aria-label', 'Fork the conversation from this message');
+                forkBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v6"/><path d="M6 12h6a3 3 0 0 0 3-3v-1"/></svg>';
+                forkBtn.addEventListener('click', () => forkConversationFrom(forkIndex));
+                bar.appendChild(forkBtn);
+            }
+
+            if (retryText) {
+                const retryBtn = document.createElement('button');
+                retryBtn.className = 'msg-action-btn';
+                retryBtn.type = 'button';
+                retryBtn.title = attachmentLost ? 'Retry (attachment will not be resent)' : 'Retry';
+                retryBtn.setAttribute('aria-label', attachmentLost ? 'Retry message (attachment will not be resent)' : 'Retry message');
+                retryBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/></svg>';
+                retryBtn.addEventListener('click', () => {
+                    if (attachmentLost) showStatus('info', "Attachment can't be resent — retrying with text only");
+                    retryMessage(retryText, isImageRetry);
+                });
+                bar.appendChild(retryBtn);
+            }
+
+            if (window.NeuraOSHub) window.NeuraOSHub.decorateActions(bar);
+
+            return bar;
+        }
+
+        function copyText(text, button) {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                showStatus('error', 'Clipboard unavailable');
+                return;
+            }
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    showStatus('success', 'Copied');
+                    flashCopied(button);
+                })
+                .catch(() => showStatus('error', 'Copy failed'));
+        }
+
+        // The status bar sits at the bottom of the screen, far from the button
+        // that was clicked. Confirming on the button itself is what people
+        // actually look at.
+        function flashCopied(button) {
+            if (!button || button.dataset.flashing) return;
+            const original = button.innerHTML;
+            const isTextButton = button.classList.contains('code-copy-btn');
+            button.dataset.flashing = '1';
+            button.classList.add('copied');
+            button.innerHTML = isTextButton
+                ? 'Copied'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+            setTimeout(() => {
+                button.innerHTML = original;
+                button.classList.remove('copied');
+                delete button.dataset.flashing;
+            }, 1200);
+        }
+
+        // The whole exchange as markdown, for pasting into an issue or a doc.
+        function copyConversation(button) {
+            if (!messages.length) {
+                showStatus('error', 'Nothing to copy yet');
+                return;
+            }
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            copyText(conversationToMarkdown(messages, convo && convo.title), button);
+        }
+
+        // Forking splits this thread at the message the reader clicked: the new
+        // chat keeps everything through it and stops there, becoming the
+        // starting point for an alternate continuation. The original stays
+        // untouched -- nothing is deleted, only branched.
+        function forkConversationFrom(index) {
+            const convo = conversations.find((c) => c.id === activeConversationId);
+            if (!convo) return;
+            const fork = forkConversation(convo, index, newConversationId(), Date.now());
+            conversations = upsertConversation(conversations, fork);
+            activeConversationId = fork.id;
+            messages = fork.messages;
+            usageCount = 0;
+            updateUsageDisplay();
+            // A fork is a fresh session pointing at the kept plan; the workspace
+            // of the thread it branched from stays where it was.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
+            renderActiveConversation();
+            writeConversations();
+            if (isNarrowScreen()) toggleHistory(false, false);
+            showStatus('success', 'Forked — continuing from here in a new chat');
+        }
+
+        function createBotBubble() {
+            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            const textEl = document.createElement('div');
+            textEl.className = 'message-text';
+            el.appendChild(textEl);
+            setMessageContent(el, '');
+            appendToTranscript(el, 'follow');
+            return el;
+        }
+
+        function finalizeMessage(el, content, retryText, attachmentLost, reasoning) {
+            setMessageContent(el, content);
+            setReasoningContent(el, reasoning);
+            el.appendChild(buildMessageActions(retryText, false, attachmentLost, messages.length));
+            messages.push({ type: 'bot', content, reasoning: reasoning || undefined, timestamp: Date.now() });
+            markMemoryUse(el, content);
+            persistMessages();
+            scrollTranscript('follow');
+        }
+
+        // A stream that died after tokens were already on screen: keep every
+        // word delivered — the upstream spent them, and often kept generating
+        // after our deadline — then name what cut it off. Discarding the text
+        // here is what invited a resend that paid for the same tokens twice.
+        // No template literals in here: the wiring tests extract this function
+        // from the page by brace-walking, and a backtick breaks their scanner.
+        function finalizePartial(bubble, renderer, notice) {
+            const text = renderer.full;
+            if (!bubble || !bubble.parentNode) {
+                showStatus('error', notice || 'The stream ended early');
+                return;
+            }
+            setMessageContent(bubble, text);
+            setReasoningContent(bubble, renderer.reasoning);
+            const note = document.createElement('div');
+            note.className = 'system-note';
+            note.textContent = '⚠ ' + (notice || 'The stream ended early — the reply above may be incomplete.') + ' Continuing will send a fresh request.';
+            bubble.appendChild(note);
+            messages.push({ type: 'bot', content: text, reasoning: renderer.reasoning || undefined, timestamp: Date.now() });
+            markMemoryUse(bubble, text);
+            persistMessages();
+            scrollTranscript('follow');
+            showStatus('error', notice || 'The stream ended early');
+        }
+
+        function addMessage(type, content, opts = {}) {
+            if (emptyState.style.display !== 'none') emptyState.style.display = 'none';
+
+            const el = document.createElement('div');
+            el.className = `message ${type}` + (opts.error ? ' error' : '');
+            const textEl = document.createElement('div');
+            textEl.className = 'message-text';
+            el.appendChild(textEl);
+            setMessageContent(el, content);
+            if (opts.reasoning) setReasoningContent(el, opts.reasoning);
+            if (type === 'bot') markMemoryUse(el, content);
+
+            if (type === 'bot') {
+                el.appendChild(buildMessageActions(opts.retryText, false, opts.attachmentLost, messages.length));
+            } else if (type === 'user') {
+                // Copy only -- retrying your own message is what the composer
+                // is for, and a second button here would just be noise.
+                el.appendChild(buildMessageActions(null, false, false, messages.length));
+            } else if (opts.retryText) {
+                // A turn that stopped part-way never produced a reply to put a
+                // button under, so its notice carries one: continuing is the
+                // whole point of what was kept.
+                el.appendChild(buildMessageActions(opts.retryText, false, false, messages.length));
+            }
+
+            // Your own message is the one arrival allowed to move you: you sent
+            // it, and you are waiting for what it produces.
+            appendToTranscript(el, type === 'user' ? 'own-message' : 'follow');
+
+            // Only a message that has no reply to sit under needs its own retry
+            // target stored; a bot reply recovers the preceding user turn, so
+            // storing a second copy of the prompt would just double the list.
+            const storedRetry = type === 'bot' ? undefined : opts.retryText || undefined;
+            messages.push({ type, content, reasoning: opts.reasoning || undefined, timestamp: Date.now(), error: !!opts.error, retryText: storedRetry });
+            persistMessages();
+
+            return el;
+        }
+
+        function showTypingIndicator() {
+            const el = document.createElement('div');
+            el.className = 'typing-indicator';
+            el.id = 'typingIndicator';
+            el.setAttribute('role', 'status');
+            el.setAttribute('aria-label', 'Assistant is thinking');
+            el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>'
+                + '<div class="typing-label" id="typingLabel">Thinking…</div>';
+            // The indicator is a placeholder that removes itself, so it never
+            // counts as output the reader missed.
+            appendToTranscript(el, 'indicator');
+        }
+
+        // What the agent is doing right now, in one line. The dots say "busy",
+        // which is the same for a two-second lookup and a stuck provider.
+        function setActivity(text) {
+            const el = document.getElementById('typingLabel');
+            if (el) el.textContent = text || '';
+        }
+
+        function removeTypingIndicator() {
+            const el = document.getElementById('typingIndicator');
+            if (el) el.remove();
+        }
+
+        function autoResize(ta) {
+            ta.style.height = '36px';
+            // A fixed 140px cap eats the whole transcript on a landscape
+            // phone once the keyboard is up; cap against the live viewport
+            // instead. Guarded: the boot-test stub has no innerHeight.
+            const cap = (typeof window !== 'undefined' && window.innerHeight) ? Math.max(80, Math.floor(window.innerHeight * 0.35)) : 140;
+            ta.style.height = Math.min(ta.scrollHeight, cap) + 'px';
+            sendButton.disabled = isTyping ? false : !ta.value.trim();
+        }
+
+        function handleKeyDown(e) {
+            if (e.key === 'Escape' && isTyping) { e.preventDefault(); stopGeneration(); return; }
+            if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'g') {
+                e.preventDefault();
+                if (isTyping) stopGeneration();
+                return;
+            }
+            // Keep browser-native Ctrl/Cmd+A/C/V behavior. Shift+Space is also
+            // ordinary input (useful for deliberate spaces in the prompt).
+            if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v'].includes(String(e.key || '').toLowerCase())) return;
+            if (e.altKey && !e.ctrlKey && !e.metaKey) {
+                const ta = e.target;
+                const k = String(e.key || '').toLowerCase();
+                const word = (dir) => {
+                    const v = ta.value;
+                    let p = ta.selectionStart;
+                    if (dir < 0) {
+                        while (p > 0 && /\s/.test(v[p - 1])) p--;
+                        while (p > 0 && !/\s/.test(v[p - 1])) p--;
+                    } else {
+                        while (p < v.length && /\s/.test(v[p])) p++;
+                        while (p < v.length && !/\s/.test(v[p])) p++;
+                    }
+                    try { ta.setSelectionRange(p, p); } catch { /* ignore */ }
+                };
+                if (k === 'b') { e.preventDefault(); word(-1); return; }
+                if (k === 'f') { e.preventDefault(); word(1); return; }
+                if (k === 'd') {
+                    e.preventDefault();
+                    const s = ta.selectionStart;
+                    const v = ta.value;
+                    let p = s;
+                    while (p < v.length && /\s/.test(v[p])) p++;
+                    while (p < v.length && !/\s/.test(v[p])) p++;
+                    ta.value = v.slice(0, s) + v.slice(p);
+                    autoResize(ta);
+                    try { ta.setSelectionRange(s, s); } catch { /* ignore */ }
+                    return;
+                }
+            }
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function toggleAttachMenu() {
+            if (attachMenu.classList.contains('open')) closeAttachMenu();
+            else openAttachMenu();
+        }
+        // Trigger the voice dictation / TTS panel.
+        function triggerVoiceMode() {
+            toggleSessionPanel();
+            setImageMode(false);
+            document.getElementById('voiceModeSwitch').checked = true;
+            setDrawWithPuter(false);
+        }
+        // The attach menu is anchored to the paperclip's own rect and to the left
+        // edge of it, unlike the model menu, which is anchored to its trigger's
+        // right edge: this one opens from the start of the controls row.
+        function positionAttachMenu() {
+            if (!attachMenu.classList.contains('open')) return;
+            const rect = attachTrigger.getBoundingClientRect();
+            const view = { width: window.innerWidth, height: window.innerHeight };
+            const spot = placeDropdown(rect, view, {
+                width: ATTACH_MENU_WIDTH,
+                minHeight: ATTACH_MENU_MIN_HEIGHT,
+                maxHeight: ATTACH_MENU_MAX_HEIGHT,
+            });
+            const margin = 8;
+            const left = Math.min(
+                Math.max(margin, Math.round(rect.left)),
+                Math.max(margin, view.width - spot.width - margin)
+            );
+            attachMenu.style.width = spot.width + 'px';
+            attachMenu.style.maxWidth = spot.width + 'px';
+            attachMenu.style.maxHeight = spot.maxHeight + 'px';
+            attachMenu.style.left = left + 'px';
+            attachMenu.style.right = 'auto';
+            attachMenu.style.top = spot.openUp ? 'auto' : spot.top + 'px';
+            attachMenu.style.bottom = spot.openUp ? spot.bottom + 'px' : 'auto';
+        }
+
+        function openAttachMenu() {
+            closeModelDropdown();
+            attachMenu.classList.add('open');
+            // Placed while open, so the measured position cannot be lost to the
+            // display:none it comes from.
+            positionAttachMenu();
+            attachTrigger.setAttribute('aria-expanded', 'true');
+        }
+        function closeAttachMenu() {
+            attachMenu.classList.remove('open');
+            attachTrigger.setAttribute('aria-expanded', 'false');
+        }
+        function focusAttachOption(index) {
+            const opts = Array.from(attachMenu.querySelectorAll('.attach-menu-item'));
+            if (!opts.length) return;
+            const i = ((index % opts.length) + opts.length) % opts.length;
+            opts[i].focus();
+        }
+        function handleAttachMenuKeydown(e) {
+            const opts = Array.from(attachMenu.querySelectorAll('.attach-menu-item'));
+            const current = opts.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); opts[(current + 1 + opts.length) % opts.length]?.focus(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); opts[(current - 1 + opts.length) % opts.length]?.focus(); }
+            else if (e.key === 'Escape') { e.preventDefault(); closeAttachMenu(); attachTrigger.focus(); }
+        }
+
+        // The menu item filters the file dialog; it never decides what the picked
+        // file becomes. Filtering "Files" by the extensions the app accepted is what
+        // made .py, .html, .css, .env, .toml, Makefile and Dockerfile unselectable --
+        // so Files opens unfiltered, and whatever arrives is classified by what it is.
+        function selectAttachKind(kind) {
+            closeAttachMenu();
+            fileInput.accept = kind === 'image'
+                ? 'image/*'
+                : kind === 'document'
+                    ? '.pdf,.docx'
+                    : kind === 'voice'
+                        ? ''
+                        : '';
+            if (kind === 'voice') {
+                triggerVoiceMode();
+                return;
+            }
+            fileInput.click();
+        }
+
+        function loadScriptOnce(url, integrity) {
+            if (!loadedScripts[url]) {
+                loadedScripts[url] = new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = url;
+                    s.crossOrigin = 'anonymous';
+                    if (integrity) s.integrity = integrity;
+                    s.onload = () => resolve();
+                    s.onerror = () => {
+                        delete loadedScripts[url];
+                        reject(new Error('Failed to load ' + url));
+                    };
+                    document.head.appendChild(s);
+                });
+            }
+            return loadedScripts[url];
+        }
+
+        const PDFJS_VERSION = '3.11.174';
+        const MAMMOTH_VERSION = '1.12.2';
+        // SRI hashes pinned to the exact CDN files above (from cdnjs' published sri metadata)
+        // so a tampered/compromised CDN response is rejected instead of silently executed.
+        const PDFJS_SRI = 'sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==';
+        const MAMMOTH_SRI = 'sha512-AnEJW9a1Eels9e8WrJPSECJq607agw+P705HEFYHRz8d2Elmfrer/XVEsSSgir/uJg1iVmVc5E2zsL9V3WU9FQ==';
+        // Note: pdf.worker.min.js is loaded by pdf.js itself via the Worker() constructor,
+        // which has no integrity option, so it can't be SRI-pinned from here.
+
+        async function extractPdfText(file) {
+            await loadScriptOnce(`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.js`, PDFJS_SRI);
+            if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+            }
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let text = '';
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const content = await page.getTextContent();
+                text += content.items.map((item) => item.str).join(' ') + '\n\n';
+            }
+            return text.trim();
+        }
+
+        async function extractDocxText(file) {
+            await loadScriptOnce(`https://cdnjs.cloudflare.com/ajax/libs/mammoth/${MAMMOTH_VERSION}/mammoth.browser.min.js`, MAMMOTH_SRI);
+            const arrayBuffer = await file.arrayBuffer();
+            const result = await mammoth.extractRawText({ arrayBuffer });
+            return result.value.trim();
+        }
+
+        const MAX_DOCUMENT_TEXT_LENGTH = 20000;
+
+        function truncateExtractedText(text) {
+            if (text.length <= MAX_DOCUMENT_TEXT_LENGTH) return text;
+            return text.slice(0, MAX_DOCUMENT_TEXT_LENGTH) + '\n\n[...truncated, document was longer]';
+        }
+
+        // A file attaches as whatever it *is*: a picture by its MIME type, a PDF or
+        // DOCX by its extension (the parser is what has to match), and otherwise
+        // text if the bytes decode as text. The old version asked the menu item
+        // instead, so a PDF opened from Files was refused for arriving through the
+        // wrong door and a .py opened from Documents likewise.
+        async function handleFileSelect(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+
+            const kind = attachmentKindFor(file.name, file.type);
+
+            if (kind === 'image') {
+                if (file.size > 8 * 1024 * 1024) {
+                    showStatus('error', 'Image too large (8MB max)');
+                    return;
+                }
+                setPendingAttachment({ kind: 'image', file, name: file.name, previewUrl: URL.createObjectURL(file) });
+                showStatus('success', 'Attached ' + file.name);
+                return;
+            }
+
+            if (kind === 'document') {
+                if (file.size > 15 * 1024 * 1024) {
+                    showStatus('error', 'Document too large (15MB max)');
+                    return;
+                }
+                try {
+                    showStatus('info', 'Reading ' + file.name + '...');
+                    const lower = file.name.toLowerCase();
+                    const rawText = lower.endsWith('.pdf') ? await extractPdfText(file) : await extractDocxText(file);
+                    setPendingAttachment({ kind: 'text', name: file.name, content: truncateExtractedText(rawText) });
+                    showStatus('success', 'Attached ' + file.name);
+                } catch (error) {
+                    console.error('Document parse failed:', error);
+                    showStatus('error', 'Could not read ' + file.name);
+                }
+                return;
+            }
+
+            // The whole file goes into the next prompt, which is why text stops at
+            // 200KB while a document can be 15MB -- its parser sends a summary.
+            if (file.size > 200 * 1024) {
+                showStatus('error', 'File too large (200KB max) — attach a document to send more');
+                return;
+            }
+            let text = null;
+            try {
+                text = decodeAttachmentText(await file.arrayBuffer());
+            } catch (error) {
+                console.error('Attachment read failed:', error);
+            }
+            if (text === null) {
+                showStatus('error', 'That is not a text file — attach it as an Image or a Document');
+                return;
+            }
+            setPendingAttachment({ kind: 'text', name: file.name, content: text });
+            showStatus('success', 'Attached ' + file.name);
+        }
+
+        function setPendingAttachment(attachment) {
+            if (pendingAttachment && pendingAttachment.previewUrl) URL.revokeObjectURL(pendingAttachment.previewUrl);
+            pendingAttachment = attachment;
+            attachmentName.textContent = attachment.name;
+            attachmentChip.hidden = false;
+            const cost = describeAttachmentCost(attachment);
+            attachmentCost.hidden = !cost;
+            attachmentCost.textContent = cost ? cost.label : '';
+            attachmentCost.className = cost && cost.heavy ? 'attachment-cost heavy' : 'attachment-cost';
+            attachmentCost.title = cost && cost.heavy
+                ? 'About ' + cost.tokens + ' tokens — more than the ' + (HISTORY_TOKEN_BUDGET / 1000)
+                  + 'k-token history this chat is trimmed to. An attachment is sent in full.'
+                : '';
+            if (attachment.kind === 'image') {
+                attachmentThumb.src = attachment.previewUrl;
+                attachmentThumb.hidden = false;
+            } else {
+                attachmentThumb.hidden = true;
+                attachmentThumb.src = '';
+            }
+        }
+
+        function clearAttachment() {
+            if (pendingAttachment && pendingAttachment.previewUrl) URL.revokeObjectURL(pendingAttachment.previewUrl);
+            pendingAttachment = null;
+            attachmentChip.hidden = true;
+            attachmentName.textContent = '';
+            attachmentCost.hidden = true;
+            attachmentCost.textContent = '';
+            attachmentCost.className = 'attachment-cost';
+            attachmentCost.title = '';
+            attachmentThumb.hidden = true;
+            attachmentThumb.src = '';
+            // An attachment is what makes the next turn an edit rather than a
+            // generation, and an edit reads only a spelled-out size.
+            updateImageSizeHint();
+        }
+
+        function loadUserPreferences() {
+            const saved = localStorage.getItem('puterChatModel');
+            selectedModel = (saved && isValidModel(saved)) ? saved : DEFAULT_MODEL;
+            const savedEffort = localStorage.getItem('puterChatEffort');
+            selectedEffort = isValidEffort(savedEffort) ? savedEffort : DEFAULT_EFFORT;
+            autoRetryEnabled = localStorage.getItem('puterChatAutoRetry') !== '0';
+            const arc = document.getElementById('autoRetryCheck');
+            if (arc) arc.checked = autoRetryEnabled;
+            freeModelsOnly = localStorage.getItem('freeai4uFreeModelsOnly') !== '0';
+            const foc = document.getElementById('freeOnlyCheck');
+            if (foc) foc.checked = freeModelsOnly;
+            compactNotices = localStorage.getItem('puterChatCompactNotices') === '1';
+            const cnc = document.getElementById('compactNoticesCheck');
+            if (cnc) cnc.checked = compactNotices;
+            if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
+            applyTheme(localStorage.getItem('puterChatTheme') || 'dark');
+            applyCompactSession();
+            updateModelLabel();
+            updateEffortPicker();
+        }
+
+        function setAutoRetry(on) {
+            autoRetryEnabled = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatAutoRetry', autoRetryEnabled ? '1' : '0'); } catch { /* private mode */ }
+        }
+
+        // The free-only switch changes what the picker shows, so the rows have to
+        // be rebuilt on the spot -- and the choice has to survive a reload, which
+        // is what the storage key is for.
+        function setFreeModelsOnly(on) {
+            freeModelsOnly = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('freeai4uFreeModelsOnly', freeModelsOnly ? '1' : '0'); } catch { /* private mode */ }
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('freeOnlyCheck');
+            if (box) box.checked = freeModelsOnly;
+            renderModelOptions();
+            updateModelLabel();
+            showStatus('info', freeModelsOnly ? 'Showing free models only' : 'Showing every model, free or paid');
+        }
+
+        function setCompactNotices(on) {
+            compactNotices = !!on;
+            try {
+                if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatCompactNotices', compactNotices ? '1' : '0');
+                if (document && document.body && document.body.classList) document.body.classList.toggle('hide-system', compactNotices);
+            } catch { /* stub DOM */ }
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactNoticesCheck');
+            if (box) box.checked = compactNotices;
+        }
+
+        // The settings half of compact. Kept beside setCompactNotices so both
+        // context controls read the same way, and made to agree with the state
+        // whoever changed it -- the command and the checkbox are one switch.
+        function setCompactSession(on) {
+            compactSession = !!on;
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem(COMPACT_KEY, compactSession ? '1' : '0'); } catch { /* private mode */ }
+            applyCompactSession();
+            showStatus('info', compactSession ? 'Compact session on — fewer tokens sent' : 'Compact session off');
+        }
+
+        function applyCompactSession() {
+            const box = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('compactCheck');
+            if (box) box.checked = compactSession;
+        }
+
+        // Server limits, shown in Settings so the enforced numbers live in one
+        // place instead of being hardcoded twice.
+        async function loadLimitsHint() {
+            const el = typeof document !== 'undefined' && typeof document.getElementById === 'function' && document.getElementById('limitsHint');
+            if (!el) return;
+            try {
+                const data = await (await fetch('/api/llm/limits')).json();
+                const t = data.timeouts, r = data.retries;
+                // The waiting budget belongs in this line more than any other
+                // number here: it is what stops a free tier's Retry-After from
+                // being spent on a turn that could be answered elsewhere.
+                const lines = [
+                    `Chat ${Math.round(t.chat / 1000)}s · headers ${Math.round(t.headers / 1000)}s · stall ${Math.round(t.stall / 1000)}s · up to ${r.maxAttempts} tries within ${Math.round((r.budgetMs || 0) / 1000)}s of waiting`,
+                ];
+                (Array.isArray(data.freeTiers) ? data.freeTiers : []).forEach((tier) => {
+                    const used = tier.cap
+                        ? ` — ${tier.callsToday}/${tier.cap} calls today`
+                        : (tier.callsToday ? ` — ${tier.callsToday} calls today` : '');
+                    lines.push(`${tier.label}: ${tier.text || 'free'}${used}`);
+                });
+                el.textContent = lines.join(' · ');
+            } catch {
+                el.textContent = 'Server limits unavailable.';
+            }
+        }
+
+        // Themes cycle dark -> light -> tokyonight -> gruvbox -> green. Guarded
+        // throughout: the boot-test stub DOM has no theme machinery, so every
+        // DOM touch checks first. (THEMES/THEME_META live up with the state.)
+        // 'auto' follows the OS; anything unknown falls back to dark.
+        function resolveTheme(stored) {
+            if (stored === 'auto') {
+                try {
+                    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                    }
+                } catch { /* ignore */ }
+                return 'dark';
+            }
+            return THEMES.includes(stored) ? stored : 'dark';
+        }
+
+        function applyTheme(theme) {
+            const stored = theme === 'auto' || THEMES.includes(theme) ? theme : 'dark';
+            const name = resolveTheme(stored);
+            try {
+                if (document && document.documentElement && typeof document.documentElement.setAttribute === 'function') {
+                    document.documentElement.setAttribute('data-theme', name);
+                }
+                const meta = document && typeof document.querySelector === 'function' && document.querySelector('meta[name="theme-color"]');
+                if (meta && typeof meta.setAttribute === 'function') meta.setAttribute('content', THEME_META[name]);
+            } catch { /* stub DOM in tests */ }
+            try {
+                if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+                    localStorage.setItem('puterChatTheme', stored);
+                }
+            } catch { /* private mode */ }
+        }
+
+        function toggleTheme() {
+            const current = (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('puterChatTheme')) || 'dark';
+            const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
+            applyTheme(next);
+            showStatus('success', 'Theme: ' + next);
+        }
+
+        // The appearance picker.
+        //
+        // ChatGPT names three choices -- System, Light, Dark -- rather than
+        // cycling, and a cycle is the wrong shape for five: reaching Gruvbox from
+        // Tokyo Night meant passing through every other theme on the way. The two
+        // packs sit below the three because they are the same choice with a
+        // different palette, which is also why they are labelled as packs.
+        const THEME_OPTIONS = [
+            { id: 'auto', label: 'System', hint: 'Follow this device', swatch: 'linear-gradient(135deg, #212121 0 50%, #ffffff 50% 100%)' },
+            { id: 'light', label: 'Light', swatch: '#ffffff' },
+            { id: 'dark', label: 'Dark', swatch: '#212121' },
+            { id: 'tokyonight', label: 'Tokyo Night', hint: 'Pack', swatch: '#1a1b26' },
+            { id: 'gruvbox', label: 'Gruvbox', hint: 'Pack', swatch: '#282828' },
+            { id: 'green', label: 'Green', hint: 'Pack', swatch: '#0d1512' },
+        ];
+
+        function storedTheme() {
+            try {
+                if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
+                    return localStorage.getItem('puterChatTheme') || 'dark';
+                }
+            } catch { /* private mode */ }
+            return 'dark';
+        }
+
+        function renderThemeMenu(menu) {
+            const current = storedTheme();
+            menu.innerHTML = '<div class="theme-menu-head">Appearance</div>';
+            for (const option of THEME_OPTIONS) {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.setAttribute('role', 'menuitemradio');
+                row.setAttribute('aria-checked', String(option.id === current));
+                if (option.id === current) {
+                    const check = document.createElement('i');
+                    check.className = 'check';
+                    check.setAttribute('aria-hidden', 'true');
+                    check.textContent = '✓';
+                    row.appendChild(check);
+                }
+                const swatch = document.createElement('i');
+                swatch.className = 'theme-swatch';
+                swatch.style.background = option.swatch;
+                const label = document.createElement('span');
+                label.textContent = option.label;
+                row.appendChild(swatch);
+                row.appendChild(label);
+                if (option.hint) {
+                    const hint = document.createElement('span');
+                    hint.className = 'hint';
+                    hint.textContent = option.hint;
+                    row.appendChild(hint);
+                }
+                row.addEventListener('click', () => {
+                    applyTheme(option.id);
+                    closeThemeMenu();
+                    showStatus('success', `Theme: ${option.label}`);
+                });
+                menu.appendChild(row);
+            }
+        }
+
+        function closeThemeMenu() {
+            const menu = document.getElementById('themeMenu');
+            if (!menu || menu.hidden) return;
+            menu.hidden = true;
+            const trigger = document.getElementById('themeToggle');
+            if (trigger && typeof trigger.setAttribute === 'function') trigger.setAttribute('aria-expanded', 'false');
+        }
+
+        function positionThemeMenu(menu, anchor) {
+            if (!anchor || typeof anchor.getBoundingClientRect !== 'function') return;
+            // On a phone the CSS makes this a sheet at the bottom of the screen;
+            // the inline placement is cleared rather than fought with.
+            try {
+                if (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(SMALL_SCREEN_QUERY).matches) {
+                    menu.style.left = '';
+                    menu.style.top = '';
+                    return;
+                }
+            } catch { /* the boot-test stub DOM has no matchMedia */ }
+            const rect = anchor.getBoundingClientRect();
+            const width = menu.offsetWidth || 226;
+            const height = menu.offsetHeight || 220;
+            const viewWidth = (typeof window !== 'undefined' && window.innerWidth) || 1024;
+            const viewHeight = (typeof window !== 'undefined' && window.innerHeight) || 768;
+            // Right-aligned to the button, then pulled back inside the viewport:
+            // the theme button is the last one in the bar, so a left-aligned menu
+            // would hang off the screen by its own width.
+            menu.style.left = `${Math.min(Math.max(8, rect.right - width), Math.max(8, viewWidth - width - 8))}px`;
+            const below = rect.bottom + 6;
+            menu.style.top = `${below + height > viewHeight - 8 ? Math.max(8, rect.top - height - 6) : below}px`;
+        }
+
+        function toggleThemeMenu(event) {
+            if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+            const menu = document.getElementById('themeMenu');
+            if (!menu) return;
+            if (!menu.hidden) {
+                closeThemeMenu();
+                return;
+            }
+            closeImageDownloadMenu();
+            renderThemeMenu(menu);
+            menu.hidden = false;
+            const anchor = (event && event.currentTarget) || document.getElementById('themeToggle');
+            const trigger = document.getElementById('themeToggle');
+            if (trigger && typeof trigger.setAttribute === 'function') trigger.setAttribute('aria-expanded', 'true');
+            positionThemeMenu(menu, anchor);
+            const first = menu.querySelector('button');
+            if (first && typeof first.focus === 'function') first.focus();
+        }
+
+        // Follow the OS while 'auto' is stored. Attached once, guarded for
+        // the stub DOM, which answers matchMedia with a no-op object.
+        try {
+            if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                const mq = window.matchMedia('(prefers-color-scheme: light)');
+                const follow = () => {
+                    try {
+                        if (typeof localStorage !== 'undefined' && localStorage.getItem('puterChatTheme') === 'auto') applyTheme('auto');
+                    } catch { /* ignore */ }
+                };
+                if (mq && typeof mq.addEventListener === 'function') mq.addEventListener('change', follow);
+                else if (mq && typeof mq.addListener === 'function') mq.addListener(follow);
+            }
+        } catch { /* stub DOM */ }
+
+        // Command palette (Ctrl+P): models plus actions, filtered as you type.
+        // OpenCode's command_list parity. Lookups happen on open, so the
+        // boot-test stub never trips over missing nodes at load.
+        let paletteIndex = 0;
+        let paletteItems = [];
+        // The palette is the app's jump-to-anything, and a phone has no Ctrl+P
+        // to open it with -- so the drawer offers it as a row too.
+        function openPaletteFromDrawer() {
+            closeDrawer();
+            openPalette();
+        }
+        function paletteActions() {
+            const actions = [
+                { label: 'New chat', hint: 'session', run: () => startNewConversation() },
+                { label: 'Toggle theme', hint: 'theme', run: () => toggleTheme() },
+                { label: 'Toggle compact notices', hint: 'details', run: () => setCompactNotices(!compactNotices) },
+                { label: 'Go to Settings', hint: 'view', run: () => switchView('settings') },
+                { label: 'Go to Models', hint: 'view', run: () => switchView('models') },
+                { label: 'Go to Chat', hint: 'view', run: () => switchView('chat') },
+            ];
+            if (isTyping) actions.unshift({ label: 'Stop generation', hint: 'interrupt', run: () => stopGeneration() });
+            return actions;
+        }
+        function openPalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            const input = document.getElementById('paletteInput');
+            if (!overlay || !input) return;
+            overlay.hidden = false;
+            input.value = '';
+            renderPalette('');
+            input.focus();
+        }
+        function closePalette() {
+            const overlay = document.getElementById('paletteOverlay');
+            if (overlay) overlay.hidden = true;
+            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
+        }
+        function renderPalette(filter) {
+            const list = document.getElementById('paletteList');
+            if (!list) return;
+            const q = (filter || '').trim().toLowerCase();
+            const models = (providerModels || []).map((m) => ({
+                label: 'Model: ' + m.id,
+                hint: (function () { try { return describeProviderModel(m) || m.id; } catch { return m.id; } })(),
+                run: () => selectModel(m.id),
+            }));
+            const items = [...models, ...paletteActions()].filter((it) => !q || (it.label + ' ' + it.hint).toLowerCase().includes(q));
+            paletteItems = items;
+            paletteIndex = 0;
+            list.innerHTML = '';
+            items.slice(0, 30).forEach((it, i) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'palette-item' + (i === 0 ? ' selected' : '');
+                b.setAttribute('role', 'option');
+                const name = document.createElement('span');
+                name.textContent = it.label;
+                const hint = document.createElement('span');
+                hint.className = 'k';
+                hint.textContent = it.hint;
+                b.appendChild(name);
+                b.appendChild(hint);
+                b.addEventListener('click', () => { closePalette(); it.run(); });
+                list.appendChild(b);
+            });
+        }
+        function movePalette(dir) {
+            const list = document.getElementById('paletteList');
+            if (!list || !paletteItems.length) return;
+            paletteIndex = (paletteIndex + dir + paletteItems.length) % paletteItems.length;
+            [...list.children].forEach((el, i) => el.classList.toggle('selected', i === paletteIndex));
+            const sel = list.children[paletteIndex];
+            if (sel && typeof sel.scrollIntoView === 'function') sel.scrollIntoView({ block: 'nearest' });
+        }
+        function runPalette() {
+            const it = paletteItems[paletteIndex];
+            closePalette();
+            if (it) it.run();
+        }
+        function handleGlobalKeys(e) {
+            if (!e) return;
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'k')) {
+                e.preventDefault();
+                const overlay = document.getElementById('paletteOverlay');
+                if (overlay && !overlay.hidden) closePalette();
+                else openPalette();
+                return;
+            }
+            const overlay = document.getElementById('paletteOverlay');
+            if (!overlay || overlay.hidden) return;
+            if (e.key === 'Escape') closePalette();
+            else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
+            else if (e.key === 'Enter') { e.preventDefault(); runPalette(); }
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('keydown', handleGlobalKeys);
+        }
+
+        function saveUserPreferences() {
+            rememberPreference('puterChatModel', selectedModel);
+        }
+
+        function updateUsageDisplay() {
+            if (usageText) {
+                usageText.textContent = `${usageCount} request${usageCount !== 1 ? 's' : ''}`;
+                usageText.style.display = usageCount ? 'inline' : 'none';
+            }
+        }
+
+        // TUI status parity: after each reply the status bar shows what
+        // answered, how long it took, how much text came back, and token
+        // usage when the provider reports it.
+        function noteTurnStats(chars, tokens = 0, cached = 0) {
+            if (!turnStartedAt) return;
+            const secs = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
+            const size = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k' : String(chars);
+            const tok = tokens > 0 ? ` · ${(tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'k' : tokens)} tok` : '';
+            // Shown because it is the one number that says whether the stable
+            // prefix is actually paying off: a turn that reads most of its input
+            // from the provider's cache costs a fraction of one that does not.
+            const cache = cached > 0 ? ` · ${(cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached)} cached` : '';
+            if (usageText) {
+                // The model that answered, not the one that was picked: a routed
+                // step can produce the reply, and naming the picker's choice there
+                // would report a model that did not write it.
+                usageText.textContent = `${lastReplyModel || selectedModel} · ${secs}s · ${size} chars${tok}${cache}`;
+                usageText.style.display = 'inline';
+            }
+            turnStartedAt = 0;
+        }
+
+        function newConversationId() {
+            return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+        }
+
+        function readConversations() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(CONVERSATIONS_KEY) || '[]');
+                return Array.isArray(raw) ? raw.filter((c) => c && c.id && Array.isArray(c.messages)) : [];
+            } catch {
+                return [];
+            }
+        }
+
+        function writeConversations() {
+            const write = () => localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
+            try {
+                write();
+                localStorage.setItem(ACTIVE_CONVERSATION_KEY, activeConversationId || '');
+            } catch (e) {
+                // A full quota shouldn't lose the chat on screen. Pictures go
+                // before words do: a chat with no image is still a chat, a chat
+                // with no history is a loss. Other conversations first, then the
+                // one being read, and the oldest half only as a last resort.
+                console.error('Failed to persist conversations:', e);
+                conversations = stripStoredImages(conversations, activeConversationId);
+                try { write(); return; } catch { /* still full */ }
+                conversations = stripStoredImages(conversations, '');
+                // The live transcript holds the same message objects, so a strip
+                // that is not reflected here is undone by the very next persist.
+                messages = capConversationImages(messages, 0);
+                try { write(); return; } catch { /* still full */ }
+                conversations = conversations.slice(0, Math.max(1, Math.floor(conversations.length / 2)));
+                try {
+                    write();
+                } catch {
+                    showStatus('error', 'Browser storage is full - history may not save');
+                }
+            }
+        }
+
+        function persistMessages() {
+            // Pictures are the only part of history that grows without bound and
+            // localStorage is what pays for it, so the newest few per chat stay.
+            const trimmed = capConversationImages(messages.slice(-MAX_MESSAGES_PER_CONVERSATION));
+            conversations = upsertConversation(conversations, {
+                id: activeConversationId,
+                title: deriveChatTitle(trimmed),
+                messages: trimmed,
+                // Saved with the chat, so a skill someone pinned is still on
+                // after a reload -- and is not carried into the next chat. The
+                // declined offers travel with it for the same reason.
+                skills: activeSkillNames,
+                skillsDismissed: activeSkillDismissals,
+                updatedAt: Date.now(),
+            });
+            writeConversations();
+            renderHistoryList();
+        }
+
+        function loadMessagesFromStorage() {
+            conversations = readConversations();
+
+            // Chats used to be one "puterChatMessages" array. Carry it in as a
+            // conversation rather than dropping someone's history on upgrade.
+            const legacyRaw = localStorage.getItem('puterChatMessages');
+            if (legacyRaw && !conversations.length) {
+                try {
+                    const migrated = migrateLegacyMessages(JSON.parse(legacyRaw), newConversationId(), Date.now());
+                    if (migrated) conversations = [migrated];
+                } catch (e) {
+                    console.error('Failed to migrate saved messages:', e);
+                }
+            }
+            if (legacyRaw) localStorage.removeItem('puterChatMessages');
+
+            const savedActive = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
+            const active = conversations.find((c) => c.id === savedActive) || sortConversations(conversations)[0];
+            if (active) {
+                activeConversationId = active.id;
+                messages = active.messages;
+                // The chat's own settings first, before a single bubble is built.
+                // Rendering a saved chat goes through addMessage, which saves the
+                // chat on the way past -- and it saves whatever is in page state
+                // at that moment. Restored after the render, the pins (and the
+                // declined offers) were overwritten by the still-empty state
+                // first, so every reload quietly dropped them: the skills
+                // reappeared nowhere, and there was no chip left to turn off.
+                syncActiveSkillsFromConversation();
+                syncDismissedSuggestionsFromConversation();
+                // Pictures are bytes in the index now, and reading them is
+                // asynchronous. The transcript is drawn once they are in hand,
+                // because the alternative is a chat that opens saying "image
+                // unavailable" about a picture that is right there. The empty
+                // transcript lasts one indexed read.
+                hydrateStoredImages().then(() => renderSavedMessages());
+            } else {
+                activeConversationId = newConversationId();
+                syncActiveSkillsFromConversation();
+                syncDismissedSuggestionsFromConversation();
+            }
+            writeConversations();
+            renderHistoryList();
+            // The session belongs to the chat that is now open: its todos and
+            // workspace replace whatever the startup read under no id.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
+        }
+
+        function renderHistoryList() {
+            const list = document.getElementById('historyList');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!conversations.length) {
+                const empty = document.createElement('p');
+                empty.className = 'history-empty';
+                // An empty sidebar is the first thing a new reader sees on a
+                // phone, and "No chats yet." answers a question they had not
+                // asked. This says what will fill it.
+                empty.textContent = 'No chats yet. Describe anything in the composer and it is saved here, so you can come back to it.';
+                list.appendChild(empty);
+                return;
+            }
+            sortConversations(conversations).forEach((convo) => {
+                const row = document.createElement('div');
+                row.className = 'history-item' + (convo.id === activeConversationId ? ' active' : '');
+                row.tabIndex = 0;
+                row.setAttribute('role', 'button');
+
+                const dot = document.createElement('span');
+                dot.className = 'history-dot';
+                dot.setAttribute('aria-hidden', 'true');
+                row.appendChild(dot);
+
+                const title = document.createElement('span');
+                title.className = 'history-title';
+                title.textContent = convo.title || 'New chat';
+                title.title = convo.title || 'New chat';
+                row.appendChild(title);
+
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'history-pin' + (convo.pinned ? ' on' : '');
+                pin.textContent = convo.pinned ? '★' : '☆';
+                pin.title = convo.pinned ? 'Unpin this chat' : 'Pin this chat';
+                pin.setAttribute('aria-label', (convo.pinned ? 'Unpin chat: ' : 'Pin chat: ') + (convo.title || 'New chat'));
+                pin.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    togglePin(convo.id);
+                });
+                row.appendChild(pin);
+
+                const share = document.createElement('button');
+                share.type = 'button';
+                share.className = 'history-share';
+                share.textContent = '↗';
+                share.title = 'Share this chat as a read-only link';
+                share.setAttribute('aria-label', 'Share chat: ' + (convo.title || 'New chat'));
+                share.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openShareModal(convo.id);
+                });
+                row.appendChild(share);
+
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'history-delete';
+                del.textContent = '\u00d7';
+                del.title = 'Delete this chat';
+                del.setAttribute('aria-label', 'Delete chat: ' + (convo.title || 'New chat'));
+                del.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteConversation(convo.id);
+                });
+                row.appendChild(del);
+
+                const open = () => openConversation(convo.id);
+                row.addEventListener('click', open);
+                row.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+                });
+                list.appendChild(row);
+            });
+            renderTabs();
+        }
+
+        function togglePin(id) {
+            const convo = conversations.find((c) => c.id === id);
+            if (!convo) return;
+            convo.pinned = !convo.pinned;
+            writeConversations();
+            renderHistoryList();
+        }
+
+        // Tab strip: the active chat first, then pinned ones. Hidden when
+        // there is nothing worth switching between.
+        function renderTabs() {
+            const strip = document.getElementById('chatTabs');
+            if (!strip) return;
+            strip.innerHTML = '';
+            const active = conversations.find((c) => c.id === activeConversationId);
+            const list = [];
+            if (active) list.push(active);
+            conversations.filter((c) => c.pinned && (!active || c.id !== active.id)).forEach((c) => list.push(c));
+            strip.hidden = list.length < 2 && !list.some((c) => c.pinned);
+            if (strip.hidden) return;
+            list.forEach((c) => {
+                const tab = document.createElement('button');
+                tab.type = 'button';
+                tab.className = 'chat-tab' + (c.id === activeConversationId ? ' active' : '');
+                tab.textContent = (c.pinned ? '★ ' : '') + (c.title || 'New chat');
+                tab.title = c.title || 'New chat';
+                tab.setAttribute('aria-label', 'Open chat: ' + (c.title || 'New chat'));
+                tab.addEventListener('click', () => openConversation(c.id));
+                strip.appendChild(tab);
+            });
+        }
+
+        function renderActiveConversation() {
+            // Restoring a saved chat builds every bubble at once; animating all
+            // of them is a two-hundred-element slide-in for content already read.
+            chatMessages.classList.add('no-anim');
+            chatMessages.innerHTML = '';
+            chatMessages.appendChild(emptyState);
+            emptyState.style.display = messages.length ? 'none' : 'flex';
+            // Whatever this chat pinned -- and refused -- comes back with it; a
+            // fresh chat has neither. Read before the bubbles, for the same
+            // reason as the reload above: building a saved chat saves the chat.
+            syncActiveSkillsFromConversation();
+            syncDismissedSuggestionsFromConversation();
+            if (messages.length) renderSavedMessages();
+            // The canvas picker follows the transcript: a chat with no HTML
+            // blocks must not keep the previous chat's list behind stale.
+            collectCanvasBlocks();
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => chatMessages.classList.remove('no-anim'));
+            } else {
+                chatMessages.classList.remove('no-anim');
+            }
+            // Opening a chat is something the reader asked for, so it lands on
+            // the newest output rather than wherever the last chat was left.
+            jumpToNewest();
+            renderHistoryList();
+        }
+
+        function openConversation(id) {
+            const convo = conversations.find((c) => c.id === id);
+            if (!convo) return;
+            activeConversationId = id;
+            messages = convo.messages;
+            renderActiveConversation();
+            writeConversations();
+            // The chat's own session comes with it: its todos and workspace.
+            taskGraph = loadTaskGraph();
+            renderTaskList();
+            workspaceFiles = loadWorkspaceFiles();
+            renderWorkspaceFiles();
+            syncMemorySwitch();
+            if (isNarrowScreen()) toggleHistory(false, false);
+        }
+
+        // A deleted chat's session state must not sit in storage forever: its
+        // todos and workspace files go with it.
+        function forgetConversationState(id) {
+            if (!id) return;
+            try {
+                const ws = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || '{}');
+                if (ws && typeof ws === 'object' && !Array.isArray(ws) && Object.prototype.hasOwnProperty.call(ws, id)) {
+                    delete ws[id];
+                    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
+                }
+            } catch { /* nothing to forget */ }
+            try {
+                const tg = JSON.parse(localStorage.getItem(TASK_KEY) || '{}');
+                if (tg && typeof tg === 'object' && !Array.isArray(tg) && Object.prototype.hasOwnProperty.call(tg, id)) {
+                    delete tg[id];
+                    localStorage.setItem(TASK_KEY, JSON.stringify(tg));
+                }
+            } catch { /* nothing to forget */ }
+            if (readMemoryOwner === id) { readMemory = null; readMemoryOwner = ''; }
+        }
+
+        function startNewConversation() {
+            // An untouched empty chat is already a new chat; don't stack them up.
+            if (!messages.length && activeConversationId) {
+                if (isNarrowScreen()) toggleHistory(false, false);
+                showStatus('info', 'Already on a new chat');
+                return;
+            }
+            activeConversationId = newConversationId();
+            messages = [];
+            usageCount = 0;
+            updateUsageDisplay();
+            // A new chat is a new session: the todo list and the workspace
+            // start empty with it, and the previous chat keeps what it had.
+            taskGraph = newTaskGraph();
+            renderTaskList();
+            workspaceFiles = {};
+            renderWorkspaceFiles();
+            renderActiveConversation();
+            writeConversations();
+            if (isNarrowScreen()) toggleHistory(false, false);
+            showStatus('success', 'New chat started');
+        }
+
+        function deleteConversation(id) {
+            const convo = conversations.find((c) => c.id === id);
+            if (!convo) return;
+            if (convo.messages.length && !confirm('Delete "' + convo.title + '"? This cannot be undone.')) return;
+            conversations = conversations.filter((c) => c.id !== id);
+            // The chat's todos and workspace files are its session; they go
+            // with it instead of sitting in storage forever.
+            forgetConversationState(id);
+            if (id === activeConversationId) {
+                const next = sortConversations(conversations)[0];
+                if (next) {
+                    activeConversationId = next.id;
+                    messages = next.messages;
+                } else {
+                    activeConversationId = newConversationId();
+                    messages = [];
+                }
+                // The surviving chat's session is now the active one.
+                taskGraph = loadTaskGraph();
+                renderTaskList();
+                workspaceFiles = loadWorkspaceFiles();
+                renderWorkspaceFiles();
+                renderActiveConversation();
+            }
+            writeConversations();
+            renderHistoryList();
+        }
+
+        function isNarrowScreen() {
+            // Portrait phones, and any short landscape phone: in both, the side
+            // panels overlay the chat rather than sitting beside it, so they
+            // should start out of the way. This reads the same condition the
+            // CSS does -- keeping a second copy here is exactly how the two
+            // drifted apart before, when the JS carried a pointer test the CSS
+            // did not and a short landscape window got an overlay starting open.
+            return window.matchMedia(SMALL_SCREEN_QUERY).matches;
+        }
+
+        // force true shows, false hides, undefined toggles. persist false is for
+        // the automatic close after picking a chat on a phone: that is the app
+        // getting out of the way, not the user choosing to keep it shut, and
+        // recording it would overwrite what they actually chose.
+        function toggleHistory(force, persist = true) {
+            const shell = document.querySelector('#viewChat .chat-shell');
+            if (!shell) return;
+            const hidden = force === undefined ? !shell.classList.contains('history-hidden') : !force;
+            shell.classList.toggle('history-hidden', hidden);
+            document.getElementById('historyToggle').setAttribute('aria-expanded', String(!hidden));
+            if (!persist) return;
+            try {
+                localStorage.setItem(HISTORY_HIDDEN_KEY, hidden ? '1' : '');
+            } catch {
+                // A browser refusing storage shouldn't break the toggle itself.
+            }
+        }
+
+        function restoreHistoryVisibility() {
+            let stored = null;
+            try {
+                stored = localStorage.getItem(HISTORY_HIDDEN_KEY);
+            } catch {
+                stored = null;
+            }
+            // A phone defaults to closed, since the sidebar covers the chat
+            // there -- but only as a default. Once the user has chosen, that
+            // choice is honoured on every screen size; overriding it was why
+            // the setting never appeared to stick on mobile.
+            const hidden = stored === null || stored === undefined
+                ? isNarrowScreen()
+                : stored === '1';
+            toggleHistory(!hidden, false);
+        }
+
+        function renderSavedMessages() {
+            const saved = messages;
+            messages = [];
+            // Re-drawn replies re-detect their memory chips, but a redraw is
+            // not a new use: counting is suppressed for this loop only.
+            restoringTranscript = true;
+            if (saved.length) emptyState.style.display = 'none';
+            saved.forEach((msg, i) => {
+                if (msg.type === 'bot' && Array.isArray(msg.images) && msg.images.length) {
+                    renderSavedImageMessage(msg);
+                    return;
+                }
+                if (msg.type === 'bot' && typeof msg.content === 'string' && msg.content.startsWith('[Generated image:')) {
+                    renderExpiredImageMessage(msg.content);
+                    return;
+                }
+                const retryText = retryTargetFor(msg, saved[i - 1]);
+                addMessage(msg.type, msg.content, { retryText, error: msg.error, reasoning: msg.reasoning });
+            });
+            restoringTranscript = false;
+        }
+
+        function renderSavedImageMessage(msg) {
+            const promptText = (msg.images[0] && msg.images[0].prompt) || '';
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            el.dataset.rawContent = msg.content || `[Generated image: ${promptText}]`;
+            let drawn = 0;
+            msg.images.forEach((im) => {
+                const url = storedImageUrl(im);
+                if (!url) return;
+                drawn += 1;
+                el.appendChild(buildImageWrap(url, im.prompt || promptText));
+            });
+            // A picture whose bytes are gone reads the same as one that was never
+            // kept: the text is still here, the file is not.
+            if (!drawn) {
+                const card = document.createElement('div');
+                card.className = 'gallery-expired';
+                card.textContent = 'Image unavailable — only "' + promptText + '" was kept, not the file. Generate it again to see it here.';
+                el.appendChild(card);
+            }
+            el.appendChild(buildMessageActions(promptText, true));
+            appendImageTools(el, storedImageUrl(msg.images[0]), promptText);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content: el.dataset.rawContent, images: msg.images, timestamp: msg.timestamp || Date.now() });
+        }
+
+        function renderExpiredImageMessage(content) {
+            const m = /^\[Generated image: ([\s\S]*)\]$/.exec(content || '');
+            const el = document.createElement('div');
+            el.className = 'message bot';
+            const card = document.createElement('div');
+            card.className = 'gallery-expired';
+            card.textContent = 'Image unavailable — only "' + (m ? m[1] : 'an earlier image') + '" was kept, not the file. Generate it again to see it here.';
+            el.appendChild(card);
+            chatMessages.appendChild(el);
+            messages.push({ type: 'bot', content, timestamp: Date.now() });
+        }
+
+        function collectGalleryImages() {
+            const out = [];
+            const seen = new Set();
+            const all = [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            all.forEach((c) => {
+                (c.messages || []).forEach((m) => {
+                    (m.images || []).forEach((im) => {
+                        const url = storedImageUrl(im);
+                        if (url && !seen.has(url)) {
+                            seen.add(url);
+                            out.push({ url, prompt: (im && im.prompt) || '', convo: c.title || 'Chat' });
+                        }
+                    });
+                    if (m.type === 'bot' && typeof m.content === 'string') {
+                        const mm = /^\[Generated image: ([\s\S]*)\]$/.exec(m.content);
+                        if (mm && !(m.images && m.images.length)) out.push({ url: '', prompt: mm[1], convo: c.title || 'Chat' });
+                    }
+                });
+            });
+            return out;
+        }
+
+        function renderGallery() {
+            const grid = document.getElementById('galleryGrid');
+            const empty = document.getElementById('galleryEmpty');
+            if (!grid) return;
+            grid.innerHTML = '';
+            const items = collectGalleryImages();
+            if (empty) empty.hidden = items.length > 0;
+            items.forEach((it) => {
+                if (!it.url) {
+                    const card = document.createElement('div');
+                    card.className = 'gallery-expired';
+                    card.textContent = '"' + it.prompt + '" — image no longer stored.';
+                    grid.appendChild(card);
+                    return;
+                }
+                const fig = document.createElement('figure');
+                fig.className = 'gallery-tile';
+                const img = document.createElement('img');
+                img.src = it.url;
+                img.alt = it.prompt;
+                img.loading = 'lazy';
+                makeImageOpener(fig, it.url, it.prompt);
+                const cap = document.createElement('figcaption');
+                cap.textContent = it.prompt;
+                fig.appendChild(img);
+                fig.appendChild(cap);
+                grid.appendChild(fig);
+            });
+        }
+
+        let designCurrentProjectId = null;
+
+        async function designApi(path, opts = {}) {
+            const res = await fetch('/api/design' + path, {
+                headers: { 'Content-Type': 'application/json' },
+                ...opts,
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: 'Request failed' }));
+                throw new Error(err.error || 'Design request failed');
+            }
+            return res.json();
+        }
+
+        async function designLoadTemplates() {
+            const select = document.getElementById('designTemplateSelect');
+            if (!select) return;
+            try {
+                const templates = await designApi('/templates');
+                select.innerHTML = '';
+                templates.forEach((t) => {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.label + ' (' + t.width + 'x' + t.height + ' ' + t.unit + ')';
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                select.innerHTML = '<option value="">Failed to load templates</option>';
+            }
+        }
+
+        async function designListProjects() {
+            const list = document.getElementById('designProjectList');
+            const empty = document.getElementById('designEmpty');
+            if (!list) return;
+            try {
+                const projects = await designApi('/projects');
+                list.innerHTML = '';
+                if (empty) empty.hidden = projects.length > 0;
+                projects.forEach((p) => {
+                    const row = document.createElement('div');
+                    row.className = 'todo-row';
+                    row.style.display = 'flex';
+                    row.style.alignItems = 'center';
+                    row.style.justifyContent = 'space-between';
+                    row.style.gap = '8px';
+                    const name = document.createElement('strong');
+                    name.textContent = p.name;
+                    name.style.fontSize = '13px';
+                    const meta = document.createElement('span');
+                    meta.textContent = p.template ? p.template : 'draft';
+                    meta.style.fontSize = '11px';
+                    meta.style.color = 'var(--text-muted)';
+                    const actions = document.createElement('div');
+                    actions.style.display = 'flex';
+                    actions.style.gap = '6px';
+                    actions.style.flexShrink = '0';
+                    const openBtn = document.createElement('button');
+                    openBtn.className = 'icon-btn-text';
+                    openBtn.textContent = 'Open';
+                    openBtn.onclick = () => designOpenProject(p.id);
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'icon-btn-text danger';
+                    delBtn.textContent = 'Delete';
+                    delBtn.onclick = async () => {
+                        await designApi('/projects/' + p.id, { method: 'DELETE' });
+                        designListProjects();
+                    };
+                    actions.appendChild(openBtn);
+                    actions.appendChild(delBtn);
+                    row.appendChild(name);
+                    row.appendChild(meta);
+                    row.appendChild(actions);
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                if (empty) {
+                    empty.hidden = false;
+                    empty.textContent = 'Failed to load projects.';
+                }
+            }
+        }
+
+        async function designCreateProject() {
+            const nameEl = document.getElementById('designProjectName');
+            const templateEl = document.getElementById('designTemplateSelect');
+            const promptEl = document.getElementById('designPrompt');
+            const name = (nameEl && nameEl.value || '').trim();
+            const template = (templateEl && templateEl.value || '').trim();
+            const prompt = (promptEl && promptEl.value || '').trim();
+            if (!name) {
+                showStatus('error', 'Project name is required');
+                return;
+            }
+            const project = await designApi('/projects', {
+                method: 'POST',
+                body: JSON.stringify({ name, template, prompt }),
+            });
+            if (nameEl) nameEl.value = '';
+            if (promptEl) promptEl.value = '';
+            showStatus('ready', 'Project created');
+            designListProjects();
+            designOpenProject(project.id);
+        }
+
+        async function designOpenProject(id) {
+            designCurrentProjectId = id;
+            const project = await designApi('/projects/' + id);
+            const editor = document.getElementById('designEditor');
+            const title = document.getElementById('designEditorTitle');
+            const canvas = document.getElementById('designCanvas');
+            if (title) title.textContent = project.name || 'Project';
+            if (canvas) canvas.value = project.canvas ? JSON.stringify(project.canvas, null, 2) : '';
+            if (editor) editor.hidden = false;
+            switchView('design');
+        }
+
+        async function designGenerate() {
+            if (!designCurrentProjectId) return;
+            const promptEl = document.getElementById('designPrompt');
+            const prompt = (promptEl && promptEl.value || '').trim();
+            if (!prompt) {
+                showStatus('error', 'Enter a prompt before generating');
+                return;
+            }
+            const res = await designApi('/generate', {
+                method: 'POST',
+                body: JSON.stringify({ projectId: designCurrentProjectId, prompt }),
+            });
+            showStatus('ready', res.message || 'Queued');
+        }
+
+        async function designExport() {
+            if (!designCurrentProjectId) return;
+            const formatEl = document.getElementById('designExportFormat');
+            const format = (formatEl && formatEl.value || 'html').trim();
+            const res = await designApi('/export', {
+                method: 'POST',
+                body: JSON.stringify({ projectId: designCurrentProjectId, format }),
+            });
+            showStatus('ready', 'Export queued: ' + format);
+        }
+
+        function designCloseEditor() {
+            designCurrentProjectId = null;
+            const editor = document.getElementById('designEditor');
+            if (editor) editor.hidden = true;
+        }
+
+        async function designSaveCurrent() {
+            if (!designCurrentProjectId) return;
+            const canvasEl = document.getElementById('designCanvas');
+            let canvas = {};
+            try {
+                canvas = canvasEl && canvasEl.value ? JSON.parse(canvasEl.value) : {};
+            } catch {
+                canvas = { raw: canvasEl && canvasEl.value || '' };
+            }
+            await designApi('/projects/' + designCurrentProjectId, {
+                method: 'PUT',
+                body: JSON.stringify({ canvas }),
+            });
+        }
+
+        // The status bar says what happened and then lets it go — except for a
+        // failure, which is the one message that asks the reader to do
+        // something next. It used to clear after 2.5s like everything else,
+        // which is how an error that names a fix disappears before the fix is
+        // read; a failure now stays up, in the failure colour, and the next
+        // message replaces it.
+        //
+        // The pending timer lives on the function rather than in a `let` down
+        // here, because showStatus is called during startup — before the bottom
+        // of this script has run — and a `let` at this point is in its temporal
+        // dead zone then. That is not theoretical: it threw "Cannot access
+        // 'statusResetTimer' before initialization" out of initializeApp and
+        // stopped the rest of the boot with it.
+        // -----------------------------------------------------------------
+        // Read-only share links. The link state and the network live in the
+        // ShareMemory module; these are the modal's hands on it.
+
+        async function openShareModal(convoId) {
+            const convo = conversations.find((c) => c.id === convoId);
+            if (!convo) return;
+            const overlay = document.getElementById('shareOverlay');
+            const status = document.getElementById('shareStatus');
+            const box = document.getElementById('shareLinkBox');
+            box.value = '';
+            status.textContent = 'Making a read-only link…';
+            overlay.classList.add('open');
+            const result = await shareMemory.publish(convo);
+            if (!result.ok) {
+                // The module decides what happened; the page decides what to say.
+                status.textContent = {
+                    busy: 'Already making a link…',
+                    empty: 'Nothing to share yet — send a message first.',
+                    'too-large': 'This conversation is too large to share.',
+                    network: 'Sharing failed — the server did not answer.',
+                    server: result.detail || 'Sharing failed — try again in a moment.',
+                }[result.reason] || 'Sharing failed — try again in a moment.';
+                return;
+            }
+            box.value = location.origin + result.url;
+            status.textContent = 'Read-only link ready:';
+        }
+
+        function closeShareModal() {
+            document.getElementById('shareOverlay').classList.remove('open');
+        }
+
+        function copyShareLink() {
+            const { url } = shareMemory.activeShare();
+            if (url) copyText(url, document.getElementById('shareCopyBtn'));
+        }
+
+        async function revokeShareLink() {
+            if (!shareMemory.activeShare().id) return;
+            const revoked = await shareMemory.revoke();
+            document.getElementById('shareStatus').textContent = revoked
+                ? 'Link revoked. Nobody can open it now.'
+                : 'Revoke failed — try again in a moment.';
+            document.getElementById('shareLinkBox').value = '';
+        }
+
+        // -----------------------------------------------------------------
+        // Saved memory: small facts offered to every chat that opts in. The
+        // state itself is declared with the other session state near the top
+        // of the page; this is the tab's behavior.
+
+        // ------------------------------------------------------------
+        // Marking the replies that drew on saved memory.
+        //
+        // The request carries the facts verbatim, so detection is a word
+        // match (chatlib's memoryFactsUsedIn, run inside the module): a reply
+        // echoing a fact's own words gets a chip saying so. Counts live in
+        // localStorage keyed by fact text -- a measure of the mechanism for
+        // the Memory tab, not a proof about any single reply.
+
+        function markMemoryUse(el, content) {
+            if (!el) return;
+            const used = shareMemory.recordUse(content, { convoId: activeConversationId, restoring: restoringTranscript });
+            if (!used.length) return;
+            const chip = document.createElement('div');
+            chip.className = 'memory-use-chip';
+            chip.setAttribute('aria-label', 'This reply drew on saved memory: ' + used.join('; '));
+            chip.title = 'This reply drew on saved memory. Manage the facts in Session → Memory.';
+            const icon = document.createElement('span');
+            icon.className = 'memory-use-icon';
+            icon.textContent = '✦';
+            icon.setAttribute('aria-hidden', 'true');
+            chip.appendChild(icon);
+            const label = document.createElement('span');
+            label.className = 'memory-use-text';
+            label.textContent = used.length === 1
+                ? 'drew on saved memory: “' + used[0] + '”'
+                : 'drew on ' + used.length + ' saved facts';
+            chip.appendChild(label);
+            el.appendChild(chip);
+        }
+
+        // Keep the switch honest with the conversation actually on screen.
+        function syncMemorySwitch() {
+            const sw = document.getElementById('memoryModeSwitch');
+            if (sw) sw.checked = shareMemory.onForChat(activeConversationId);
+        }
+
+        function setMemoryForChat(on) {
+            shareMemory.setForChat(activeConversationId, on);
+            showStatus('info', on ? 'Memory offered to this chat' : 'Memory off for this chat');
+        }
+
+        // The cap warning, shown before the next save is refused rather than
+        // as one. The server reports its cap with the list; an older backend
+        // that doesn't simply shows nothing.
+        function renderMemoryCapacity() {
+            const el = document.getElementById('memoryCapacity');
+            if (!el) return;
+            const cap = shareMemory.capacityInfo();
+            if (!cap || cap.state === 'ok') { el.hidden = true; el.textContent = ''; return; }
+            el.hidden = false;
+            el.textContent = cap.state === 'full'
+                ? 'Memory is full — the next new fact will be refused. Forget something to make room.'
+                : 'Only ' + cap.remaining + (cap.remaining === 1 ? ' slot' : ' slots') + ' left before memory is full — consider forgetting what you no longer need.';
+        }
+
+        function renderMemoryList() {
+            const memoryFacts = shareMemory.factsList();
+            const list = document.getElementById('memoryList');
+            const count = document.getElementById('memoryCount');
+            if (!list) return;
+            list.innerHTML = '';
+            if (count) count.textContent = memoryFacts.length ? memoryFacts.length + ' saved' : 'empty';
+            if (!memoryFacts.length) {
+                const empty = document.createElement('div');
+                empty.className = 'image-provider-report-empty';
+                empty.textContent = 'Nothing saved yet. When the model learns something worth keeping, it saves it here — or you can add one below.';
+                list.appendChild(empty);
+                renderMemoryCapacity();
+                return;
+            }
+            renderMemoryCapacity();
+            const counts = shareMemory.useCounts();
+            for (const fact of memoryFacts) {
+                const row = document.createElement('div');
+                row.className = 'memory-fact-row';
+                const text = document.createElement('span');
+                text.className = 'memory-fact-text';
+                text.textContent = fact.text;
+                row.appendChild(text);
+                const usedN = counts[fact.text] || 0;
+                const meter = document.createElement('span');
+                meter.className = 'memory-fact-used';
+                meter.title = usedN ? usedN + (usedN === 1 ? ' reply drew on this fact' : ' replies drew on this fact') : 'No reply has drawn on this fact yet';
+                const bar = document.createElement('span');
+                bar.className = 'memory-fact-meter';
+                bar.setAttribute('aria-label', usedN + ' uses');
+                const fill = memoryUseMeter(usedN);
+                for (let i = 0; i < 4; i += 1) {
+                    const seg = document.createElement('i');
+                    if (i < fill) seg.className = 'on';
+                    bar.appendChild(seg);
+                }
+                meter.appendChild(bar);
+                const num = document.createElement('span');
+                num.textContent = usedN ? usedN + '\u00d7' : '0';
+                meter.appendChild(num);
+                row.appendChild(meter);
+                if (!usedN) row.classList.add('dead');
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'memory-fact-delete';
+                del.textContent = '\u00d7';
+                del.title = 'Forget this';
+                del.setAttribute('aria-label', 'Forget: ' + fact.text);
+                del.addEventListener('click', () => deleteMemoryFact(fact.text));
+                row.appendChild(del);
+                list.appendChild(row);
+            }
+        }
+
+        async function loadMemoryFacts() {
+            await shareMemory.loadFacts();
+            renderMemoryList();
+        }
+
+        async function upsertMemoryFact(text, replace) {
+            const result = await shareMemory.upsertFact(text, replace);
+            if (!result.ok) showStatus('error', result.error || 'Could not save that');
+        }
+
+        function addMemoryFactFromInput() {
+            const input = document.getElementById('memoryAddInput');
+            if (!input || !input.value.trim()) return;
+            upsertMemoryFact(input.value.trim(), false);
+            input.value = '';
+        }
+
+        async function deleteMemoryFact(text) {
+            await shareMemory.deleteFact(text);
+        }
+
+        async function clearAllMemoryFacts() {
+            await shareMemory.clearAllFacts();
+        }
+
+        // The tool the model calls to remember something. Runs client-side:
+        // the fact lands in the same store the Memory tab reads, and the
+        // acknowledgement tells the model what it saved.
+        function runMemoryTool(args) {
+            return shareMemory.memoryTool(args);
+        }
+
+        function showStatus(type, msg, holdMs = 2500) {
+            const failed = type === 'error';
+            statusDot.className = 'status-dot' + (failed ? ' error' : '');
+            statusMessage.textContent = msg;
+            if (statusMessage.classList) statusMessage.classList.toggle('error', failed);
+            if (showStatus.timer) clearTimeout(showStatus.timer);
+            // Only the passing kinds expire: "Saved", "Copied", "Mode: BUILD".
+            if (failed) return;
+            // And a message that explains a result does not expire either, for the
+            // same reason a failure does not: the sentence about a picture that
+            // came back a different shape is read *after* the picture appears, and
+            // 2.5 seconds of it, ellipsised in a one-line bar, is a sentence nobody
+            // finishes. It goes when the next thing happens.
+            if (!holdMs) return;
+            showStatus.timer = setTimeout(() => {
+                if (statusMessage.textContent === msg) {
+                    statusMessage.textContent = 'Ready';
+                    if (statusMessage.classList) statusMessage.classList.remove('error');
+                    statusDot.className = 'status-dot';
+                }
+            }, 2500);
+        }
+
+        function toggleHelp() { openHelp(); }
+        function openHelp() {
+            lastFocusedBeforeModal = document.activeElement;
+            helpOverlay.classList.add('open');
+            helpOverlay.querySelector('.modal-close').focus();
+        }
+        function closeHelp() {
+            helpOverlay.classList.remove('open');
+            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
+        }
+
+        function openDrawer() {
+            lastFocusedBeforeModal = document.activeElement;
+            drawerOverlay.classList.add('open');
+            drawerOverlay.querySelector('.modal-close').focus();
+        }
+        function closeDrawer() {
+            drawerOverlay.classList.remove('open');
+            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
+        }
+
+        function getModalCloser(overlay) {
+            if (overlay === helpOverlay) return closeHelp;
+            if (overlay === drawerOverlay) return closeDrawer;
+            if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
+            if (overlay && overlay.id === 'shareOverlay') return closeShareModal;
+            if (overlay && overlay.id === 'imageConfirmOverlay') return () => closeImageConfirm(false);
+            if (overlay && overlay.id === 'imageEditOverlay') return closeImageEdit;
+            return closeImageLightbox;
+        }
+
+        function handleModalKeydown(e) {
+            const openOverlay = document.querySelector('.modal-overlay.open');
+            if (!openOverlay) return;
+            const close = getModalCloser(openOverlay);
+            if (e.key === 'Escape') { close(); return; }
+            if (e.key !== 'Tab') return;
+            const focusable = openOverlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+
+        function refreshPage() { showStatus('info', 'Refreshing...'); location.reload(); }
