@@ -134,16 +134,18 @@ test('the shell is chrome plus screens, in that order', () => {
 
 test('a choice is one control, not a row of buttons', () => {
   const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
-  // The mode is a property of the next message, so it is a pill with a panel --
-  // three always-present tabs read as navigation and cost a row of the header.
-  assert.match(chat, /<ModePicker/);
+  // Phase 2: the mode is a coloured label inside the composer, cycled with Tab,
+  // and the header that held the mode and model pills is gone.
+  assert.match(chat, /<Composer/);
   assert.ok(!/className="mode-tab /.test(chat), 'the mode tabs are gone');
-  const mode = read('desktop', 'src', 'components', 'ModePicker.tsx');
-  assert.match(mode, /aria-expanded/);
-  assert.match(mode, /Escape/, 'a panel that cannot be dismissed by keyboard is a trap');
-  // The panel explains each mode where the choice is made, rather than leaving
-  // three unexplained words in the layout.
-  assert.match(mode, /Draft a plan first/);
+  assert.ok(!/<header className="screen-header">/.test(chat), 'the chat header is gone');
+  assert.ok(!/<ModePicker/.test(chat), 'the mode pill is replaced by the composer label');
+  const box = read('desktop', 'src', 'components', 'Composer.tsx');
+  assert.match(box, /grammar\.cycleMode\(mode, e\.shiftKey\)/, 'Tab / Shift+Tab cycles the mode');
+  assert.match(box, /grammar\.leaveMode\(/, 'Backspace at the start or Esc leaves it');
+  assert.match(box, /modeInfo\.hint/, 'the label explains the mode where it is shown');
+  const composer = require('../desktop/src/composer.js');
+  assert.match(composer.modeById('plan').hint, /Draft a plan first/, 'each mode still explains itself');
 });
 
 test('a failed turn is reported once, in the turn it belongs to', () => {

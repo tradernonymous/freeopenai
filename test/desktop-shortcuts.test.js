@@ -25,7 +25,8 @@ function navItems() {
 
 test('the sidebar list is the source, and every key on it is unique', () => {
   const items = navItems();
-  assert.ok(items.length >= 8, `found ${items.length} screens`);
+  // Five destinations (Phase 2.6); the other views are their tabs.
+  assert.equal(items.length, 5, `found ${items.length} destinations`);
   const keys = items.map((i) => i.keys);
   assert.equal(new Set(keys).size, keys.length, 'two screens share a key');
   for (const key of keys) assert.match(key, /^Alt\+[1-9A-Z]$/);

@@ -270,8 +270,11 @@ test('the way out of zen is hoverable while invisible', () => {
 test('zen mode is reachable from the keyboard and from the palette', () => {
   assert.match(COMMANDS, /id: 'toggle-zen'/, 'the palette lists it');
   assert.match(COMMANDS, /Ctrl\+Shift\+Z/, 'with its shortcut stated');
-  assert.match(APP, /e\.shiftKey && e\.key\.toLowerCase\(\) === 'z'/, 'Ctrl+Shift+Z is bound');
-  assert.match(APP, /setZen\(\(on\) => !on\)/, 'and it toggles rather than only entering');
+  const keymap = require('../desktop/src/keymap.js');
+  const zen = keymap.BINDINGS.find((b) => b.id === 'zen');
+  assert.equal(zen && zen.keys, 'Ctrl+Shift+Z', 'Ctrl+Shift+Z is bound');
+  assert.equal(zen.when, 'always', 'and it works with shortcuts off and inside the palette');
+  assert.match(APP, /case 'zen': setZen\(\(on\) => !on\)/, 'and it toggles rather than only entering');
   assert.match(APP, /case 'toggle-zen':/, 'the palette command resolves to the same state');
   assert.match(APP, /className=\{zen \? 'app zen' : 'app'\}/, 'the shell actually renders zen');
   assert.match(APP, /className="zen-peek"/, 'and the peek pill is mounted with it');

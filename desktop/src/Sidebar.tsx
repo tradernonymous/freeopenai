@@ -15,20 +15,47 @@
 import Icon, { type IconName } from './components/Icon';
 import { APP_VERSION } from './version';
 
-// The ONE list of screens and their keys. App.tsx walks it for Alt+N, the
-// command palette shows its keys, and test/desktop-shortcuts.test.js holds
+// The ONE list of destinations and their keys. App.tsx resolves Alt+N from it,
+// the command palette shows its keys, and test/desktop-shortcuts.test.js holds
 // README.md and docs/desktop.md to it -- three places used to disagree.
+//
+// Five, not nine: the screens that overlapped now live inside a destination as
+// its tabs (SUB_VIEWS). Chat holds Builds; Code holds the local folder and the
+// Files generator; Library holds Images. Nothing was removed -- every view is
+// still one Ctrl+K away and keeps its own screen.
 export const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', keys: 'Alt+1' },
   { id: 'code', label: 'Code', icon: 'terminal', keys: 'Alt+2' },
-  { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+3' },
-  { id: 'build', label: 'Builds', icon: 'build', keys: 'Alt+4' },
-  { id: 'local', label: 'Local', icon: 'folder', keys: 'Alt+5' },
-  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+6' },
-  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+7' },
-  { id: 'files', label: 'Files', icon: 'folder', keys: 'Alt+F' },
-  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+8' },
+  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+3' },
+  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+4' },
+  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+5' },
 ];
+
+/** Every view, and the destination whose tab strip it sits in. */
+export const SUB_VIEWS: Array<{ id: ViewId; label: string; parent: NavId }> = [
+  { id: 'chat', label: 'Chat', parent: 'chat' },
+  { id: 'build', label: 'Builds', parent: 'chat' },
+  { id: 'code', label: 'Agent', parent: 'code' },
+  { id: 'local', label: 'Local', parent: 'code' },
+  { id: 'files', label: 'Files', parent: 'code' },
+  { id: 'design', label: 'Design', parent: 'design' },
+  { id: 'library', label: 'Library', parent: 'library' },
+  { id: 'images', label: 'Images', parent: 'library' },
+  { id: 'settings', label: 'Settings', parent: 'settings' },
+];
+
+/** Anything can ask the shell to move: detail { view?: ViewId, panel?: 'sessions' }. */
+export const NAVIGATE_EVENT = 'freeai4u:navigate';
+
+/** The destination a view belongs to. */
+export function destinationOf(view: ViewId): NavId {
+  return SUB_VIEWS.find((v) => v.id === view)?.parent || 'chat';
+}
+
+/** The tabs a destination shows; one tab means no strip. */
+export function tabsOf(destination: NavId): Array<{ id: ViewId; label: string }> {
+  return SUB_VIEWS.filter((v) => v.parent === destination);
+}
 
 const PANEL_ITEMS: Array<{ key: 'folder' | 'terminal' | 'sessions' | 'builds' | 'knowledge'; label: string; icon: IconName; title: string }> = [
   { key: 'folder', label: 'Folder', icon: 'folder', title: 'Files in the folder you opened' },
@@ -45,14 +72,16 @@ export function navKeys(): Record<string, string> {
   return out;
 }
 
-/** The screen a key press names, or null. `Alt+8` -> 'settings', `Alt+F` -> 'files'. */
+/** The destination a key press names, or null. `Alt+5` -> 'settings'. */
 export function navForKey(key: string): NavId | null {
   const wanted = `Alt+${String(key || '').toUpperCase()}`;
   const hit = NAV_ITEMS.find((item) => item.keys.toUpperCase() === wanted);
   return hit ? hit.id : null;
 }
 
-export type NavId = 'chat' | 'code' | 'images' | 'build' | 'local' | 'design' | 'library' | 'files' | 'settings';
+export type NavId = 'chat' | 'code' | 'design' | 'library' | 'settings';
+/** A view: a destination, or one of the tabs inside one. */
+export type ViewId = NavId | 'build' | 'local' | 'files' | 'images';
 
 export interface PanelKeyMap {
   folder: boolean;
@@ -65,8 +94,8 @@ export interface PanelKeyMap {
 export type PanelId = keyof PanelKeyMap;
 
 interface SidebarProps {
-  active: NavId;
-  onNavigate: (id: NavId) => void;
+  active: ViewId;
+  onNavigate: (id: ViewId) => void;
   onOpenPalette: () => void;
   onTogglePanel: (key: PanelId) => void;
   panels: Partial<PanelKeyMap>;
@@ -95,10 +124,10 @@ export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePan
         {NAV_ITEMS.map((item) => (
           <button
             key={item.id}
-            className={`sidebar-btn ${active === item.id ? 'active' : ''}`}
+            className={`sidebar-btn ${destinationOf(active) === item.id ? 'active' : ''}`}
             onClick={() => onNavigate(item.id)}
             title={`${item.label} — ${item.keys}`}
-            aria-current={active === item.id ? 'page' : undefined}
+            aria-current={destinationOf(active) === item.id ? 'page' : undefined}
           >
             <Icon name={item.icon} />
             <span className="sidebar-label">{item.label}</span>
@@ -108,16 +137,16 @@ export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePan
       </nav>
 
       <div className="sidebar-divider" />
-      <div className="sidebar-group-label">
-        <span className="sidebar-group-label-text">Panels</span>
-      </div>
-      <nav className="sidebar-nav" aria-label="Panels">
+      {/* The docks are toggles, not places: a quiet row of icons, each also on
+          the keyboard (Ctrl+H history, Ctrl+` terminal) and in Ctrl+K. */}
+      <nav className="sidebar-nav sidebar-panels" aria-label="Panels">
         {PANEL_ITEMS.map((item) => (
           <button
             key={item.key}
-            className={`sidebar-btn ${panels[item.key] ? 'active' : ''}`}
+            className={`sidebar-btn sidebar-panel-btn ${panels[item.key] ? 'active' : ''}`}
             onClick={() => onTogglePanel(item.key)}
-            title={item.title}
+            title={`${item.label} — ${item.title}`}
+            aria-label={item.label}
             aria-pressed={!!panels[item.key]}
           >
             <Icon name={item.icon} />

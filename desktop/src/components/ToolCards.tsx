@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Icon from './Icon';
 import type { ToolEvent } from '../agent-turn';
 
@@ -14,6 +14,16 @@ interface Props {
   events: ToolEvent[];
   /** Present only while the turn is live and a card is asking. */
   onDecide?: (id: string, allow: boolean, always: boolean) => void;
+  /** Ctrl+T: every card open (true), every card folded (false), or each its own. */
+  expandAll?: boolean;
+}
+
+/** 0.4s, 12s, 1m 05s: how long a tool has been (or was) at it. */
+export function elapsed(ms: number): string {
+  if (ms < 10000) return `${(ms / 1000).toFixed(1)}s`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`;
 }
 
 const ICON: Record<ToolEvent['status'], 'activity' | 'check' | 'close' | 'alert' | 'shield'> = {
@@ -32,25 +42,37 @@ const WORD: Record<ToolEvent['status'], string> = {
   error: 'failed',
 };
 
-export default function ToolCards({ events, onDecide }: Props) {
+export default function ToolCards({ events, onDecide, expandAll }: Props) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // A running tool's timer ticks; nothing re-renders once they are all done.
+  const live = events.some((e) => e.status === 'running');
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => setTick((n) => n + 1), 250);
+    return () => clearInterval(timer);
+  }, [live]);
+  useEffect(() => { if (expandAll !== undefined) setOpen({}); }, [expandAll]);
   if (!events.length) return null;
   return (
     <div className="tool-cards">
       {events.map((event) => {
         const asking = event.status === 'asking' && !!onDecide;
-        const shown = open[event.id] || asking;
+        const shown = (open[event.id] ?? !!expandAll) || asking;
         const canAlways = event.name.startsWith('mcp__');
         return (
           <div key={event.id} className={`tool-card is-${event.status}`}>
             <button
               className="tool-card-head"
-              onClick={() => setOpen((o) => ({ ...o, [event.id]: !o[event.id] }))}
+              onClick={() => setOpen((o) => ({ ...o, [event.id]: !(o[event.id] ?? !!expandAll) }))}
               aria-expanded={shown}
             >
               <Icon name={ICON[event.status]} size={13} />
               <span className="tool-card-summary">{event.summary}</span>
               <span className="tool-card-status">{WORD[event.status]}</span>
+              {event.startedAt && event.status !== 'asking' && (
+                <span className="tool-card-time mono">{elapsed((event.endedAt || Date.now()) - event.startedAt)}</span>
+              )}
               <Icon name={shown ? 'chevron-down' : 'chevron-right'} size={12} />
             </button>
             {shown && (

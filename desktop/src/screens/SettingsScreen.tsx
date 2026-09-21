@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../api';
 import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
 import DiagnosticsCard from '../components/DiagnosticsCard';
 import LocalModelsCard from '../components/LocalModelsCard';
 import ConnectorsCard from '../components/ConnectorsCard';
+import ShortcutsCard from '../components/ShortcutsCard';
 import FileTree from '../components/FileTree';
 import Terminal from '../components/Terminal';
 
@@ -34,6 +35,30 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
 
   useEffect(() => { load(); }, []);
 
+  // One searchable surface: the query hides every section that does not
+  // mention it, and the rail lists what is left to jump to. It reads the
+  // rendered text, so a card added later is searchable without registering.
+  const [query, setQuery] = useState('');
+  const [titles, setTitles] = useState<string[]>([]);
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const q = query.trim().toLowerCase();
+    const found: string[] = [];
+    root.querySelectorAll<HTMLElement>(':scope > .settings-section').forEach((section) => {
+      const hit = !q || (section.textContent || '').toLowerCase().includes(q);
+      section.hidden = !hit;
+      const title = section.querySelector('h2')?.textContent || '';
+      if (hit && title) found.push(title);
+    });
+    setTitles((prev) => (prev.join('|') === found.join('|') ? prev : found));
+  }, [query, providers.length, memory.length]);
+  const jump = (title: string) => {
+    const heading = Array.from(mainRef.current?.querySelectorAll('h2') || []).find((h) => h.textContent === title);
+    heading?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const forget = async (id: string) => {
     try {
       await api.memoryForget(id);
@@ -51,9 +76,21 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
       </header>
       <div className="settings-layout">
         <aside className="settings-nav">
-          <button className="settings-nav-btn active" type="button">Engine</button>
+          <input
+            type="search"
+            className="settings-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            autoFocus
+          />
+          {titles.map((title) => (
+            <button key={title} className="settings-nav-btn" type="button" onClick={() => jump(title)}>{title}</button>
+          ))}
+          {!titles.length && <div className="settings-hint">Nothing matches “{query}”.</div>}
         </aside>
-        <main className="settings-main">
+        <main className="settings-main" ref={mainRef}>
           <section className="settings-section">
             <h2>Engine</h2>
             {/* A saved address is a setting; whether it answers is the card's
@@ -126,6 +163,11 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
           </section>
 
           <ConnectorsCard />
+
+          <section className="settings-section">
+            <h2>Shortcuts</h2>
+            <ShortcutsCard />
+          </section>
 
           <LocalModelsCard />
 

@@ -21,19 +21,33 @@
 - **Library**: every skill the engine serves, with its full SKILL.md, plus the chats stored locally.
 - **Settings**: the engine address (Test + save), sign-in, provider health with free-tier limits, the rate-limit retry budget, and the memory the model saved — forget any fact.
 
+The rail has five destinations. The screens that overlapped live inside one as its tabs: **Chat** holds Builds, **Code** holds Local and Files, **Library** holds Images. A destination reopens on the tab you last used.
+
 | Shortcut | Does |
 | :-- | :-- |
 | `Alt+1` | Chat |
 | `Alt+2` | Code |
-| `Alt+3` | Images |
-| `Alt+4` | Builds |
-| `Alt+5` | Local |
-| `Alt+6` | Design |
-| `Alt+7` | Library |
-| `Alt+8` | Settings |
-| `Alt+F` | Files |
-| `Ctrl+K` | The command palette |
+| `Alt+3` | Design |
+| `Alt+4` | Library |
+| `Alt+5` | Settings |
+| `Ctrl+K` | The command palette — every screen, tab, panel and action |
+| `Ctrl+N` / `Ctrl+M` / `Ctrl+T` | New chat / pick the model / open or fold every tool card |
+| `Ctrl+H` / ``Ctrl+` `` | History / terminal dock |
+| `Ctrl+Shift+Z` | Zen mode |
 | `Enter` / `Shift+Enter` | Send / newline in the composer |
+
+Every shortcut above except the destinations comes from one table (`src/keymap.js`). **Settings → Shortcuts** shows it, lets you remap any row, names a clash as soon as you make one, and has a master switch. With shortcuts off, Ctrl+K, Esc and Ctrl+Shift+Z still work, so you can always get back.
+
+### The composer
+
+The chat has no header any more. Everything about the next message is in the composer:
+
+- **Modes.** Tab / Shift+Tab cycles **Chat → Plan → Build**, shown as a coloured label and border. Plan offers the model read-only tools only. Typing `!` at the start switches to **Shell**: the line runs in the open folder, and its output shows in the thread and goes to the model with your next message. `/design` sends the brief to the Design studio. Backspace at the start, or Esc, leaves a mode.
+- **`/` commands.** `/new /history /plan /build /interview /implement /review /model /tools /mcp /copy /export /settings /help`, plus every skill as `/skill:<name>`. `/interview` → `/plan` → `/implement` → `/review` is a workflow: after each reply, a chip offers the next step.
+- **`@` mentions.** One menu for this service's models, the other services, files at the top of the open folder (attached as text) and MCP servers.
+- **Model chip** in the composer footer, with a dot that lights when tools are on. Send and Stop are one button, and Esc stops a reply.
+- **Up** in an empty box brings back your last message. `/copy` and `/export md|json` include tool calls and their results.
+- **Right-click** a reply for Copy, Explain, Rework, **Branch** (a new chat with the thread up to that point) and **To Design**.
 
 ## The local folder
 
@@ -117,7 +131,7 @@ Four things make the window read as a product rather than a panel of buttons:
 
 Three more rules came out of using it, and they are what stop the window reading as a web page in a frame:
 
-- **A choice is one control, not a row of buttons.** The chat header carried three always-present mode tabs (Chat / Plan / Build) that read as navigation while actually being a property of the next message; they are one pill (`src/components/ModePicker.tsx`) that names the current mode and explains each option where the choice is made. The service-and-model pair is likewise one pill (`ModelPicker.tsx`) rather than two dropdowns that had to be read as a pair.
+- **A choice is one control, not a row of buttons.** The chat header carried three always-present mode tabs (Chat / Plan / Build) that read as navigation while actually being a property of the next message; they became one pill, and since Phase 2 they are a coloured label inside the composer (`src/components/Composer.tsx`), cycled with Tab and explained on hover. The service-and-model pair is likewise one pill (`ModelPicker.tsx`), now in the composer footer, rather than two dropdowns that had to be read as a pair.
 - **No operating-system chrome.** Every `<select>` is gone: they open an OS-styled menu with a system font and highlight colour, which is the one element in a hand-styled window that betrays it. `src/components/SelectPill.tsx` is the app's own control — pill, panel, filter, per-option note — used by Images (service, model, shape), Design (template, service, model) and Files (document type). `test/desktop-images.test.js` walks every `.tsx` and fails if a `<select>` comes back, comments excluded.
 - **One failure, one place.** A failed turn is reported *in that turn*: which service and model were asked, the provider's own words, and what to do, with Retry and *try another model* as actions. The red bar at the bottom of the screen that repeated the same failure in shorthand — and, when nothing had failed, printed the engine's retry arithmetic as `rate-limit budget 20s`, which looked like a permanent fault and explained nothing — is gone. What the free tier meters is a quiet line beside the composer (`30,000 tokens/min · 12 of 1000 used today`), and the retry budget itself lives in Settings → *Limits the engine enforces*, where it belongs.
 

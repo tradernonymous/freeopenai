@@ -96,8 +96,11 @@ test('every command in the registry actually resolves to something', () => {
 
 test('the palette is wired: Ctrl+K opens it, every action resolves', () => {
   const shell = read('desktop', 'src', 'App.tsx');
-  assert.match(shell, /ctrlKey \|\| e\.metaKey\) && key === 'k'/, 'Ctrl+K is bound');
-  assert.match(shell, /setPaletteOpen\(\(open\) => !open\)/, 'and it toggles');
+  // Keys come from one table (src/keymap.js); the shell only acts on the answer.
+  const keymap = require('../desktop/src/keymap.js');
+  assert.ok(keymap.BINDINGS.some((b) => b.id === 'palette' && b.keys === 'Ctrl+K'), 'Ctrl+K is bound');
+  assert.match(shell, /keymap\.resolveKey\(/, 'the shell asks the resolver');
+  assert.match(shell, /case 'palette': setPaletteOpen\(\(open\) => !open\)/, 'and it toggles');
   assert.match(shell, /<CommandPalette/, 'the palette is mounted');
   assert.match(shell, /openPalette/, 'and the sidebar/status bar can open it');
   // Every action key in the registry has a branch in the shell (or navigates).

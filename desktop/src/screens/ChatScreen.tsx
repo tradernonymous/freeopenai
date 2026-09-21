@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
-import { hasShell, localModelStatus, openUrl } from '../bridge';
+import { hasShell, listLocalDir, localModelStatus, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
-import ModePicker from '../components/ModePicker';
+import Composer from '../components/Composer';
+import { NAVIGATE_EVENT } from '../Sidebar';
 // UMD modules: loaded for their side effect, read off globalThis.
 import RadialMenu, { type RadialItem } from '../components/RadialMenu';
 import { pushToast } from '../components/Toasts';
@@ -14,6 +15,7 @@ import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
 import { executeTool } from '../tool-run';
 import '../tools.js';
+import '../composer.js';
 import { isSavedProvider, streamSaved } from '../run-model';
 import '../saved-models.js';
 import '../chats.js';
@@ -30,6 +32,11 @@ const localModels: typeof import('../local-models.js') = (globalThis as any).Fre
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
+const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
+
+type ModeId = import('../composer.js').ModeId;
+type SlashCommand = import('../composer.js').SlashCommand;
+type MentionSource = import('../composer.js').MentionSource;
 
 /** The folder open in the app (App.tsx keeps it here), for the local tools. */
 function openFolder(): string {
@@ -50,6 +57,10 @@ export interface Msg {
   failure?: import('../failure.js').Attribution;
   /** What the model did during this reply: tool calls, their state, their results. */
   tools?: ToolEvent[];
+  /** Shown in the thread, never sent: /help, and `!` command output (which
+   *  rides the next message instead, so turns keep alternating). */
+  note?: boolean;
+  shell?: string;
 }
 
 export interface ChatSession {
@@ -105,6 +116,41 @@ export const OPEN_CHAT_EVENT = 'freeai4u:open-chat';
 // session" does -- as an event -- so the shell never has to know how a chat is
 // created.
 export const NEW_CHAT_EVENT = 'freeai4u:new-chat';
+/** Ctrl+M: open the model chip. */
+export const MODEL_PICK_EVENT = 'freeai4u:pick-model';
+/** Ctrl+T: open or fold every tool card. */
+export const TOOL_CARDS_EVENT = 'freeai4u:tool-cards';
+/** A brief for the Design studio, handed over through sessionStorage. */
+export const DESIGN_BRIEF_KEY = 'freeai4u.designBrief';
+
+/** The turns a model is shown: notes are for the person, shell output rides along. */
+export function turnsFor(messages: Msg[]): Array<{ role: string; content: string }> {
+  const out: Array<{ role: string; content: string }> = [];
+  let pending = '';
+  for (const m of messages) {
+    if (m.note) {
+      if (m.shell) pending += `${m.shell}\n\n`;
+      continue;
+    }
+    if (m.role === 'user' && pending) {
+      out.push({ role: 'user', content: `Command output from the open folder:\n${pending}---\n${m.content}` });
+      pending = '';
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  return out;
+}
+
+const HELP = [
+  '**The composer**',
+  '',
+  '- **Tab / Shift+Tab** — Chat → Plan → Build. **!** at the start runs a command in the open folder. Backspace at the start or **Esc** leaves a mode.',
+  '- **/** — commands: ' + grammar.SLASH.map((c) => '`/' + c.id + '`').join(' '),
+  '- **@** — switch model, attach a file from the open folder, point at an MCP server.',
+  '- **Up** in an empty box brings back the last message. **Ctrl+N** new chat, **Ctrl+M** model, **Ctrl+T** tool cards, **Ctrl+K** everything else.',
+  '- Workflow: `/interview` → `/plan` → `/implement` → `/review` — each reply offers the next step.',
+].join('\n');
 
 interface ProviderRow {
   id: string;
@@ -150,6 +196,28 @@ export default function ChatScreen() {
     return () => window.removeEventListener(savedModels.CHANGED_EVENT, onSaved);
   }, []);
   const [runOpen, setRunOpen] = useState(false);
+  // Shell and Design are where ONE message goes, not what the chat is: they
+  // live here, not on the session, and fall back to its mode after a send.
+  const [transient, setTransient] = useState<'shell' | 'design' | null>(null);
+  // The workflow step just taken (/interview, /plan, ...), so the reply can
+  // offer the next one.
+  const [flow, setFlow] = useState<string | null>(null);
+  const [cardsOpen, setCardsOpen] = useState<boolean | undefined>(undefined);
+  const [skillRows, setSkillRows] = useState<SlashCommand[]>([]);
+  const [folderFiles, setFolderFiles] = useState<string[]>([]);
+  useEffect(() => {
+    api.skills()
+      .then((rows: any) => setSkillRows((Array.isArray(rows) ? rows : []).slice(0, 40).map((row: any) => grammar.skillRow(row))))
+      .catch(() => setSkillRows([]));
+    const onCards = () => setCardsOpen((open) => !open);
+    const onPick = () => (document.querySelector('.composer .model-pill') as HTMLButtonElement | null)?.click();
+    window.addEventListener(TOOL_CARDS_EVENT, onCards);
+    window.addEventListener(MODEL_PICK_EVENT, onPick);
+    return () => {
+      window.removeEventListener(TOOL_CARDS_EVENT, onCards);
+      window.removeEventListener(MODEL_PICK_EVENT, onPick);
+    };
+  }, []);
   // Tools: on unless switched off in Settings -> Connectors; GitHub's are
   // offered only while an account is connected.
   const [toolsOn, setToolsOn] = useState(() => toolsLib.enabled());
@@ -398,6 +466,16 @@ export default function ChatScreen() {
     if (!active || sending) return;
     const text = (active.draft || '').trim();
     if (!text) return;
+    if (transient === 'shell') {
+      await runShell(text);
+      return;
+    }
+    if (transient === 'design') {
+      sendToDesign(text);
+      patchSession(active.id, { draft: '' });
+      setTransient(null);
+      return;
+    }
     if (active.mode === 'build') {
       await startBuild(text);
       return;
@@ -445,7 +523,13 @@ export default function ChatScreen() {
     };
 
     try {
-      const turns = history.map(({ role, content }) => ({ role, content }));
+      const turns = turnsFor(history);
+      if (active.mode === 'plan') {
+        turns.unshift({
+          role: 'system',
+          content: 'Plan mode: reply with a short numbered plan (files, steps, risks) and change nothing. Read-only tools are available for looking around.',
+        });
+      }
       const provider = active.provider;
       const model = active.model;
       // One request, to whichever provider the session is on. The turn calls
@@ -470,7 +554,14 @@ export default function ChatScreen() {
           if (!last || last.role !== 'assistant') return s;
           const list = (last.tools || []).slice();
           const at = list.findIndex((t) => t.id === event.id);
-          if (at >= 0) list[at] = event; else list.push(event);
+          // Stamped here, for the elapsed timer on the card.
+          const was = at >= 0 ? list[at] : null;
+          const stamped: ToolEvent = {
+            ...event,
+            startedAt: was?.startedAt || Date.now(),
+            endedAt: event.status === 'running' || event.status === 'asking' ? undefined : (was?.endedAt || Date.now()),
+          };
+          if (at >= 0) list[at] = stamped; else list.push(stamped);
           msgs[msgs.length - 1] = { ...last, tools: list };
           return { ...s, messages: msgs, updatedAt: Date.now() };
         }));
@@ -479,7 +570,11 @@ export default function ChatScreen() {
       const root = openFolder();
       await runTurn({
         messages: turns,
-        tools: toolsOn ? toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() }) : [],
+        tools: toolsOn
+          ? toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() })
+            // Plan changes nothing, so it is offered nothing that could.
+            .filter((t) => active.mode !== 'plan' || (!toolsLib.ASKS[t.function.name] && !t.function.name.startsWith('mcp__')))
+          : [],
         stream: streamOnce,
         execute: (call, args) => executeTool(call, args, { localRoot: root }),
         // Stopping the turn is a Deny for whatever was waiting.
@@ -595,7 +690,7 @@ export default function ChatScreen() {
       if (stickToBottom.current) scrollToBottom(false);
     };
     try {
-      const turns = msgs.map(({ role, content }) => ({ role, content }));
+      const turns = turnsFor(msgs);
       if (provider === 'hf') {
         await hfInference.streamChat(model, turns, (frame) => {
           if (frame.content) append(frame.content);
@@ -675,11 +770,130 @@ export default function ChatScreen() {
     }
   };
 
-  const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
+  // `!` mode: the line runs in the open folder, and its output is shown now
+  // and handed to the model with the next message.
+  const runShell = async (command: string) => {
+    if (!active) return;
+    const root = openFolder();
+    if (!hasShell() || !root) {
+      pushToast('warn', 'Open a folder first (Ctrl+K → Open a local folder); commands run there.');
+      return;
     }
+    setSending(true);
+    patchSession(active.id, { draft: '' });
+    let out = '';
+    try {
+      out = await executeTool({ id: `sh${Date.now().toString(36)}`, name: 'run_command', arguments: '' } as any, { command }, { localRoot: root });
+    } catch (err) {
+      out = `Error: ${(err as Error).message || String(err)}`;
+    }
+    const block = `$ ${command}\n${toolsLib.clip(out)}`;
+    setSessions((prev) => {
+      const next = prev.map((s) => (s.id === active.id
+        ? { ...s, messages: [...s.messages, { role: 'user' as const, content: block, note: true, shell: block, ts: Date.now() }], updatedAt: Date.now() }
+        : s));
+      saveSessions(next);
+      return next;
+    });
+    setSending(false);
+    stickToBottom.current = true;
+  };
+
+  const sendToDesign = (brief: string) => {
+    try { sessionStorage.setItem(DESIGN_BRIEF_KEY, brief); } catch { /* the event still carries it */ }
+    window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: { view: 'design' } }));
+    pushToast('info', 'Brief sent to Design.');
+  };
+
+  const addNote = (content: string) => {
+    if (!active) return;
+    patchSession(active.id, { messages: [...active.messages, { role: 'assistant', content, note: true, model: 'NeuraOS', ts: Date.now() }], draft: '' });
+  };
+
+  const download = (name: string, text: string) => {
+    if (chats.downloadJson(name, text)) pushToast('ok', `Saved ${name}.`);
+    else pushToast('warn', 'This window has no download surface.');
+  };
+
+  const setMode = (mode: ModeId) => {
+    if (!active) return;
+    if (mode === 'shell' || mode === 'design') { setTransient(mode); return; }
+    setTransient(null);
+    if (mode !== active.mode) patchSession(active.id, { mode });
+  };
+
+  // One place every `/command` lands, from the menu or typed with an argument.
+  const onCommand = (command: SlashCommand, arg: string) => {
+    if (!active) return;
+    const go = (detail: Record<string, string>) => window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail }));
+    const clear = () => patchSession(active.id, { draft: '' });
+    if (command.id.startsWith('skill:')) {
+      patchSession(active.id, { draft: `Use the ${command.id.slice(6)} skill. ${arg}`.trim() + ' ' });
+      return;
+    }
+    switch (command.id) {
+      case 'new': startNew(); return;
+      case 'history': clear(); go({ panel: 'sessions' }); return;
+      case 'settings': case 'tools': case 'mcp': clear(); go({ view: 'settings' }); return;
+      case 'model': clear(); window.dispatchEvent(new CustomEvent(MODEL_PICK_EVENT)); return;
+      case 'help': addNote(HELP); return;
+      case 'copy': {
+        clear();
+        navigator.clipboard.writeText(grammar.threadMarkdown(active))
+          .then(() => pushToast('ok', 'Thread copied as Markdown.'))
+          .catch(() => pushToast('warn', 'This window would not let the app copy.'));
+        return;
+      }
+      case 'export': {
+        clear();
+        const slug = (active.title || 'chat').replace(/[^\w-]+/g, '-').slice(0, 40) || 'chat';
+        if (/json/i.test(arg)) download(`${slug}.json`, JSON.stringify(active, null, 2));
+        else download(`${slug}.md`, grammar.threadMarkdown(active));
+        return;
+      }
+      default: break;
+    }
+    if (command.mode) setMode(command.mode);
+    setFlow(command.next || command.id === 'review' ? command.id : null);
+    const text = command.insertText ? command.insertText + arg : arg;
+    const sessionMode = command.mode && command.mode !== 'shell' && command.mode !== 'design' ? { mode: command.mode } : {};
+    patchSession(active.id, { draft: text, ...sessionMode });
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  // What `@` can reach: this provider's models, the other services, files at
+  // the top of the open folder, and MCP servers.
+  const root = openFolder();
+  useEffect(() => {
+    if (!hasShell() || !root) { setFolderFiles([]); return; }
+    listLocalDir(root, '')
+      .then((listing: any) => setFolderFiles((listing?.entries || []).filter((e: any) => !e.dir).map((e: any) => String(e.name)).slice(0, 200)))
+      .catch(() => setFolderFiles([]));
+  }, [root]);
+  const mentionSources: MentionSource[] = [
+    ...models.map((m) => ({ kind: 'model' as const, id: m.id, label: m.id, hint: 'switch to this model', provider: active?.provider })),
+    ...choices.filter((c) => c.id !== active?.provider).map((c) => ({ kind: 'model' as const, id: `provider:${c.id}`, label: c.label, hint: 'switch service', provider: c.id })),
+    ...folderFiles.map((f) => ({ kind: 'file' as const, id: f, label: f, hint: 'attach from the open folder' })),
+    ...toolsLib.mcpServers().map((sv) => ({ kind: 'mcp' as const, id: sv.name, label: sv.name, hint: `${sv.tools.length} tools` })),
+  ];
+  const onMention = (source: MentionSource): string => {
+    if (!active) return '';
+    if (source.kind === 'model') {
+      if (source.id.startsWith('provider:')) patchSession(active.id, { provider: source.provider || '', model: '' });
+      else patchSession(active.id, { model: source.id });
+      pushToast('info', `Now on ${source.label}.`);
+      return '';
+    }
+    if (source.kind === 'file') {
+      readLocalFile(root, source.id)
+        .then((file: any) => {
+          if (file.binary) { pushToast('warn', `${source.id} is binary; it cannot be attached as text.`); return; }
+          setAttached((prev) => `${prev ? prev + '\n\n' : ''}--- ${source.id} ---\n${file.text}`);
+        })
+        .catch((e: unknown) => pushToast('error', ((e as Error).message || String(e)).split('\n')[0]));
+      return `@${source.id}`;
+    }
+    return `@${source.label}`;
   };
 
   const onScroll = () => {
@@ -701,6 +915,7 @@ export default function ChatScreen() {
     if (!body) return;
     e.preventDefault();
     const snippet = body.length > 4000 ? `${body.slice(0, 4000)}\n…` : body;
+    const index = Number((target.closest('.message') as HTMLElement | null)?.dataset.index ?? -1);
     const fenced = `\`\`\`\n${snippet}\n\`\`\``;
     const ask = (text: string) => {
       patchSession(active.id, { draft: text });
@@ -719,7 +934,23 @@ export default function ChatScreen() {
       },
       { id: 'explain', label: 'Explain', icon: 'chat', run: () => ask(`Explain this:\n\n${fenced}`) },
       { id: 'rework', label: 'Rework', icon: 'build', run: () => ask(`Rework this and show the improved version:\n\n${fenced}`) },
+      { id: 'design', label: 'To Design', icon: 'design', run: () => sendToDesign(snippet) },
     ];
+    if (index >= 0) {
+      // A new chat with everything up to here: try another direction without
+      // losing this one.
+      items.push({
+        id: 'branch',
+        label: 'Branch',
+        icon: 'plus',
+        run: () => {
+          const fork = { ...newSession(active.provider, active.model), title: `${active.title} (branch)`, mode: active.mode, messages: active.messages.slice(0, index + 1) };
+          persist([fork, ...sessions].slice(0, MAX_SESSIONS));
+          setActiveId(fork.id);
+          pushToast('info', 'Branched into a new chat.');
+        },
+      });
+    }
     if (active.messages.some((m) => m.failure)) {
       items.push({
         id: 'retry-next',
@@ -780,36 +1011,12 @@ export default function ChatScreen() {
     return parts.join(' · ');
   })();
 
+  // The workflow's next step, offered once the reply to this one has landed.
+  const lastMsg = active.messages[active.messages.length - 1];
+  const nextUp = flow && !sending && lastMsg?.role === 'assistant' && !lastMsg.note ? grammar.nextStep(flow) : null;
+
   return (
     <div className="screen chat">
-      <header className="screen-header">
-        {/* One pill, not three tabs: the mode is a property of the next
-            message, so it reads as a setting rather than as navigation. */}
-        <ModePicker
-          mode={active.mode}
-          onPick={(m) => patchSession(active.id, { mode: m })}
-          disabled={sending}
-        />
-        <div className="header-actions">
-          {/* One pill, not two dropdowns: the service and the model are one
-              decision, and the pill names both without being read as a pair. */}
-          <ModelPicker
-            providers={choices}
-            models={models}
-            provider={active.provider}
-            model={active.model}
-            onPick={(provider, model) => patchSession(active.id, { provider, model })}
-            disabled={sending}
-          />
-          {isSavedProvider(active.provider) && (
-            <button onClick={() => setRunOpen((open) => !open)} title="Run settings for this model" aria-label="Run settings" aria-pressed={runOpen}>
-              <Icon name="settings" size={15} />
-            </button>
-          )}
-          <button onClick={startNew} title="New chat" aria-label="New chat"><Icon name="plus" size={15} /></button>
-        </div>
-      </header>
-
       {active.provider === 'hf' && !hfToken && (
         <div className="hf-signin-banner" role="status">
           {hfCode ? (
@@ -842,9 +1049,9 @@ export default function ChatScreen() {
           </div>
         )}
         {active.messages.map((msg, i) => (
-          <div key={i} className={`message ${msg.role}${msg.error ? ' errored' : ''}`}>
+          <div key={i} data-index={i} className={`message ${msg.role}${msg.error ? ' errored' : ''}${msg.note ? ' is-note' : ''}`}>
             <div className="message-role">
-              {msg.role === 'user'
+              {msg.shell ? 'You · command' : msg.role === 'user'
                 ? 'You'
                 : (msg.providerLabel && msg.model ? `${msg.providerLabel} · ${msg.model}` : (msg.model || 'Assistant'))}
             </div>
@@ -852,9 +1059,11 @@ export default function ChatScreen() {
               ? (msg.content
                 ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                 : null)
-              : <div className="message-content">{msg.content}</div>}
+              : msg.shell
+                ? <pre className="message-content shell-output">{msg.shell}</pre>
+                : <div className="message-content">{msg.content}</div>}
             {msg.role === 'assistant' && msg.tools && msg.tools.length > 0 && (
-              <ToolCards events={msg.tools} onDecide={sending && i === active.messages.length - 1 ? decide : undefined} />
+              <ToolCards events={msg.tools} expandAll={cardsOpen} onDecide={sending && i === active.messages.length - 1 ? decide : undefined} />
             )}
             {/* What failed, what it was asked of (which the label above already
                 names), the provider's own words, and what to do next -- instead
@@ -884,7 +1093,7 @@ export default function ChatScreen() {
         ))}
         {sending && (
           <div className="message assistant">
-            <div className="message-content typing">Thinking…</div>
+            <div className="message-content typing shimmer">Thinking…</div>
           </div>
         )}
       </div>
@@ -901,41 +1110,70 @@ export default function ChatScreen() {
           onClose={() => setRadial(null)}
         />
       )}
-      <div className="composer">
-        {attached && (
-          <div className="attach-chip">
-            <span className="attach-label">
-              <Icon name="paperclip" size={13} /> Attached text · {attached.length.toLocaleString()} chars
-            </span>
-            <button onClick={() => setAttached('')} title="Remove attachment" aria-label="Remove attachment">
-              <Icon name="close" size={13} />
-            </button>
-          </div>
+      <Composer
+        value={active.draft}
+        onChange={(text) => patchSession(active.id, { draft: text })}
+        mode={transient || active.mode}
+        onMode={setMode}
+        sending={sending}
+        onSend={send}
+        onStop={stop}
+        onCommand={onCommand}
+        slashExtra={skillRows}
+        mentionSources={mentionSources}
+        onMention={onMention}
+        toolsOn={toolsOn}
+        recall={() => grammar.lastUserText(active.messages)}
+        inputRef={inputRef}
+        modelChip={(
+          <>
+            {/* One pill, not two dropdowns: the service and the model are one
+                decision. It lives in the composer now -- Ctrl+M or @ reach it. */}
+            <ModelPicker
+              providers={choices}
+              models={models}
+              provider={active.provider}
+              model={active.model}
+              onPick={(provider, model) => patchSession(active.id, { provider, model })}
+              disabled={sending}
+            />
+            {isSavedProvider(active.provider) && (
+              <button className="composer-icon" onClick={() => setRunOpen((open) => !open)} title="Run settings for this model" aria-label="Run settings" aria-pressed={runOpen}>
+                <Icon name="settings" size={14} />
+              </button>
+            )}
+            {/* The free tier's own numbers, as a quiet fact: a limit working
+                as intended is not a fault. */}
+            {freeTierNote && (
+              <span className="composer-note" title="What this service's free tier meters">{freeTierNote}</span>
+            )}
+          </>
         )}
-        <div className="composer-row">
-          {sending
-            ? <button className="stop-btn" onClick={stop} title="Stop the reply"><Icon name="stop" size={12} /> Stop</button>
-            : null}
-          {/* The free tier's own numbers, as a quiet fact beside the box rather
-              than a warning bar: a limit working as intended is not a fault. */}
-          {freeTierNote && (
-            <span className="composer-note" title="What this service's free tier meters">
-              {freeTierNote}
-            </span>
-          )}
-          <textarea
-            ref={inputRef}
-            value={active.draft}
-            onChange={(e) => patchSession(active.id, { draft: e.target.value })}
-            onKeyDown={onKey}
-            placeholder={active.mode === 'build' ? 'Describe the build — this starts a remote build session…' : 'Message NeuraOS…'}
-            rows={1}
-          />
-          <button onClick={send} disabled={sending || !active.draft.trim()} className="send-btn">
-            {sending ? '…' : <Icon name="arrow-up" size={16} />}
-          </button>
-        </div>
-      </div>
+        above={(
+          <>
+            {nextUp && (
+              <div className="follow-chip-row">
+                <button className="follow-chip" onClick={() => onCommand(nextUp, '')} title={nextUp.hint}>
+                  Next: /{nextUp.id} <span className="follow-chip-hint">{nextUp.hint}</span>
+                </button>
+                <button className="follow-chip-close" onClick={() => setFlow(null)} aria-label="Dismiss the suggestion">
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            )}
+            {attached && (
+              <div className="attach-chip">
+                <span className="attach-label">
+                  <Icon name="paperclip" size={13} /> Attached text · {attached.length.toLocaleString()} chars
+                </span>
+                <button onClick={() => setAttached('')} title="Remove attachment" aria-label="Remove attachment">
+                  <Icon name="close" size={13} />
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      />
     </div>
   );
 }

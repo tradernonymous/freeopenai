@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from './api';
-import Sidebar, { navForKey, navKeys, type NavId } from './Sidebar';
+import Sidebar, { destinationOf, navForKey, navKeys, tabsOf, NAVIGATE_EVENT, type NavId, type ViewId } from './Sidebar';
 import TitleBar from './TitleBar';
-import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT } from './screens/ChatScreen';
+import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT, MODEL_PICK_EVENT, TOOL_CARDS_EVENT } from './screens/ChatScreen';
 import DesignScreen from './screens/DesignScreen';
 import ImagesScreen from './screens/ImagesScreen';
 import BuildScreen from './screens/BuildScreen';
@@ -35,13 +35,15 @@ import './chats.js';
 import './connection.js';
 import './onboarding.js';
 import './commands.js';
+import './keymap.js';
 
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
 const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
 const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
+const keymap: typeof import('./keymap.js') = (globalThis as any).FreeAI4UKeymap;
 
-type View = NavId;
+type View = ViewId;
 type RightPanel = 'builds' | 'knowledge' | 'none';
 type PanelKey = 'folder' | 'terminal' | 'sessions' | 'builds' | 'knowledge';
 
@@ -173,6 +175,26 @@ export default function App() {
       .catch(() => setSkillEntries([]));
   }, []);
 
+  // A destination remembers which of its tabs was open last, so Alt+2 goes
+  // back to Local if Local is where you were, not always to the agent.
+  const lastTab = useRef<Partial<Record<NavId, ViewId>>>({});
+  useEffect(() => { lastTab.current[destinationOf(view)] = view; }, [view]);
+  const navigate = useCallback((to: ViewId) => {
+    const isDestination = tabsOf(to as NavId).length > 0 && destinationOf(to) === to;
+    setView(isDestination ? (lastTab.current[to as NavId] || to) : to);
+  }, []);
+
+  // The composer's /history, /settings, /design... ask the shell to move.
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      if (detail.view) setView(detail.view as View);
+      if (detail.panel === 'sessions') setShowSessions((v) => !v);
+    };
+    window.addEventListener(NAVIGATE_EVENT, onNav);
+    return () => window.removeEventListener(NAVIGATE_EVENT, onNav);
+  }, []);
+
   const toggle = () => setTheme((t) => toggleTheme(t));
   const toggleRightPanel = (panel: RightPanel) => setRightPanel((prev) => (prev === panel ? 'none' : panel));
 
@@ -275,45 +297,45 @@ export default function App() {
     }
   };
 
-  // Zen has its own listener because it is a mode rather than a move: it has
-  // to work from every screen, and from inside the palette itself, where the
-  // other handler is already using the keyboard.
-  useEffect(() => {
-    const onZen = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        setZen((on) => !on);
-      }
-    };
-    window.addEventListener('keydown', onZen);
-    return () => window.removeEventListener('keydown', onZen);
-  }, []);
-
-  // Alt+<key> opens the screen the sidebar labels with that key -- the same
-  // NAV_ITEMS list, so the label and the shortcut cannot drift. Ctrl+K is the
-  // palette.
+  // Every app-wide key goes through ONE table (src/keymap.js): the resolver
+  // decides what a press means -- priority, the "shortcuts off" switch, the
+  // palette being open -- and this only acts on the answer. Alt+N is resolved
+  // from the sidebar's own list (navForKey), so the rail and the key agree.
+  const paletteOpenRef = useRef(false);
+  paletteOpenRef.current = paletteOpen;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && key === 'k') {
-        e.preventDefault();
-        setPaletteOpen((open) => !open);
-        return;
-      }
-      if (key === 'escape') {
-        setPaletteOpen(false);
-        return;
-      }
-      if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      const target = navForKey(e.key);
-      if (target) {
-        e.preventDefault();
-        setView(target);
+      const hit = keymap.resolveKey({
+        enabled: keymap.enabled(),
+        paletteOpen: paletteOpenRef.current,
+        bindings: keymap.withOverrides(keymap.readOverrides()),
+        nav: (e) => navForKey(e.key),
+      }, e);
+      if (!hit) return;
+      // Escape is shared with the composer and menus: close, never swallow.
+      if (hit.action === 'escape') { setPaletteOpen(false); return; }
+      e.preventDefault();
+      switch (hit.action) {
+        case 'palette': setPaletteOpen((open) => !open); break;
+        case 'zen': setZen((on) => !on); break;
+        case 'new-chat':
+          setView('chat');
+          window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT));
+          break;
+        case 'model':
+          setView('chat');
+          window.dispatchEvent(new CustomEvent(MODEL_PICK_EVENT));
+          break;
+        case 'tool-cards': window.dispatchEvent(new CustomEvent(TOOL_CARDS_EVENT)); break;
+        case 'history': setShowSessions((v) => !v); break;
+        case 'terminal': setShowTerminal((v) => !v); break;
+        case 'nav': if (hit.to) navigate(hit.to as ViewId); break;
+        default: break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [navigate]);
 
   // The shell's screen decision: show the way in when the user can act on it,
   // otherwise the app. Settings stays reachable from the connect surface, since
@@ -363,7 +385,7 @@ export default function App() {
       <div className="app-body">
         <Sidebar
           active={view}
-          onNavigate={setView}
+          onNavigate={navigate}
           onOpenPalette={openPalette}
           onTogglePanel={togglePanel}
           panels={panels}
@@ -410,6 +432,23 @@ export default function App() {
           )}
           <div className="main-content">
             <div className="primary-pane">
+              {/* A destination with more than one view shows them as tabs --
+                  the screens that used to be separate rail rows. */}
+              {!showConnect && tabsOf(destinationOf(view)).length > 1 && (
+                <div className="sub-nav" role="tablist" aria-label="Views">
+                  {tabsOf(destinationOf(view)).map((tab) => (
+                    <button
+                      key={tab.id}
+                      role="tab"
+                      aria-selected={view === tab.id}
+                      className={`sub-nav-tab ${view === tab.id ? 'active' : ''}`}
+                      onClick={() => setView(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {showConnect ? (
                 <ConnectScreen
                   reason={shell.reason}

@@ -34,6 +34,9 @@ export interface ToolEvent {
   asks: string;
   status: ToolStatus;
   result?: string;
+  /** Stamped by the screen, for the elapsed timer. */
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export interface TurnOptions {
