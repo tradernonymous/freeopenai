@@ -1069,7 +1069,6 @@ function updateNavActive(btn) {
         const settingsAuthStatus = document.getElementById('settingsAuthStatus');
         const settingsAuthButton = document.getElementById('settingsAuthButton');
         const defaultModelSelect = document.getElementById('defaultModelSelect');
-        const modelsList = document.getElementById('modelsList');
         const loadErrorBanner = document.getElementById('loadErrorBanner');
         const loadErrorText = document.getElementById('loadErrorText');
         const attachmentChip = document.getElementById('attachmentChip');
@@ -1088,10 +1087,8 @@ function updateNavActive(btn) {
         const fileInput = document.getElementById('fileInput');
         const views = {
             chat: document.getElementById('viewChat'),
-            models: document.getElementById('viewModels'),
             settings: document.getElementById('viewSettings'),
             gallery: document.getElementById('viewGallery'),
-            design: document.getElementById('viewDesign'),
         };
 
         // Initialize
@@ -1109,7 +1106,6 @@ function updateNavActive(btn) {
         syncMemorySwitch();
         document.getElementById('reasoningCheck').checked = reasoningVisible;
         document.getElementById('routingCheck').checked = routingMode === 'auto';
-        designLoadTemplates();
         applyAppLink();
         window.addEventListener('hashchange', applyAppLink);
 
@@ -1222,7 +1218,6 @@ function updateNavActive(btn) {
 
         function renderModelOptions() {
             modelDropdownList.innerHTML = '';
-            modelsList.innerHTML = '';
             defaultModelSelect.innerHTML = '';
 
             activeModels().forEach((m) => {
@@ -1247,24 +1242,6 @@ function updateNavActive(btn) {
                 });
                 modelDropdownList.appendChild(opt);
 
-                const card = document.createElement('button');
-                card.type = 'button';
-                card.className = 'model-card' + (m.id === selectedModel ? ' active' : '');
-                card.dataset.model = m.id;
-                const cardName = document.createElement('span');
-                cardName.className = 'model-name';
-                cardName.textContent = m.name;
-                const cardDesc = document.createElement('span');
-                cardDesc.className = 'model-desc';
-                cardDesc.textContent = m.desc;
-                card.appendChild(cardName);
-                card.appendChild(cardDesc);
-                card.addEventListener('click', () => {
-                    selectModel(m.id);
-                    switchView('chat');
-                });
-                modelsList.appendChild(card);
-
                 const sel = document.createElement('option');
                 sel.value = m.id;
                 sel.textContent = m.name;
@@ -1272,40 +1249,14 @@ function updateNavActive(btn) {
             });
 
             defaultModelSelect.value = selectedModel;
-            // A re-render rebuilds every card unhidden; the view's filter, if
-            // any, goes right back on so the grid does not forget what it showed.
-            const cardSearch = document.getElementById('modelCardSearch');
-            if (cardSearch) filterModelCards(cardSearch.value);
             // Last, so the note sits under the rows it is about and cannot be
             // picked: it is a paragraph, not a button.
             const note = hiddenModelRowsNote();
             if (note) {
                 const line = document.createElement('p');
-                line.className = 'models-note';
+                line.className = 'model-dropdown-empty';
                 line.textContent = note;
-                modelsList.appendChild(line);
-            }
-        }
-
-        // The Models view is a card grid, and a grid with dozens of rows needs
-        // the same filter the dropdown already has: same substring rule, same
-        // empty note, same hidden attribute the CSS already respects.
-        function filterModelCards(query) {
-            const needle = String(query || '').trim().toLowerCase();
-            let shown = 0;
-            modelsList.querySelectorAll('.model-card').forEach((card) => {
-                const match = !needle || card.textContent.toLowerCase().includes(needle);
-                card.hidden = !match;
-                if (match) shown++;
-            });
-            let empty = modelsList.querySelector('.models-empty');
-            if (!shown && !empty) {
-                empty = document.createElement('p');
-                empty.className = 'models-empty';
-                empty.textContent = 'No model matches that.';
-                modelsList.appendChild(empty);
-            } else if (empty) {
-                empty.hidden = shown > 0;
+                modelDropdownList.appendChild(line);
             }
         }
 
@@ -1387,10 +1338,6 @@ function updateNavActive(btn) {
                 renderMcpServers();
             }
             if (name === 'gallery') renderGallery();
-            if (name === 'design') {
-                designLoadTemplates();
-                designListProjects();
-            }
         }
 
         // Kept as a thin alias: the command palette's own action list (below)
@@ -1506,7 +1453,6 @@ function updateNavActive(btn) {
             if (!isValidModel(modelId)) return;
             selectedModel = modelId;
             modelDropdownList.querySelectorAll('.model-option:not([hidden])').forEach((opt) => opt.classList.toggle('active', opt.dataset.model === modelId));
-            modelsList.querySelectorAll('.model-card').forEach((card) => card.classList.toggle('active', card.dataset.model === modelId));
             defaultModelSelect.value = modelId;
             updateModelLabel();
             updateEffortPicker();
@@ -8456,170 +8402,6 @@ function updateNavActive(btn) {
             });
         }
 
-        let designCurrentProjectId = null;
-
-        async function designApi(path, opts = {}) {
-            const res = await fetch('/api/design' + path, {
-                headers: { 'Content-Type': 'application/json' },
-                ...opts,
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({ error: 'Request failed' }));
-                throw new Error(err.error || 'Design request failed');
-            }
-            return res.json();
-        }
-
-        async function designLoadTemplates() {
-            const select = document.getElementById('designTemplateSelect');
-            if (!select) return;
-            try {
-                const templates = await designApi('/templates');
-                select.innerHTML = '';
-                templates.forEach((t) => {
-                    const opt = document.createElement('option');
-                    opt.value = t.id;
-                    opt.textContent = t.label + ' (' + t.width + 'x' + t.height + ' ' + t.unit + ')';
-                    select.appendChild(opt);
-                });
-            } catch (e) {
-                select.innerHTML = '<option value="">Failed to load templates</option>';
-            }
-        }
-
-        async function designListProjects() {
-            const list = document.getElementById('designProjectList');
-            const empty = document.getElementById('designEmpty');
-            if (!list) return;
-            try {
-                const projects = await designApi('/projects');
-                list.innerHTML = '';
-                if (empty) empty.hidden = projects.length > 0;
-                projects.forEach((p) => {
-                    const row = document.createElement('div');
-                    row.className = 'todo-row';
-                    row.style.display = 'flex';
-                    row.style.alignItems = 'center';
-                    row.style.justifyContent = 'space-between';
-                    row.style.gap = '8px';
-                    const name = document.createElement('strong');
-                    name.textContent = p.name;
-                    name.style.fontSize = '13px';
-                    const meta = document.createElement('span');
-                    meta.textContent = p.template ? p.template : 'draft';
-                    meta.style.fontSize = '11px';
-                    meta.style.color = 'var(--text-muted)';
-                    const actions = document.createElement('div');
-                    actions.style.display = 'flex';
-                    actions.style.gap = '6px';
-                    actions.style.flexShrink = '0';
-                    const openBtn = document.createElement('button');
-                    openBtn.className = 'icon-btn-text';
-                    openBtn.textContent = 'Open';
-                    openBtn.onclick = () => designOpenProject(p.id);
-                    const delBtn = document.createElement('button');
-                    delBtn.className = 'icon-btn-text danger';
-                    delBtn.textContent = 'Delete';
-                    delBtn.onclick = async () => {
-                        await designApi('/projects/' + p.id, { method: 'DELETE' });
-                        designListProjects();
-                    };
-                    actions.appendChild(openBtn);
-                    actions.appendChild(delBtn);
-                    row.appendChild(name);
-                    row.appendChild(meta);
-                    row.appendChild(actions);
-                    list.appendChild(row);
-                });
-            } catch (e) {
-                if (empty) {
-                    empty.hidden = false;
-                    empty.textContent = 'Failed to load projects.';
-                }
-            }
-        }
-
-        async function designCreateProject() {
-            const nameEl = document.getElementById('designProjectName');
-            const templateEl = document.getElementById('designTemplateSelect');
-            const promptEl = document.getElementById('designPrompt');
-            const name = (nameEl && nameEl.value || '').trim();
-            const template = (templateEl && templateEl.value || '').trim();
-            const prompt = (promptEl && promptEl.value || '').trim();
-            if (!name) {
-                showStatus('error', 'Project name is required');
-                return;
-            }
-            const project = await designApi('/projects', {
-                method: 'POST',
-                body: JSON.stringify({ name, template, prompt }),
-            });
-            if (nameEl) nameEl.value = '';
-            if (promptEl) promptEl.value = '';
-            showStatus('ready', 'Project created');
-            designListProjects();
-            designOpenProject(project.id);
-        }
-
-        async function designOpenProject(id) {
-            designCurrentProjectId = id;
-            const project = await designApi('/projects/' + id);
-            const editor = document.getElementById('designEditor');
-            const title = document.getElementById('designEditorTitle');
-            const canvas = document.getElementById('designCanvas');
-            if (title) title.textContent = project.name || 'Project';
-            if (canvas) canvas.value = project.canvas ? JSON.stringify(project.canvas, null, 2) : '';
-            if (editor) editor.hidden = false;
-            switchView('design');
-        }
-
-        async function designGenerate() {
-            if (!designCurrentProjectId) return;
-            const promptEl = document.getElementById('designPrompt');
-            const prompt = (promptEl && promptEl.value || '').trim();
-            if (!prompt) {
-                showStatus('error', 'Enter a prompt before generating');
-                return;
-            }
-            const res = await designApi('/generate', {
-                method: 'POST',
-                body: JSON.stringify({ projectId: designCurrentProjectId, prompt }),
-            });
-            showStatus('ready', res.message || 'Queued');
-        }
-
-        async function designExport() {
-            if (!designCurrentProjectId) return;
-            const formatEl = document.getElementById('designExportFormat');
-            const format = (formatEl && formatEl.value || 'html').trim();
-            const res = await designApi('/export', {
-                method: 'POST',
-                body: JSON.stringify({ projectId: designCurrentProjectId, format }),
-            });
-            showStatus('ready', 'Export queued: ' + format);
-        }
-
-        function designCloseEditor() {
-            designCurrentProjectId = null;
-            const editor = document.getElementById('designEditor');
-            if (editor) editor.hidden = true;
-        }
-
-        async function designSaveCurrent() {
-            if (!designCurrentProjectId) return;
-            const canvasEl = document.getElementById('designCanvas');
-            let canvas = {};
-            try {
-                canvas = canvasEl && canvasEl.value ? JSON.parse(canvasEl.value) : {};
-            } catch {
-                canvas = { raw: canvasEl && canvasEl.value || '' };
-            }
-            await designApi('/projects/' + designCurrentProjectId, {
-                method: 'PUT',
-                body: JSON.stringify({ canvas }),
-            });
-        }
-
         // The status bar says what happened and then lets it go — except for a
         // failure, which is the one message that asks the reader to do
         // something next. It used to clear after 2.5s like everything else,
@@ -8902,7 +8684,6 @@ if ('serviceWorker' in navigator) {
 // ============================================================
 var paletteCommands = [
     { id: 'new-chat', icon: 'fa-plus', title: 'New Chat', desc: 'Start a fresh conversation', shortcut: 'Ctrl+N', action: function() { startNewConversation(); } },
-    { id: 'models', icon: 'fa-microchip', title: 'Models', desc: 'Browse available AI models', shortcut: 'Ctrl+M', action: function() { switchViewFromDrawer('models'); } },
     { id: 'settings', icon: 'fa-cog', title: 'Settings', desc: 'Configure NeuraOS', shortcut: 'Ctrl+,', action: function() { switchViewFromDrawer('settings'); } },
     { id: 'gallery', icon: 'fa-images', title: 'Gallery', desc: 'View generated images', shortcut: 'Ctrl+G', action: function() { switchViewFromDrawer('gallery'); } },
     { id: 'build', icon: 'fa-hammer', title: 'Build', desc: 'Build mode', shortcut: 'Ctrl+B', action: function() { switchViewFromDrawer('build'); } },

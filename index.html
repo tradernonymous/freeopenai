@@ -54,10 +54,6 @@
                     <div class="chat-history-list" id="chatHistoryList"></div>
                 </div>
             </div>
-            <button class="top-nav-link" type="button" onclick="switchView('models'); updateNavActive(this);" aria-label="Models">
-                <i class="fas fa-microchip"></i>
-                <span>Models</span>
-            </button>
             <button class="top-nav-link" type="button" onclick="switchView('settings'); updateNavActive(this);" aria-label="Settings">
                 <i class="fas fa-cog"></i>
                 <span>Settings</span>
@@ -69,10 +65,6 @@
             <button class="top-nav-link" type="button" onclick="switchView('build'); updateNavActive(this);" aria-label="Build">
                 <i class="fas fa-hammer"></i>
                 <span>Build</span>
-            </button>
-            <button class="top-nav-link" type="button" onclick="switchView('design'); updateNavActive(this);" aria-label="Design">
-                <i class="fas fa-pen-ruler"></i>
-                <span>Design</span>
             </button>
         </div>
         <div class="top-nav-actions">
@@ -401,14 +393,6 @@
                 </div>
             </div>
 
-            <div class="view" id="viewModels">
-                
-                <div class="settings-body">
-                    <input type="text" class="model-dropdown-search models-search" id="modelCardSearch" placeholder="Filter models…" aria-label="Filter models" autocomplete="off" oninput="filterModelCards(this.value)">
-                    <div class="models-list" id="modelsList"></div>
-                </div>
-            </div>
-
             <div class="view" id="viewSettings">
                 
                 <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
@@ -648,48 +632,6 @@
                 </div>
             </div>
 
-            <div class="view" id="viewDesign">
-                
-                <div class="settings-body">
-                    <div class="settings-row">
-                        <div>
-                            <strong>New project</strong>
-                            <p class="settings-hint">Pick a template, name the project, and describe the output.</p>
-                        </div>
-                    </div>
-                    <div class="settings-row settings-row-column">
-                        <input type="text" id="designProjectName" placeholder="Project name" aria-label="Project name">
-                        <select id="designTemplateSelect" aria-label="Template">
-                            <option value="">Loading templates…</option>
-                        </select>
-                        <textarea id="designPrompt" placeholder="Describe what you want to create…" rows="3" aria-label="Design prompt"></textarea>
-                        <button class="icon-btn-text" type="button" onclick="designCreateProject()">Create project</button>
-                    </div>
-                    <h3 class="settings-section-title">Projects</h3>
-                    <div class="settings-row settings-row-column">
-                        <div class="workspace-list" id="designProjectList" aria-label="Design projects">
-                            <p class="settings-hint" id="designEmpty">No projects yet.</p>
-                        </div>
-                    </div>
-                    <div id="designEditor" hidden>
-                        <h3 class="settings-section-title" id="designEditorTitle">Project</h3>
-                        <div class="settings-row settings-row-column">
-                            <textarea id="designCanvas" placeholder="Canvas JSON or HTML will appear here…" rows="8" aria-label="Canvas"></textarea>
-                            <div class="github-browser-row">
-                                <button class="icon-btn-text" type="button" onclick="designGenerate()">Generate</button>
-                                <select id="designExportFormat" aria-label="Export format">
-                                    <option value="html">HTML</option>
-                                    <option value="pdf">PDF</option>
-                                    <option value="png">PNG</option>
-                                    <option value="svg">SVG</option>
-                                </select>
-                                <button class="icon-btn-text" type="button" onclick="designExport()">Export</button>
-                                <button class="icon-btn-text danger" type="button" onclick="designCloseEditor()">Close</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
     </main>
 

@@ -187,7 +187,7 @@
         /* Without this, every tap on a phone waits on the browser's double-tap
            zoom detector before the handler runs. */
         button, select, input, textarea, a,
-        .model-option, .history-item, .model-card, .drawer-nav-btn,
+        .model-option, .history-item, .drawer-nav-btn,
         .attach-menu-item, .msg-action-btn, .code-copy-btn, .message-image {
             touch-action: manipulation;
         }
@@ -202,28 +202,12 @@
            browser's default grey wash that ignores whichever theme is on. */
         ::selection { background: var(--accent); color: var(--bg); }
 
-        /* Scrollbars. The browser default is a grey slab that ignores the
-           theme; this keeps the same monochrome palette and uses the same
-           highlight-plus-shadow trick as every other raised surface. */
-        * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-        ::-webkit-scrollbar { width: 10px; height: 10px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb {
-            background: linear-gradient(180deg, #4a4a4a, #2e2e2e);
-            border-radius: 999px;
-            /* Inset border, so the thumb floats clear of the track edge. */
-            border: 2px solid transparent;
-            background-clip: padding-box;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: linear-gradient(180deg, #6a6a6a, #3f3f3f);
-            background-clip: padding-box;
-        }
-        ::-webkit-scrollbar-thumb:active { background: linear-gradient(180deg, #8a8a8a, #555); background-clip: padding-box; }
+        /* Scrollbars: thin, brand green, defined once below (search
+           "scrollbar, everywhere") rather than duplicated per-browser here. */
+        * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--hub-green) 55%, transparent) transparent; }
         ::-webkit-scrollbar-corner { background: transparent; }
         /* A horizontal scroller inside a message shouldn't get the full-size bar. */
-        .message-text pre::-webkit-scrollbar { height: 8px; }
+        .message-text pre::-webkit-scrollbar { height: 4px; }
 
         /* Menu trigger button, one per view's chat-bar (replaces the old top header).
            Its shape comes from the shared icon-control rule further down, beside
@@ -786,10 +770,6 @@
             box-shadow: var(--lift);
         }
         .model-dropdown-search:focus { border-color: var(--border-strong); box-shadow: var(--glow); }
-        /* The Models view reuses the dropdown's search control, full-width
-           above the card grid -- one search look everywhere, it-tools style. */
-        .models-search { margin: 0 0 10px; width: 100%; }
-        .models-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         .model-dropdown-list { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
         .model-dropdown-empty { padding: 14px 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
@@ -1795,16 +1775,6 @@
         .icon-btn-text:focus-visible { outline: none; box-shadow: var(--glow); border-color: var(--accent); }
         .icon-btn-text.danger:hover { border-color: var(--danger); color: var(--danger); }
 
-        .models-list { display: flex; flex-direction: column; gap: 8px; }
-        .model-card {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 14px; border: 1px solid var(--border); border-radius: var(--r);
-            background: var(--surface-2); cursor: pointer; text-align: left; color: var(--text); font: inherit;
-        }
-        .model-card:hover, .model-card:focus-visible { border-color: var(--accent); outline: none; }
-        .model-card.active { border-color: var(--accent); background: var(--accent-bg); }
-        .model-card .model-desc { color: var(--text-muted); font-size: 12px; }
-
         /* Help modal */
         .modal-overlay {
             position: fixed; inset: 0; z-index: 200;
@@ -2701,24 +2671,6 @@ button, a, .icon-btn, .model-trigger, .effort-select, .drawer-nav-btn {
 }
 
 /* Model Card Enhancements */
-.model-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: 12px;
-    transition: all 200ms ease;
-}
-.model-card:hover {
-    border-color: var(--accent);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-    transform: translateY(-2px);
-}
-.model-card.selected {
-    border-color: var(--accent);
-    background: var(--accent-bg);
-    box-shadow: 0 0 12px var(--accent-bg);
-}
-
 /* Empty States */
 .empty-state {
     text-align: center;
@@ -2752,19 +2704,6 @@ button, a, .icon-btn, .model-trigger, .effort-select, .drawer-nav-btn {
     from { opacity: 0; }
     to { opacity: 1; }
 }
-
-/* Enhanced scrollbar for chat */
-.chat-messages::-webkit-scrollbar {
-    width: 6px;
-}
-.chat-messages::-webkit-scrollbar-thumb {
-    background: var(--border-strong);
-    border-radius: 3px;
-}
-.chat-messages::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
-}
-
 
 /* === PHASE 3: CONSISTENCY AND VISUAL COHERENCE === */
 
@@ -2846,13 +2785,13 @@ html[data-theme="light"] {
 
 /* Consistent card styles */
 .chat-card, .session-panel, .canvas-pane, .build-card,
-.model-card, .todo-row, .skill-row {
+.todo-row, .skill-row {
     transition: all var(--duration-normal) var(--ease-out);
 }
 
 /* Consistent border styles */
 .chat-card, .session-panel, .canvas-pane, .build-card,
-.model-card, .todo-row, .skill-row, .palette {
+.todo-row, .skill-row, .palette {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
 }
@@ -2900,20 +2839,22 @@ input:focus, textarea:focus, select:focus {
     box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
-/* Consistent scrollbar across all scrollable areas */
+/* Thin scrollbar, everywhere, in the app's own brand green rather than a
+   grey slab -- --hub-green is theme-independent (hub.css), so this stays the
+   same colour whether the page is on the grey ChatGPT palette or a pack. */
 *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
 }
 *::-webkit-scrollbar-track {
     background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-    background: var(--border-strong);
-    border-radius: 3px;
+    background: color-mix(in srgb, var(--hub-green) 55%, transparent);
+    border-radius: 999px;
 }
 *::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
+    background: var(--hub-green);
 }
 
 /* Consistent loading states */
