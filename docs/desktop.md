@@ -203,6 +203,9 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/hf-models.js` | HuggingFace model browser: search, GGUF quants, download URLs |
 | `src/coding-agent.js` | Local coding agent: plan→approve→edit→run loop, tool parsing |
 | `src/remote-handoff.js` | Remote handoff orchestrator: package workspace, push to engine, SSE stream |
+| `src/hf-inference.js` | HuggingFace Inference API as a chat provider (curated model list, streaming) |
+| `src/hf-skills.js` | HuggingFace Skills knowledge pack: load SKILL.md from HF repos |
+| `src/finetune.js` | Experimental local fine-tuning: LoRA via llama.cpp, VRAM/RAM guards |
 | `src/components/ModelPicker.tsx` | One pill for "who answers": service and model as one decision |
 | `src-tauri/src/models.rs` | The llama.cpp server: find, start, wait, stop — loopback only, reaped on exit |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
@@ -297,10 +300,10 @@ What the shell does that a window of tabs does not:
 | P3 — local-first folder, terminal and confinement, LOCAL tab | shipped |
 | P4 — local models: llama.cpp + GGUF, the memory guard, `Local` in the picker | shipped |
 | P5 — Sign in with Hugging Face + the Hub browser | shipped |
-| P6 — Hugging Face as a model route, BYOK un-parked | not started |
+| P6 — Hugging Face as a chat provider (HF Inference API in the model picker) | shipped |
 | P7 — the local, approval-gated coding agent (the flagship) | shipped |
-| P8 — knowledge and skills (Agent Skills, the HF catalogue) | not started |
-| P9 — local images, parallel agents, fine-tuning (stretch) | not started |
+| P8 — knowledge and skills (HF Skills catalog in Knowledge panel) | shipped |
+| P9 — experimental fine-tuning (LoRA via llama.cpp, VRAM guards) | shipped (experimental) |
 
 The NeuraOS pass (the UI/UX and hybrid-compute plan) is tracked separately,
 because it cuts across those phases:

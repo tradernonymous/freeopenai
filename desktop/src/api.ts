@@ -266,7 +266,7 @@ export const api = {
   // builds: a build is created with the plan text; watch it over SSE; answer
   // approvals and questions through /input; stop it with /cancel.
   buildList: () => request('/api/build/sessions'),
-  buildRun: (body: { plan: string; repo?: string; chatId?: string }) =>
+  buildRun: (body: { plan: string; repo?: string; chatId?: string; provider?: string; model?: string }) =>
     request('/api/build/sessions', { method: 'POST', body: JSON.stringify(body) }),
   buildGet: (id: string) => request(`/api/build/sessions/${encodeURIComponent(id)}`),
   buildInput: (id: string, body: { requestId: string; decision?: 'approve' | 'reject'; text?: string }) =>

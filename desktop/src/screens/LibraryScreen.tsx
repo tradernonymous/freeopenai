@@ -6,9 +6,11 @@ import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
 import '../chats.js';
 import '../hf-auth.js';
 import '../hf-models.js';
+import '../hf-skills.js';
 
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const hfModels: typeof import('../hf-models.js') = (globalThis as any).FreeAI4UHfModels;
+const hfSkills: typeof import('../hf-skills.js') = (globalThis as any).FreeAI4UHfSkills;
 
 // Named for the store, not `chats`: this screen already has a `chats` state.
 const chatStore: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
@@ -39,6 +41,10 @@ export default function LibraryScreen() {
   const [error, setError] = useState('');
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // --- HF Skills state ---
+  const [hfCatalog, setHfCatalog] = useState<any[]>([]);
+  const [hfCatalogLoading, setHfCatalogLoading] = useState(false);
 
   // --- HuggingFace state ---
   const [hfSignedIn, setHfSignedIn] = useState(false);
@@ -112,6 +118,14 @@ export default function LibraryScreen() {
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
     setChats(chatStore.byRecency(chatStore.readStore()) as ChatSession[]);
+
+    // Load HF skills catalog.
+    setHfCatalogLoading(true);
+    const hfToken = hfAuth.accessToken()?.access_token;
+    hfSkills.loadCatalog(hfToken || undefined)
+      .then((rows: any) => setHfCatalog(Array.isArray(rows) ? rows : []))
+      .catch(() => setHfCatalog([]))
+      .finally(() => setHfCatalogLoading(false));
   };
 
   useEffect(() => { load(); }, []);
@@ -215,6 +229,21 @@ export default function LibraryScreen() {
       </section>
 
       <div className="library-layout">
+        <section className="library-col">
+          <h3 className="col-title">HF Skills ({hfCatalog.length})</h3>
+          {hfCatalogLoading && <div className="empty">Loading HF skills…</div>}
+          <div className="skill-list">
+            {hfCatalog.map((s: any) => (
+              <button key={s.name} className={`skill-item ${open?.name === s.name ? 'active' : ''}`} onClick={() => { setOpen({ name: s.name, description: s.description, source: s.repo || 'hf' }); setContent(s.content); }}>
+                <div className="skill-name">{s.name}</div>
+                <div className="skill-desc">{s.description}</div>
+                <div className="skill-src">{s.repo}{s.tags?.length ? ' · ' + s.tags.join(', ') : ''}</div>
+              </button>
+            ))}
+            {!hfCatalog.length && !hfCatalogLoading && <div className="empty">No HF skills loaded — sign in to Hugging Face for the full catalog.</div>}
+          </div>
+        </section>
+
         <section className="library-col">
           <h3 className="col-title">Skills on this engine ({skills.length})</h3>
           {error && <div className="stream-error">{error}</div>}

@@ -3,6 +3,14 @@ import { api } from '../api';
 import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
 import PlanCanvas from '../components/PlanCanvas';
+import ModelPicker from '../components/ModelPicker';
+import '../hf-auth.js';
+import '../hf-inference.js';
+import '../local-models.js';
+
+const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
+const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 
 interface Step {
   id: string | number;
@@ -75,6 +83,18 @@ export default function BuildScreen() {
   const [enabled, setEnabled] = useState(true);
   const [gateReason, setGateReason] = useState('');
 
+  // Build model selection.
+  const [buildProvider, setBuildProvider] = useState(() => {
+    try { return localStorage.getItem('freeai4u.buildProvider') || ''; } catch { return ''; }
+  });
+  const [buildModel, setBuildModel] = useState(() => {
+    try { return localStorage.getItem('freeai4u.buildModel') || ''; } catch { return ''; }
+  });
+  const [providerRows, setProviderRows] = useState<Array<{ id: string; label: string; freeTier?: any; local?: boolean }>>([]);
+  const [modelRows, setModelRows] = useState<Array<{ id: string; free?: string }>>([]);
+  const hfToken = hfAuth.accessToken()?.access_token || null;
+  const hfRow = hfInference.providerRow(hfToken);
+
   const listRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | (Window & typeof globalThis) | null>(null);
 
@@ -92,6 +112,41 @@ export default function BuildScreen() {
     });
     if (view.status === 'running' || view.pending) setActiveId(view.id);
     return undefined;
+  }, []);
+
+  // Load providers for the build model picker.
+  useEffect(() => {
+    api.providers()
+      .then((rows: any) => {
+        const chat = (Array.isArray(rows) ? rows : []).filter((p: any) => p.kind !== 'image' && p.configured);
+        setProviderRows(chat);
+      })
+      .catch(() => setProviderRows([]));
+  }, []);
+
+  // Load models when build provider changes.
+  useEffect(() => {
+    if (!buildProvider) { setModelRows([]); return; }
+    if (buildProvider === 'hf') {
+      setModelRows(hfInference.models(hfToken));
+      return;
+    }
+    api.models(buildProvider)
+      .then((data: any) => {
+        const list: any[] = Array.isArray(data) ? data : (Array.isArray(data?.models) ? data.models : []);
+        setModelRows(list.map((m: any) => ({ id: String(m.id || m), free: m.free || '' })));
+      })
+      .catch(() => setModelRows([]));
+  }, [buildProvider, hfToken]);
+
+  // Persist build model selection.
+  const onBuildModelPick = useCallback((provider: string, model: string) => {
+    setBuildProvider(provider);
+    setBuildModel(model);
+    try {
+      localStorage.setItem('freeai4u.buildProvider', provider);
+      localStorage.setItem('freeai4u.buildModel', model);
+    } catch { /* best effort */ }
   }, []);
 
   // initial list + engine gate state
@@ -161,7 +216,12 @@ export default function BuildScreen() {
     setStarting(true);
     setError('');
     try {
-      const view: any = await api.buildRun({ plan: text, repo: repo.trim() || undefined });
+      const view: any = await api.buildRun({
+        plan: text,
+        repo: repo.trim() || undefined,
+        ...(buildProvider ? { provider: buildProvider } : {}),
+        ...(buildModel ? { model: buildModel } : {}),
+      });
       upsert(view);
       setActiveId(view.id);
       setPlan('');
@@ -231,6 +291,16 @@ export default function BuildScreen() {
       <header className="screen-header">
         <h1>Builds</h1>
         <div className="header-actions">
+          <ModelPicker
+            providers={[
+              ...(hfRow ? [hfRow] : []),
+              ...providerRows,
+            ]}
+            models={modelRows}
+            provider={buildProvider}
+            model={buildModel}
+            onPick={onBuildModelPick}
+          />
           <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo (optional)" style={{ width: 180 }} />
           <button className="primary" onClick={start} disabled={starting || !plan.trim()}>
             {starting ? 'Starting…' : 'New build'}

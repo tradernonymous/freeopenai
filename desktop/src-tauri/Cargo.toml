@@ -1,6 +1,6 @@
 [package]
 name = "freeai4u-desktop"
-version = "2.9.0"
+version = "2.10.0"
 description = "NeuraOS Desktop — chat, images, local models and approval-gated builds on the FreeAI4U engine"
 authors = ["printezy247"]
 license = "MIT"

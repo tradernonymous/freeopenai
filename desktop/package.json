@@ -1,6 +1,6 @@
 {
   "name": "freeai4u-desktop",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "description": "NeuraOS Desktop — native Windows app on the FreeAI4U engine",
   "scripts": {
     "dev": "vite",

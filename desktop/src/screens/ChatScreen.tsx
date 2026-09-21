@@ -12,11 +12,15 @@ import '../chats.js';
 import '../failure.js';
 import '../fallback.js';
 import '../local-models.js';
+import '../hf-auth.js';
+import '../hf-inference.js';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
 const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFallback;
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
+const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
 
 export interface Msg {
   role: 'user' | 'assistant';
@@ -99,9 +103,13 @@ export default function ChatScreen() {
   const [localRow, setLocalRow] = useState<ProviderRow | null>(null);
   const [models, setModels] = useState<Array<{ id: string; free?: string }>>([]);
   // The picker's list: the engine's providers plus a local model if one is up.
-  const choices = localRow && !providerRows.some((p) => p.id === 'local')
-    ? [localRow, ...providerRows]
-    : providerRows;
+  const [hfToken, setHfToken] = useState<string | null>(() => hfAuth.accessToken()?.access_token || null);
+  const hfRow = hfInference.providerRow(hfToken);
+  const choices = [
+    ...(localRow && !providerRows.some((p) => p.id === 'local') ? [localRow] : []),
+    ...(hfRow && !providerRows.some((p) => p.id === 'hf') ? [hfRow] : []),
+    ...providerRows,
+  ];
   const [sending, setSending] = useState(false);
   const [attached, setAttached] = useState<string>('');
   // Right-click on a reply opens the actions for what is under the pointer.
@@ -191,6 +199,11 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!active?.provider) {
       setModels([]);
+      return;
+    }
+    // HF Inference has its own curated model list.
+    if (active.provider === 'hf') {
+      setModels(hfInference.models(hfToken));
       return;
     }
     // A local server serves exactly the model it was started with, so its list
@@ -327,7 +340,11 @@ export default function ChatScreen() {
 
     try {
       const turns = history.map(({ role, content }) => ({ role, content }));
-      if (active.provider === 'local') {
+      if (active.provider === 'hf') {
+        await hfInference.streamChat(active.model, turns, (frame: StreamFrame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal, hfToken || undefined);
+      } else if (active.provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', active.model, turns, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
         }, controller.signal);
@@ -440,7 +457,11 @@ export default function ChatScreen() {
     };
     try {
       const turns = msgs.map(({ role, content }) => ({ role, content }));
-      if (provider === 'local') {
+      if (provider === 'hf') {
+        await hfInference.streamChat(model, turns, (frame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal, hfToken || undefined);
+      } else if (provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
           if (frame.content) append(frame.content);
         }, controller.signal);
