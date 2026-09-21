@@ -5716,7 +5716,17 @@ function createRequestHandler(root) {
 }
 
 if (require.main === module) {
-  http.createServer(createRequestHandler(rootDir)).listen(port, () => console.log(`Serving on port ${port}`));
+  const server = http.createServer(createRequestHandler(rootDir));
+  
+  // Initialize WebSocket presence server with auth
+  try {
+    new PresenceServer(server, wsAuth);
+    console.log('[WS] Presence server initialized');
+  } catch (e) {
+    console.warn('[WS] Failed to initialize:', e.message);
+  }
+  
+  server.listen(port, () => console.log(`Serving on port ${port}`));
 }
 
 module.exports = {

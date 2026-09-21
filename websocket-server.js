@@ -6,10 +6,11 @@
 const crypto = require('crypto');
 
 class PresenceServer {
-  constructor(server) {
+  constructor(server, wsAuth) {
     this.clients = new Map(); // clientId -> { ws, userId, chatId, cursor, color }
     this.chatRooms = new Map(); // chatId -> Set of clientIds
     this.server = server;
+    this.wsAuth = wsAuth || null;
     
     // Use raw HTTP upgrade for WebSocket
     server.on('upgrade', (req, socket, head) => {
@@ -18,6 +19,17 @@ class PresenceServer {
   }
   
   handleUpgrade(req, socket, head) {
+    // Validate authentication if wsAuth is available
+    if (this.wsAuth) {
+      const auth = this.wsAuth.validateRequest(req);
+      if (!auth.valid) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      this._pendingAuth = auth;
+    }
+    
     // Simple WebSocket handshake
     const key = req.headers['sec-websocket-key'];
     if (!key) {
@@ -41,7 +53,7 @@ class PresenceServer {
     const clientId = crypto.randomBytes(8).toString('hex');
     const client = {
       ws: socket,
-      userId: null,
+      userId: this._pendingAuth?.userId || null,
       chatId: null,
       cursor: { x: 0, y: 0 },
       color: this.generateColor()
