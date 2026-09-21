@@ -63,6 +63,7 @@ class Repository(context: Context) {
     private val imagesDir = File(root, "images").apply { mkdirs() }
     private val libraryFile = File(root, "library.bin")
     private val outboxFile = File(root, "outbox.bin")
+    private val automationsFile = File(root, "automations.bin")
 
     private fun safeId(id: String): String = id.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(64)
 
@@ -122,6 +123,14 @@ class Repository(context: Context) {
     }
 
     @Synchronized
+    fun loadAutomations(): List<AutomationEntry> = automationsFromJson(readSealed(automationsFile)?.let { String(it, Charsets.UTF_8) })
+
+    @Synchronized
+    fun saveAutomations(entries: List<AutomationEntry>) {
+        writeSealed(automationsFile, automationsToJson(entries).toByteArray(Charsets.UTF_8))
+    }
+
+    @Synchronized
     fun saveImage(id: String, bytes: ByteArray) {
         writeSealed(File(imagesDir, safeId(id) + ".bin"), bytes)
     }
@@ -141,5 +150,6 @@ class Repository(context: Context) {
         imagesDir.listFiles()?.forEach { it.delete() }
         libraryFile.delete()
         outboxFile.delete()
+        automationsFile.delete()
     }
 }

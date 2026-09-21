@@ -22,9 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -63,7 +61,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun AutomationScreen(
     vm: AppViewModel,
-    onRunAutomation: (String) -> Unit = {},
+    onRunAutomation: (String) -> Unit = { vm.runAutomation(it) },
 ) {
     var showBuilder by remember { mutableStateOf(false) }
     var automationPrompt by remember { mutableStateOf("") }
@@ -110,17 +108,19 @@ fun AutomationScreen(
             }
 
             // History
-            item {
-                Spacer(Modifier.height(8.dp))
-                SectionHeader("Recent Automations")
-            }
+            if (vm.automations.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    SectionHeader("Recent Automations")
+                }
 
-            items(automationHistory) { entry ->
-                HistoryCard(
-                    prompt = entry.first,
-                    status = entry.second,
-                    onClick = { onRunAutomation(entry.first) },
-                )
+                items(vm.automations) { entry ->
+                    HistoryCard(
+                        prompt = entry.prompt,
+                        status = relativeTime(entry.ranAt),
+                        onClick = { onRunAutomation(entry.prompt) },
+                    )
+                }
             }
 
             item { Spacer(Modifier.height(16.dp)) }
@@ -313,16 +313,4 @@ private val quickAutomations = listOf(
         icon = Icons.Default.PlayArrow,
         prompt = "Scroll down on the current screen",
     ),
-    QuickAutomation(
-        title = "Scheduled Task",
-        description = "Set up a recurring automation",
-        icon = Icons.Default.Schedule,
-        prompt = "I want to schedule a recurring automation",
-    ),
-)
-
-private val automationHistory = listOf(
-    "Opened Twitter and liked 3 posts" to "✅ Completed 2 hours ago",
-    "Scrolled through Instagram feed" to "✅ Completed yesterday",
-    "Read SMS for verification code" to "✅ Completed yesterday",
 )

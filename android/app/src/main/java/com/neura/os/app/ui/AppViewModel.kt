@@ -32,6 +32,8 @@ import com.neura.os.app.data.MAX_HISTORY_MESSAGES
 import com.neura.os.app.data.CompareTarget
 import com.neura.os.app.data.compareTargetsValid
 import com.neura.os.app.data.defaultCompareTarget
+import com.neura.os.app.data.AutomationEntry
+import com.neura.os.app.data.recordAutomation
 import com.neura.os.app.data.Skill
 import com.neura.os.app.data.SlashMatch
 import com.neura.os.app.data.renderCommandsHelp
@@ -143,6 +145,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** The installed skill catalogue from GET /api/skills. */
     var skills by mutableStateOf<List<Skill>>(emptyList())
         private set
+    /** The Automate tab's history of runs, persisted on device. */
+    var automations by mutableStateOf<List<AutomationEntry>>(emptyList())
+        private set
     /** SKILL.md text by name, fetched once per skill for the chats that pin it. */
     private val skillBodies = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** A long client-side answer to a slash command (/help, /doctor), shown in
@@ -186,6 +191,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val chats = repo.loadConversations()
             val lib = repo.loadLibrary()
             val savedOutbox = repo.loadOutbox()
+            val runs = repo.loadAutomations()
             main.post {
                 // A chat started before the disk was read (a shared photo, a
                 // notification tap) is kept rather than replaced by the load.
@@ -194,6 +200,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 conversations.addAll(fresh + chats)
                 library = lib
                 outbox = savedOutbox
+                automations = runs
                 loaded = true
             }
         }
@@ -464,6 +471,26 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val result = try { api.skills() } catch (e: Exception) { null }
             if (result != null) main.post { skills = result }
         }
+    }
+
+    // --- Automations ------------------------------------------------------------
+
+    /** Records an automation run and persists it. */
+    fun recordAutomationRun(prompt: String) {
+        val next = recordAutomation(automations, prompt, System.currentTimeMillis())
+        automations = next
+        io.execute { repo.saveAutomations(next) }
+    }
+
+    /** Kicks off an automation prompt through the ordinary agent pipeline:
+     * a fresh chat sends it, and any phone action it proposes waits for the
+     * user's tap, exactly as in a hand-typed chat. */
+    fun runAutomation(prompt: String) {
+        val text = prompt.trim()
+        if (text.isEmpty()) return
+        val chatId = newChat()
+        recordAutomationRun(text)
+        send(chatId, text)
     }
 
     /** The SKILL.md shown in the Skills detail sheet, keyed by skill name. */
