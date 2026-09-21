@@ -6,11 +6,9 @@ import PlanCanvas from '../components/PlanCanvas';
 import ModelPicker from '../components/ModelPicker';
 import '../hf-auth.js';
 import '../hf-inference.js';
-import '../local-models.js';
 
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
-const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 
 interface Step {
   id: string | number;

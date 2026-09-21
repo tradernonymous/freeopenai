@@ -13,8 +13,6 @@ export interface HfProviderRow {
   freeTier: { text: string };
 }
 
-export declare const FREE_MODELS: HfModelOption[];
-export declare const API_BASE: string;
 export declare function providerRow(token: string | null): HfProviderRow | null;
 export declare function models(token: string | null): HfModelOption[];
 export declare function streamChat(
@@ -24,8 +22,3 @@ export declare function streamChat(
   signal?: AbortSignal,
   token?: string,
 ): Promise<void>;
-export declare function chat(
-  model: string,
-  messages: Array<{ role: string; content: string }>,
-  token?: string,
-): Promise<unknown>;

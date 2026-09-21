@@ -141,38 +141,9 @@
     }
   }
 
-  // --- one-shot chat (for tools) -------------------------------------------
-
-  /**
-   * chat(model, messages, token)
-   *
-   * Non-streaming chat completion, used by tools that want a complete answer.
-   */
-  async function chat(model, messages, token) {
-    if (!token) throw new Error('HuggingFace Inference requires a signed-in HF account.');
-    var url = API_BASE + '/' + encodeURIComponent(model) + '/v1/chat/completions';
-    var res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + token,
-      },
-      body: JSON.stringify({ model: model, messages: messages, stream: false }),
-    });
-    if (!res.ok) {
-      var body = '';
-      try { body = await res.text(); } catch {}
-      throw new Error('HuggingFace Inference API answered ' + res.status + ': ' + body.slice(0, 200));
-    }
-    return res.json();
-  }
-
   return {
-    FREE_MODELS: FREE_MODELS,
-    API_BASE: API_BASE,
     providerRow: providerRow,
     models: models,
     streamChat: streamChat,
-    chat: chat,
   };
 });

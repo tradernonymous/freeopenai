@@ -20,10 +20,6 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.FreeAI4UHfSkills = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
-  var SKILL_REPOS = [
-    'huggingface/skills',
-  ];
-
   var HF_RAW = 'https://huggingface.co';
 
   // --- fetch a SKILL.md from a repo ----------------------------------------
@@ -96,7 +92,6 @@
       description: meta.description || '',
       tags: Array.isArray(meta.tags) ? meta.tags : (meta.tags ? [meta.tags] : []),
       content: body,
-      source: meta.source || '',
     };
   }
 
@@ -110,58 +105,31 @@
    */
   async function loadCatalog(token) {
     var skills = [];
-    // First, try the engine's own skills endpoint (it may have more).
-    // Then supplement with HF skills.
-    for (var r = 0; r < SKILL_REPOS.length; r++) {
-      var repo = SKILL_REPOS[r];
-      // Fetch the directory listing (or a known list of skills).
-      // For huggingface/skills, the skills live in skill-name/SKILL.md.
-      var knownSkills = [
-        'huggingface-local-models/SKILL.md',
-        'hf-mem/SKILL.md',
-        'hf-cli/SKILL.md',
-        'huggingface-llm-trainer/SKILL.md',
-      ];
-      for (var i = 0; i < knownSkills.length; i++) {
-        var text = await fetchSkill(repo, knownSkills[i], token);
-        if (text) {
-          var parsed = parseSkillMd(text);
-          if (parsed && parsed.name) {
-            parsed.repo = repo;
-            parsed.path = knownSkills[i];
-            skills.push(parsed);
-          }
+    // The huggingface/skills repo lays skills out as <name>/SKILL.md; these
+    // four are the ones a local coding agent actually uses.
+    var repo = 'huggingface/skills';
+    var knownSkills = [
+      'huggingface-local-models/SKILL.md',
+      'hf-mem/SKILL.md',
+      'hf-cli/SKILL.md',
+      'huggingface-llm-trainer/SKILL.md',
+    ];
+    for (var i = 0; i < knownSkills.length; i++) {
+      var text = await fetchSkill(repo, knownSkills[i], token);
+      if (text) {
+        var parsed = parseSkillMd(text);
+        if (parsed && parsed.name) {
+          parsed.repo = repo;
+          parsed.path = knownSkills[i];
+          skills.push(parsed);
         }
       }
     }
     return skills;
   }
 
-  // --- search for skills by tag or name ------------------------------------
-
-  /**
-   * filterSkills(skills, query)
-   *
-   * Filters skills by name, description, or tags. Case-insensitive.
-   */
-  function filterSkills(skills, query) {
-    if (!query) return skills;
-    var q = String(query).toLowerCase();
-    return skills.filter(function (s) {
-      if (s.name.toLowerCase().includes(q)) return true;
-      if (s.description.toLowerCase().includes(q)) return true;
-      for (var i = 0; i < s.tags.length; i++) {
-        if (s.tags[i].toLowerCase().includes(q)) return true;
-      }
-      return false;
-    });
-  }
-
   return {
-    SKILL_REPOS: SKILL_REPOS,
-    fetchSkill: fetchSkill,
     parseSkillMd: parseSkillMd,
     loadCatalog: loadCatalog,
-    filterSkills: filterSkills,
   };
 });

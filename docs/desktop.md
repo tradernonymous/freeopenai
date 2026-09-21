@@ -205,7 +205,6 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/remote-handoff.js` | Remote handoff orchestrator: package workspace, push to engine, SSE stream |
 | `src/hf-inference.js` | HuggingFace Inference API as a chat provider (curated model list, streaming) |
 | `src/hf-skills.js` | HuggingFace Skills knowledge pack: load SKILL.md from HF repos |
-| `src/finetune.js` | Experimental local fine-tuning: LoRA via llama.cpp, VRAM/RAM guards |
 | `src/components/ModelPicker.tsx` | One pill for "who answers": service and model as one decision |
 | `src-tauri/src/models.rs` | The llama.cpp server: find, start, wait, stop — loopback only, reaped on exit |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
@@ -303,7 +302,7 @@ What the shell does that a window of tabs does not:
 | P6 — Hugging Face as a chat provider (HF Inference API in the model picker) | shipped |
 | P7 — the local, approval-gated coding agent (the flagship) | shipped |
 | P8 — knowledge and skills (HF Skills catalog in Knowledge panel) | shipped |
-| P9 — experimental fine-tuning (LoRA via llama.cpp, VRAM guards) | shipped (experimental) |
+| P9 — experimental fine-tuning (LoRA via llama.cpp, VRAM guards) | planned — needs its own surface (trainer UI, dataset pick, adapter output) |
 
 The NeuraOS pass (the UI/UX and hybrid-compute plan) is tracked separately,
 because it cuts across those phases:
@@ -315,9 +314,10 @@ because it cuts across those phases:
 | 3 — local intelligence and hybrid compute (llama.cpp, smart fallback, remote handoff) | shipped |
 | 4 — polish, interaction and autonomy (radial menus, micro-animations, brand) | shipped, except the 60 FPS profile, which needs a machine with a GPU and a profiler rather than a promise in a document |
 
-What that leaves unbuilt on purpose, in the order it is worth doing: Hugging
-Face as a model route (P6), the Agent Skills knowledge pack (P8), and
-fine-tuning (P9).
+What that leaves unbuilt on purpose, in the order it is worth doing:
+fine-tuning (P9 — the estimate/validate helpers existed without any surface
+and were pruned; it returns with a trainer UI, a dataset picker and adapter
+output wired end to end).
 `test/desktop-contract.test.js` is the guard rail for all of them: it holds the
 frontend's Tauri command names against the shell's `generate_handler!` list and
 `api.ts`'s routes against `server.js`, so a screen that calls something the
