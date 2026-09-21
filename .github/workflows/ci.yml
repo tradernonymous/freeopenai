@@ -54,6 +54,15 @@ jobs:
   # Maestro UI tests for Android - runs against a debug build in an emulator.
   # Phase 4: Progress tracking UI tests.
   #
+  # Two jobs, mirroring android.yml's build -> smoke split: the emulator-boot
+  # job runs on a completely clean runner with nothing else touching the
+  # Android SDK first. A combined single-job version (SDK setup + gradle build
+  # + emulator-runner all in one runner) hit "Unable to connect to adb daemon
+  # on port: 5037" -- the sdkmanager-driven platform-tools install for the
+  # gradle build left an adb server state that fought with the one
+  # reactivecircus/android-emulator-runner manages. Splitting into two jobs,
+  # like android.yml's build/smoke jobs already do, avoids that entirely.
+  #
   # Runs on ubuntu-latest via reactivecircus/android-emulator-runner instead of
   # a hand-rolled boot loop on macos-latest: macOS runners have no nested
   # hypervisor at all, so the emulator only ever boots in software mode there
@@ -64,9 +73,9 @@ jobs:
   # action + api-29 x86_64 image boots reliably on ubuntu-latest, so this
   # reuses that proven combination instead of continuing to re-tune the macOS
   # one.
-  maestro:
+  maestro-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -87,6 +96,22 @@ jobs:
         run: |
           cd android
           gradle :app:assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1
+
+  maestro:
+    needs: maestro-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: maestro-debug-apk
+          path: android/app/build/outputs/apk/debug/
       - name: Install Maestro
         run: |
           curl -Ls "https://get.maestro.mobile.dev" | bash
