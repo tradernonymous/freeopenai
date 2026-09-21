@@ -9,7 +9,7 @@ Adapted for freeopenai from openai/skills `gh-fix-ci` (Apache-2.0, see LICENSE.t
 
 ## Workflows
 - `ci.yml`: web tests, lint, smoke.
-- `android.yml`: JVM unit tests, compiles the Kotlin app, signs and publishes `freeai4u.apk` + `version.json` to the `apk-latest` release. There is no local Android SDK: this run IS the compiler.
+- `android.yml`: JVM unit tests, compiles the Kotlin app, signs and publishes `neuraos.apk` + `version.json` to the `apk-latest` release. There is no local Android SDK: this run IS the compiler.
 
 `gh` may not be on PATH in a fresh shell; use `"/c/Program Files/GitHub CLI/gh.exe"` in Git Bash.
 

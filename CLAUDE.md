@@ -1,8 +1,8 @@
-# freeopenai — notes for Claude
+# neuraos — notes for Claude
 
 <!-- Kept short on purpose: every line here is read at the start of every session. -->
 
-FreeAI4U: a zero-dependency Node server (`server.js`, login gate, provider proxy) + one large web page (`index.html`, `chatlib.js`) + a Kotlin/Jetpack Compose Android app (`android/`). Deployed on Railway from `main`; the APK is published by CI to the `apk-latest` release.
+NeuraOS: a zero-dependency Node server (`server.js`, login gate, provider proxy) + one large web page (`index.html`, `chatlib.js`) + a Kotlin/Jetpack Compose Android app (`android/`). Deployed on Railway from `main`; the APK is published by CI to the `apk-latest` release.
 
 ## Commands
 

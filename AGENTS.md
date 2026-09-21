@@ -1,4 +1,4 @@
-# FreeAI4U — notes for an agent working in this repository
+# NeuraOS — notes for an agent working in this repository
 
 This file is read by the build agent at the start of every turn (and by other
 tools that look for `AGENTS.md`). It says what this project is and the rules
@@ -14,7 +14,7 @@ A free AI hub, in three versions that share one server:
 | Server | `server.js`, `agent-sessions.js`, `chatlib.js` | Node with **no runtime dependencies**. Login gate, provider proxy, skills, remote builds. |
 | Web app | `index.html`, `hub.js`, `hub.css` | One page. Chat · Plan · Build, workspace, GitHub tools. |
 | Android | `android/` | Kotlin + Jetpack Compose client. minSdk 29, targetSdk 35. |
-| Desktop | `desktop/` (Tauri 2 + React) | Native Windows app on the freeai4u engine: streaming chat, images, build approvals, skills. CI builds the exe; `node --test test/desktop.test.js` guards the wiring. |
+| Desktop | `desktop/` (Tauri 2 + React) | Native Windows app on the NeuraOS engine: streaming chat, images, build approvals, skills. CI builds the exe; `node --test test/desktop.test.js` guards the wiring. |
 
 Deployed on Railway from `main`. The APK is published by CI to the `apk-latest`
 release, the exe to `desktop-latest`.

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/readme/hero-3d.svg" alt="FreeAI4U. Free AI chat, images and agents. One login. Keys stay on the server." width="100%">
+  <img src="docs/readme/hero-3d.svg" alt="NeuraOS. Free AI chat, images and agents. One login. Keys stay on the server." width="100%">
 </p>
 
 <p align="center">
@@ -99,7 +99,7 @@ curl -s https://<project>.up.railway.app/api/health
 ## 📲 Android app
 
 1. On the phone, open **[apk-latest](https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest)**.
-2. Tap `freeai4u.apk` → **Install**.
+2. Tap `neuraos.apk` → **Install**.
 3. Sign in once. Updates are offered in the app.
 
 > [!NOTE]
@@ -113,7 +113,7 @@ curl -s https://<project>.up.railway.app/api/health
 2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**. The installer sets up the WebView2 runtime automatically if the machine lacks it.
 3. Sign in once if the engine asks. `Alt+1…6` switches screens. More in [Desktop](docs/desktop.md).
 
-> **Note:** A native Tauri 2 + React app with its own sidebar and tray. Streaming chat, image generation, live build approvals and skills — all on the freeai4u engine, with the keys staying on the server.
+> **Note:** A native Tauri 2 + React app with its own sidebar and tray. Streaming chat, image generation, live build approvals and skills — all on the NeuraOS engine, with the keys staying on the server.
 
 ## 🛠️ Remote builds
 

@@ -1,6 +1,6 @@
 # Desktop app (Windows)
 
-`FreeAI4U Desktop` is a native Tauri 2 app: its own window, sidebar, tray icon and installer. The AI engine is the FreeAI4U server (Railway by default) — the same one the web app and the Android app use — so chat, images and builds all run on free models with the keys staying server-side.
+`NeuraOS Desktop` is a native Tauri 2 app: its own window, sidebar, tray icon and installer. The AI engine is the NeuraOS server (Railway by default) — the same one the web app and the Android app use — so chat, images and builds all run on free models with the keys staying server-side.
 
 ## Install
 
@@ -65,7 +65,7 @@ Earlier builds did the opposite: `loginRequired && !signedIn` hid *every* screen
 
 ## The engine address
 
-The desktop talks to `https://freeopenai-production.up.railway.app` by default. Settings → **Engine server** accepts any FreeAI4U server: `https://` anywhere, `http://localhost` for a self-hosted engine. Test + save; the choice is remembered. The window title bar tells you when the engine cannot be reached.
+The desktop talks to `https://freeopenai-production.up.railway.app` by default. Settings → **Engine server** accepts any NeuraOS server: `https://` anywhere, `http://localhost` for a self-hosted engine. Test + save; the choice is remembered. The window title bar tells you when the engine cannot be reached.
 
 ## WebView2 (the blank-screen fix)
 
