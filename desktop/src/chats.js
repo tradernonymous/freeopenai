@@ -25,7 +25,12 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.FreeAI4UChats = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
-  var MAX_SESSIONS = 60;
+  // 60 used to be the cap, chosen when a chat was a few short turns. Tool-
+  // heavy transcripts are long, so the cap is now generous and the real
+  // limit is the browser's storage quota, which writeStore handles below by
+  // dropping the oldest sessions until the write fits. A move off
+  // localStorage (SQLite through the shell) is the next step, not this one.
+  var MAX_SESSIONS = 500;
   // Fired after an import so a mounted Chat screen reloads what it is showing.
   var CHATS_CHANGED_EVENT = 'freeai4u:chats-changed';
   var STORE_KEY = 'freeai4u.chats';
@@ -70,16 +75,39 @@
 
   // The cap is applied on write as well as on read: whichever way a history
   // grows, what is stored is never more than the limit.
+  //
+  // localStorage refuses a write that would exceed its quota (5-10 MB in
+  // WebView2) by throwing, and the old code answered that by keeping nothing
+  // -- every new message after the quota was silently lost. Now the tail (the
+  // oldest sessions; the screen prepends the newest) is dropped a slice at a
+  // time until the write fits. `dropped` says how many were lost so the
+  // screen can tell the user, rather than letting history vanish quietly.
   function writeStore(storage, sessions) {
+    return writeStoreReport(storage, sessions).ok;
+  }
+
+  function writeStoreReport(storage, sessions) {
     var target = store(storage);
-    if (!target) return false;
-    try {
-      var rows = (Array.isArray(sessions) ? sessions : []).filter(isStoredSession);
-      target.setItem(STORE_KEY, JSON.stringify(rows.slice(0, MAX_SESSIONS)));
-      return true;
-    } catch {
-      return false;
+    if (!target) return { ok: false, kept: 0, dropped: 0, quota: false };
+    var rows = (Array.isArray(sessions) ? sessions : []).filter(isStoredSession).slice(0, MAX_SESSIONS);
+    var quota = false;
+    var keep = rows.length;
+    while (keep > 0 || rows.length === 0) {
+      try {
+        target.setItem(STORE_KEY, JSON.stringify(rows.slice(0, keep)));
+        return { ok: true, kept: keep, dropped: rows.length - keep, quota: quota };
+      } catch {
+        if (keep === 0) break;
+        quota = true;
+        // Halve, but never below one fewer than now, so the newest session
+        // always gets its chance to be written alone.
+        keep = Math.min(keep - 1, Math.floor(keep / 2));
+      }
     }
+    // Nothing fits, not even the newest session alone. The store is left as it
+    // was: an empty list written here would be the loss this function exists
+    // to prevent.
+    return { ok: false, kept: 0, dropped: rows.length, quota: quota };
   }
 
   /** The list as a history panel wants it: most recently updated first. */
@@ -216,6 +244,7 @@
     isStoredSession: isStoredSession,
     readStore: readStore,
     writeStore: writeStore,
+    writeStoreReport: writeStoreReport,
     byRecency: byRecency,
     isChatSession: isChatSession,
     updatedAtOf: updatedAtOf,

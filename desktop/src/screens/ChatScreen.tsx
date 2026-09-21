@@ -55,8 +55,18 @@ function loadSessions(): ChatSession[] {
   return chats.readStore() as ChatSession[];
 }
 
+// A write that hits the browser's storage quota drops the oldest chats to
+// fit (src/chats.js). That is a loss the user should hear about once, not a
+// history that quietly shrinks.
+let warnedQuota = false;
 function saveSessions(sessions: ChatSession[]) {
-  chats.writeStore(null, sessions);
+  const report = chats.writeStoreReport(null, sessions);
+  if (report.quota && !warnedQuota) {
+    warnedQuota = true;
+    pushToast('warn', report.ok
+      ? `Storage is full: ${report.dropped} oldest chat(s) were dropped. Export your chats to keep them.`
+      : 'Storage is full and this chat could not be saved. Export your chats, then delete some.');
+  }
 }
 
 export function newSession(provider = '', model = ''): ChatSession {

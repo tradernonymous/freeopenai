@@ -130,14 +130,16 @@ const stored = (id, updatedAt, extra = {}) => ({
 test('the store round-trips, and caps what it writes', () => {
   const storage = memoryStorage();
   let rows = [stored('a', 3), stored('b', 2)];
-  for (let i = 0; i < 70; i += 1) rows.push(stored('old-' + i, i));
+  const cap = chats.MAX_SESSIONS;
+  assert.ok(cap >= 500, 'tool-heavy transcripts need more than the old 60');
+  for (let i = 0; i < cap + 10; i += 1) rows.push(stored('old-' + i, i));
   assert.equal(chats.writeStore(storage, rows), true);
 
   const loaded = chats.readStore(storage);
-  assert.equal(loaded.length, chats.MAX_SESSIONS, 'the cap holds on write and on read');
+  assert.equal(loaded.length, cap, 'the cap holds on write and on read');
   assert.equal(loaded[0].id, 'a', 'order is preserved: the screen prepends, so the head is newest');
-  assert.ok(loaded.some((s) => s.id === 'old-57'), 'the 60th entry is still there');
-  assert.ok(!loaded.some((s) => s.id === 'old-69'), 'the tail -- the oldest -- is what the cap drops');
+  assert.ok(loaded.some((s) => s.id === 'old-' + (cap - 3)), 'the last entry inside the cap is still there');
+  assert.ok(!loaded.some((s) => s.id === 'old-' + (cap + 9)), 'the tail -- the oldest -- is what the cap drops');
   assert.deepEqual(chats.readStore(memoryStorage()), [], 'an empty store is an empty list');
 });
 
@@ -219,4 +221,32 @@ test('the chat screen reloads after an import and prunes ghost ids', () => {
   assert.match(screen, /CHATS_CHANGED_EVENT/, 'it listens for an import');
   assert.match(screen, /!sessions\.some\(\(s\) => s\.id === activeId\)/, 'a pruned id falls back to a real session');
   assert.doesNotMatch(screen, /const saved = loadSessions\(\);/, 'localStorage is parsed once, not twice');
+});
+
+test('a full localStorage loses the oldest chats, never the newest, and says so', () => {
+  // A storage that refuses anything over ~2 KB, the way WebView2 refuses a
+  // write past its quota: by throwing.
+  const small = memoryStorage();
+  const limit = 2000;
+  const setItem = small.setItem.bind(small);
+  small.setItem = (key, value) => {
+    if (String(value).length > limit) throw new Error('QuotaExceededError');
+    setItem(key, value);
+  };
+  const rows = [];
+  for (let i = 0; i < 40; i += 1) rows.push(stored('s' + i, 100 - i));
+
+  const report = chats.writeStoreReport(small, rows);
+  assert.equal(report.ok, true);
+  assert.equal(report.quota, true, 'the quota was hit and reported');
+  assert.ok(report.kept > 0 && report.kept < 40, `kept ${report.kept}`);
+  assert.equal(report.kept + report.dropped, 40);
+  const loaded = chats.readStore(small);
+  assert.equal(loaded[0].id, 's0', 'the head -- the newest -- survives');
+  assert.equal(loaded.length, report.kept);
+
+  // One session too big for the quota on its own: honest failure, not a hang.
+  const huge = stored('huge', 1, { messages: [{ role: 'user', content: 'x'.repeat(limit) }] });
+  assert.deepEqual(chats.writeStoreReport(small, [huge]), { ok: false, kept: 0, dropped: 1, quota: true });
+  assert.equal(chats.writeStore(small, [huge]), false);
 });

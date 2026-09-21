@@ -260,7 +260,6 @@ export const api = {
   // chat helpers
   skills: () => request('/api/skills'),
   skillContent: (name: string) => request(`/api/skills/content?name=${encodeURIComponent(name)}`),
-  websearch: (q: string) => request(`/api/llm/websearch?q=${encodeURIComponent(q)}`),
   fetchUrl: (url: string) => request(`/api/llm/fetch?url=${encodeURIComponent(url)}`),
 
   // builds: a build is created with the plan text; watch it over SSE; answer

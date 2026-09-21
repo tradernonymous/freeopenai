@@ -17,6 +17,7 @@ export declare const CHATS_CHANGED_EVENT: string;
 export declare function browserStorage(): ChatStorage | null;
 export declare function isStoredSession(value: unknown): boolean;
 export declare function readStore(storage?: ChatStorage | null): any[];
+export declare function writeStoreReport(storage: ChatStorage | null, sessions: any[]): { ok: boolean; kept: number; dropped: number; quota: boolean };
 export declare function writeStore(storage: ChatStorage | null, sessions: any[]): boolean;
 export declare function byRecency(sessions: any[]): any[];
 export declare function isChatSession(value: unknown): boolean;
