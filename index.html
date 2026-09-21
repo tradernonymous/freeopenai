@@ -302,6 +302,11 @@
                                 <input type="checkbox" id="autoSkillsCheck" checked onchange="setSkillsEnabled(this.checked)">
                             </div>
                             <p class="session-hint">In Plan and Build the router picks skills per request. What it used shows up below, marked automatic, so an odd answer can be traced to a method rather than guessed at.</p>
+                            <div class="session-switch">
+                                <label for="arenaModeSwitch">Arena — ask several providers at once</label>
+                                <input type="checkbox" id="arenaModeSwitch" onchange="setArenaMode(this.checked)">
+                            </div>
+                            <p class="session-hint">The next message fans to a few already-configured providers, each answering into its own bubble, instead of the one model picked above.</p>
                             <input type="text" class="model-dropdown-search" id="skillSearch" placeholder="Filter skills…" aria-label="Filter skills" autocomplete="off" oninput="filterSkillOptions(this.value)">
                             <div class="model-dropdown-list" id="skillMenuList" role="listbox" aria-label="Installed skills"></div>
                             <h4 class="session-subhead">Used in this chat</h4>

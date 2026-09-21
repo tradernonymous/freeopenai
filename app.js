@@ -833,6 +833,9 @@ function updateNavActive(btn) {
         let puterReady = false;
         let lastFocusedBeforeModal = null;
         let imageMode = false;
+        // Not persisted across chats on purpose, like imageMode: it describes
+        // the next message, not a standing preference for this browser.
+        let arenaMode = false;
         let currentAbort = null;
         let generationId = 0;
         let autoRetryEnabled = true;
@@ -3874,6 +3877,129 @@ function updateNavActive(btn) {
             renderer.flush();
         }
 
+        // Arena: the same message fanned to several already-configured
+        // providers at once, each answering into its own bubble. Deliberately
+        // its own lean path rather than a fork of streamProviderChat above: it
+        // is not one conversation's provider, so none of that function's
+        // per-conversation bookkeeping applies -- forgetRefusedModel and
+        // suspendProvider both mutate state for the *selected* provider, and
+        // running them for an arena participant that happens to fail would
+        // wrongly suspend a provider the user is not even chatting on
+        // elsewhere. One straightforward attempt per participant; a failure
+        // is shown in that bubble alone; tools and skills sit out, matching
+        // the same "tool-free, so nothing can half-apply on one branch and not
+        // the others" reasoning the Android app's Compare mode already uses.
+        const ARENA_SIZE = 3;
+
+        // The first few configured chat providers, in the order the server
+        // already declares them (the same order the model picker uses) --
+        // not a ranking this page invents, just "whichever this deployment
+        // actually has keys for".
+        async function pickArenaProviders() {
+            try {
+                const res = await fetch('/api/llm/providers');
+                const rows = await res.json().catch(() => []);
+                return (Array.isArray(rows) ? rows : [])
+                    .filter((p) => p.configured && p.kind !== 'image')
+                    .slice(0, ARENA_SIZE)
+                    .map((p) => ({ id: p.id, label: p.label }));
+            } catch {
+                return [];
+            }
+        }
+
+        // A provider's own first model -- the same "no explicit choice needed"
+        // default the picker falls back to -- rather than the model the main
+        // chat happens to be on, which may not even exist on this provider.
+        async function modelForArenaProvider(providerId) {
+            try {
+                const res = await fetch('/api/llm/models?provider=' + encodeURIComponent(providerId));
+                const rows = await res.json().catch(() => []);
+                const first = Array.isArray(rows) ? rows[0] : null;
+                return first ? String(first.id || first) : '';
+            } catch {
+                return '';
+            }
+        }
+
+        // One participant's turn: POST, then read the SSE stream into the
+        // renderer already wired to that participant's bubble. No refusal
+        // ladder and no retry -- a single free attempt, exactly what one
+        // arena reply is worth next to the other participants already
+        // streaming alongside it.
+        async function streamArenaReply(providerId, modelId, convo, renderer, signal) {
+            const res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(providerId), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelId, messages: convo, stream: true }),
+                signal,
+            });
+            if (!res.ok) {
+                const detail = errorDetailFromBody(await res.text().catch(() => '')) || 'Request failed (' + res.status + ')';
+                throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const part of parseSseChunk(lines.join('\n'))) {
+                    if (part === '[DONE]') break;
+                    if (part && part.error) throw new Error(part.error);
+                    const delta = part?.choices?.[0]?.delta;
+                    if (delta) renderer.appendText(delta.content || '');
+                }
+            }
+            renderer.flush();
+        }
+
+        // The orchestrator sendMessage() delegates to when Arena is on. One
+        // user turn, N independent bot bubbles labeled by provider -- each is
+        // an ordinary message (addMessage already handles persistence and
+        // reload), so nothing new is asked of the message store; the label is
+        // just the bubble's own first line, the simplest way to say which
+        // provider wrote which reply without a schema change.
+        async function sendArenaMessage(raw) {
+            addMessage('user', raw);
+            chatInput.value = '';
+            chatInput.style.height = '36px';
+            setComposerBusy(true);
+            const runId = ++generationId;
+            const controller = new AbortController();
+            currentAbort = controller;
+            try {
+                const participants = await pickArenaProviders();
+                if (!participants.length) {
+                    addMessage('system', 'Arena needs at least one configured provider — none are ready right now.', { error: true });
+                    return;
+                }
+                const convo = buildConversation(raw, null);
+                await Promise.allSettled(participants.map(async (p) => {
+                    const bubble = createBotBubble();
+                    const renderer = createStreamRenderer(bubble);
+                    renderer.appendText('**' + p.label + '**\n\n');
+                    try {
+                        const modelId = await modelForArenaProvider(p.id);
+                        if (!modelId) throw new Error('no model available');
+                        await streamArenaReply(p.id, modelId, convo, renderer, controller.signal);
+                    } catch (err) {
+                        if (!isActiveRun(runId, controller)) return;
+                        renderer.appendText('\n\n_Error: ' + (err && err.message ? err.message : 'that provider did not answer') + '_');
+                    }
+                    // One push per participant, with the finished text -- the
+                    // same finalizeMessage the ordinary single-provider stream
+                    // uses, so a reload shows exactly what streaming showed.
+                    finalizeMessage(bubble, renderer.full, null, false, renderer.reasoning);
+                }));
+            } finally {
+                releaseRun(controller);
+            }
+        }
+
         // Everything the model needs to answer this turn: how to behave, what has
         // been said already, and the new message. `messages` already holds the
         // live user turn by the time this runs, so history is taken up to it.
@@ -4524,6 +4650,12 @@ function updateNavActive(btn) {
 
         function toggleImageMode() { setImageMode(!imageMode); }
 
+        function setArenaMode(on) {
+            arenaMode = !!on;
+            const box = document.getElementById('arenaModeSwitch');
+            if (box) box.checked = arenaMode;
+        }
+
         function setDrawWithPuter(on) {
             drawWithPuter = !!on;
             rememberPreference(IMAGE_PUTER_KEY, drawWithPuter ? '1' : '');
@@ -4703,6 +4835,15 @@ function updateNavActive(btn) {
                 updateImageSizeHint();
                 if (commandReply) addMessage('system', commandReply);
                 persistMessages();
+                return;
+            }
+
+            // Arena fans the plain text to several providers instead of the
+            // one usual path below -- no image detection, no tools, no skills,
+            // the same simplicity the Android app's Compare mode already
+            // settled on for asking more than one model the same thing.
+            if (arenaMode) {
+                await sendArenaMessage(raw);
                 return;
             }
 
