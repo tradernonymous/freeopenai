@@ -188,17 +188,22 @@
    * rank of Infinity means "never pick this on the user's behalf" (it can
    * still be chosen by hand).
    *
-   * TODO(human): decide the preference order. Unsloth recommends UD-Q4_K_XL
-   * as the default and Q4_K_M as the plain fallback; UD-Q2_K_XL is the
-   * smallest quant that keeps tool calling; IQ1_* breaks it; Q8_0/BF16/F16
-   * are for people with the memory to spare and are rarely the right default.
-   * Return a number for the given quant string (already upper-cased; may be
-   * '' when the file name carries no tag).
+   * The order (the user's decision, 2026-09-22): Unsloth's UD-Q4_K_XL first,
+   * plain Q4_K_M as the fallback, then the Q5/Q6 middle, other Q4s, and
+   * UD-Q2_K_XL / IQ2 only when nothing bigger fits. Q8_0, BF16, F16 and F32
+   * are never auto-picked: they are for people with memory to spare and are
+   * rarely the right default. 1-bit is refused before this is consulted.
    */
   function quantRank(quant) {
     var q = String(quant || '').toUpperCase();
-    // TODO(human)
-    return q ? 50 : Infinity;
+    if (!q) return Infinity;
+    if (q === 'UD-Q4_K_XL') return 0;
+    if (q === 'Q4_K_M') return 1;
+    if (/^(UD-)?Q[56]_/.test(q)) return 2;
+    if (/^(UD-)?(Q4|IQ4|IQ3|Q3)_/.test(q)) return 3;
+    if (/^(UD-)?(Q2|IQ2)_/.test(q)) return 4;
+    if (/^(UD-)?(Q8|BF16|F16|F32)/.test(q)) return Infinity;
+    return 5;
   }
 
   /**

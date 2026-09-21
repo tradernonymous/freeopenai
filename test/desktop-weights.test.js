@@ -79,12 +79,23 @@ test('the default file skips split parts and 1-bit quants, and prefers what fits
   ];
   const roomy = { ramGb: 32, ramKnown: true, cores: 8 };
   const chosen = local.pickDefaultFile(files, roomy);
-  assert.ok(chosen, 'something is offered');
-  assert.ok(!local.isSplit(chosen.name), 'never a split part');
-  assert.ok(!/IQ1/.test(chosen.name), 'never a 1-bit quant');
-  // On a 4 GB machine only the 2-bit file fits (2 GB weights + cache + headroom).
-  const tight = local.pickDefaultFile(files, { ramGb: 4, ramKnown: true, cores: 4 });
+  assert.equal(chosen.name, 'm-UD-Q4_K_XL.gguf', "Unsloth's default wins when it fits");
+  // The user's order: UD-Q4_K_XL, Q4_K_M, Q5/Q6, other Q4/Q3, 2-bit; Q8 and
+  // full precision are never auto-picked, and a missing tag never is either.
+  const ranks = ['UD-Q4_K_XL', 'Q4_K_M', 'Q5_K_M', 'UD-Q6_K_XL', 'IQ4_XS', 'UD-Q2_K_XL'].map(local.quantRank);
+  assert.deepEqual(ranks, ranks.slice().sort((a, b) => a - b));
+  assert.ok(local.quantRank('UD-Q4_K_XL') < local.quantRank('Q4_K_M'));
+  assert.ok(local.quantRank('Q4_K_M') < local.quantRank('Q5_K_M'));
+  for (const never of ['Q8_0', 'BF16', 'F16', 'F32', '']) assert.equal(local.quantRank(never), Infinity, `${never} is by hand only`);
+  const noSmall = local.pickDefaultFile([{ name: 'm-Q8_0.gguf', size: 8 * GB }, { name: 'm-BF16.gguf', size: 16 * GB }], roomy);
+  assert.equal(noSmall, null, 'a repo with only full-precision files gets no recommendation');
+  // On an 8 GB machine only the 2-bit file passes the guard (weights + a 16k
+  // cache + headroom against 80% of memory), so the ranking yields to the fit.
+  const tight = local.pickDefaultFile(files, { ramGb: 8, ramKnown: true, cores: 4 });
   assert.equal(tight.name, 'm-UD-Q2_K_XL.gguf');
+  // When nothing fits at all, the best-ranked file is still offered (the row
+  // says why it cannot start); a person can then pick by hand.
+  assert.equal(local.pickDefaultFile(files, { ramGb: 4, ramKnown: true, cores: 4 }).name, 'm-UD-Q4_K_XL.gguf');
   assert.equal(local.pickDefaultFile([{ name: 'README.md', size: 1 }], roomy), null);
 });
 
