@@ -268,7 +268,10 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
 
           <section className="run-section">
             <div className="run-label">Tools</div>
-            <p className="settings-hint">Tool calling for local models arrives with Phase 1 (the server already starts with --jinja).</p>
+            <p className="settings-hint">
+              Tools are offered to this model like any other (the server starts with --jinja). Switch them on or off,
+              and connect GitHub or MCP servers, in Settings → Connectors. Small or 1-bit models often ignore tools.
+            </p>
           </section>
         </>
       )}

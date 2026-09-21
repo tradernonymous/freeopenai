@@ -486,3 +486,16 @@ export async function shellPostStream(
     stop();
   }
 }
+
+// ---- connecting an account in a window of this app --------------------------
+//
+// The engine keys a GitHub connection to its session cookie. The system browser
+// has a different cookie jar, so the sign-in happens in a second window of this
+// app (same cookies), which the shell closes when GitHub hands back (net.rs).
+export async function authWindowOpen(url: string): Promise<void> {
+  await call('auth_window_open', { url });
+}
+
+export function onConnectFinished(handler: () => void): Promise<() => void> {
+  return subscribe<string>('connect-finished', () => handler());
+}

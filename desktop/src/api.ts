@@ -105,11 +105,13 @@ export interface StreamFrame {
   content?: string;
   model?: string;
   done?: boolean;
+  /** Tool-call deltas (OpenAI shape) or whole calls (Ollama); tools.js collects them. */
+  toolCalls?: any[];
 }
 
 export async function streamChat(
   provider: string,
-  body: { model: string; messages: Array<{ role: string; content: any }>; stream?: boolean },
+  body: { model: string; messages: Array<{ role: string; content: any }>; stream?: boolean; tools?: any[] },
   onFrame: (frame: StreamFrame) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -186,8 +188,9 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
     // A provider answered without a stream: read it whole, still one frame.
     const data = await res.json().catch(() => null);
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content === 'string' && content) {
-      onFrame({ content, done: true });
+    const called = data?.choices?.[0]?.message?.tool_calls;
+    if ((typeof content === 'string' && content) || (Array.isArray(called) && called.length)) {
+      onFrame({ content: typeof content === 'string' ? content : undefined, toolCalls: Array.isArray(called) ? called : undefined, done: true });
       return;
     }
     throw new ApiError(res.status, (data && data.error) || connection.messageFor('no-reply'));
@@ -219,7 +222,8 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
         }
         const delta = frame?.choices?.[0]?.delta;
         const content = delta && typeof delta.content === 'string' ? delta.content : undefined;
-        if (content) onFrame({ content, model: frame?.model });
+        const called = delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length ? delta.tool_calls : undefined;
+        if (content || called) onFrame({ content, toolCalls: called, model: frame?.model });
       } catch { /* a frame that is not JSON says nothing */ }
     }
   }
@@ -229,6 +233,8 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
 // ---- the rest of the engine ----------------------------------------------
 
 export const api = {
+  /** Any engine route, with the session and the JSON handling every call gets. */
+  raw: (path: string, opts?: RequestInit) => request(path, opts),
   // engine health + auth
   getServer,
   serverSaved,

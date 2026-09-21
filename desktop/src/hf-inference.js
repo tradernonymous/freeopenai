@@ -159,7 +159,7 @@
    * The router speaks the OpenAI shape, so the SSE parsing is identical to the
    * engine's streamChat.
    */
-  async function streamChat(model, messages, onFrame, signal, token) {
+  async function streamChat(model, messages, onFrame, signal, token, tools) {
     if (!token) throw new Error('Hugging Face Inference requires a signed-in HF account.');
     var res;
     try {
@@ -169,7 +169,7 @@
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + token,
         },
-        body: JSON.stringify({ model: modelId(model), messages: messages, stream: true }),
+        body: JSON.stringify(Object.assign({ model: modelId(model), messages: messages, stream: true }, tools && tools.length ? { tools: tools } : {})),
         signal,
       });
     } catch (err) {
@@ -218,7 +218,12 @@
           }
           var delta = frame.choices && frame.choices[0] && frame.choices[0].delta;
           var text = delta && typeof delta.content === 'string' ? delta.content : undefined;
-          if (text) onFrame({ content: text, model: frame.model });
+          var called = delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length ? delta.tool_calls : undefined;
+          if (text || called) {
+            var out = { content: text, model: frame.model };
+            if (called) out.toolCalls = called;
+            onFrame(out);
+          }
         } catch (e) {
           if (e && e.message && e.message.includes('HF Inference')) throw e;
           // Ignore unparseable frames.

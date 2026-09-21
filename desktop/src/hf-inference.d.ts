@@ -25,8 +25,9 @@ export declare function modelId(model: string): string;
 export declare function explain(status: number, body?: string): string;
 export declare function streamChat(
   model: string,
-  messages: Array<{ role: string; content: string }>,
-  onFrame: (frame: { content?: string; done?: boolean; model?: string }) => void,
+  messages: Array<{ role: string; content: any }>,
+  onFrame: (frame: { content?: string; done?: boolean; model?: string; toolCalls?: any[] }) => void,
   signal?: AbortSignal,
   token?: string,
+  tools?: any[],
 ): Promise<void>;

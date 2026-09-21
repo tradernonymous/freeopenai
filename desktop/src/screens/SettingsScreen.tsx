@@ -4,6 +4,7 @@ import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
 import DiagnosticsCard from '../components/DiagnosticsCard';
 import LocalModelsCard from '../components/LocalModelsCard';
+import ConnectorsCard from '../components/ConnectorsCard';
 import FileTree from '../components/FileTree';
 import Terminal from '../components/Terminal';
 
@@ -123,6 +124,8 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
               ))}
             </div>
           </section>
+
+          <ConnectorsCard />
 
           <LocalModelsCard />
 

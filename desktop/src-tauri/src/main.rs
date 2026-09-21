@@ -74,6 +74,7 @@ fn main() {
             net::run_installer,
             net::open_url,
             net::puter_signin_open,
+            net::auth_window_open,
             ollama::ollama_tags,
             ollama::ollama_ps,
             ollama::ollama_eject,
@@ -194,6 +195,11 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
+                // Only the main window lives in the tray. A sign-in window
+                // that is closed is simply closed.
+                if window.label() != "main" {
+                    return;
+                }
                 // Closing the window hides it (the app lives in the tray) --
                 // except while quitting, when the close must go through so
                 // Tauri's own shutdown can run.

@@ -9,6 +9,11 @@ import ModePicker from '../components/ModePicker';
 import RadialMenu, { type RadialItem } from '../components/RadialMenu';
 import { pushToast } from '../components/Toasts';
 import RunSettings from '../components/RunSettings';
+import ToolCards from '../components/ToolCards';
+import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
+import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
+import { executeTool } from '../tool-run';
+import '../tools.js';
 import { isSavedProvider, streamSaved } from '../run-model';
 import '../saved-models.js';
 import '../chats.js';
@@ -24,6 +29,12 @@ const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFa
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
+const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
+
+/** The folder open in the app (App.tsx keeps it here), for the local tools. */
+function openFolder(): string {
+  try { return localStorage.getItem('freeai4u.localRoot') || ''; } catch { return ''; }
+}
 const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
 
 export interface Msg {
@@ -37,6 +48,8 @@ export interface Msg {
   error?: boolean;
   /** Why it failed, classified: what was asked, the provider's words, advice. */
   failure?: import('../failure.js').Attribution;
+  /** What the model did during this reply: tool calls, their state, their results. */
+  tools?: ToolEvent[];
 }
 
 export interface ChatSession {
@@ -137,6 +150,37 @@ export default function ChatScreen() {
     return () => window.removeEventListener(savedModels.CHANGED_EVENT, onSaved);
   }, []);
   const [runOpen, setRunOpen] = useState(false);
+  // Tools: on unless switched off in Settings -> Connectors; GitHub's are
+  // offered only while an account is connected.
+  const [toolsOn, setToolsOn] = useState(() => toolsLib.enabled());
+  const [githubConnected, setGithubConnected] = useState(false);
+  useEffect(() => {
+    const onTools = () => setToolsOn(toolsLib.enabled());
+    const readGithub = () => {
+      api.raw('/api/github/status')
+        .then((data: any) => setGithubConnected(Array.isArray(data?.accounts) && data.accounts.length > 0))
+        .catch(() => setGithubConnected(false));
+    };
+    readGithub();
+    window.addEventListener(toolsLib.CHANGED_EVENT, onTools);
+    window.addEventListener(GITHUB_CHANGED_EVENT, readGithub);
+    return () => {
+      window.removeEventListener(toolsLib.CHANGED_EVENT, onTools);
+      window.removeEventListener(GITHUB_CHANGED_EVENT, readGithub);
+    };
+  }, []);
+  // An Allow / Deny card is a promise the turn is waiting on.
+  const approvals = useRef<Record<string, (allow: boolean) => void>>({});
+  const decide = (id: string, allow: boolean, always: boolean) => {
+    const resolve = approvals.current[id];
+    if (!resolve) return;
+    delete approvals.current[id];
+    if (allow && always) {
+      const event = active?.messages[active.messages.length - 1]?.tools?.find((t) => t.id === id);
+      if (event) toolsLib.setAlways(event.name);
+    }
+    resolve(allow);
+  };
   // Hugging Face sign-in, right here: a device code, the same flow Library uses.
   const [hfCode, setHfCode] = useState<{ user_code: string; verification_uri: string } | null>(null);
   const signInHf = () => {
@@ -402,23 +446,52 @@ export default function ChatScreen() {
 
     try {
       const turns = history.map(({ role, content }) => ({ role, content }));
-      if (active.provider === 'hf') {
-        await hfInference.streamChat(active.model, turns, (frame: StreamFrame) => {
-          if (frame.content) append(frame.content);
-        }, controller.signal, hfToken || undefined);
-      } else if (isSavedProvider(active.provider)) {
-        await streamSaved(active.provider, active.model, turns, (frame: StreamFrame) => {
-          if (frame.content) append(frame.content);
-        }, controller.signal, (stage) => { if (stage) pushToast('info', stage); });
-      } else if (active.provider === 'local') {
-        await streamLocalChat(localRow?.baseUrl || '', active.model, turns, (frame: StreamFrame) => {
-          if (frame.content) append(frame.content);
-        }, controller.signal, localRow?.apiKey || undefined);
-      } else {
-        await streamChat(active.provider, { model: active.model, messages: turns }, (frame: StreamFrame) => {
-          if (frame.content) append(frame.content);
-        }, controller.signal);
-      }
+      const provider = active.provider;
+      const model = active.model;
+      // One request, to whichever provider the session is on. The turn calls
+      // it again after every round of tool results.
+      const streamOnce: TurnOptions['stream'] = (messages, offered, onFrame, signal) => {
+        if (provider === 'hf') {
+          return hfInference.streamChat(model, messages, onFrame, signal, hfToken || undefined, offered);
+        }
+        if (isSavedProvider(provider)) {
+          return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered);
+        }
+        if (provider === 'local') {
+          return streamLocalChat(localRow?.baseUrl || '', model, messages, onFrame, signal, localRow?.apiKey || undefined, offered ? { tools: offered } : undefined);
+        }
+        return streamChat(provider, { model, messages, ...(offered ? { tools: offered } : {}) }, onFrame, signal);
+      };
+      const upsertTool = (event: ToolEvent) => {
+        setSessions((prev) => prev.map((s) => {
+          if (s.id !== sid) return s;
+          const msgs = s.messages.slice();
+          const last = msgs[msgs.length - 1];
+          if (!last || last.role !== 'assistant') return s;
+          const list = (last.tools || []).slice();
+          const at = list.findIndex((t) => t.id === event.id);
+          if (at >= 0) list[at] = event; else list.push(event);
+          msgs[msgs.length - 1] = { ...last, tools: list };
+          return { ...s, messages: msgs, updatedAt: Date.now() };
+        }));
+        if (stickToBottom.current) scrollToBottom(false);
+      };
+      const root = openFolder();
+      await runTurn({
+        messages: turns,
+        tools: toolsOn ? toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() }) : [],
+        stream: streamOnce,
+        execute: (call, args) => executeTool(call, args, { localRoot: root }),
+        // Stopping the turn is a Deny for whatever was waiting.
+        approve: (event) => new Promise<boolean>((resolve) => {
+          approvals.current[event.id] = resolve;
+          controller.signal.addEventListener('abort', () => { delete approvals.current[event.id]; resolve(false); }, { once: true });
+        }),
+        onText: append,
+        onTool: upsertTool,
+        onNote: (note) => pushToast('info', note),
+        signal: controller.signal,
+      });
       // persist the finished transcript
       setSessions((prev) => { saveSessions(prev); return prev; });
     } catch (err) {
@@ -780,6 +853,9 @@ export default function ChatScreen() {
                 ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                 : null)
               : <div className="message-content">{msg.content}</div>}
+            {msg.role === 'assistant' && msg.tools && msg.tools.length > 0 && (
+              <ToolCards events={msg.tools} onDecide={sending && i === active.messages.length - 1 ? decide : undefined} />
+            )}
             {/* What failed, what it was asked of (which the label above already
                 names), the provider's own words, and what to do next -- instead
                 of the provider's error dump standing in for a reply. */}

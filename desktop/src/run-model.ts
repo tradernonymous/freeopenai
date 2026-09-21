@@ -83,18 +83,45 @@ export function ollamaFrame(line: string): StreamFrame | null {
   }
   if (row && row.error) throw new ApiError(0, `Ollama: ${typeof row.error === 'string' ? row.error : JSON.stringify(row.error)}`);
   const content = row?.message?.content;
-  if (row?.done) return { content: typeof content === 'string' && content ? content : undefined, done: true, model: row.model };
-  return typeof content === 'string' && content ? { content, model: row.model } : null;
+  // Ollama sends a tool call whole, with its arguments as an object.
+  const called = Array.isArray(row?.message?.tool_calls) && row.message.tool_calls.length ? row.message.tool_calls : undefined;
+  if (row?.done) return { content: typeof content === 'string' && content ? content : undefined, toolCalls: called, done: true, model: row.model };
+  return (typeof content === 'string' && content) || called ? { content: content || undefined, toolCalls: called, model: row.model } : null;
 }
 
-async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f: StreamFrame) => void, signal?: AbortSignal): Promise<void> {
+/**
+ * A turn that used tools is replayed to the model. OpenAI-shaped servers want a
+ * call's arguments as JSON text; Ollama wants the object, and names the tool
+ * on the result as `tool_name`.
+ */
+export function forOllama(message: any): any {
+  if (!message || typeof message !== 'object') return message;
+  if (Array.isArray(message.tool_calls)) {
+    return {
+      ...message,
+      tool_calls: message.tool_calls.map((call: any) => {
+        const args = call?.function?.arguments;
+        let parsed = args;
+        if (typeof args === 'string') {
+          try { parsed = JSON.parse(args || '{}'); } catch { parsed = {}; }
+        }
+        return { ...call, function: { ...(call?.function || {}), arguments: parsed } };
+      }),
+    };
+  }
+  if (message.role === 'tool' && message.name && !message.tool_name) return { ...message, tool_name: message.name };
+  return message;
+}
+
+async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f: StreamFrame) => void, signal?: AbortSignal, offered?: any[]): Promise<void> {
   if (!hasShell()) throw new ApiError(0, 'Ollama is reached through the installed desktop app.');
   const values = settingsFor(entry);
   const body = JSON.stringify({
     model: entry.name,
-    messages: runSettings.withSystem(messages, values),
+    messages: runSettings.withSystem(messages, values).map(forOllama),
     stream: true,
     options: runSettings.ollamaOptions(values),
+    ...(offered && offered.length ? { tools: offered } : {}),
   });
   let buffer = '';
   let status = 200;
@@ -142,12 +169,14 @@ export async function streamSaved(
   onFrame: (frame: StreamFrame) => void,
   signal?: AbortSignal,
   onStage?: (stage: string) => void,
+  /** Tool definitions to offer (OpenAI shape), when the turn has any. */
+  offered?: any[],
 ): Promise<void> {
   const entry = savedModels.find(provider, model);
   if (!entry) {
     throw new ApiError(0, `${model || 'That model'} is no longer in your models. Add it again in Settings → Local models.`);
   }
-  if (entry.kind === 'ollama') return streamOllama(entry, messages, onFrame, signal);
+  if (entry.kind === 'ollama') return streamOllama(entry, messages, onFrame, signal, offered);
   const status = await ensureUnsloth(entry, false, onStage);
   onStage?.('');
   const values = settingsFor(entry);
@@ -158,6 +187,6 @@ export async function streamSaved(
     onFrame,
     signal,
     status.api_key || undefined,
-    runSettings.openaiParams(values),
+    { ...runSettings.openaiParams(values), ...(offered && offered.length ? { tools: offered } : {}) },
   );
 }

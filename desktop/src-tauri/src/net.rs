@@ -485,6 +485,61 @@ pub fn puter_signin_open(url: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "port": port }))
 }
 
+/// Whether a URL is the engine's GitHub sign-in: https (or loopback http for
+/// a local engine) and exactly `/api/github/authorize`.
+pub fn is_connect_url(url: &str) -> bool {
+    let scheme = scheme_of(url).unwrap_or_default();
+    let Some(host) = host_of(url) else { return false };
+    if !(scheme == "https" || (scheme == "http" && is_loopback(&host))) {
+        return false;
+    }
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    path == "api/github/authorize"
+}
+
+/// Connect an account in a SECOND WINDOW OF THIS APP.
+///
+/// The engine keys a GitHub connection to its session cookie. The system
+/// browser has another cookie jar, so a sign-in there would connect GitHub to
+/// a session this app is not using. A window of this app shares the webview's
+/// cookies, so the engine sees the same session on the way out to GitHub and
+/// on the way back. The window gets no commands (it shows remote pages), and
+/// it is closed -- and `connect-finished` emitted -- as soon as navigation
+/// returns to the engine outside the /api/github/ routes.
+#[tauri::command]
+pub async fn auth_window_open(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri::Emitter;
+    let url = url.trim().to_string();
+    if !is_connect_url(&url) {
+        return Err("only the engine's GitHub sign-in is opened this way".to_string());
+    }
+    let target: tauri::Url = url.parse().map_err(|e| format!("not an address: {}", e))?;
+    let engine_host = target.host_str().unwrap_or("").to_string();
+    if let Some(existing) = app.get_webview_window("connect") {
+        let _ = existing.destroy();
+    }
+    let handle = app.clone();
+    tauri::WebviewWindowBuilder::new(&app, "connect", tauri::WebviewUrl::External(target))
+        .title("Connect GitHub - NeuraOS")
+        .inner_size(560.0, 760.0)
+        .on_navigation(move |next| {
+            let back_home = next.host_str() == Some(engine_host.as_str()) && !next.path().starts_with("/api/github/");
+            if back_home {
+                let _ = handle.emit("connect-finished", next.path().to_string());
+                if let Some(window) = handle.get_webview_window("connect") {
+                    let _ = window.destroy();
+                }
+                return false;
+            }
+            true
+        })
+        .build()
+        .map_err(|e| format!("could not open the sign-in window: {}", e))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 fn spawn_detached(program: &Path, args: &[String]) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
@@ -536,6 +591,16 @@ mod tests {
 
     fn extra(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn only_the_engines_github_sign_in_gets_a_window() {
+        assert!(is_connect_url("https://engine.example.com/api/github/authorize"));
+        assert!(is_connect_url("http://127.0.0.1:3000/api/github/authorize"));
+        assert!(!is_connect_url("http://engine.example.com/api/github/authorize"), "http only on this machine");
+        assert!(!is_connect_url("https://engine.example.com/api/github/authorize/x"));
+        assert!(!is_connect_url("https://engine.example.com/login"));
+        assert!(!is_connect_url("https://github.com/login/oauth/authorize"));
     }
 
     #[test]

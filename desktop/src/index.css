@@ -4215,3 +4215,83 @@ button.linkish {
   color: var(--warn, #d29922);
   line-height: 1.35;
 }
+
+/* ---- Tool cards: what the model did, and Allow / Deny --------------------- */
+.tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tool-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font-size: 12px;
+}
+.tool-card.is-asking {
+  border-color: var(--accent);
+}
+.tool-card.is-error,
+.tool-card.is-denied {
+  border-color: var(--warn, #d29922);
+}
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+}
+.tool-card-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-1, var(--text));
+}
+.tool-card-status {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.tool-card-body {
+  padding: 0 10px 8px;
+}
+.tool-card-label {
+  margin: 6px 0 2px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.tool-card-pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: var(--bg-3, var(--bg));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-card-ask {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}
+.tool-card-actions {
+  display: flex;
+  gap: 6px;
+}

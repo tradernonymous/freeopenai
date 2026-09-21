@@ -166,6 +166,17 @@ Start passes `-m <file>` for a file the app has, or `-hf <repo>:<quant>` for a r
 
 Lifecycle in one rule: a server that has not answered `/health` is **starting**, never *ready* — a model that has not loaded cannot answer, and saying it is ready is how a first message disappears into a void.
 
+## Tools in Chat (Phase 1)
+
+A model in Chat can ask for things, on **every** provider -- the engine's, Hugging Face, Ollama Local, Unsloth Local. The rules are in [`src/tools.js`](../desktop/src/tools.js) (pure, node-tested), the loop in `src/agent-turn.ts`, the executor in `src/tool-run.ts`, the cards in `components/ToolCards.tsx`.
+
+- **What is offered** depends on what is connected: `web_search` and `web_fetch` always; the nine `github_*` tools (the same names as the web app's) only while a GitHub account is connected; `list_files`, `read_file`, `write_file`, `edit_file`, `run_command` only while a folder is open in the app; and `mcp__<server>__<tool>` for every MCP server added in Settings.
+- **Reading is free; changing asks.** Every file write, command and commit -- and every MCP tool, whose effects this app cannot know -- shows an **Allow / Deny** card in the conversation before it runs. A write can never be "always allowed"; an MCP *server* can be trusted ("Always for this server"). A Deny is told to the model as an answer, so it carries on without the tool.
+- **Where each tool runs:** web, GitHub and MCP go to the engine (`/api/llm/websearch`, `/api/llm/fetch`, `/api/github/*`, `/api/mcp/call`); the file and command tools go to the shell, confined to the open folder by `local.rs`.
+- **The loop** streams, collects tool calls out of the stream (OpenAI deltas or Ollama's whole calls), runs them, hands the results back and streams again, up to 8 rounds. A provider that refuses `tools` outright gets the turn again without them, once, and says so.
+
+**Settings -> Connectors** holds the switch for tools, the **GitHub** accounts (several, like the web app; Connect opens the engine's sign-in in a *window of this app*, because the engine keys the connection to its session cookie and the system browser has another cookie jar), and the **MCP servers** (remote https servers reached through the engine; their tools are read when the server is added). MCP servers on this PC (stdio) are the next step of docs/adr/0001.
+
 ## Hugging Face integration
 
 Library → **Hugging Face** lets the user sign in with their HF account (device-code OAuth, [`src/hf-auth.js`](../desktop/src/hf-auth.js)), search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. The OAuth scope includes `inference-api`, so the same token works for chat through the Hugging Face router (`src/hf-inference.js`).
