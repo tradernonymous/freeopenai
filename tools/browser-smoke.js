@@ -858,6 +858,7 @@ async function main() {
     // The file the command produced, downloaded through the panel that lists it.
     const serverFiles = await evaluate(`(async () => {
       switchView('settings');
+      jumpToSettingsSection('workspace');
       await renderServerWorkspaceFiles();
       const row = [...document.querySelectorAll('#serverWorkspaceFileList .workspace-row')]
         .find((node) => node.textContent.includes('smoke-report.txt'));
@@ -1075,7 +1076,10 @@ async function main() {
     if (!behavior.send.inputCleared || !behavior.send.userEcho || !behavior.send.botReply || !behavior.send.transcriptShows) {
       throw new Error('the composer did not complete a send: ' + JSON.stringify(behavior.send));
     }
-    if (!behavior.attachment.open || behavior.attachment.options !== 4) throw new Error('attachment menu smoke check failed');
+    // image, document, file -- the fourth option ("Voice") was removed: it
+    // called a voice-mode feature with no speech-recognition wiring anywhere
+    // in the app, a non-functional control rather than a real fourth kind.
+    if (!behavior.attachment.open || behavior.attachment.options !== 3) throw new Error('attachment menu smoke check failed');
     if (!behavior.gallery.stored || !behavior.gallery.kept || behavior.gallery.inline || !behavior.gallery.rendered) {
       throw new Error('generated image did not survive into the Gallery as stored bytes: ' + JSON.stringify(behavior.gallery));
     }
