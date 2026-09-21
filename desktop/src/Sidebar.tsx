@@ -15,7 +15,10 @@
 import Icon, { type IconName } from './components/Icon';
 import { APP_VERSION } from './version';
 
-const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string }> = [
+// The ONE list of screens and their keys. App.tsx walks it for Alt+N, the
+// command palette shows its keys, and test/desktop-shortcuts.test.js holds
+// README.md and docs/desktop.md to it -- three places used to disagree.
+export const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', keys: 'Alt+1' },
   { id: 'code', label: 'Code', icon: 'terminal', keys: 'Alt+2' },
   { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+3' },
@@ -34,6 +37,20 @@ const PANEL_ITEMS: Array<{ key: 'folder' | 'terminal' | 'sessions' | 'builds' | 
   { key: 'builds', label: 'Approvals', icon: 'check', title: 'Pending build approvals' },
   { key: 'knowledge', label: 'Skills', icon: 'skills', title: 'Skills and memory' },
 ];
+
+/** The {view: 'Alt+N'} map the palette is handed. */
+export function navKeys(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const item of NAV_ITEMS) out[item.id] = item.keys;
+  return out;
+}
+
+/** The screen a key press names, or null. `Alt+8` -> 'settings', `Alt+F` -> 'files'. */
+export function navForKey(key: string): NavId | null {
+  const wanted = `Alt+${String(key || '').toUpperCase()}`;
+  const hit = NAV_ITEMS.find((item) => item.keys.toUpperCase() === wanted);
+  return hit ? hit.id : null;
+}
 
 export type NavId = 'chat' | 'code' | 'images' | 'build' | 'local' | 'design' | 'library' | 'files' | 'settings';
 

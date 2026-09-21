@@ -25,17 +25,19 @@ interface Props {
   onClose: () => void;
   /** Chats and skills, so the palette reaches them too. */
   extra: PaletteEntry[];
+  /** {view: 'Alt+N'} from the sidebar, so the hints shown are the keys that work. */
+  keys?: Record<string, string>;
   onRun: (entry: PaletteEntry) => void;
 }
 
-export default function CommandPalette({ open, onClose, extra, onRun }: Props) {
+export default function CommandPalette({ open, onClose, extra, keys, onRun }: Props) {
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const results: PaletteEntry[] = useMemo(
-    () => (open ? commands.search(query, { extra }) : []),
-    [open, query, extra],
+    () => (open ? commands.search(query, { extra, keys }) : []),
+    [open, query, extra, keys],
   );
 
   useEffect(() => {

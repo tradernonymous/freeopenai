@@ -17,7 +17,7 @@ export declare const MAX_RESULTS: number;
 export declare function score(command: CommandEntry, query: string): number;
 export declare function search(
   query: string,
-  options?: { limit?: number; extra?: CommandEntry[] },
+  options?: { limit?: number; extra?: CommandEntry[]; keys?: Record<string, string> },
 ): CommandEntry[];
 export declare function chatCommand(session: { id: string; title?: string }): CommandEntry;
 export declare function skillCommand(skill: { id?: string; name?: string }): CommandEntry;

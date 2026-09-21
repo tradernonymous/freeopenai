@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
-import Sidebar, { type NavId } from './Sidebar';
+import Sidebar, { navForKey, navKeys, type NavId } from './Sidebar';
 import TitleBar from './TitleBar';
 import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT } from './screens/ChatScreen';
 import DesignScreen from './screens/DesignScreen';
@@ -250,9 +250,10 @@ export default function App() {
     return () => window.removeEventListener('keydown', onZen);
   }, []);
 
-  // Alt+1..7 walks the sidebar in its displayed order; Ctrl+K is the palette.
+  // Alt+<key> opens the screen the sidebar labels with that key -- the same
+  // NAV_ITEMS list, so the label and the shortcut cannot drift. Ctrl+K is the
+  // palette.
   useEffect(() => {
-    const order: View[] = ['chat', 'code', 'images', 'build', 'local', 'design', 'library', 'files', 'settings'];
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if ((e.ctrlKey || e.metaKey) && key === 'k') {
@@ -265,14 +266,10 @@ export default function App() {
         return;
       }
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      const n = Number.parseInt(e.key, 10);
-      if (n >= 1 && n <= order.length && e.altKey) {
+      const target = navForKey(e.key);
+      if (target) {
         e.preventDefault();
-        setView(order[n - 1]);
-      }
-      if (e.altKey && e.key === 'f') {
-        e.preventDefault();
-        setView('files');
+        setView(target);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -468,6 +465,7 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         extra={paletteExtra}
+        keys={navKeys()}
         onRun={runCommand}
       />
       {zen && (

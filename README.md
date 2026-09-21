@@ -111,7 +111,7 @@ curl -s https://<project>.up.railway.app/api/health
 
 1. Download the installer from **[desktop-latest](https://github.com/tradernonymous/freeopenai/releases/tag/desktop-latest)**.
 2. Double-click. On *"Windows protected your PC"*: **More info → Run anyway**. The installer sets up the WebView2 runtime automatically if the machine lacks it.
-3. Sign in once if the engine asks. `Alt+1…6` switches screens. More in [Desktop](docs/desktop.md).
+3. Sign in once if the engine asks. `Alt+1…8` switches screens (`Alt+F` for Files). More in [Desktop](docs/desktop.md).
 
 > **Note:** A native Tauri 2 + React app with its own sidebar and tray. Streaming chat, image generation, live build approvals and skills — all on the NeuraOS engine, with the keys staying on the server.
 

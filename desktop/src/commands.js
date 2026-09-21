@@ -19,14 +19,19 @@
   // The fixed surface: every screen the sidebar has, plus the actions that had
   // no home before this existed.
   var COMMANDS = [
-    { id: 'go-chat', group: 'Go to', title: 'Chat', hint: 'Talk to a model', keys: 'Alt+1', palette: 'chat' },
-    { id: 'go-images', group: 'Go to', title: 'Images', hint: 'Generate a picture', keys: 'Alt+2', palette: 'images' },
-    { id: 'go-build', group: 'Go to', title: 'Builds', hint: 'Remote build sessions and approvals', keys: 'Alt+3', palette: 'build' },
-    { id: 'go-local', group: 'Go to', title: 'Local', hint: 'Your own folder: tree, viewer, terminal', keys: 'Alt+4', palette: 'local' },
-    { id: 'go-design', group: 'Go to', title: 'Design', hint: 'Brand + anti-slop review', keys: 'Alt+5', palette: 'design' },
-    { id: 'go-library', group: 'Go to', title: 'Library', hint: 'Skills and saved chats', keys: 'Alt+6', palette: 'library' },
-    { id: 'go-files', group: 'Go to', title: 'Files', hint: 'Extract and generate documents', keys: 'Alt+F', palette: 'files' },
-    { id: 'go-settings', group: 'Go to', title: 'Settings', hint: 'Engine, sign-in, diagnostics', keys: 'Alt+7', palette: 'settings' },
+    // The screens. Their Alt+N keys are NOT written here: the sidebar's
+    // NAV_ITEMS (src/Sidebar.tsx) is the one list, and the palette is handed a
+    // {view: keys} map from it (search's `keys` option), so the hint the
+    // palette shows can never disagree with the key the shell listens for.
+    { id: 'go-chat', group: 'Go to', title: 'Chat', hint: 'Talk to a model', palette: 'chat' },
+    { id: 'go-code', group: 'Go to', title: 'Code', hint: 'The coding agent on a local folder', palette: 'code' },
+    { id: 'go-images', group: 'Go to', title: 'Images', hint: 'Generate a picture', palette: 'images' },
+    { id: 'go-build', group: 'Go to', title: 'Builds', hint: 'Remote build sessions and approvals', palette: 'build' },
+    { id: 'go-local', group: 'Go to', title: 'Local', hint: 'Your own folder: tree, viewer, terminal', palette: 'local' },
+    { id: 'go-design', group: 'Go to', title: 'Design', hint: 'Brand + anti-slop review', palette: 'design' },
+    { id: 'go-library', group: 'Go to', title: 'Library', hint: 'Skills and saved chats', palette: 'library' },
+    { id: 'go-files', group: 'Go to', title: 'Files', hint: 'Extract and generate documents', palette: 'files' },
+    { id: 'go-settings', group: 'Go to', title: 'Settings', hint: 'Engine, sign-in, diagnostics', palette: 'settings' },
     { id: 'new-chat', group: 'Do', title: 'New chat', hint: 'Start a fresh conversation' },
     { id: 'toggle-theme', group: 'Do', title: 'Switch theme', hint: 'Light or dark' },
     { id: 'toggle-zen', group: 'Do', title: 'Zen mode', hint: 'Hide the chrome and keep only the canvas', keys: 'Ctrl+Shift+Z' },
@@ -74,7 +79,12 @@
     var opts = options || {};
     var limit = Number(opts.limit) > 0 ? Number(opts.limit) : MAX_RESULTS;
     var extra = Array.isArray(opts.extra) ? opts.extra : [];
-    var all = COMMANDS.concat(extra);
+    var keys = opts.keys && typeof opts.keys === 'object' ? opts.keys : null;
+    var all = COMMANDS.concat(extra).map(function (command) {
+      if (!keys || !command.palette || String(command.id).indexOf('go-') !== 0) return command;
+      var hint = keys[command.palette];
+      return hint ? Object.assign({}, command, { keys: hint }) : command;
+    });
     var scored = [];
     for (var i = 0; i < all.length; i += 1) {
       var value = score(all[i], query);

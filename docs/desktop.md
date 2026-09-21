@@ -23,7 +23,14 @@
 
 | Shortcut | Does |
 | :-- | :-- |
-| `Alt+1` … `Alt+7` | Chat, Images, Builds, Local, Design, Library, Settings |
+| `Alt+1` | Chat |
+| `Alt+2` | Code |
+| `Alt+3` | Images |
+| `Alt+4` | Builds |
+| `Alt+5` | Local |
+| `Alt+6` | Design |
+| `Alt+7` | Library |
+| `Alt+8` | Settings |
 | `Alt+F` | Files |
 | `Ctrl+K` | The command palette |
 | `Enter` / `Shift+Enter` | Send / newline in the composer |
@@ -104,7 +111,7 @@ Every "we cannot reach it" failure in this app had one shape: work a webview is 
 Four things make the window read as a product rather than a panel of buttons:
 
 - **One icon set** (`src/components/Icon.tsx`), drawn here rather than imported: 24x24, 1.6px stroke, `currentColor`, so an icon is the same weight as its label and the same colour as the state it sits in. The sidebar's icons used to be emoji (💬 🖼 🛠 …), which render differently on every Windows build and cannot be aligned, sized or coloured. The typeface is bundled the same way (`@fontsource-variable/inter`, imported in `main.tsx`), so the app looks the same on every machine instead of inheriting whatever Segoe build happens to be installed.
-- **`Ctrl+K`** opens a command palette over every screen, action, panel, saved chat and skill (`src/commands.js` holds the registry and the matching rules; `Ctrl+K`, arrows, `Enter`, `Esc`). Before it, the whole keyboard story was `Alt+1..6`.
+- **`Ctrl+K`** opens a command palette over every screen, action, panel, saved chat and skill (`src/commands.js` holds the registry and the matching rules; `Ctrl+K`, arrows, `Enter`, `Esc`). Before it, the whole keyboard story was the Alt keys in the table above.
 - **Toasts** (`src/toasts.js`) replace a `setTimeout` hint in the sidebar: queued, dismissible, announced with `aria-live`, repeats refresh instead of stacking, and a failure can be sticky until it is dealt with.
 - **A status bar**: which engine this build is pointed at, whether it answered — and what it *wants* (an engine that reports healthy while refusing every call says *sign-in required*, not *connected*) — plus an available update and the version.
 
