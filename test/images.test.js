@@ -17,11 +17,11 @@ function post(app, path, body) {
   });
 }
 
-// These are the tests about what happens when nothing is set up, and the
-// keyless free drawer is set up by existing: left on, each of them would draw a
-// real picture on a public service instead of failing. The tests that are about
-// that drawer turn it back on.
-test.beforeEach(() => { process.env.POLLINATIONS_FREE = '0'; });
+// These are the tests about what happens when nothing is set up, and
+// Pollinations draws with no key or variable at all -- left on, each of them
+// would draw a real picture on a public service instead of failing.
+test.beforeEach(() => { process.env.POLLINATIONS_DISABLED = '1'; });
+test.afterEach(() => { delete process.env.POLLINATIONS_DISABLED; });
 
 test('generations without a key is a clear 400, not a leak', async () => {
   delete process.env.NARA_API_KEY;

@@ -1312,13 +1312,51 @@ const LLM_PROVIDERS = {
   },
   // Google Gemini on the free tier, through the v1beta/openai compatibility
   // endpoint: plain OpenAI chat and a model list on GEMINI_API_KEY from
-  // aistudio.google.com (no card, daily free quota). No image block: image
-  // models are not available on the Gemini API free tier, so there is
-  // nothing honest to declare for drawing.
+  // aistudio.google.com (no card, daily free quota).
   gemini: {
     label: 'Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     envVar: 'GEMINI_API_KEY',
+    // The OpenAI-compatibility shim above has no images endpoint -- Gemini's
+    // free-tier image model (gemini-2.5-flash-image, "Nano Banana") only
+    // answers on Gemini's own generateContent API, a different request and
+    // response shape (see drawImage's gemini-generate branch). Same key,
+    // same free daily quota, different address.
+    image: {
+      shape: 'gemini-generate',
+      defaultModel: 'gemini-2.5-flash-image',
+      edit: 'none',
+      sizes: [],
+    },
+  },
+  // Pollinations.ai: the one drawer here that needs no key, no signup, and no
+  // card at all -- a GET with the prompt in the URL (see drawImage's
+  // pollinations-get branch). Image-only (kind: 'image'), so it never shows
+  // up as a broken chat option. keyless mirrors Kilo/OVHcloud: configured
+  // the moment this build ships, off with POLLINATIONS_DISABLED=1.
+  pollinations: {
+    label: 'Pollinations (Free)',
+    kind: 'image',
+    baseUrl: 'https://image.pollinations.ai',
+    // No real key is ever read for this provider (keyless, needsKey: false);
+    // envVar exists only so providerEnvName has a stem to build
+    // POLLINATIONS_DISABLED from, the same as every other provider's off
+    // switch. providerIsConfigured's _DISABLED check runs before the keyless
+    // early-return, and providerEnvName calls .replace on envVar
+    // unconditionally -- an actually-undefined envVar throws there.
+    envVar: 'POLLINATIONS_API_KEY',
+    keyless: true,
+    needsKey: false,
+    image: {
+      shape: 'pollinations-get',
+      defaultModel: 'flux',
+      edit: 'none',
+      sizes: [
+        { label: 'Square (1:1)', value: '1024x1024' },
+        { label: 'Landscape (3:2)', value: '1536x1024' },
+        { label: 'Portrait (2:3)', value: '1024x1536' },
+      ],
+    },
   },
   // Cloudflare Workers AI: an official free allowance on every Cloudflare
   // account (10,000 Neurons a day, no card), used with an API token the
@@ -3060,6 +3098,40 @@ async function drawImage(args) {
         openaiAttempt('/images/generations'),
       ];
     }
+    if (store.shape === 'pollinations-get') {
+      // No key, no signup: a GET with the prompt in the path. Sizes ride as
+      // query params rather than a body -- there is no body, this is a GET --
+      // and the response is the picture itself (image/*), which the generic
+      // bytes branch below already normalizes without any shape-specific code.
+      return [() => {
+        const params = new URLSearchParams({ nologo: 'true', model: useModel });
+        // declaredSize, not preferenceSize: the store declares its sizes
+        // (resolveImageSize), so a match -- exact or nearest -- lands there;
+        // preferenceSize is only ever set for a store that declares none.
+        if (declaredSize) {
+          const [w, h] = declaredSize.split('x');
+          if (w) params.set('width', w);
+          if (h) params.set('height', h);
+        }
+        return fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt) + '?' + params.toString(), { signal });
+      }];
+    }
+    if (store.shape === 'gemini-generate') {
+      // Gemini's own generateContent API, not the OpenAI-compatibility shim the
+      // chat path uses -- the free-tier image models (gemini-2.5-flash-image,
+      // "Nano Banana") only answer on this endpoint, with x-goog-api-key
+      // instead of a Bearer token and a response shape of its own
+      // (candidates[].content.parts[].inlineData), normalized below.
+      return [() => fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(useModel) + ':generateContent',
+        {
+          method: 'POST',
+          signal,
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': provider.key || '' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        },
+      )];
+    }
     if (kind === 'edits' && store.edit === 'multipart') return [multipartAttempt];
     // Two paths where a service describes its own endpoint two ways.
     return [store.path || '/images/generations', store.altPath].filter(Boolean).map(openaiAttempt);
@@ -3138,6 +3210,21 @@ async function drawImage(args) {
   if (payload && !payload.data && payload.result && typeof payload.result.image === 'string' && payload.result.image) {
     // Workers AI: {result:{image:<base64>}}. FLUX.1 [schnell] answers JPEG.
     return { status: response.status, model: usedModel, notes, data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: payload.result.image, media_type: 'image/jpeg' }] } };
+  }
+  if (payload && !payload.data && Array.isArray(payload.candidates)) {
+    // Gemini's generateContent: candidates[0].content.parts[] holds text and
+    // image parts mixed together; inlineData carries the picture as
+    // {mimeType, data (base64)} already, so no re-encoding is needed.
+    const parts = (payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts) || [];
+    const imagePart = parts.find((p) => p && p.inlineData && p.inlineData.data);
+    if (imagePart) {
+      return {
+        status: response.status,
+        model: usedModel,
+        notes,
+        data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: imagePart.inlineData.data, media_type: imagePart.inlineData.mimeType || 'image/png' }] },
+      };
+    }
   }
   if (payload && !payload.data) {
     const artifact = Array.isArray(payload.artifacts) ? payload.artifacts[0] : null;

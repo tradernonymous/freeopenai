@@ -20,6 +20,7 @@ const PROVIDER_VARS = [
   'OPENROUTER_API_KEY', 'OPENROUTER_IMAGE_MODEL', 'OPENROUTER_IMAGES_BASE_URL',
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
   'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
+  'GEMINI_API_KEY',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
 ];
@@ -36,6 +37,13 @@ function clearProviders() {
   // that gate, so the baseline is a key with credits on it; the gate has a test
   // of its own below.
   process.env.OPENROUTER_FREE_ONLY = '0';
+  // Pollinations draws with no variable at all -- unlike Kilo/OVHcloud, which
+  // stay out of the image order unless an operator names a model, it is a
+  // candidate on every request by design. These tests are about the other
+  // providers' shapes and error paths, so it is switched off here rather than
+  // threaded through every "nothing is configured"/"every provider fails"
+  // assertion below; test/pollinations.test.js covers it drawing on its own.
+  process.env.POLLINATIONS_DISABLED = '1';
 }
 
 // A stand-in upstream that records every request and answers with whatever the

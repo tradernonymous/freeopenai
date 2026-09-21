@@ -15,6 +15,8 @@ do anything.**
 | **OVHcloud AI Endpoints** | Qwen3-Coder 30B, gpt-oss 120B/20B, Qwen3.5 397B, Llama 3.3 70B | **Nothing.** On in every deployment. |
 | **Cloudflare Workers AI** | Free image generation (FLUX.1 schnell), plus chat | Set `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
 | **OVHcloud images** | Free image generation, no key | Set `OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10` |
+| **Pollinations.ai** | Free image generation, no key, no signup, no card | **Nothing.** On in every deployment (`POLLINATIONS_DISABLED=1` to turn it off). |
+| **Gemini "Nano Banana"** | Free image generation on the same key the Gemini chat provider already uses | Set `GEMINI_API_KEY` (aistudio.google.com, no card) |
 | **gpt4free** | Free image generation + a second chat pool | Deploy the service — see below |
 
 ## 1 · The custom gateway slot
@@ -107,7 +109,7 @@ OmniRoute's image endpoint fronts mostly paid or one-off-credit providers.
 ### The draw order
 
 ```
-cloudflare → nara → openrouter → nvidia → omniroute → (ovhcloud, if opted in) → g4f → puter (opt-in)
+cloudflare → nara → openrouter → nvidia → gemini (if GEMINI_API_KEY is set) → pollinations → omniroute → (ovhcloud, if opted in) → g4f → puter (opt-in)
 ```
 
 The first service that answers with a picture wins. `IMAGE_PROVIDER=<id>` pins
