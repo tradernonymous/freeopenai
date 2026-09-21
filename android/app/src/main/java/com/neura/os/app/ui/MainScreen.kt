@@ -434,7 +434,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                             Icon(Icons.Filled.ExpandMore, "Change model", tint = Palette.muted)
                         }
                     },
-                    actions = { IconButton({ sessionSheet = true }, Modifier.pressScale()) { Icon(Icons.Filled.Checklist, "Session") } },
+                    actions = { IconButton({ sessionSheet = true }, Modifier.pressScale().testTag("session_button")) { Icon(Icons.Filled.Checklist, "Session") } },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
                 )
                 AnimatedVisibility(streaming) { LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Palette.green, trackColor = Palette.background) }
@@ -721,6 +721,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                         }
                         Box(
                             Modifier.padding(4.dp).size(40.dp).pressScale(0.85f).clip(CircleShape)
+                                .testTag("send_button")
                                 .background(if (state == 0) Palette.surfaceHigh else Palette.text)
                                 .clickable {
                                     haptics(HapticFeedbackType.TextHandleMove)

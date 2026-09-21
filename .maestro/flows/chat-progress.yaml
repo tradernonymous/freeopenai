@@ -19,11 +19,13 @@ appId: com.neura.os
 - assertVisible:
     text: "RECEIVING"
     optional: true
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 30000
-- assertVisible:
-    id: "chat_input"
+- extendedWaitUntil:
+    visible:
+      id: "chat_input"
     timeout: 5000
 
 ---
@@ -40,13 +42,15 @@ appId: com.neura.os
 - tapOn:
     id: "send_button"
     optional: true
-- assertVisible:
-    text: "STOP"
+- extendedWaitUntil:
+    visible:
+      text: "STOP"
     timeout: 10000
 - tapOn:
     text: "STOP"
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 10000
 
 ---

@@ -9,17 +9,20 @@ appId: com.neura.os
 - inputText: "generate a 16:9 image of a mountain landscape at sunset"
 - tapOn:
     id: "send_button"
-- assertVisible:
-    text: "DRAW"
+- extendedWaitUntil:
+    visible:
+      text: "DRAW"
     timeout: 15000
 - assertVisible:
     text: "Image generation"
     optional: true
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 90000
-- assertVisible:
-    id: "chat_input"
+- extendedWaitUntil:
+    visible:
+      id: "chat_input"
     timeout: 5000
 
 ---
@@ -32,8 +35,9 @@ appId: com.neura.os
 - inputText: "generate a detailed 4k image of a futuristic city"
 - tapOn:
     id: "send_button"
-- assertVisible:
-    text: "STOP"
+- extendedWaitUntil:
+    visible:
+      text: "STOP"
     timeout: 15000
 - tapOn:
     text: "STOP"

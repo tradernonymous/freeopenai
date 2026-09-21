@@ -17,8 +17,9 @@ appId: com.neura.os
 - assertVisible:
     text: "Files"
     optional: true
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 10000
 
 ---
@@ -40,11 +41,13 @@ appId: com.neura.os
 - tapOn:
     text: "Create"
     optional: true
-- assertVisible:
-    text: "maestro-test.txt"
+- extendedWaitUntil:
+    visible:
+      text: "maestro-test.txt"
     timeout: 10000
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 10000
 
 ---
@@ -62,8 +65,9 @@ appId: com.neura.os
 - assertVisible:
     text: "maestro-test.txt"
     optional: true
-- assertVisible:
-    text: "READY"
+- extendedWaitUntil:
+    visible:
+      text: "READY"
     timeout: 10000
 
 ---
