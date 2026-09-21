@@ -72,16 +72,16 @@ test('the page loads the hub and hands it what it needs', () => {
   assert.match(html, /<script src="hub\.js" defer><\/script>/);
   assert.match(html, /<link rel="stylesheet" href="hub\.css">/);
   assert.ok(html.indexOf('hub.css') > html.indexOf('</style>'), 'the hub stylesheet comes after the inline styles');
-  assert.match(html, /window\.NeuraOSPage = \{/);
+  assert.match(appJs, /window\.NeuraOSPage = \{/);
   for (const key of ['modes: MODES', 'toolGroups: TOOL_GROUPS', 'modeToolGroups: MODE_TOOL_GROUPS', 'chatCommands: CHAT_COMMANDS', 'setMode:']) {
-    assert.ok(html.includes(key), 'bridge exposes ' + key);
+    assert.ok(appJs.includes(key), 'bridge exposes ' + key);
   }
-  assert.match(html, /NeuraOSHub\.syncMode\(selectedMode\)/, 'the switch follows every mode change');
-  assert.match(html, /NeuraOSHub\.decorateActions\(bar\)/, 'replies get the Build action');
+  assert.match(appJs, /NeuraOSHub\.syncMode\(selectedMode\)/, 'the switch follows every mode change');
+  assert.match(appJs, /NeuraOSHub\.decorateActions\(bar\)/, 'replies get the Build action');
 });
 
 test('picking a mode directly has the same effects as cycling to it', () => {
-  const setter = html.slice(appJs.indexOf('function setChatMode('), html.indexOf('window.NeuraOSPage'));
+  const setter = appJs.slice(appJs.indexOf('function setChatMode('), appJs.indexOf('window.NeuraOSPage'));
   assert.match(setter, /isValidMode\(id\)/, 'an unknown mode is ignored');
   assert.match(setter, /rememberPreference\('freeopenaiMode'/);
   assert.match(setter, /updateModeChip\(\)/);

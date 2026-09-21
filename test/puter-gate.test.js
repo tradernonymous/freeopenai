@@ -7,7 +7,7 @@ const path = require('node:path');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const assert = require('node:assert/strict');
 const { needsPuterAccount, PUTER_PROVIDER, safeJson } = require('../chatlib.js');
-const { HTML, loadFromIndex, sourceOf, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
+const { loadFromIndex, sourceOf, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const NAMES = ['needsPuterLogin', 'refreshLoginRequirement'];
 
@@ -40,7 +40,7 @@ test('the page reads the login flag from a public endpoint, at startup', () => {
   // it leaves the stricter rule in place, so the deploy's login would buy the
   // user nothing. Checked at the call site rather than anywhere in the file,
   // since the definition would match a looser search.
-  const startup = HTML.slice(HTML.indexOf('loadMessagesFromStorage();'));
+  const startup = APP_JS.slice(APP_JS.indexOf('loadMessagesFromStorage();'));
   assert.match(startup.slice(0, 200), /refreshLoginRequirement\(\);/, 'the startup block must fetch it');
 });
 

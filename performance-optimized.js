@@ -1,6 +1,6 @@
 /**
  * Phase 4: Performance Optimization
- * Virtual scrolling, lazy loading, and Web Worker for heavy computations
+ * Lazy loading and Web Worker for heavy computations
  */
 
 var PerformanceOptimizer = (function() {
@@ -13,82 +13,21 @@ var PerformanceOptimizer = (function() {
         chatMessages = document.getElementById('chatMessages');
         if (!chatMessages) return;
         
-        // Initialize virtual scrolling
-        initVirtualScrolling();
-        
+        // No virtual scrolling here on purpose: hiding off-screen messages
+        // with display:none collapses the scroll height under the transcript
+        // controller's feet (its pin/follow math assumes the content it put
+        // there is still there), so jump-to-newest never settles and the pill
+        // comes back. A fixed 80px item guess made it worse, never better.
+
         // Initialize lazy loading
         initLazyLoading();
         
         // Initialize Web Worker for markdown
         initMarkdownWorker();
-        
-        // Optimize message rendering
-        optimizeMessageRendering();
-    }
-    
-    /**
-     * Virtual scrolling for chat messages
-     * Only renders visible messages + buffer, keeps DOM light
-     */
-    function initVirtualScrolling() {
-        if (!chatMessages) return;
-        
-        var ITEM_HEIGHT = 80; // Average message height
-        var BUFFER = 5; // Extra messages above/below viewport
-        var visibleStart = 0;
-        var visibleEnd = 0;
-        
-        function getVisibleRange() {
-            var scrollTop = chatMessages.scrollTop;
-            var viewportHeight = chatMessages.clientHeight;
-            var startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER);
-            var endIndex = Math.min(
-                chatMessages.children.length,
-                Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER
-            );
-            return { start: startIndex, end: endIndex };
-        }
-        
-        function updateVisibility() {
-            var range = getVisibleRange();
-            var messages = chatMessages.children;
-            
-            for (var i = 0; i < messages.length; i++) {
-                var msg = messages[i];
-                if (i < range.start || i > range.end) {
-                    // Off-screen: hide but keep in DOM
-                    if (!msg.dataset.virtHidden) {
-                        msg.style.display = 'none';
-                        msg.dataset.virtHidden = '1';
-                    }
-                } else {
-                    // On-screen: show
-                    if (msg.dataset.virtHidden) {
-                        msg.style.display = '';
-                        delete msg.dataset.virtHidden;
-                    }
-                }
-            }
-            
-            visibleStart = range.start;
-            visibleEnd = range.end;
-        }
-        
-        // Debounced scroll handler
-        var scrollTimer = null;
-        chatMessages.addEventListener('scroll', function() {
-            if (scrollTimer) cancelAnimationFrame(scrollTimer);
-            scrollTimer = requestAnimationFrame(updateVisibility);
-        }, { passive: true });
-        
-        // Initial visibility
-        updateVisibility();
-        
-        // Re-run when messages change
-        var mutationObserver = new MutationObserver(function() {
-            requestAnimationFrame(updateVisibility);
-        });
-        mutationObserver.observe(chatMessages, { childList: true });
+        // No addMessage patch here on purpose: deferring appends a frame breaks
+        // callers that read the transcript in the same tick (runCommandTool's
+        // "Wrote …" acknowledgement), and a throttled page may never run the
+        // frame at all. Batching would need a real queue, not a wrapper.
     }
     
     /**
@@ -212,23 +151,6 @@ var PerformanceOptimizer = (function() {
                 .replace(/\\*(.+?)\\*/g, '<em>$1</em>')
                 .replace(/\\[(.+?)\\]\\((.+?)\\)/g, '<a href="$2" target="_blank">$1</a>')
                 .replace(/\\n/g, '<br>');
-        }
-    }
-    
-    /**
-     * Optimize message rendering
-     * Uses DocumentFragment for batch DOM updates
-     */
-    function optimizeMessageRendering() {
-        // Patch addMessage to use DocumentFragment for batch inserts
-        if (typeof window.addMessage === 'function') {
-            var originalAddMessage = window.addMessage;
-            window.addMessage = function() {
-                // Use requestAnimationFrame to batch DOM updates
-                return requestAnimationFrame(function() {
-                    return originalAddMessage.apply(this, arguments);
-                });
-            };
         }
     }
     

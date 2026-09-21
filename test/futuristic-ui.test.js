@@ -12,11 +12,11 @@ test('the chat has a restrained futuristic ambient layer', () => {
   assert.match(css, /body::before[\s\S]*?ambient-grid/);
   assert.match(css, /\.chat-card::before[\s\S]*?edge-scan/);
   assert.match(css, /\.composer:focus-within[\s\S]*?composer-flow/);
-  assert.match(css, /id="commandState"[^>]*aria-live="polite"/);
+  assert.match(html, /id="commandState"[^>]*aria-live="polite"/);
   assert.match(html, /class="brand-name">NeuraOS<\/span>/);
   assert.match(css, /\.chat-bar-title \.brand-name \{ display: none; \}/);
   assert.match(html, /command-state\.js/);
-  assert.match(css, /function updateCommandState\([\s\S]*?NeuraOSCommandState\.commandStateOf/);
+  assert.match(appJs, /function updateCommandState\([\s\S]*?NeuraOSCommandState\.commandStateOf/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration: \.001ms/);
 });
 

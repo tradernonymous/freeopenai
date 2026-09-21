@@ -14,7 +14,6 @@ const { describeProviderModel, freeRowsOnly } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 const NAMES = ['activeModels', 'hiddenModelRowsNote', 'providerHealthMap'];
@@ -78,20 +77,20 @@ test('health is handed to the failover order, and only for providers that have i
 });
 
 test('the free-only switch is in Settings, wired to the setter and restored on load', () => {
-  assert.match(CSS, /id="freeOnlyCheck"[^>]*onchange="setFreeModelsOnly\(this\.checked\)"/,
+  assert.match(HTML, /id="freeOnlyCheck"[^>]*onchange="setFreeModelsOnly\(this\.checked\)"/,
     'the checkbox is wired to the setter');
-  assert.match(HTML, /function setFreeModelsOnly\(on\) \{/, 'and the setter exists');
-  assert.match(HTML, /localStorage\.getItem\('freeai4uFreeModelsOnly'\)/, 'the choice survives a reload');
+  assert.match(APP_JS, /function setFreeModelsOnly\(on\) \{/, 'and the setter exists');
+  assert.match(APP_JS, /localStorage\.getItem\('freeai4uFreeModelsOnly'\)/, 'the choice survives a reload');
 });
 
 test('an image turn is carried to another provider, like every other turn', () => {
   // The streaming branch is reached exactly when a picture is attached, and it
   // used to throw straight out. Both halves are asserted, because either one
   // alone leaves the same hole open.
-  const start = HTML.indexOf('// Direct providers stream via SSE');
-  const end = HTML.indexOf('// Puter streaming path.');
+  const start = APP_JS.indexOf('// Direct providers stream via SSE');
+  const end = APP_JS.indexOf('// Puter streaming path.');
   assert.ok(start !== -1 && end > start, 'the streaming branch is where this test thinks it is');
-  const branch = HTML.slice(start, end);
+  const branch = APP_JS.slice(start, end);
   assert.match(branch, /for \(let hop = 0; hop <= MAX_PROVIDER_FAILOVERS; hop\+\+\)/, 'it hops');
   assert.match(branch, /isFailoverWorthyFailure\(error\.message, error\.statusCode, error\.modelId\)/,
     'on the same failures the tool loop treats as another provider\'s to answer');

@@ -102,13 +102,13 @@ test('the model menu is fixed to the viewport, never absolute in the toolbar', (
 test('opening the menu computes its placement rather than relying on CSS alone', () => {
   // A menu that is never placed falls back to the stylesheet's guess, which is
   // how the first version ended up clipped with no way to reach the rest.
-  const open = CSS.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
-  assert.ok(open, 'index.html no longer defines openModelDropdown() -- re-point this test');
+  const open = APP_JS.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
+  assert.ok(open, 'app.js no longer defines openModelDropdown() -- re-point this test');
   assert.match(open[1], /positionModelDropdown\(\)/, 'openModelDropdown must position the menu it opens');
   // Both popups share the one resize listener, so a rotated phone re-places
   // whichever of them is open.
   assert.match(
-    CSS,
+    APP_JS,
     /window\.addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);/,
     'and re-place it when the window changes',
   );

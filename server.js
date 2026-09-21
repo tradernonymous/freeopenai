@@ -28,13 +28,19 @@ const {
   pickAccount,
 } = require('./github.js');
 const { createBuildSessions, handleBuildRoute, resolveInside, protectedPath, searchFolder, refusedGit } = require('./agent-sessions.js');
+// Push stays a silent no-op unless FCM_SERVICE_ACCOUNT is set -- the require
+// is unconditional because the module itself has no side effects.
+const { parseServiceAccount, sendPush } = require('./fcm-push.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
 // '/api/health' is public on purpose: it reports what the running deploy
 // actually is, so a merge can be confirmed live instead of assumed. The
 // response is written to carry no secrets — see llmHealth.
-const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/api/health']);
+// '/manifest.json' rides along because browsers fetch the PWA manifest on
+// their own schedule, sometimes before the session cookie exists: behind the
+// login it 401s and the install breaks, and it carries no secrets anyway.
+const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/api/health', '/manifest.json']);
 const LOGIN_RATE_LIMIT = 10;
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
 const loginAttempts = new Map();

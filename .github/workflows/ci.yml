@@ -66,13 +66,31 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-35 system-images;android-35;default;x86_64
+          # arm64, not x86_64: macos-latest runners are Apple Silicon, and the
+          # translated x86_64 image never finished booting -- two runs in a row
+          # sat in the boot wait until the 40-minute job timeout.
+          packages: platform-tools platforms;android-35 system-images;android-35;google_apis;arm64-v8a
           emulator: true
       - name: Create and start emulator
         run: |
-          echo "no" | avdmanager create avd -n test -k "system-images;android-35;default;x86_64" --force
+          echo "no" | avdmanager create avd -n test -k "system-images;android-35;google_apis;arm64-v8a" --force
           $ANDROID_HOME/emulator/emulator -avd test -no-snapshot-load -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
-          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          adb wait-for-device
+          # Bounded waits from here: a wedged emulator must fail this step in
+          # minutes, not sit until the job timeout.
+          started=""
+          for i in $(seq 1 18); do
+            if adb devices | grep -q emulator; then started="yes"; break; fi
+            sleep 10
+          done
+          if [ -z "$started" ]; then echo "emulator did not appear in adb devices"; adb devices; exit 1; fi
+          booted=""
+          for i in $(seq 1 60); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted="yes"; break; fi
+            sleep 10
+          done
+          if [ -z "$booted" ]; then echo "emulator never finished booting"; exit 1; fi
+          echo "emulator booted"
       - name: Install Maestro
         run: |
           curl -Ls "https://get.maestro.mobile.dev" | bash

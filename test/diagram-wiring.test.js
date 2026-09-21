@@ -14,7 +14,7 @@ const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 function realDiagramTypes() {
   const at = APP_JS.indexOf('const MERMAID_TYPES = [');
   assert.ok(at > 0, 'MERMAID_TYPES is gone -- re-point this test');
-  const body = HTML.slice(at, HTML.indexOf('];', at));
+  const body = APP_JS.slice(at, APP_JS.indexOf('];', at));
   return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
 }
 
@@ -33,11 +33,11 @@ test('the gate accepts known diagram types and rejects prose', () => {
 
 test('the engine loads vendored, strict, and only on demand', () => {
   assert.ok(
-    HTML.includes("const MERMAID_SRC = './vendor/mermaid/mermaid-12.0.0.mjs'"),
+    APP_JS.includes("const MERMAID_SRC = './vendor/mermaid/mermaid-12.0.0.mjs'"),
     'the loader must point at the vendored bytes, never a CDN',
   );
   assert.ok(!HTML.includes('cdn.jsdelivr'), 'no CDN script may join the diagram path');
-  assert.ok(HTML.includes("securityLevel: 'strict'"), 'the engine must sanitise labels');
+  assert.ok(APP_JS.includes("securityLevel: 'strict'"), 'the engine must sanitise labels');
   const render = sourceOf('renderDiagram');
   assert.match(render, /mermaidDiagramType\(code\)/, 'rendering without the gate loads the engine for prose');
   assert.match(render, /ensureMermaid\(\)/);

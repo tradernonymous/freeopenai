@@ -411,12 +411,11 @@ body.zen-mode main {
     color: var(--text-muted);
 }
 
-/* ---- Chat Messages: Scrollable Area ---- */
+/* ---- Chat Messages: Scrollable Area (instant scroll: see style.css) ---- */
 .chat-messages {
     height: calc(100vh - 48px - 200px - 24px);
     overflow-y: auto;
     padding: 24px 16px;
-    scroll-behavior: smooth;
 }
 
 /* ---- Empty State: Centered ---- */

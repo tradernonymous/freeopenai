@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // The page defines sendMessage inside a <script> block; the shared extractor
 // finds it the same way every other wiring test does.
@@ -42,6 +42,6 @@ test('the page still binds Enter and the send button to sendMessage', () => {
   // The keyboard path and the button path are separate; both must reach the
   // same function, or one input dies while tests on the other stay green.
   assert.match(HTML, /onkeydown="handleKeyDown\(event\)"/, 'the textarea lost its key handler');
-  assert.match(CSS, /e\.key === 'Enter' && !e\.shiftKey[\s\S]{0,80}sendMessage\(\)/, 'Enter no longer calls sendMessage');
-  assert.match(CSS, /id="sendButton"[\s\S]{0,200}?onclick="isTyping \? stopGeneration\(\) : sendMessage\(\)"/, 'the send button no longer calls sendMessage');
+  assert.match(APP_JS, /e\.key === 'Enter' && !e\.shiftKey[\s\S]{0,80}sendMessage\(\)/, 'Enter no longer calls sendMessage');
+  assert.match(HTML, /id="sendButton"[\s\S]{0,200}?onclick="isTyping \? stopGeneration\(\) : sendMessage\(\)"/, 'the send button no longer calls sendMessage');
 });

@@ -64,12 +64,12 @@ test('the attach menu is fixed to the viewport, and its trigger cannot scroll aw
 });
 
 test('opening the menu places it, and a resize re-places it', () => {
-  const open = CSS.match(/function openAttachMenu\(\)\s*\{[\s\S]*?\n        \}/);
+  const open = APP_JS.match(/function openAttachMenu\(\)\s*\{[\s\S]*?\n        \}/);
   assert.ok(open, 'openAttachMenu is gone -- re-point this test');
   assert.match(open[0], /positionAttachMenu\(\)/, 'the CSS fallback is not a real position');
   // The same treatment the model menu already gets: a rotated phone moves the
   // trigger out from under an open menu.
-  assert.match(CSS, /addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);[\s\S]{0,120}positionAttachMenu\(\);/);
+  assert.match(APP_JS, /addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);[\s\S]{0,120}positionAttachMenu\(\);/);
 });
 
 const NAMES = ['positionAttachMenu'];

@@ -470,7 +470,7 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   }
   // The shell carries the class the toggle flips -- a toggle for a class nobody
   // sets is a button that does nothing.
-  assert.match(CSS, /class="chat-shell[^"]*"/);
+  assert.match(HTML, /class="chat-shell[^"]*"/);
   assert.match(CSS, /\.chat-shell\.session-hidden \.session-panel/);
   // The panel is still one thing, not two: the width-budget rule that used to
   // arbitrate between two pop-ups has nothing left to arbitrate.
@@ -478,19 +478,19 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
 
   // The desktop shape is a glass pop-up over the chat, not a column of the
   // layout. The two lists used to cost 500px of the transcript between them.
-  const panel = HTML.slice(HTML.indexOf('\n        .session-panel {'), HTML.indexOf('\n        /* Out of the way means out of reach'));
+  const panel = CSS.slice(CSS.indexOf('\n        .session-panel {'), CSS.indexOf('\n        /* Out of the way means out of reach'));
   assert.match(panel, /position: absolute; z-index: 25;/);
   assert.match(panel, /top: calc\(var\(--bar-h\) \+ 10px\)/, 'a pop-up that covers the button that dismisses it is a trap');
   // And it stops above the composer. `bottom: 10px` put the todo card over Send:
   // the composer's right edge and the card's left edge crossed, so the one
   // control every turn needs was behind a panel.
   assert.match(panel, /bottom: var\(--panel-floor, 10px\)/);
-  assert.match(HTML, /function syncPanelFloor\(\)/, 'nothing measures the composer');
-  const floor = HTML.slice(APP_JS.indexOf('function syncPanelFloor()'), APP_JS.indexOf('function watchPanelFloor()'));
+  assert.match(APP_JS, /function syncPanelFloor\(\)/, 'nothing measures the composer');
+  const floor = APP_JS.slice(APP_JS.indexOf('function syncPanelFloor()'), APP_JS.indexOf('function watchPanelFloor()'));
   assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
   assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
-  assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
-  assert.match(HTML, /restoreSessionPanel\(\);\s*restoreCanvas\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
+  assert.match(APP_JS, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
+  assert.match(APP_JS, /restoreSessionPanel\(\);\s*restoreCanvas\(\);\s*watchPanelFloor\(\)/, 'the floor is never measured at startup');
   assert.match(panel, /background: var\(--glass\)/);
   assert.match(panel, /backdrop-filter: blur\(18px\)/, 'the pop-up has to be glass');
   assert.match(panel, /-webkit-backdrop-filter: blur\(18px\)/, 'or Safari gets an opaque slab');
@@ -506,7 +506,7 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   assert.match(CSS, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
   // Hidden has to mean gone, not merely invisible: a transparent panel still
   // swallows the clicks meant for the transcript underneath it.
-  const putAway = HTML.slice(HTML.indexOf('.chat-shell.session-hidden .session-panel {'), HTML.indexOf('.session-tabs {'));
+  const putAway = CSS.slice(CSS.indexOf('.chat-shell.session-hidden .session-panel {'), CSS.indexOf('.session-tabs {'));
   assert.match(putAway, /opacity: 0; pointer-events: none;/);
   assert.match(putAway, /translateX\(calc\(100% \+ 20px\)\)/);
 
@@ -515,15 +515,15 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   // no room for a card beside anything. That shape is shared, so it lives in the
   // one small-screen block; the landscape block only narrows how much of the
   // width the drawer takes.
-  const small = HTML.slice(
-    HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape)'),
-    HTML.indexOf('@media (max-width: 380px)'),
+  const small = CSS.slice(
+    CSS.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape)'),
+    CSS.indexOf('@media (max-width: 380px)'),
   );
   assert.match(small, /\.session-panel \{[\s\S]*?position: absolute; top: 0; bottom: 0; right: 0[\s\S]*?margin: 0/);
   assert.match(small, /\.chat-shell\.session-hidden \.session-panel \{[\s\S]*?translateX\(102%\)/);
   assert.match(small, /\.session-scrim \{[\s\S]*?display: block/);
   assert.match(small, /\.chat-shell\.session-hidden \.session-scrim \{ opacity: 0; pointer-events: none; \}/);
-  const landscape = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
+  const landscape = CSS.slice(CSS.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
   assert.match(landscape, /\.session-panel,[\s\S]*?width: 34%/);
   // Nothing is hidden at any desktop size any more: one pop-up has no width to
   // argue over, so it is available at every one of them.
@@ -535,7 +535,7 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // controls became one chip in the settings group.
   assert.match(HTML, /id="sessionToggle"/);
   assert.match(HTML, /id="sessionChip"/);
-  assert.match(CSS, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
+  assert.match(HTML, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
   // The actions group is down to attach alone, and it now leads the settings row
   // rather than holding a line of its own -- so the slice runs from the group to
   // the first control after it.
@@ -555,9 +555,9 @@ test('the composer and the chat bar each carry one control for the surface', () 
   assert.match(HTML, /spends credits/);
   // Off unless the stored value says otherwise: a default that read the other
   // way would spend the allowance before anyone touched anything.
-  assert.match(HTML, /let drawWithPuter = localStorage\.getItem\(IMAGE_PUTER_KEY\) === '1';/);
+  assert.match(APP_JS, /let drawWithPuter = localStorage\.getItem\(IMAGE_PUTER_KEY\) === '1';/);
   assert.match(HTML, /onclick="startImageTurn\(\)"/);
-  const hero = HTML.slice(APP_JS.indexOf('function startImageTurn()'), APP_JS.indexOf('function startPlanTurn()'));
+  const hero = APP_JS.slice(APP_JS.indexOf('function startImageTurn()'), APP_JS.indexOf('function startPlanTurn()'));
   assert.match(hero, /if \(!imageMode\) toggleImageMode\(\);/);
 });
 
@@ -565,17 +565,17 @@ test('every control in the toolbar is built from the same four values', () => {
   // The row used to be 999px pills beside 8px rectangles, 4px padding beside
   // 6px: three apps stitched together. These tokens are now the only thing that
   // decides how a control looks.
-  const root = HTML.slice(HTML.indexOf(':root {'), HTML.indexOf('/* Light theme'));
+  const root = CSS.slice(CSS.indexOf(':root {'), CSS.indexOf('/* Light theme'));
   for (const token of ['--ctl-h', '--ctl-r', '--ctl-bg', '--ctl-bg-hover']) {
     assert.ok(root.includes(token + ':'), 'missing ' + token);
   }
   for (const group of ['\\.effort-chip, \\.mode-chip, \\.session-chip', '\\.composer-attach, \\.composer-send']) {
-    const block = HTML.slice(HTML.indexOf(group.replace(/\\/g, '')), HTML.indexOf('}', HTML.indexOf(group.replace(/\\/g, ''))));
+    const block = CSS.slice(CSS.indexOf(group.replace(/\\/g, '')), CSS.indexOf('}', CSS.indexOf(group.replace(/\\/g, ''))));
     assert.match(block, /border-radius: var\(--ctl-r\)|var\(--ctl-r\)/, group + ' must use the shared radius');
   }
   // No pill shapes left in the composer row, and the attach button is a real
   // control with the same fill as the chips rather than an invisible glyph.
-  const composer = HTML.slice(HTML.indexOf('.composer-attach, .composer-send'), HTML.indexOf('.composer-input {'));
+  const composer = CSS.slice(CSS.indexOf('.composer-attach, .composer-send'), CSS.indexOf('.composer-input {'));
   assert.ok(!/999px/.test(composer), 'the composer controls share one radius now');
   assert.match(composer, /\.composer-attach \{[^}]*background: var\(--ctl-bg\)/);
   assert.match(composer, /\.composer-attach \{[^}]*border-color: var\(--border\)/);
@@ -587,44 +587,44 @@ test('the reasoning summary can be switched off, and the setting reaches old rep
   // The checkbox is in Settings, next to the other behaviour switches.
   assert.match(HTML, /id="reasoningCheck" checked onchange="setReasoningVisible\(this\.checked\)"/);
   // Read at startup, applied at startup, and the control reflects it.
-  assert.match(HTML, /let reasoningVisible = localStorage\.getItem\(REASONING_KEY\) !== '1'/);
-  assert.match(HTML, /document\.getElementById\('reasoningCheck'\)\.checked = reasoningVisible/);
+  assert.match(APP_JS, /let reasoningVisible = localStorage\.getItem\(REASONING_KEY\) !== '1'/);
+  assert.match(APP_JS, /document\.getElementById\('reasoningCheck'\)\.checked = reasoningVisible/);
   // Both renderers consult it, so a reply that arrives while it is off leaves
   // no scratchpad behind...
-  const strip = HTML.slice(APP_JS.indexOf('function setReasoningStrip'), APP_JS.indexOf('function setReasoningContent'));
+  const strip = APP_JS.slice(APP_JS.indexOf('function setReasoningStrip'), APP_JS.indexOf('function setReasoningContent'));
   assert.match(strip, /!text \|\| !reasoningVisible/);
-  const content = HTML.slice(APP_JS.indexOf('function setReasoningContent'), HTML.indexOf('// Puter streams reasoning'));
+  const content = APP_JS.slice(APP_JS.indexOf('function setReasoningContent'), APP_JS.indexOf('// Puter streams reasoning'));
   assert.match(content, /!text \|\| !reasoningVisible/);
   // ...but the text is still recorded, so switching it on shows the reasoning of
   // replies that already happened rather than only the next one.
   assert.match(strip, /if \(text\) el\.dataset\.rawReasoning = text;/);
   assert.match(content, /if \(text\) el\.dataset\.rawReasoning = text;/);
-  const toggle = HTML.slice(APP_JS.indexOf('function setReasoningVisible'), HTML.indexOf('// Ticking a row goes through'));
+  const toggle = APP_JS.slice(APP_JS.indexOf('function setReasoningVisible'), APP_JS.indexOf('// Ticking a row goes through'));
   assert.match(toggle, /querySelectorAll\('\.message\.bot'\)/);
 });
 
 test('the skills panel records what applied, per conversation', () => {
   // Written on the turn, from what actually rode along -- not from what was
   // pinned, which would claim credit for skills the router never used.
-  assert.match(HTML, /logSkillsUsed\(activeConversationId, activeSkills\)/);
-  const log = HTML.slice(APP_JS.indexOf('function logSkillsUsed'), APP_JS.indexOf('function renderSkillRail'));
+  assert.match(APP_JS, /logSkillsUsed\(activeConversationId, activeSkills\)/);
+  const log = APP_JS.slice(APP_JS.indexOf('function logSkillsUsed'), APP_JS.indexOf('function renderSkillRail'));
   assert.match(log, /pinned: !!skill\.pinned/);
   assert.match(log, /turns: prev\.turns \+ 1/);
   // Every path that changes which chat is open redraws it, from one place.
-  assert.match(CSS, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
+  assert.match(APP_JS, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
   // A skill that is no longer installed cannot be pinned, so tapping it drops
   // the row rather than offering something that cannot work.
-  const tap = HTML.slice(APP_JS.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
+  const tap = APP_JS.slice(APP_JS.indexOf('function dropSkillUseRow'), APP_JS.indexOf('// --- Sending a work step'));
   assert.match(tap, /if \(isPinned\) \{ removePinnedSkill\(name\); return; \}/);
   assert.match(tap, /no longer installed/);
   // But an empty catalogue is not a missing skill: a chat that never needed a
   // skill never fetched the library, so the tap has to look before concluding.
   assert.match(tap, /ensureSkillsLoaded\(\)\.then\(\(\) => \{/);
-  assert.match(HTML, /else if \(!skillsCatalog\.length\) \{/);
+  assert.match(APP_JS, /else if \(!skillsCatalog\.length\) \{/);
 });
 
 test('all of the conversation stays inside the one scroll window', () => {
-  const css = HTML.slice(HTML.indexOf('.chat-messages {'), HTML.indexOf('.message {'));
+  const css = CSS.slice(CSS.indexOf('.chat-messages {'), CSS.indexOf('.message {'));
   // One axis scrolling and the other visible computes to auto on both, which let
   // a wide child be scrolled to instead of wrapped -- and because the column is
   // centred, half of that overflow sat at an offset nothing could reach.

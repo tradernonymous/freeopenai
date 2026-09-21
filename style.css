@@ -1206,7 +1206,10 @@
             /* Overrides the page-wide 1ms rule above, which would otherwise turn
                every one of these infinite animations into a strobe. */
             .holo-forge *, .holo-forge *::before, .holo-forge *::after { animation: none !important; }
-            .holo-forge__words i { opacity: 0; }
+            /* Scoped to the overlay: a bare `.holo-forge__words i` ties with an
+               unrelated `i` rule elsewhere and loses on order, which would
+               strobe the words it was meant to still. */
+            .holo-forge .holo-forge__words i { opacity: 0; }
             .holo-forge__words i:first-child { opacity: 1; }
             .holo-forge__grid, .holo-forge__beam { opacity: .3; }
         }
@@ -1865,7 +1868,6 @@
            the transcript is furniture, so it goes. */
         @media print {
             html, body { height: auto; overflow: visible; background: #fff; color: #000; }
-            .history-sidebar, .history-scrim,
             .drawer, .drawer-overlay, .chat-input-area, .status-bar, .chat-bar,
             .message-actions, .code-copy-btn, .modal-overlay, .load-error-banner,
             .empty-state, .typing-indicator { display: none !important; }
@@ -1875,10 +1877,13 @@
             .chat-messages { display: block; height: auto; overflow: visible; padding: 0; }
             .message {
                 max-width: 100%; font-size: 11pt; line-height: 1.5; color: #000;
-                margin: 0 0 14pt; padding: 0; animation: none;
+                margin: 0 0 14pt; padding: 0;
                 /* A reply shouldn't be split across a page break if it fits. */
                 break-inside: avoid;
+                /* Scoped to the transcript: a bare `.message` ties with the
+                   slide-in rule and loses on order, so print would animate. */
             }
+            #chatMessages .message { animation: none; }
             .message.user {
                 background: #f0f0f0; border: 1px solid #ddd; border-radius: 6pt;
                 padding: 8pt 10pt; max-width: 100%;
@@ -1915,8 +1920,8 @@
             /* A phone's bar carries finger-sized controls, so it is taller. */
             :root { --bar-h: 52px; --measure: 100%; }
             /* Full bleed. The desktop inset is a frame around a window; on a
-               phone the window is the screen. */
-            #viewChat { padding: 0; }
+               phone the window is the screen. (Padding is 0 unconditionally
+               now, so no declaration is needed here to keep it that way.) */
             /* The keyboard takes half a landscape phone's height, and the status
                bar is the first thing that can go while it is up. */
             body.keyboard-open .status-bar { display: none; }
@@ -1956,11 +1961,15 @@
                button -- so the guard did nothing there except make the widest
                control in the row a third wider than it needed to be, on every
                phone. Its own dropdown holds a real input, and that still has it. */
-            .composer-input, .effort-select, #providerSelect,
+            .effort-select, #providerSelect,
             .settings-row select, .github-browser-row select, .github-browser-row input,
             #githubFileContent, .model-dropdown-search, .palette input, .mask-prompt {
                 font-size: 16px;
             }
+            /* Scoped so it beats the unconditional 14px below: a bare
+               `.composer-input` ties and loses on order, which brought back
+               the iOS focus zoom this guard exists to prevent. */
+            #viewChat .composer-input { font-size: 16px; }
             /* A phone header can't hold "Effort: extra high" and still leave room
                for the menu button, so the picker shows the level alone.
                Written against .composer-controls because the unconditional rule
@@ -2006,7 +2015,7 @@
             }
             .chat-shell { position: relative; }
             .history-scrim {
-                display: block; position: absolute; inset: 0; z-index: 39;
+                position: absolute; inset: 0; z-index: 39;
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.history-hidden .history-scrim { opacity: 0; pointer-events: none; }
@@ -2014,14 +2023,17 @@
                375px has room for the chat or the panel, never both. Flush and
                square here -- a floating card floating over the whole screen is
                just a screen with a border on it. */
-            .session-panel {
+            /* Scoped to the chat view so these beat the unconditional card
+               layer below: bare class selectors tie with it and lose on order,
+               which put the desktop radius and shadow back on the phone drawer. */
+            #viewChat .session-panel {
                 position: absolute; top: 0; bottom: 0; right: 0; z-index: 40;
                 width: 84%; max-width: 320px; margin: 0;
                 border-radius: 0; border-width: 0 0 0 1px;
                 box-shadow: 0 0 40px rgba(0, 0, 0, .5);
                 transform: translateX(0); transition: transform 180ms ease;
             }
-            .chat-shell.session-hidden .session-panel {
+            #viewChat .chat-shell.session-hidden .session-panel {
                 width: 84%; opacity: 1; transform: translateX(102%);
                 border-left-color: var(--border);
             }
@@ -2030,16 +2042,17 @@
                 background: rgba(0, 0, 0, .5); opacity: 1; transition: opacity 180ms ease;
             }
             .chat-shell.session-hidden .session-scrim { opacity: 0; pointer-events: none; }
-            /* The canvas takes the same flush treatment from the right edge,
-               under the session panel so the two never stack. */
-            .canvas-pane {
+            /* Same scoping as the session panel above: the drawer rules must
+               beat the unconditional card layer, and the hidden rule must
+               beat them back. */
+            #viewChat .canvas-pane {
                 position: absolute; top: 0; bottom: 0; right: 0; z-index: 38;
                 width: 84%; max-width: 320px; margin: 0;
                 border-radius: 0; border-width: 0 0 0 1px;
                 box-shadow: 0 0 40px rgba(0, 0, 0, .5);
                 transform: translateX(0); transition: transform 180ms ease;
             }
-            .chat-shell.canvas-hidden .canvas-pane {
+            #viewChat .chat-shell.canvas-hidden .canvas-pane {
                 width: 84%; opacity: 1; transform: translateX(102%);
                 border-left-color: var(--border);
             }
@@ -2052,8 +2065,11 @@
                stops being hover-only -- there is no hover to reveal it with.
                The reveal itself lives in the (hover: none) block below, since
                that is a pointer question rather than a size one. */
-            .todo-row { padding: 12px 10px; }
-            .todo-check { width: 22px; height: 22px; }
+            /* Scoped to the chat view so finger sizing beats the unconditional
+               sizes below: bare selectors tie with them and lose on order,
+               which shrank phone rows back to desktop size. */
+            #viewChat .todo-row { padding: 12px 10px; }
+            #viewChat .todo-check { width: 22px; height: 22px; }
             /* Touch targets. Both Apple and Google ask for ~44px, and the icon
                buttons here are 24-32px. Growing them for real would push the
                header past 375px, so the hit area is extended with a pseudo
@@ -2072,8 +2088,10 @@
                 top: 50%; left: 50%; transform: translate(-50%, -50%);
                 width: max(100%, 44px); height: max(100%, 44px);
             }
-            /* The row already spans the sidebar, so only its height needs help. */
-            .history-item { padding: 13px 10px; }
+            /* The row already spans the sidebar, so only its height needs help.
+               Scoped to the nav because the unconditional list rule below is
+               more specific and would otherwise keep the desktop padding. */
+            .top-nav .chat-history-list .history-item { padding: 13px 10px; }
             /* Message actions sit close together; spread them so a thumb can
                pick one without hitting its neighbour. */
             .message-actions { gap: 10px; margin-top: 12px; }
@@ -2114,8 +2132,10 @@
             /* 13px is fine with a mouse, but iOS zooms any focused input
                under 16px -- and a zoomed dropdown is a broken dropdown. */
             .model-dropdown-search { font-size: 16px; }
-            /* Phone reading distance wants a touch more size and air. */
-            .message-text { font-size: 15px; line-height: 1.65; }
+            /* Phone reading distance wants a touch more size and air. The
+               line-height matches the unconditional rule below, so only the
+               size is scoped: a tied line-height there would lose on order. */
+            .message-text { font-size: 15px; }
             /* Generated images stay compact in the transcript and open in the
                existing lightbox when tapped. */
             .message-image-wrap, .img-shimmer, .holo-forge { width: min(280px, 100%); }
@@ -2141,7 +2161,18 @@
             #viewChat .chat-bar-title .dot,
             #viewChat .chat-bar-title .brand-name { display: none; }
             .command-state { font-size: 8px; padding-inline: 5px; }
-            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 76px; }
+            /* The provider name truncates the same way the model name does, so
+               it can give up width here; the full list is a tap away either
+               way. 58px is the point the row's content plus the mode chip's
+               44px finger-target overhang fits the 274px a 360px phone gives
+               the strip -- any wider and the target's spill past the row's end
+               reads as a scroll. */
+            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 58px; }
+            /* The mode dot is decoration on top of a label that already says the
+               mode ("Chat"/"Plan"/"Build") and a chip that already recolors for
+               it -- dropping the 6px dot plus its 6px gap buys the model button
+               the width the smoke requires without touching any label. */
+            .mode-chip::before { display: none; }
             .composer-controls .model-trigger #modelLabel { max-width: 68px; }
             /* The mode chip joined the composer row; on a 360px screen its
                desktop padding is what pushes the input too small. */
@@ -2238,6 +2269,27 @@
             .composer-model-controls .model-trigger > svg { flex-shrink: 0; }
         }
 
+        /* A 360px phone gives the settings strip 274px, and the six controls at
+           their tightened sizes want all of it -- exact-fit flex arithmetic then
+           loses a subpixel to rounding and the strip reports a scroll it never
+           shows. One pixel less column gap here buys five back and the row fits
+           with room to spare, which is what keeps the model name shrinking
+           instead of the strip scrolling. */
+        @media (max-width: 380px) {
+            .composer-settings, .composer-controls { column-gap: 2px; }
+            /* Same rounding trap one level down: the model group nests the
+               trigger beside the provider and effort controls with its own 3px
+               gaps, so the row can again total exactly the strip width and a
+               subpixel makes it scroll. 2px here matches the row above. */
+            .composer-model-controls { gap: 2px; }
+            /* The last chip's 44px finger target spills ~5px past the row's end
+               (the target is centred on a 35px chip), and that spill is what the
+               strip reports as a scroll -- the controls themselves fit. Padding
+               is outside the flex content box, so the filler button cannot eat
+               it: the spill lands on padding and the strip genuinely fits. */
+            .composer-settings { padding-right: 6px; }
+        }
+
         /* A 1440px desktop used to be "not wide enough for history + skills +
            chat + todos", so the skills card and its toggle were hidden between
            1101px and 1499px. Floating panels have no width, so that budget is
@@ -2269,7 +2321,9 @@
             :root { --bar-h: 46px; }
             .chat-input-area { padding: 6px 10px 6px; }
             .chat-messages { padding: 12px; gap: 16px; }
-            .composer { padding: 6px; border-radius: 18px; }
+            /* Scoped so the landscape radius beats the unconditional one
+               below: a bare `.composer` ties with it and loses on order. */
+            #viewChat .composer { padding: 6px; border-radius: 18px; }
             .composer-model-controls { gap: 2px; }
             .composer-controls .model-trigger #modelLabel { max-width: 92px; }
             .composer-model-controls .effort-select, .composer-model-controls #providerSelect { max-width: 118px; }
@@ -2457,8 +2511,12 @@ button, a, .icon-btn, .model-trigger, .effort-select, .drawer-nav-btn {
 /* === PHASE 2: MODERNIZED CHAT, PLAN, BUILD MODES === */
 
 /* Modern Chat Interface */
+/* Instant, not smooth: the transcript controller sets scrollTop and reads the
+ * result back in the same tick (pin, follow, jump-to-newest), and smooth
+ * turns every one of those into an animation the math never catches -- the
+ * jump pill landed 2000px short with the frame still gliding. */
 .chat-messages {
-    scroll-behavior: smooth;
+    scroll-behavior: auto;
 }
 .message {
     animation: messageSlideIn 300ms cubic-bezier(.16, 1, .3, 1);
@@ -2874,8 +2932,10 @@ html * {
 
 /* === NAV CLEANUP: Minimalistic Layout === */
 
-/* Hide old chat bar - completely removed from view */
-.chat-bar { display: none !important; }
+/* The chat bar stays visible: it carries the only live command state pill and
+ * the header controls (session, refresh, appearance), which the browser smoke
+ * requires on screen at every size. Hiding it orphaned updateCommandState()
+ * and left the appearance toggle unreachable, so the bar is not "old". */
 
 /* Hide old history sidebar - replaced by hover dropdown */
 .history-sidebar { display: none !important; }

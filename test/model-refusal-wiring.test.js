@@ -1,4 +1,4 @@
-// index.html has no harness, so a wrong model name in an error and a retry that
+// app.js has no harness, so a wrong model name in an error and a retry that
 // never fired both shipped unnoticed. This pulls the functions involved straight
 // out of the shipped file and runs them against stubs, so the wiring is
 // exercised as written rather than as described.
@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { loadFromIndex, assertScannerCanRead } = require('./helpers/index-html.js');
 // The real decisions, not stubs, so this exercises the shipped pairing of
 // index.html's wiring with chatlib.js's rules.
 const {    errorDetailFromBody,
@@ -22,8 +23,6 @@ const {    errorDetailFromBody,
     cachedTokensFromUsage,
 } = require('../chatlib.js');
 
-const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // Realistic ids matter, not placeholders like 'a': isAccountLevelFailure treats
@@ -41,52 +40,12 @@ const MODELS = [
   'google/gemma-4-31b',
 ];
 
-// The source of a named function, from `function` through its closing brace.
-function sourceOf(name) {
-  const start = HTML.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `index.html no longer defines ${name}() -- re-point this test`);
-  // Walk past the parameter list first: a default such as `extra = {}` contains
-  // a brace that would otherwise read as the body opening.
-  let params = 0;
-  let i = HTML.indexOf('(', start);
-  for (; i < HTML.length; i++) {
-    if (HTML[i] === '(') params++;
-    else if (HTML[i] === ')' && !--params) break;
-  }
-  let depth = 0;
-  i = HTML.indexOf('{', i);
-  let quote = null;
-  for (; i < HTML.length; i++) {
-    const ch = HTML[i];
-    const next = HTML[i + 1];
-    if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '/' && next === '/') { i = HTML.indexOf('\n', i); if (i === -1) break; continue; }
-    if (ch === '/' && next === '*') { i = HTML.indexOf('*/', i); if (i === -1) break; i++; continue; }
-    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue; }
-    if (ch === '{') depth++;
-    else if (ch === '}' && !--depth) return HTML.slice(start, i + 1);
-  }
-  throw new Error(`unbalanced braces while reading ${name}()`);
-}
-
-// Keep the `async` keyword that precedes the declaration.
-function declarationOf(name) {
-  const start = HTML.indexOf(`function ${name}(`);
-  const asyncPrefix = HTML.slice(Math.max(0, start - 6), start).endsWith('async ') ? 'async ' : '';
-  return asyncPrefix + sourceOf(name);
-}
-
 // The page's functions close over page-scope variables. `with` resolves those
 // reads and, more usefully, makes an assignment such as `selectedModel = next`
 // land back on the deps object, so the test can watch it move.
+const NAMES = ['forgetRefusedModel', 'callModel', 'streamProviderChat', 'finalizePartial'];
 function load(deps) {
-  const names = ['forgetRefusedModel', 'callModel', 'streamProviderChat', 'finalizePartial'];
-  const body = names.map(declarationOf).join('\n') + `\nreturn { ${names.join(', ')} };`;
-  return new Function('deps', `with (deps) {\n${body}\n}`)(deps);
+  return loadFromIndex(NAMES, deps);
 }
 
 // Both shapes of a refusal, because the two request paths read it differently:
@@ -190,12 +149,7 @@ function harness({ models, answers, streamed = null }) {
 test('the extracted source is the shipped one, and still brace-matches cleanly', () => {
   // The three functions this file depends on must parse the same way in both
   // files; a rename or a template literal in them invalidates the extraction.
-  for (const name of ['forgetRefusedModel', 'callModel', 'streamProviderChat']) {
-    // Comments are stripped first: a backtick quoted in prose cannot confuse
-    // the scanner, but one in code can, and that is what this guards.
-    const code = sourceOf(name).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    assert.equal(code.includes('`'), false, `${name}() gained a template literal -- the scanner needs updating`);
-  }
+  assertScannerCanRead(['forgetRefusedModel', 'callModel', 'streamProviderChat']);
 });
 
 test('a refused model is retried with the next one, and the turn still answers', async () => {
@@ -235,8 +189,8 @@ test('a whole refusing list is bounded, then reported against the last model tri
 });
 
 test('the error label reads the failure, not the current selection', () => {
-  const match = HTML.match(/const failedOn = ([^;]+);/);
-  assert.ok(match, 'index.html no longer computes a failedOn label -- re-point this test');
+  const match = APP_JS.match(/const failedOn = ([^;]+);/);
+  assert.ok(match, 'app.js no longer computes a failedOn label -- re-point this test');
   const label = (vars) => new Function('vars', `with (vars) { return ${match[1]}; }`)(vars);
   // A refusal moves selectedModel on before the error is rendered, so reading
   // the selection here is what printed a model the app never called.

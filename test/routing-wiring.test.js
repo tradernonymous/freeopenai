@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers, HTML } = require('./helpers/index-html.js');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const { refusedModelIds } = require('../chatlib.js');
 
 const NAMES = ['forgetRoutedModel'];
@@ -85,11 +85,11 @@ test('the page wires the switch, the selector and the note together', () => {
   // A setting that nothing reads, or a selector nothing calls, is a feature that
   // looks finished in a diff and does nothing at runtime.
   assert.match(HTML, /id="routingCheck" checked onchange="setRoutingEnabled\(this\.checked\)"/);
-  assert.match(HTML, /let routingMode = localStorage\.getItem\(ROUTING_KEY\)/);
-  assert.match(HTML, /routeForStep\(stage, tools\.length > 0, needsVision\)/);
-  assert.match(HTML, /const askModel = route \? route\.model : null;/);
-  assert.match(HTML, /noteRouteOnce\(route\);/);
-  assert.match(CSS, /callModel\(convo, \{ tools \}, signal, askModel\)/);
+  assert.match(APP_JS, /let routingMode = localStorage\.getItem\(ROUTING_KEY\) === '1' \? 'off' : 'auto';/);
+  assert.match(APP_JS, /routeForStep\(stage, tools\.length > 0, needsVision\)/);
+  assert.match(APP_JS, /const askModel = route \? route\.model : null;/);
+  assert.match(APP_JS, /noteRouteOnce\(route\);/);
+  assert.match(APP_JS, /callModel\(convo, \{ tools \}, signal, askModel\)/);
   // The status bar credits the model that answered, not the one that was picked.
-  assert.match(HTML, /lastReplyModel \|\| selectedModel/);
+  assert.match(APP_JS, /lastReplyModel \|\| selectedModel/);
 });

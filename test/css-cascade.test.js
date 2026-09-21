@@ -20,14 +20,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
-const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const PSEUDO_ELEMENT = '\u0001';
-
-function styleBlocks(html) {
-  return [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
-}
 
 // a = ids, b = classes/attributes/pseudo-classes, c = elements/pseudo-elements.
 function specificity(selector) {
@@ -146,8 +140,10 @@ test('a rule that needs a state is not treated as beating a media rule', () => {
 });
 
 test('no rule inside a @media is overruled by one outside it', () => {
-  const blocks = styleBlocks(HTML);
-  assert.ok(blocks.length >= 1, 'expected an inline stylesheet');
+  // The page carries no inline stylesheet (styles were extracted to style.css),
+  // so the shipped sheet is what gets checked.
+  const blocks = [CSS];
+  assert.ok(blocks.length >= 1, 'expected a stylesheet to check');
   const rows = blocks.flatMap((css) => declarations(css));
   assert.ok(rows.length > 500, `only parsed ${rows.length} declarations -- the parser has drifted`);
 

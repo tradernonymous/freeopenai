@@ -228,9 +228,9 @@ test('the canvas picker and frame are wired into the page', () => {
   const frameTag = HTML.slice(Math.max(0, at - 200), at + 300);
   assert.match(frameTag, /<iframe[\s\S]*?sandbox="allow-scripts"/);
   assert.ok(!/allow-same-origin/.test(frameTag), 'the canvas iframe must never rejoin this origin');
-  assert.ok(HTML.includes("classList.contains('canvas-hidden')"), 'the toggle keyed on the shell is how open/closed is tracked');
-  assert.ok(HTML.includes('function restoreCanvas'), 'restoreCanvas must exist to reopen a persisted state');
-  assert.ok(HTML.indexOf('restoreSessionPanel();') < HTML.indexOf('restoreCanvas();'), 'the boot must restore the session panel before the canvas');
+  assert.ok(APP_JS.includes("classList.contains('canvas-hidden')"), 'the toggle keyed on the shell is how open/closed is tracked');
+  assert.ok(APP_JS.includes('function restoreCanvas'), 'restoreCanvas must exist to reopen a persisted state');
+  assert.ok(APP_JS.indexOf('restoreSessionPanel();') < APP_JS.indexOf('restoreCanvas();'), 'the boot must restore the session panel before the canvas');
   assert.ok(HTML.includes('canvas-artifacts.js'), 'the page loads the module');
-  assert.ok(HTML.includes('CanvasArtifacts.create('), 'and builds its instance');
+  assert.ok(APP_JS.includes('CanvasArtifacts.create('), 'and builds its instance');
 });

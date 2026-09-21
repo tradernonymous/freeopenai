@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { HTML, sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the three icon buttons are one rule, and it uses the control radius', () => {
   // .icon-btn, .menu-trigger-btn and .modal-close were three copies of the same
@@ -47,7 +48,7 @@ test('the reasoning is legible, and its summary is a real control', () => {
 test('a user bubble is themed, not hard-coded white', () => {
   // The bubble is a tint over whatever surface is behind it. Hard-coded white
   // over the light theme's near-white surface left no bubble at all.
-  const light = HTML.slice(HTML.indexOf('html[data-theme="light"] {'), HTML.indexOf('html[data-theme="light"] .message-text'));
+  const light = CSS.slice(CSS.indexOf('html[data-theme="light"] {'), CSS.indexOf('html[data-theme="light"] .message-text'));
   assert.match(light, /--bubble-user:/, 'the light theme must say what a bubble is');
   assert.match(light, /--bubble-edge:/);
 
@@ -113,19 +114,31 @@ test('the rail scrolls to the named heading', () => {
 });
 
 test('the transcript is a window inside the app frame, and a phone gets the screen', () => {
-  // Edge to edge it read as "the page" rather than as a conversation with a size.
-  assert.match(CSS, /#viewChat \{ padding: 10px; \}/, 'the chat view lost its inset');
-  assert.match(CSS, /#viewChat \.chat-card \{ border-radius: var\(--r-lg\); box-shadow: var\(--lift\); \}/);
+  // Full bleed at every size: the chat view carries no inset, which is what
+  // the browser smoke asserts per viewport. An inset here used to read as "the
+  // page" rather than a conversation with a size; the window-inside-a-frame
+  // claim now lives in the card's own bounds, not the view's padding.
+  assert.match(CSS, /#viewChat \{ padding: 0; \}/, 'the chat view lost its full bleed');
+  // Full bleed means a flush card too: no radius, no border, no shadow. The
+  // rounded floating card this used to pin belonged to the inset layout.
+  assert.match(CSS, /#viewChat \.chat-card \{ border-radius: 0; border: none; box-shadow: none; \}/);
 
-  // The small-screen layer drops it again: a phone's transcript wants every pixel.
-  const small = HTML.slice(HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {'));
+  // The small-screen layer keeps it there: a phone's transcript wants every pixel.
+  const small = CSS.slice(CSS.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {'));
   assert.match(small, /#viewChat \{ padding: 0; \}/);
 
-  // And the card must never clip: the model picker and the attach menu hang
-  // below the composer, and a rounded overflow:hidden card would cut them off.
+  // And the card must never clip its popups: the model picker and the attach
+  // menu hang below the composer, so both are position: fixed -- viewport
+  // relative, which is what frees the card to keep overflow: hidden for its
+  // own rounded corners. An absolute popup inside this card would be cut off.
   const card = CSS.match(/\.chat-card \{[^}]*\}/);
   assert.ok(card, '.chat-card is gone -- re-point this test');
-  assert.match(card[0], /overflow: visible/);
+  assert.match(card[0], /overflow: hidden/);
+  for (const rule of [/\.model-dropdown \{[^}]*\}/, /\.attach-menu \{[^}]*\}/]) {
+    const popup = CSS.match(rule);
+    assert.ok(popup, rule + ' is gone -- re-point this test');
+    assert.match(popup[0], /position: fixed/, 'the popup must escape the card');
+  }
 });
 
 test('the way back to the newest output tracks the reading column', () => {
@@ -153,8 +166,9 @@ test('restoring a saved chat does not animate every bubble in', () => {
 
 test('the busy row names the step instead of three dots and silence', () => {
   // The dots say "busy", which is the same for a two-second lookup and a stuck
-  // provider; the label says what is happening.
-  assert.match(HTML, /class="typing-label" id="typingLabel"/);
+  // provider; the label says what is happening. It is built by the typing
+  // indicator at runtime, so the assertion reads the builder, not static HTML.
+  assert.match(APP_JS, /<div class="typing-label" id="typingLabel">/);
   assert.match(CSS, /\.typing-label \{[^}]*\}/, 'the label has no rule, so it cannot truncate on a phone');
   assert.match(sourceOf('setActivity'), /getElementById\('typingLabel'\)/);
   // The tool loop names the step it is running...

@@ -536,16 +536,14 @@ test('a turn that wrote to the list and closed everything is not nagged', async 
 });
 
 test('the shipped call site hands the loop a memory to remember reads in', () => {
-  const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
   const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.match(HTML, /readMemoryFor\(activeConversationId\)/, 'the page keeps a per-conversation read memory');
+  assert.match(APP_JS, /readMemoryFor\(activeConversationId\)/, 'the page keeps a per-conversation read memory');
   // The last argument is whether this turn carries an image, which routing reads
   // to keep an image turn on a model that can see it. Pinned here because
   // dropping it would silently let a routed step be handed a picture it cannot
   // read -- and nothing else in the suite would notice.
   assert.match(
-    HTML,
+    APP_JS,
     /runChatWithTools\(turnConvo, selectedModel, tools, controller\.signal, memo, remembered, !!attachedImageFile\)/,
     'and passes it in, or the memory is written and never read'
   );

@@ -30,11 +30,9 @@ test('anything else is not an app link', () => {
 });
 
 test('the page reads the link on load and on hashchange, as a value only', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-  const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
   const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.match(html, /applyAppLink\(\);\s*window\.addEventListener\('hashchange', applyAppLink\);/);
-  const body = html.slice(appJs.indexOf('function applyAppLink()'), appJs.indexOf('function initializeApp()'));
+  assert.match(appJs, /applyAppLink\(\);\s*window\.addEventListener\('hashchange', applyAppLink\);/);
+  const body = appJs.slice(appJs.indexOf('function applyAppLink()'), appJs.indexOf('function initializeApp()'));
   assert.match(body, /history\.replaceState/);
   assert.match(body, /chatInput\.value =/);
   assert.doesNotMatch(body, /innerHTML|insertAdjacentHTML|eval\(/);

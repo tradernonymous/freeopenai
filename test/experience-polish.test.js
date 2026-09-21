@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { HTML, sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 function makeClassList() {
   const set = new Set();
@@ -191,12 +192,12 @@ test('every control shares one focus ring and one press', () => {
 
 test('the closed session panel is hidden from keyboard and assistive technology', () => {
   assert.match(HTML, /id="sessionPanel"[^>]*aria-hidden="true"[^>]*inert/);
-  assert.match(HTML, /panel\.setAttribute\('aria-hidden', String\(hidden\)\)/);
-  assert.match(HTML, /panel\.toggleAttribute\('inert', hidden\)/);
+  assert.match(APP_JS, /panel\.setAttribute\('aria-hidden', String\(hidden\)\)/);
+  assert.match(APP_JS, /panel\.toggleAttribute\('inert', hidden\)/);
 });
 
 test('an empty sidebar says what will fill it', () => {
-  assert.ok(HTML.includes('No chats yet. Describe anything in the composer and it is saved here'), 'the empty sidebar copy is back to answering a question nobody asked');
+  assert.ok(APP_JS.includes('No chats yet. Describe anything in the composer and it is saved here'), 'the empty sidebar copy is back to answering a question nobody asked');
   assert.doesNotMatch(HTML, /'No chats yet\.'/, 'the one-line empty state is back');
 });
 

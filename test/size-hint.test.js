@@ -23,7 +23,6 @@ const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
-const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 const NAMES = ['imageAttachmentIsPending', 'imageSizeIsConditional', 'storedImageUrl', 'imageWorkIsPossible', 'updateImageSizeHint'];
 
@@ -175,7 +174,7 @@ test('the hint lives in the row that already exists, and is styled as a hint', (
   const hint = HTML.indexOf('id="sizeHint"');
   const send = HTML.indexOf('id="sendButton"');
   assert.ok(row !== -1 && input > row && hint > input && send > hint, 'the hint belongs between the input and Send');
-  assert.match(CSS, /id="chatInput"[^>]*oninput="[^"]*updateImageSizeHint\(\)/, 'typing has to update it');
+  assert.match(HTML, /id="chatInput"[^>]*oninput="[^"]*updateImageSizeHint\(\)/, 'typing has to update it');
   const css = CSS.match(/\.size-hint \{[\s\S]*?\n        \}/);
   assert.ok(css, '.size-hint is gone -- re-point this test');
   assert.match(css[0], /font-size: 11px/, 'a hint is not a headline');

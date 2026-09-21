@@ -21,9 +21,9 @@ pre[data-loading="true"]::after {
     font-size: 12px;
 }
 
-/* Smooth scroll behavior */
+/* Instant scroll (see style.css): smooth turns the transcript controller's
+ * same-tick pin/follow/jump math into an animation it never catches. */
 .chat-messages {
-    scroll-behavior: smooth;
     will-change: scroll-position;
 }
 

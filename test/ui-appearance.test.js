@@ -15,14 +15,14 @@ const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the palette is the neutral ladder, not white on black', () => {
-  const root = HTML.slice(HTML.indexOf(':root {'), HTML.indexOf('html[data-theme="light"] {'));
+  const root = CSS.slice(CSS.indexOf(':root {'), CSS.indexOf('html[data-theme="light"] {'));
   // Chrome one step below the conversation, raised surfaces one step above it.
   assert.match(root, /--bg: #212121;/, 'the conversation surface moved off the ChatGPT grey');
   assert.match(root, /--bg-elevated: #171717;/, 'the rail and bar must sit darker than the conversation');
   assert.match(root, /--surface-2: #303030;/, 'the raised step is gone');
   assert.doesNotMatch(root, /--bg: #000000;/, 'pure black is back, which reads as a headlamp on a long transcript');
 
-  const light = HTML.slice(HTML.indexOf('html[data-theme="light"] {'), HTML.indexOf('html[data-theme="light"] .message-text'));
+  const light = CSS.slice(CSS.indexOf('html[data-theme="light"] {'), CSS.indexOf('html[data-theme="light"] .message-text'));
   assert.match(light, /--bg: #ffffff;/);
   assert.match(light, /--bg-elevated: #f9f9f9;/);
   assert.match(light, /--surface-2: #f4f4f4;/);
@@ -50,7 +50,7 @@ test('the appearance toggle is reachable at every size, including the smallest p
   assert.match(drawer, /Appearance/, 'the drawer row has to say what it is');
   assert.match(HTML, /class="theme-menu" id="themeMenu"/, 'the picker is missing from the page');
   // A phone gets it as a sheet at the bottom, where a thumb already is.
-  assert.match(HTML, /\.theme-menu \{ left: 12px; right: 12px; bottom: /, 'the picker has no small-screen placement');
+  assert.match(CSS, /\.theme-menu \{ left: 12px; right: 12px; bottom: /, 'the picker has no small-screen placement');
 });
 
 test('the picker names the three choices rather than cycling through five', () => {
@@ -58,7 +58,7 @@ test('the picker names the three choices rather than cycling through five', () =
   // through sourceOf's function lookup.
   const at = APP_JS.indexOf('const THEME_OPTIONS = [');
   assert.ok(at > 0, 'THEME_OPTIONS is gone -- re-point this test');
-  const options = HTML.slice(at, HTML.indexOf('];', at));
+  const options = APP_JS.slice(at, APP_JS.indexOf('];', at));
   assert.match(options, /id: 'auto', label: 'System'/);
   assert.match(options, /id: 'light', label: 'Light'/);
   assert.match(options, /id: 'dark', label: 'Dark'/);
@@ -86,7 +86,7 @@ test('the generation overlay counts nothing', () => {
   for (const layer of ['holo-forge__grid', 'holo-forge__rings', 'holo-forge__beam', 'holo-forge__motes', 'holo-forge__core']) {
     // Some of these are grouped selectors (`.holo-forge__motes, ...::after`),
     // so the rule is matched by the class, not by the exact line.
-    assert.ok(HTML.includes('.' + layer), layer + ' has no rule');
+    assert.ok(CSS.includes('.' + layer), layer + ' has no rule');
     assert.ok(forge.includes(layer), layer + ' is never built');
   }
   assert.match(forge, /holo-forge__words/);
@@ -96,9 +96,9 @@ test('the generation overlay counts nothing', () => {
 test('the overlay stills itself for reduced motion instead of strobing', () => {
   // The page-wide rule sets every animation to 1ms, which turns an infinite
   // animation into a strobe -- the opposite of what the setting asks for.
-  const at = HTML.indexOf('/* Overrides the page-wide 1ms rule');
+  const at = CSS.indexOf('/* Overrides the page-wide 1ms rule');
   assert.ok(at > 0, 'the reduced-motion override for the overlay is gone');
-  const block = HTML.slice(at, at + 600);
+  const block = CSS.slice(at, at + 600);
   assert.match(block, /\.holo-forge \*, \.holo-forge \*::before, \.holo-forge \*::after \{ animation: none !important; \}/);
   assert.match(block, /\.holo-forge__words i:first-child \{ opacity: 1; \}/);
 });

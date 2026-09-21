@@ -71,13 +71,13 @@ test('CSS and JS name the same small screen, and the JS adds nothing of its own'
 });
 
 test('a landscape phone gets the off-canvas drawers, not a third of the screen', () => {
-  // The off-canvas shape is shared by both small screens, so it lives in the
-  // shared block; the landscape block only narrows the share of the width.
-  assert.match(SMALL, /\.history-sidebar\s*\{[^}]*position:\s*absolute; top: 0; bottom: 0; left: 0/);
-  assert.match(SMALL, /\.chat-shell\.history-hidden \.history-sidebar\s*\{[^}]*translateX\(-102%\)/);
+  // The history sidebar rules are gone on purpose: the nav cleanup replaced
+  // the sidebar with the hover dropdown in the top nav, and always-hiding it
+  // would make any phone-drawer rule for it dead. The dropdown is the single
+  // history surface at every size, so that is what is pinned here.
+  assert.match(HTML, /id="chatHistoryDropdown"/, 'the history dropdown is the phone surface now');
   assert.match(SMALL, /\.session-panel\s*\{[^}]*position:\s*absolute; top: 0; bottom: 0; right: 0/);
   assert.match(SMALL, /\.chat-shell\.session-hidden \.session-panel\s*\{[^}]*translateX\(102%\)/);
-  assert.match(SMALL, /\.history-scrim\s*\{[^}]*display:\s*block/);
   assert.match(SMALL, /\.session-scrim\s*\{[^}]*display:\s*block/);
   assert.match(SMALL, /\.chat-shell\.history-hidden \.history-scrim\s*\{[^}]*pointer-events:\s*none/);
   assert.match(SMALL, /\.chat-shell\.session-hidden \.session-scrim\s*\{[^}]*pointer-events:\s*none/);
@@ -95,7 +95,9 @@ test('every field resists the iOS focus zoom, in both orientations', () => {
     .filter((r) => /font-size:\s*16px/.test(r.body))
     .flatMap((r) => r.selectors);
   for (const field of [
-    '.composer-input',
+    // Scoped, so it beats the unconditional 14px below: the bare selector
+    // tied with it and lost on order, which brought the iOS zoom back.
+    '#viewChat .composer-input',
     '.effort-select',
     '#providerSelect',
     '.settings-row select',
