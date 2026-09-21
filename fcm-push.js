@@ -97,7 +97,13 @@ async function sendPush(account, deviceToken, payload, fetchImpl = fetch, now = 
   for (const [key, value] of Object.entries(payload || {})) {
     if (value != null) data[key] = String(value);
   }
-  const message = { token: deviceToken, data };
+  // A data-only message defaults to NORMAL delivery priority. On Android 12+
+  // the OS then defers delivery -- and with it the "a build is waiting for
+  // your approval" tap -- until the app is next used or enters a doze window,
+  // which is exactly the backgrounded state this notification exists for.
+  // HIGH cuts through: FCM keeps delivering it promptly even when the app is
+  // idle in the background and the phone is dozing.
+  const message = { token: deviceToken, data, android: { priority: 'HIGH' } };
   const res = await fetchImpl(
     'https://fcm.googleapis.com/v1/projects/' + account.projectId + '/messages:send',
     {

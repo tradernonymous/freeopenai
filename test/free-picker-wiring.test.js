@@ -14,6 +14,8 @@ const { describeProviderModel, freeRowsOnly } = require('../chatlib.js');
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 const NAMES = ['activeModels', 'hiddenModelRowsNote', 'providerHealthMap'];
 
@@ -76,7 +78,7 @@ test('health is handed to the failover order, and only for providers that have i
 });
 
 test('the free-only switch is in Settings, wired to the setter and restored on load', () => {
-  assert.match(HTML, /id="freeOnlyCheck"[^>]*onchange="setFreeModelsOnly\(this\.checked\)"/,
+  assert.match(CSS, /id="freeOnlyCheck"[^>]*onchange="setFreeModelsOnly\(this\.checked\)"/,
     'the checkbox is wired to the setter');
   assert.match(HTML, /function setFreeModelsOnly\(on\) \{/, 'and the setter exists');
   assert.match(HTML, /localStorage\.getItem\('freeai4uFreeModelsOnly'\)/, 'the choice survives a reload');

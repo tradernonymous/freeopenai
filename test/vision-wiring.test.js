@@ -28,12 +28,14 @@ const {
 } = require('../attachment-helpers.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 
 // The source of a named function, from `function` through its closing brace.
 function sourceOf(name) {
   const start = HTML.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `index.html no longer defines ${name}() -- re-point this test`);
+  assert.notEqual(start, -1, `app.js no longer defines ${name}() -- re-point this test`);
   // Walk past the parameter list first: a default such as `extra = {}` contains
   // a brace that would otherwise read as the body opening.
   let params = 0;

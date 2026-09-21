@@ -2,10 +2,14 @@ name: Android
 
 # The APK builds here because no developer machine in this project carries
 # the Android SDK: the runner installs the toolchain, runs the JVM unit
-# tests, builds the signed release APK and publishes it to the rolling
-# `apk-latest` GitHub release, where a phone can download it straight from
-# the browser. Without a signing key in the repository's secrets it falls
-# back to the debug variant as an artifact, so a fork still builds.
+# tests, lints, builds the signed release APK, boots it in an emulator to
+# prove it launches, and only THEN publishes it to the rolling `apk-latest`
+# GitHub release, where a phone can download it straight from the browser.
+# Delivery is three jobs so a build that crashes at launch (or fails lint,
+# or fails its tests) is never published: build -> smoke (BLOCKING) -> publish.
+# Without a signing key in the repository's secrets it falls back to the
+# debug variant as an artifact, so a fork still builds (and nothing is
+# published).
 on:
   push:
     branches: [main]
@@ -70,6 +74,9 @@ jobs:
       # Every build's versionCode goes up, so each installs over the last.
       - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - run: gradle :app:testDebugUnitTest
+      # Lint is a hard gate again (abortOnError=true in build.gradle.kts):
+      # "mandatory" checks only mean something when they can actually fail.
+      - run: gradle :app:lintRelease
       - name: Restore the signing key
         if: env.HAS_KEYSTORE == 'true'
         run: |
@@ -90,21 +97,93 @@ jobs:
           name: neuraos-apk
           path: ${{ runner.temp }}/neuraos.apk
           retention-days: 30
+
+  # Boots the exact APK built above in a headless emulator and launches it --
+  # the check that caught the black-screen launch: a manifest whose components
+  # resolve to classes that do not exist builds green and passes unit tests,
+  # then dies the moment the OS starts it. BLOCKING on purpose: a red smoke
+  # aborts the workflow and nothing is published. (Re-run the job if the
+  # emulator flakes; shipping a crash is worse than a rare manual re-run.)
+  # Note: GitHub-hosted Linux runners have NO KVM, so the emulator boots in
+  # software mode -- the AOSP API-29 image instead of API-34 google_apis for
+  # that reason (both cover the minSdk; the lighter image actually finishes
+  # booting here).
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806
+        with:
+          name: neuraos-apk
+          path: ${{ runner.temp }}
+      - run: test -s "$RUNNER_TEMP/neuraos.apk"
+      # GitHub-hosted runners pre-set ANDROID_AVD_HOME to a nonstandard path,
+      # but this pinned emulator-runner insists the AVD lives at
+      # ~/.android/avd (it appends hw config there). Align the env so
+      # avdmanager, the action, and the emulator all agree on one AVD home;
+      # otherwise the boot dies with "Directory nonexistent".
+      - name: Align the AVD home for the emulator action
+        run: |
+          mkdir -p "$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+      - name: Boot the emulator and launch the app
+        id: smoke
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@1b48cf25bcdcd1c835908e340039354ff983978a
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
+          # Single flat command let: the action executes the script: block by
+          # splicing it into its own shell, and embedded control flow
+          # (`if`/`fi`, `$(...)`) gets mangled on this runner. The real logic
+          # lives in a checked-in file so newlines and quoting survive.
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh" "$RUNNER_TEMP/neuraos.apk"
+
+  # Only runs once the APK is built AND the smoke check passed. Recomputes the
+  # manifest (sha256 + size) from the artifact it actually downloaded, so the
+  # phone can reject a truncated download instead of failing at install time
+  # with a parse error.
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_KEYSTORE: ${{ secrets.APK_KEYSTORE_BASE64 != '' }}
+    steps:
+      - name: Note the unsigned fork build
+        if: env.HAS_KEYSTORE != 'true'
+        run: echo "No signing key configured; the apk-latest release is skipped for this build."
+      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806
+        with:
+          name: neuraos-apk
+          path: ${{ runner.temp }}
       - name: Publish to the rolling apk-latest release
         if: env.HAS_KEYSTORE == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          APK_VERSION_CODE: ${{ github.run_number }}
         run: |
-          NOTES="NeuraOS Android app, build $APK_VERSION_CODE (from $GITHUB_SHA). Every push to main that touches android/ replaces neuraos.apk here; install it over the previous build, it keeps its data."
+          VCODE=$((100 + APK_VERSION_CODE))
+          NOTES="NeuraOS Android app, build $VCODE (from $GITHUB_SHA). Every push to main that touches android/ replaces neuraos.apk here; install it over the previous build, it keeps its data."
           if gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit apk-latest --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+            gh release edit apk-latest --repo "$GITHUB_REPOSITORY" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
           else
             gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
           fi
           # What the installed app reads to offer the next build (see
-          # MainActivity.checkForUpdate). The link is the stable asset URL.
-          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/neuraos.apk","notes":"Build %s from %s"}\n' \
-            "$APK_VERSION_CODE" "$APK_VERSION_CODE" "$GITHUB_REPOSITORY" "$APK_VERSION_CODE" "${GITHUB_SHA:0:7}" > "$RUNNER_TEMP/version.json"
+          # NativeActivity.checkForUpdate). The link is the stable asset URL.
+          # sha256 + size let the phone reject a truncated download instead
+          # of failing at install time with a parse error.
+          APK_SHA256="$(sha256sum "$RUNNER_TEMP/neuraos.apk" | cut -d' ' -f1)"
+          APK_SIZE="$(stat -c%s "$RUNNER_TEMP/neuraos.apk")"
+          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/neuraos.apk","notes":"Build %s from %s","sha256":"%s","size":%s}\n' \
+            "$VCODE" "$VCODE" "$GITHUB_REPOSITORY" "$VCODE" "${GITHUB_SHA:0:7}" "$APK_SHA256" "$APK_SIZE" > "$RUNNER_TEMP/version.json"
           # APK first, manifest second: a phone never sees a version that is
           # not downloadable yet.
           gh release upload apk-latest "$RUNNER_TEMP/neuraos.apk" --repo "$GITHUB_REPOSITORY" --clobber

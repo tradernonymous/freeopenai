@@ -426,6 +426,12 @@ test('the provider report says what is ready, with which model, and what is miss
     assert.equal(openrouter.ready, true);
     assert.equal(openrouter.model, 'google/gemini-2.5-flash-image');
     assert.equal(openrouter.edits, 'reference');
+    // The row carries the models this service can actually be asked for, so a
+    // picker can offer a real choice instead of the one the server had already
+    // picked. The current model leads the list.
+    assert.ok(Array.isArray(openrouter.models), 'the report lists the service\'s models');
+    assert.equal(openrouter.models[0], 'google/gemini-2.5-flash-image');
+    for (const model of openrouter.models) assert.equal(typeof model, 'string');
     // Nara is configured but has no alias, so it is listed as not ready with the
     // reason -- which is the whole point of reporting it.
     const nara = body.providers.find((p) => p.id === 'nara');

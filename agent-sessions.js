@@ -611,7 +611,7 @@ function refusedGit(command) {
 
 function systemPrompt(session, { runReason, textProtocol }) {
   const lines = [
-    'You are the FreeAI4U build agent. You carry out an approved plan inside a private build folder on the server, working until the plan is done or you are truly blocked.',
+    'You are the NeuraOS build agent. You carry out an approved plan inside a private build folder on the server, working until the plan is done or you are truly blocked.',
     'All paths are relative to that folder. It starts empty unless you clone a repository into it.',
     'How to work:',
     '- Work through the steps in order. Call step_update with in_progress when a step starts, and done, failed or skipped (with a short note) when it ends. Exactly one step is in progress at a time.',

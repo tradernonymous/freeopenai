@@ -5,17 +5,19 @@ const path = require('node:path');
 const { COMMAND_STATES, commandStateOf, commandStateLabel } = require('../command-state.js');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the chat has a restrained futuristic ambient layer', () => {
-  assert.match(html, /body::before[\s\S]*?ambient-grid/);
-  assert.match(html, /\.chat-card::before[\s\S]*?edge-scan/);
-  assert.match(html, /\.composer:focus-within[\s\S]*?composer-flow/);
-  assert.match(html, /id="commandState"[^>]*aria-live="polite"/);
+  assert.match(css, /body::before[\s\S]*?ambient-grid/);
+  assert.match(css, /\.chat-card::before[\s\S]*?edge-scan/);
+  assert.match(css, /\.composer:focus-within[\s\S]*?composer-flow/);
+  assert.match(css, /id="commandState"[^>]*aria-live="polite"/);
   assert.match(html, /class="brand-name">NeuraOS<\/span>/);
-  assert.match(html, /\.chat-bar-title \.brand-name \{ display: none; \}/);
+  assert.match(css, /\.chat-bar-title \.brand-name \{ display: none; \}/);
   assert.match(html, /command-state\.js/);
-  assert.match(html, /function updateCommandState\([\s\S]*?NeuraOSCommandState\.commandStateOf/);
-  assert.match(html, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration: \.001ms/);
+  assert.match(css, /function updateCommandState\([\s\S]*?NeuraOSCommandState\.commandStateOf/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?animation-duration: \.001ms/);
 });
 
 test('command state is a pure precedence rule', () => {
@@ -30,9 +32,9 @@ test('command state is a pure precedence rule', () => {
 });
 
 test('primary interactions acknowledge hover, focus, and press', () => {
-  assert.match(html, /\.hero-card:hover[\s\S]*?transform: translateY\(-2px\)/);
-  assert.match(html, /\.hero-start:hover[\s\S]*?box-shadow: 0 0 18px var\(--accent-bg\)/);
-  assert.match(html, /\.composer-send:hover:not\(:disabled\)[\s\S]*?rotate\(-2deg\)/);
-  assert.match(html, /\.composer-send:focus-visible[\s\S]*?var\(--glow\)/);
-  assert.match(html, /\.command-state\[data-state="running"\][\s\S]*?state-ping/);
+  assert.match(css, /\.hero-card:hover[\s\S]*?transform: translateY\(-2px\)/);
+  assert.match(css, /\.hero-start:hover[\s\S]*?box-shadow: 0 0 18px var\(--accent-bg\)/);
+  assert.match(css, /\.composer-send:hover:not\(:disabled\)[\s\S]*?rotate\(-2deg\)/);
+  assert.match(css, /\.composer-send:focus-visible[\s\S]*?var\(--glow\)/);
+  assert.match(css, /\.command-state\[data-state="running"\][\s\S]*?state-ping/);
 });

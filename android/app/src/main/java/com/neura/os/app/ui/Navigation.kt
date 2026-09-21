@@ -5,8 +5,7 @@ import kotlinx.serialization.Serializable
 /**
  * NeuraOS navigation routes — type-safe with kotlinx.serialization.
  *
- * Each destination is a @Serializable data class/object, compatible with
- * Jetpack Navigation 3's NavDisplay. The existing multi-back-stack
+ * Each destination is a @Serializable data class/object. The multi-back-stack
  * (per-tab stacks with process-death-safe keys) is preserved.
  */
 @Serializable sealed interface Route {

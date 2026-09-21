@@ -13,6 +13,8 @@ const {
 } = require('../chatlib.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // The composer sits at the foot of the window, which is the whole reason the
 // menu cannot open downward.
@@ -86,7 +88,7 @@ test('an offset margin configuration is honoured', () => {
 // The cause, not just the symptom: the menu is clipped by the toolbar it hangs
 // from whenever it is absolutely positioned inside it, however good the maths.
 test('the model menu is fixed to the viewport, never absolute in the toolbar', () => {
-  const blocks = [...HTML.matchAll(/\.model-dropdown\s*\{([^}]*)\}/g)].map((m) => m[1]);
+  const blocks = [...CSS.matchAll(/\.model-dropdown\s*\{([^}]*)\}/g)].map((m) => m[1]);
   assert.ok(blocks.length, 'index.html no longer styles .model-dropdown -- re-point this test');
   for (const block of blocks) {
     assert.match(block, /position:\s*fixed/, `a .model-dropdown rule is not fixed to the viewport: ${block.trim().slice(0, 80)}`);
@@ -100,13 +102,13 @@ test('the model menu is fixed to the viewport, never absolute in the toolbar', (
 test('opening the menu computes its placement rather than relying on CSS alone', () => {
   // A menu that is never placed falls back to the stylesheet's guess, which is
   // how the first version ended up clipped with no way to reach the rest.
-  const open = HTML.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
+  const open = CSS.match(/function openModelDropdown\(\)\s*\{([\s\S]*?)\n        \}/);
   assert.ok(open, 'index.html no longer defines openModelDropdown() -- re-point this test');
   assert.match(open[1], /positionModelDropdown\(\)/, 'openModelDropdown must position the menu it opens');
   // Both popups share the one resize listener, so a rotated phone re-places
   // whichever of them is open.
   assert.match(
-    HTML,
+    CSS,
     /window\.addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);/,
     'and re-place it when the window changes',
   );

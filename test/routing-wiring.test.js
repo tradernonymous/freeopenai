@@ -7,7 +7,10 @@
 // function that can be run is run.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { sourceOf, loadFromIndex, assertScannerCanRead, assertSandboxCovers, HTML } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const { refusedModelIds } = require('../chatlib.js');
 
 const NAMES = ['forgetRoutedModel'];
@@ -86,7 +89,7 @@ test('the page wires the switch, the selector and the note together', () => {
   assert.match(HTML, /routeForStep\(stage, tools\.length > 0, needsVision\)/);
   assert.match(HTML, /const askModel = route \? route\.model : null;/);
   assert.match(HTML, /noteRouteOnce\(route\);/);
-  assert.match(HTML, /callModel\(convo, \{ tools \}, signal, askModel\)/);
+  assert.match(CSS, /callModel\(convo, \{ tools \}, signal, askModel\)/);
   // The status bar credits the model that answered, not the one that was picked.
   assert.match(HTML, /lastReplyModel \|\| selectedModel/);
 });

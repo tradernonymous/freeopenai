@@ -1,0 +1,42 @@
+appId: com.neura.os
+---
+# Image generation progress
+- launchApp
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "generate a 16:9 image of a mountain landscape at sunset"
+- tapOn:
+    id: "send_button"
+- assertVisible:
+    text: "DRAW"
+    timeout: 15000
+- assertVisible:
+    text: "Image generation"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 90000
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000
+
+---
+# Image generation: stop during generation
+- launchApp
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "generate a detailed 4k image of a futuristic city"
+- tapOn:
+    id: "send_button"
+- assertVisible:
+    text: "STOP"
+    timeout: 15000
+- tapOn:
+    text: "STOP"
+- assertVisible:
+    text: "READY"
+    timeout: 10000

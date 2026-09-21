@@ -10,11 +10,13 @@
 
 **Install it (first time)**
 
-1. On the phone, open **https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest** and tap `freeai4u.apk`.
+1. On the phone, open **https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest** and tap `neuraos.apk`.
 2. Allow Chrome to install apps from this source. OPPO's ColorOS adds its own warning for apps outside its store; tap **Install anyway**.
 3. Open the app. The server is filled in; type the username (`AUTH_USER_1`) and its password once and tap **Sign in**. It stays signed in from then on.
 
-**Updating.** The app checks `version.json` in the same release once a day and offers **Download** when a newer build exists; install it over the top and the app keeps its data. **Settings → Check for updates** asks straight away. Every push to `main` that touches `android/` rebuilds and republishes it.
+**Updating.** The app checks `version.json` in the same release once a day (a fresh in-memory result is reused for 15 minutes; **Settings → Check for updates** always asks straight away) and offers **Download** when a newer build exists. Tapping it downloads inside the app with the system DownloadManager — progress lives in the notification shade and the download survives backgrounding and retries flaky networks — then the file is verified (exact byte size plus SHA-256 from `version.json`, both emitted by CI) before the system installer opens it; a truncated or damaged file is deleted and you are told to retry. Install it over the top and the app keeps its data. First install of an update asks you to allow **“Install unknown apps”** for NeuraOS once. Every push to `main` that touches `android/` rebuilds and republishes it.
+
+`version.json` fields: `versionCode` (int, must exceed the installed one), `versionName`, `url` (must be an `https://github.com/…/releases/download/…` link — anything else is ignored), `notes`, plus `sha256` (hex SHA-256 of the APK) and `size` (exact bytes). A manifest with a malformed digest, an absurd size, or an off-policy link is discarded outright.
 
 **What is in it**
 
@@ -38,11 +40,11 @@
 **Privacy and security.**
 - Chats, pictures, personas and prompts are stored only on the phone, sealed with an AES-256-GCM key held in the Android Keystore. Backup and device transfer are off.
 - The password is kept only so the app can sign in again when the server's seven-day session lapses, and it is sealed the same way. Sign out offers to keep or erase everything.
-- Traffic is HTTPS only, with system trust anchors only, and the window is flagged secure, so screenshots and the recents thumbnail come out blank.
+- Traffic is HTTPS only, with system trust anchors only, and the window is flagged secure, so screenshots and the recents thumbnail come out blank. Certificate pinning is deliberately not used: short-lived public CA certificates rotate faster than a sideloaded build gets updated, and a stale pin would brick the app with no recovery path. Update-manifest fetches additionally follow redirects only across an allowlist (`github.com` → GitHub's object-store hosts) and never downgrade off HTTPS.
 - The sign-in screen ignores taps while another app draws over it.
 - Error text masks anything that looks like a key.
 - The hidden Puter page runs with no JavaScript bridge. The Puter picture is read back in slices by polling a page property.
-- Permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `USE_BIOMETRIC`, `SET_ALARM` and `FOREGROUND_SERVICE` (`dataSync`, only while a reply streams) are granted at install. `RECORD_AUDIO` is asked for the first time voice mode opens, and `POST_NOTIFICATIONS` once on Android 13+. The app requests no location, contacts, SMS, call-log or storage permission.
+- Permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `USE_BIOMETRIC`, `SET_ALARM` and `FOREGROUND_SERVICE` (`dataSync`, only while a reply streams) are granted at install. `RECORD_AUDIO` is asked for the first time voice mode opens, and `POST_NOTIFICATIONS` once on Android 13+. `REQUEST_INSTALL_PACKAGES` is declared so in-app updates can hand the verified APK to the system installer (which re-verifies the signing certificate — an update signed with any other key is refused there); Android still asks you to allow “Install unknown apps” for NeuraOS first. The app requests no location, contacts, SMS, call-log or storage permission.
 - Nothing in the app drives other apps, uses an accessibility service, or impersonates another client.
 
 **Where the ideas came from.** Patterns were re-implemented, not copied, from:
@@ -57,6 +59,7 @@
 
 **Building and signing.** CI (`.github/workflows/android.yml`) builds on every push that touches `android/` and runs the JVM unit tests:
 - `ApiTest`: URL policy, session contract, update manifest.
+- `UpdateSecurityTest` (54 tests): update-manifest URL policy, SHA-256 helpers, manifest `sha256`/`size` validation, redirect allowlist, capped reads, fetch outcomes (`Available`/`Current`/`Failed` with reasons), APK byte/file verification, and the update-result cache.
 - `DataTest`: storage round trips, SSE parsing, chat bodies.
 - `AgentTest`: modes, tasks, approvals and action tickets, phone-action validation, streamed tool calls, history grouping.
 - `RemoteBuildTest`: build sessions, events and the approval reducer.

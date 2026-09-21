@@ -13,43 +13,50 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', '..', 'style.css'), 'utf8');
+const HUB_CSS = fs.readFileSync(path.join(__dirname, '..', '..', 'hub.css'), 'utf8');
+// JS was extracted from index.html into app.js; functions live there now.
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', '..', 'app.js'), 'utf8');
+// Combined source for function extraction — app.js first (where functions are),
+// then index.html as fallback for any that haven't moved yet.
+const SRC = APP_JS + '\n' + HTML;
 
 // The source of a named function, from `function` through its closing brace.
 function sourceOf(name) {
-  const start = HTML.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `index.html no longer defines ${name}() -- re-point this test`);
+  const start = SRC.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `source no longer defines ${name}() -- re-point this test`);
   // Walk past the parameter list first: a default such as `extra = {}` contains
   // a brace that would otherwise read as the body opening.
   let params = 0;
-  let i = HTML.indexOf('(', start);
-  for (; i < HTML.length; i++) {
-    if (HTML[i] === '(') params++;
-    else if (HTML[i] === ')' && !--params) break;
+  let i = SRC.indexOf('(', start);
+  for (; i < SRC.length; i++) {
+    if (SRC[i] === '(') params++;
+    else if (SRC[i] === ')' && !--params) break;
   }
   let depth = 0;
-  i = HTML.indexOf('{', i);
+  i = SRC.indexOf('{', i);
   let quote = null;
-  for (; i < HTML.length; i++) {
-    const ch = HTML[i];
-    const next = HTML[i + 1];
+  for (; i < SRC.length; i++) {
+    const ch = SRC[i];
+    const next = SRC[i + 1];
     if (quote) {
       if (ch === '\\') i++;
       else if (ch === quote) quote = null;
       continue;
     }
-    if (ch === '/' && next === '/') { i = HTML.indexOf('\n', i); if (i === -1) break; continue; }
-    if (ch === '/' && next === '*') { i = HTML.indexOf('*/', i); if (i === -1) break; i++; continue; }
+    if (ch === '/' && next === '/') { i = SRC.indexOf('\n', i); if (i === -1) break; continue; }
+    if (ch === '/' && next === '*') { i = SRC.indexOf('*/', i); if (i === -1) break; i++; continue; }
     if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue; }
     if (ch === '{') depth++;
-    else if (ch === '}' && !--depth) return HTML.slice(start, i + 1);
+    else if (ch === '}' && !--depth) return SRC.slice(start, i + 1);
   }
   throw new Error(`unbalanced braces while reading ${name}()`);
 }
 
 // Keep the `async` keyword that precedes the declaration.
 function declarationOf(name) {
-  const start = HTML.indexOf(`function ${name}(`);
-  const asyncPrefix = HTML.slice(Math.max(0, start - 6), start).endsWith('async ') ? 'async ' : '';
+  const start = SRC.indexOf(`function ${name}(`);
+  const asyncPrefix = SRC.slice(Math.max(0, start - 6), start).endsWith('async ') ? 'async ' : '';
   return asyncPrefix + sourceOf(name);
 }
 
@@ -127,6 +134,8 @@ function assertSandboxCovers(names, deps) {
 
 module.exports = {
   HTML,
+  CSS,
+  HUB_CSS,
   sourceOf,
   declarationOf,
   loadFromIndex,

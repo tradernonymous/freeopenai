@@ -21,9 +21,11 @@ const {
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the attach menu is fixed to the viewport, and its trigger cannot scroll away', () => {
-  const block = HTML.match(/\.attach-menu\s*\{[^}]*\}/);
+  const block = CSS.match(/\.attach-menu\s*\{[^}]*\}/);
   assert.ok(block, '.attach-menu is gone -- re-point this test');
   assert.match(block[0], /position:\s*fixed/, 'an absolutely positioned menu here is clipped by whatever scrolls around it');
   assert.doesNotMatch(block[0], /position:\s*absolute/);
@@ -32,10 +34,10 @@ test('the attach menu is fixed to the viewport, and its trigger cannot scroll aw
   // is what keeps attach and draw on screen on a phone instead of sliding off
   // the right edge, and it is also why the menu has to be placed against the
   // viewport rather than against the row it belongs to.
-  const settings = HTML.match(/\.composer-settings\s*\{[^}]*\}/);
+  const settings = CSS.match(/\.composer-settings\s*\{[^}]*\}/);
   assert.ok(settings, '.composer-settings is gone -- re-point this test');
   assert.match(settings[0], /overflow-x:\s*auto/);
-  const actions = HTML.match(/\.composer-actions\s*\{[^}]*\}/);
+  const actions = CSS.match(/\.composer-actions\s*\{[^}]*\}/);
   assert.ok(actions, '.composer-actions is gone -- re-point this test');
   assert.doesNotMatch(actions[0], /overflow/, 'the actions group must never scroll');
 
@@ -62,12 +64,12 @@ test('the attach menu is fixed to the viewport, and its trigger cannot scroll aw
 });
 
 test('opening the menu places it, and a resize re-places it', () => {
-  const open = HTML.match(/function openAttachMenu\(\)\s*\{[\s\S]*?\n        \}/);
+  const open = CSS.match(/function openAttachMenu\(\)\s*\{[\s\S]*?\n        \}/);
   assert.ok(open, 'openAttachMenu is gone -- re-point this test');
   assert.match(open[0], /positionAttachMenu\(\)/, 'the CSS fallback is not a real position');
   // The same treatment the model menu already gets: a rotated phone moves the
   // trigger out from under an open menu.
-  assert.match(HTML, /addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);[\s\S]{0,120}positionAttachMenu\(\);/);
+  assert.match(CSS, /addEventListener\('resize',[\s\S]{0,120}positionModelDropdown\(\);[\s\S]{0,120}positionAttachMenu\(\);/);
 });
 
 const NAMES = ['positionAttachMenu'];

@@ -97,7 +97,11 @@ android {
     }
 
     lint {
-        abortOnError = false
+        // Release builds fail on lint *errors* again (warnings still pass).
+        // The old softer setting let a full lintRelease stay advisory and
+        // drift; the one known-fatal detector (NullSafeMutableLiveData on
+        // Kotlin 2.1.x) is suppressed in lint.xml.
+        abortOnError = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -123,17 +127,11 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
-    implementation(libs.compose.material3.adaptive.navigation.suite)
-    implementation(libs.compose.ui.tooling.preview)
-    // The preview renderer itself, not just its annotations -- debug-only,
-    // like leakcanary below, so @Preview costs nothing in the release build.
-    debugImplementation(libs.compose.ui.tooling)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     // Firebase Messaging pulls in an old transitive androidx.fragment that
@@ -154,5 +152,7 @@ dependencies {
     testImplementation(libs.junit)
     // Navigation 3 serialization for type-safe routes.
     implementation(libs.androidx.serialization.json)
-    // Coil for image loading in the image studio.
+    // Studio images are decoded in-app from stored data URLs (loadBitmap in
+    // AppViewModel), so no Coil dependency is pulled in. If remote image URLs
+    // are ever added, that is the moment to add Coil -- not before.
 }

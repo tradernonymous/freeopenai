@@ -1,154 +1,154 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import { APP_VERSION } from '../version';
+import ConnectionCard from '../components/ConnectionCard';
+import DiagnosticsCard from '../components/DiagnosticsCard';
+import LocalModelsCard from '../components/LocalModelsCard';
+import FileTree from '../components/FileTree';
+import Terminal from '../components/Terminal';
 
-interface Plugin {
-  id: string;
-  name: string;
-  description: string;
-  installed: boolean;
-  enabled: boolean;
-  author?: string;
+// Settings: everything the engine can tell us about itself.
+//
+// The engine address and the sign-in form live in ConnectionCard, because the
+// first-run connect screen needs exactly the same two things -- one owner, one
+// set of outcomes, instead of a copy per screen.
+interface Props {
+  /** The address or the session changed: the shell has to re-probe. */
+  onConnectionChanged?: () => void;
+  /** What the shell last concluded about the engine, in the diagnostics report. */
+  diagnosticsState?: string;
 }
 
-export default function SettingsScreen() {
-  const [providers, setProviders] = useState<Record<string, any>>({});
-  const [health, setHealth] = useState<any>(null);
-  const [version, setVersion] = useState('2.0.0');
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
+export default function SettingsScreen({ onConnectionChanged, diagnosticsState }: Props) {
+  const [providers, setProviders] = useState<any[]>([]);
+  const [limits, setLimits] = useState<any>(null);
+  const [memory, setMemory] = useState<Array<any>>([]);
+  const version = APP_VERSION;
 
-  useEffect(() => {
-    api.health().then(setHealth);
-    api.providers().then((p: any) => setProviders(p || {}));
-    if ((window as any).__APP_VERSION__) setVersion((window as any).__APP_VERSION__);
-    setPlugins([
-      { id: 'dsh-better-sidebar', name: 'DSH Better Sidebar', description: 'VSCode-style right sidebar with explorer/editor/terminal/Git/browser.', installed: true, enabled: true, author: 'omdsh-dev' },
-      { id: 'dsh-rewind', name: 'DSH Rewind', description: 'In-window conversation rollback without branching; lightweight workspace backup.', installed: true, enabled: true, author: 'SiriLee' },
-      { id: 'dsh-market', name: 'DSH Market', description: 'Browse, search, and install community plugins from multiple sources.', installed: true, enabled: false, author: 'jing-hy' },
-      { id: 'dsh-pet', name: 'DSH Pet', description: 'Desktop pet with preset animations and Codex resource pack import.', installed: false, enabled: false, author: 'PC2005-cloud' },
-      { id: 'dsh-balance', name: 'DSH Balance', description: 'DeepSeek balance, cost estimation, and pricing alerts.', installed: false, enabled: false, author: 'deepseek-ai' },
-    ]);
-  }, []);
-
-  const providerEntries = Object.entries(providers || {}).filter(([, v]: [string, any]) => !v.disabled);
-
-  const togglePlugin = (id: string) => {
-    setPlugins((prev) => prev.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p)));
+  const load = () => {
+    api.providers().then((rows: any) => setProviders(Array.isArray(rows) ? rows : [])).catch(() => setProviders([]));
+    api.limits().then(setLimits).catch(() => setLimits(null));
+    api.memory().then((m: any) => setMemory(Array.isArray(m) ? m : Array.isArray(m?.facts) ? m.facts : [])).catch(() => setMemory([]));
   };
 
-  const installPlugin = (id: string) => {
-    setPlugins((prev) => prev.map((p) => (p.id === id ? { ...p, installed: true, enabled: true } : p)));
+  useEffect(() => { load(); }, []);
+
+  const forget = async (id: string) => {
+    try {
+      await api.memoryForget(id);
+      setMemory((prev) => prev.filter((f: any) => f.id !== id));
+    } catch { /* the list refreshes on the next load */ }
   };
 
   return (
     <div className="screen settings">
       <header className="screen-header">
         <h1>Settings</h1>
+        <div className="header-actions">
+          <span className="limit-badge">v{version}</span>
+        </div>
       </header>
       <div className="settings-layout">
         <aside className="settings-nav">
-          <nav>
-            {['About', 'Connection', 'Providers', 'Plugins', 'Skills'].map((item) => (
-              <button key={item} className="settings-nav-btn">
-                {item}
-              </button>
-            ))}
-          </nav>
+          <button className="settings-nav-btn active" type="button">Engine</button>
         </aside>
         <main className="settings-main">
           <section className="settings-section">
-            <h2>About</h2>
-            <div className="settings-card">
-              <div className="setting-row">
-                <span className="setting-label">App</span>
-                <span className="setting-value">FreeAI4U Desktop</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">Version</span>
-                <span className="setting-value">{version}</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">Platform</span>
-                <span className="setting-value">{navigator.platform}</span>
-              </div>
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <h2>Connection</h2>
-            <div className="settings-card">
-              <div className="setting-row">
-                <span className="setting-label">Server</span>
-                <span className="setting-value">Railway (remote)</span>
-              </div>
-              <div className="setting-row">
-                <span className="setting-label">Status</span>
-                <span className={`setting-value ${health?.ok ? 'ok' : 'warn'}`}>{health?.ok ? 'Healthy' : 'Unreachable'}</span>
-              </div>
-              {health?.uptimeSeconds != null && (
-                <div className="setting-row">
-                  <span className="setting-label">Uptime</span>
-                  <span className="setting-value">{Math.floor(health.uptimeSeconds / 60)} min</span>
-                </div>
-              )}
-              {health?.commit && (
-                <div className="setting-row">
-                  <span className="setting-label">Commit</span>
-                  <span className="setting-value mono">{health.commit.slice(0, 8)}</span>
-                </div>
-              )}
-            </div>
+            <h2>Engine</h2>
+            {/* A saved address is a setting; whether it answers is the card's
+                business, and it says which of the two happened. The shell is
+                told either way, so fixing a wrong address here moves the app
+                off the connect surface instead of waiting for a restart. */}
+            <ConnectionCard
+              onServerChanged={() => { load(); onConnectionChanged?.(); }}
+              onConnected={() => { load(); onConnectionChanged?.(); }}
+            />
           </section>
 
           <section className="settings-section">
             <h2>Providers</h2>
             <div className="settings-card">
-              {providerEntries.length === 0 && <div className="empty">No providers available.</div>}
-              {providerEntries.map(([id, p]) => (
-                <div key={id} className="setting-row provider-row">
-                  <span className="setting-label">{id}</span>
-                  <span className="setting-value">{p.models?.length || 0} models</span>
+              {providers.length === 0 && <div className="empty">No providers reported by the engine.</div>}
+              {providers.map((p: any) => (
+                <div key={p.id} className="provider-row" style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span className="setting-label">
+                    {p.configured ? '' : '○ '}{p.label || p.id}
+                    {p.kind && p.kind !== 'chat' ? ` (${p.kind})` : ''}
+                  </span>
+                  <span className={`setting-value ${p.configured ? 'ok' : 'warn'}`}>
+                    {p.configured
+                      ? ((p.freeTier && (p.freeTier.text || p.freeTier.limitText)) || 'ready')
+                      : (p.note || 'no key set')}
+                  </span>
                 </div>
               ))}
             </div>
           </section>
 
           <section className="settings-section">
-            <h2>Plugins</h2>
-            <div className="plugin-grid">
-              {plugins.map((p) => (
-                <div key={p.id} className="plugin-card">
-                  <div className="plugin-card-header">
-                    <div className="plugin-name">{p.name}</div>
-                    {p.installed ? (
-                      <button onClick={() => togglePlugin(p.id)} disabled={!p.installed}>
-                        {p.enabled ? 'Disable' : 'Enable'}
-                      </button>
-                    ) : (
-                      <button onClick={() => installPlugin(p.id)} className="primary">
-                        Install
-                      </button>
-                    )}
-                  </div>
-                  <div className="plugin-desc">{p.description}</div>
-                  <div className="plugin-meta">
-                    <span>{p.author}</span>
-                    <span>{p.installed ? 'Installed' : 'Available'}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <h2>Skills</h2>
+            <h2>Limits the engine enforces</h2>
             <div className="settings-card">
-              <div className="setting-row">
-                <span className="setting-label">Loaded</span>
-                <span className="setting-value">Server-side</span>
-              </div>
-              <p className="settings-hint">Skills are loaded from the server. Manage them in the web app.</p>
+              {limits?.retries && (
+                <div className="setting-row">
+                  <span className="setting-label">How long a rate-limited model is retried</span>
+                  <span className="setting-value">
+                    {Math.round(limits.retries.budgetMs / 1000)}s in total, {limits.retries.maxAttempts} attempt
+                    {limits.retries.maxAttempts === 1 ? '' : 's'}, {Math.round((limits.retries.baseDelayMs || 0) / 1000 * 10) / 10}s apart
+                  </span>
+                </div>
+              )}
+              {limits?.timeouts && (
+                <div className="setting-row">
+                  <span className="setting-label">Chat timeout</span>
+                  <span className="setting-value">{Math.round(limits.timeouts.chat / 1000)}s</span>
+                </div>
+              )}
+              <p className="settings-hint">
+                A rate-limited service is retried only as long as the turn is worth waiting for; after that the engine hands
+                the same question to the next model instead of leaving you with nothing. This is why a rate limit never ends a
+                turn here, and it is a setting rather than a warning: nothing is wrong with your chat.
+              </p>
             </div>
           </section>
+
+          <section className="settings-section">
+            <h2>Memory the model saved</h2>
+            <div className="settings-card">
+              {memory.length === 0 && <div className="empty">Nothing saved yet.</div>}
+              {memory.map((f: any) => (
+                <div key={f.id} className="provider-row" style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span className="setting-label">{f.text || f.fact || f.name || f.id}</span>
+                  <button onClick={() => forget(f.id)}>Forget</button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <LocalModelsCard />
+
+          {/* The engine's own shell, kept but demoted. It only works when the
+              server sets WORKSPACE_RUN=1 and the account is signed in, which is
+              why it is not a sidebar row any more: the local folder and the
+              local terminal answer for the app's own machine. */}
+          <section className="settings-section">
+            <h2>Advanced</h2>
+            <div className="settings-card">
+              <details className="engine-shell">
+                <summary>Engine shell (needs WORKSPACE_RUN=1 on the server)</summary>
+                <p className="settings-hint">
+                  Commands and files on the FreeAI4U server, in the engine's own workspace — not on
+                  this machine. The <strong>Folder</strong> and <strong>Terminal</strong> panels in
+                  the sidebar are the local ones.
+                </p>
+                <div className="engine-shell-body">
+                  <FileTree />
+                  <Terminal />
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <DiagnosticsCard state={diagnosticsState} />
         </main>
       </div>
     </div>

@@ -8,7 +8,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { HTML, sourceOf } = require('./helpers/index-html.js');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('the palette is the neutral ladder, not white on black', () => {
   const root = HTML.slice(HTML.indexOf(':root {'), HTML.indexOf('html[data-theme="light"] {'));
@@ -25,7 +29,7 @@ test('the palette is the neutral ladder, not white on black', () => {
 
   // The composer is the one control always in reach, so it is lifted off the
   // transcript rather than sitting on the same grey as it.
-  const composer = HTML.match(/\.composer \{[^}]*\}/);
+  const composer = CSS.match(/\.composer \{[^}]*\}/);
   assert.ok(composer, '.composer is gone -- re-point this test');
   assert.match(composer[0], /background: var\(--surface-2\)/);
 });
@@ -52,7 +56,7 @@ test('the appearance toggle is reachable at every size, including the smallest p
 test('the picker names the three choices rather than cycling through five', () => {
   // A const, not a function, so it is read from the page text rather than
   // through sourceOf's function lookup.
-  const at = HTML.indexOf('const THEME_OPTIONS = [');
+  const at = APP_JS.indexOf('const THEME_OPTIONS = [');
   assert.ok(at > 0, 'THEME_OPTIONS is gone -- re-point this test');
   const options = HTML.slice(at, HTML.indexOf('];', at));
   assert.match(options, /id: 'auto', label: 'System'/);

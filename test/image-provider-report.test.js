@@ -4,12 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 test('image session tab gives users actionable provider diagnostics', () => {
-  assert.match(html, /id="imageProviderReport"[^>]*aria-live="polite"/);
-  assert.match(html, /id="imageProviderReport"[^>]*aria-busy/);
+  assert.match(css, /id="imageProviderReport"[^>]*aria-live="polite"/);
+  assert.match(css, /id="imageProviderReport"[^>]*aria-busy/);
   assert.match(html, /image-provider-report-note/);
-  assert.match(html, /id="imageProviderReportStatus"[^>]*>Checking…/);
+  assert.match(css, /id="imageProviderReportStatus"[^>]*>Checking…/);
   assert.match(html, /id="chatProviderList"/);
   assert.match(html, /id="imageProviderList"/);
   assert.match(html, /onclick="loadImageProviderReport\(\)"/);
@@ -23,8 +25,8 @@ test('image session tab gives users actionable provider diagnostics', () => {
 });
 
 test('provider diagnostics render provider names as text, not HTML', () => {
-  assert.match(html, /querySelector\('\.image-provider-name'\)\.textContent/);
-  assert.match(html, /querySelector\('\.image-provider-detail'\)\.textContent/);
+  assert.match(css, /querySelector\('\.image-provider-name'\)\.textContent/);
+  assert.match(css, /querySelector\('\.image-provider-detail'\)\.textContent/);
   assert.match(html, /provider\.reason \|\| provider\.note/);
   // Configured state decides the row's state label on the chat tab: a slot
   // that answers reads as ready, one still awaiting its variable as setup.

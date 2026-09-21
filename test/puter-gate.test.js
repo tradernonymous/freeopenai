@@ -2,6 +2,9 @@
 // the send gate checked Puter before it looked at the provider at all. These
 // tests cover the decision and the wiring that applies it.
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const assert = require('node:assert/strict');
 const { needsPuterAccount, PUTER_PROVIDER, safeJson } = require('../chatlib.js');
 const { HTML, loadFromIndex, sourceOf, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');

@@ -1,0 +1,70 @@
+appId: com.neura.os
+---
+# Chat progress: typing indicator and streaming response
+- launchApp
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "Write a short poem about testing"
+- tapOn:
+    text: "Send"
+    optional: true
+- tapOn:
+    id: "send_button"
+    optional: true
+- assertVisible:
+    text: "SENDING"
+    optional: true
+- assertVisible:
+    text: "RECEIVING"
+    optional: true
+- assertVisible:
+    text: "READY"
+    timeout: 30000
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000
+
+---
+# Chat progress: stop streaming
+- launchApp
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "Write a very long story about a dragon that never ends"
+- tapOn:
+    text: "Send"
+    optional: true
+- tapOn:
+    id: "send_button"
+    optional: true
+- assertVisible:
+    text: "STOP"
+    timeout: 10000
+- tapOn:
+    text: "STOP"
+- assertVisible:
+    text: "READY"
+    timeout: 10000
+
+---
+# Chat progress: voice mode toggle
+- launchApp
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- tapOn:
+    text: "Voice mode"
+    optional: true
+- assertVisible:
+    text: "Voice mode active"
+    optional: true
+- tapOn:
+    text: "Voice mode active"
+    optional: true
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000

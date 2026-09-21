@@ -67,12 +67,12 @@ test('a prompt becomes a filename a file system will accept', () => {
 test('the filename says the size, so a folder listing answers "was it the size I asked for?"', () => {
   assert.equal(
     imageDownloadFilename('A neon Tokyo street at night', 'jpeg', 1536, 1024),
-    'freeai4u-a-neon-tokyo-street-at-night-1536x1024.jpg',
+    'neuraos-a-neon-tokyo-street-at-night-1536x1024.jpg',
   );
-  assert.equal(imageDownloadFilename('cat', 'pdf', 1024, 1024), 'freeai4u-cat-1024x1024.pdf');
+  assert.equal(imageDownloadFilename('cat', 'pdf', 1024, 1024), 'neuraos-cat-1024x1024.pdf');
   // No dimensions known is a missing clause, not "0x0".
-  assert.equal(imageDownloadFilename('cat', 'png', 0, 0), 'freeai4u-cat.png');
-  assert.equal(imageDownloadFilename('cat', 'png'), 'freeai4u-cat.png');
+  assert.equal(imageDownloadFilename('cat', 'png', 0, 0), 'neuraos-cat.png');
+  assert.equal(imageDownloadFilename('cat', 'png'), 'neuraos-cat.png');
 });
 
 test('the page is the picture: no sheet, no margin, nothing blank around it', async () => {

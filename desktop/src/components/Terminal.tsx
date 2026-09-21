@@ -1,10 +1,42 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api';
+// UMD module: loaded for its side effect, read off globalThis.
+import '../run-result.js';
+
+const runResult: typeof import('../run-result.js') = (globalThis as any).FreeAI4URunResult;
+
+// The engine terminal: commands run on the server workspace (WORKSPACE_RUN=1 +
+// a login). Three things here are deliberate:
+//
+//   1. A result is written back by the ENTRY'S ID, never by matching the
+//      command text. The old code matched `cmd === cmd && out === 'Running…'`,
+//      so two identical commands in a row were both overwritten by whichever
+//      result arrived first, and an earlier finished command could be
+//      re-overwritten later.
+//   2. The output shown is the engine's real stdout/stderr and exit code. The
+//      old code read a response field no route returns, so every command
+//      printed "ok" no matter what it did.
+//   3. The cwd is the one the engine reports for the run (or "workspace root"),
+//      not a hardcoded '.' dressed up as a directory.
+
+interface Entry {
+  id: string;
+  cmd: string;
+  out: string;
+  kind: 'running' | 'out' | 'err';
+}
+
+let counter = 0;
+function nextId(): string {
+  counter += 1;
+  return `run-${Date.now().toString(36)}-${counter}`;
+}
+
 
 export default function Terminal() {
-  const [history, setHistory] = useState<Array<{ cmd: string; out: string }>>([]);
+  const [history, setHistory] = useState<Entry[]>([]);
   const [input, setInput] = useState('');
-  const [cwd, setCwd] = useState('.');
+  const [cwd, setCwd] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -15,12 +47,17 @@ export default function Terminal() {
     const cmd = input.trim();
     if (!cmd) return;
     setInput('');
-    setHistory((prev) => [...prev, { cmd, out: 'Running…' }]);
+    const id = nextId();
+    setHistory((prev) => [...prev, { id, cmd, out: 'Running…', kind: 'running' }]);
+    // Identity, not value: this is the fix for the same-command-twice bug.
+    const settle = (patch: { out: string; kind: Entry['kind'] }) =>
+      setHistory((prev) => prev.map((h) => (h.id === id ? { ...h, ...patch } : h)));
     try {
-      const res = await api.workspaceRun({ command: cmd, path: cwd });
-      setHistory((prev) => prev.map((h) => (h.cmd === cmd && h.out === 'Running…' ? { cmd, out: (res as any)?.output || 'ok' } : h)));
+      const res: any = await api.workspaceRun(cmd);
+      if (typeof res?.cwd === 'string' && res.cwd) setCwd(res.cwd);
+      settle(runResult.formatRun(res));
     } catch (e) {
-        setHistory((prev) => prev.map((h) => (h.cmd === cmd && h.out === 'Running…' ? { cmd, out: `Error: ${(e as Error).message}` } : h)));
+      settle({ out: `Error: ${(e as Error).message}`, kind: 'err' });
     }
   };
 
@@ -35,13 +72,15 @@ export default function Terminal() {
     <div className="terminal">
       <div className="terminal-header">
         <span>Terminal</span>
-        <span className="terminal-cwd">{cwd}</span>
+        <span className="terminal-cwd" title="Where the engine ran the last command">
+          {cwd ? `workspace/${cwd}` : 'engine workspace'}
+        </span>
       </div>
       <div className="terminal-body">
-        {history.map((item, i) => (
-          <div key={i} className="terminal-line">
+        {history.map((item) => (
+          <div key={item.id} className="terminal-line">
             <div className="terminal-prompt">$ {item.cmd}</div>
-            <pre className="terminal-output">{item.out}</pre>
+            <pre className={`terminal-output ${item.kind === 'err' ? 'terminal-error' : ''}`}>{item.out}</pre>
           </div>
         ))}
         <div ref={bottomRef} />
@@ -52,7 +91,7 @@ export default function Terminal() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKey}
-          placeholder="Run a command in the workspace…"
+          placeholder="Run a command in the engine workspace…"
           rows={1}
         />
       </div>

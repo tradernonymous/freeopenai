@@ -297,6 +297,115 @@ test('the Forget-all button really asks the server to forget, not just the DOM',
   assert.equal(cleared, 1, 'the button drives the module, which builds the request');
 });
 
+test('the Memory tab renders a use meter per fact, dimming never-used ones', async () => {
+  // The counts were a bare number; now each fact draws a 4-segment bar so a
+  // dead fact reads as empty at a glance. This drives the shipped renderer
+  // with a compact DOM stub, since the panel harness does not extract it.
+  const { loadFromIndex } = require('./helpers/index-html.js');
+  const { ids, document: doc } = stubDom();
+  const facts = [{ text: 'prefers Python' }, { text: 'collects stamps' }];
+  const counts = { 'prefers Python': 3 };
+  const gauge = (n) => Math.min(4, Math.max(0, Math.round(Number(n) || 0)));
+  const deps = {
+    document: doc,
+    shareMemory: { factsList: () => facts, useCounts: () => counts, capacityInfo: () => null },
+    chatlib: { memoryUseMeter: gauge },
+    memoryUseMeter: gauge,
+  };
+  const loaded = loadFromIndex(['renderMemoryList', 'renderMemoryCapacity'], deps);
+  loaded.renderMemoryList();
+  const rows = ids.memoryList.children;
+  assert.equal(rows.length, 2, 'one row per fact');
+  const hot = rows[0];
+  const cold = rows[1];
+  assert.ok(String(cold.className).includes('dead'), 'the never-used fact is dimmed as dead');
+  assert.ok(!String(hot.className).includes('dead'), 'a used fact is not dimmed');
+  const meterOf = (row) => row.children.find((c) => String(c.className).includes('memory-fact-used'));
+  const hotMeter = meterOf(hot);
+  const coldMeter = meterOf(cold);
+  assert.ok(hotMeter && coldMeter, 'every fact row carries the meter');
+  const segsOf = (m) => m.children.find((c) => String(c.className).includes('memory-fact-meter')).children;
+  assert.equal(segsOf(hotMeter).filter((s) => String(s.className).includes('on')).length, 3, '3 uses fill 3 of 4 segments');
+  assert.equal(segsOf(coldMeter).filter((s) => String(s.className).includes('on')).length, 0, 'a dead fact fills none');
+  assert.equal(hotMeter.children[1].textContent, '3\u00d7', 'the count still reads as text');
+  assert.equal(coldMeter.children[1].textContent, '0', 'zero says zero');
+});
+
+// A compact DOM stub for the page renderers this file drives directly: just
+// enough element for innerHTML/appendChild/classList/hidden, keyed by id.
+function stubDom() {
+  const el = () => {
+    const node = {
+      tagName: 'div', children: [], className: '', textContent: '', title: '',
+      attrs: {}, type: '', hidden: false,
+      setAttribute(n, v) { this.attrs[n] = String(v); },
+      getAttribute(n) { return this.attrs[n]; },
+      addEventListener() {},
+      appendChild(kid) { kid.parent = this; this.children.push(kid); return kid; },
+    };
+    node.classList = { add(c) { node.className = (node.className + ' ' + c).trim(); } };
+    return node;
+  };
+  const ids = {};
+  const document = {
+    createElement: () => el(),
+    getElementById: (id) => ids[id] || (ids[id] = el()),
+  };
+  return { ids, document };
+}
+
+function fakeGauge(n) { return Math.min(4, Math.max(0, Math.round(Number(n) || 0))); }
+
+test('the Memory tab warns when the store is nearly full, and when it is full', async () => {
+  // A refused save was the only way to meet the cap; now the tab says so
+  // first, from the max the server reports with the fact list.
+  const { loadFromIndex } = require('./helpers/index-html.js');
+  const build = (facts, cap) => {
+    const { ids, document: doc } = stubDom();
+    const deps = {
+      document: doc,
+      shareMemory: {
+        factsList: () => facts,
+        useCounts: () => ({}),
+        capacityInfo: () => {
+          if (!cap) return null;
+          const remaining = cap - facts.length;
+          if (remaining <= 0) return { state: 'full', remaining: 0, max: cap };
+          if (remaining <= 5) return { state: 'near', remaining, max: cap };
+          return { state: 'ok', remaining, max: cap };
+        },
+      },
+      chatlib: { memoryUseMeter: fakeGauge },
+      memoryUseMeter: fakeGauge,
+    };
+    const loaded = loadFromIndex(['renderMemoryList', 'renderMemoryCapacity'], deps);
+    loaded.renderMemoryList();
+    return ids.memoryCapacity;
+  };
+  const far = build([{ text: 'a' }], 200);
+  assert.equal(far.hidden, true, 'plenty of room: no warning');
+  const near = build(Array.from({ length: 197 }, (_, i) => ({ text: 'f' + i })), 200);
+  assert.equal(near.hidden, false, '3 slots left: the warning shows');
+  assert.match(near.textContent, /3 slots left/);
+  const full = build(Array.from({ length: 200 }, (_, i) => ({ text: 'f' + i })), 200);
+  assert.equal(full.hidden, false, 'at the cap: the warning shows');
+  assert.match(full.textContent, /Memory is full/);
+  const silent = build([{ text: 'a' }], 0);
+  assert.equal(silent.hidden, true, 'an older backend that reports no cap stays silent');
+});
+
+test('memoryUseMeter turns a use count into a 0-4 gauge', () => {
+  const { memoryUseMeter } = require('../chatlib.js');
+  assert.equal(memoryUseMeter(0), 0, 'a dead fact lights nothing');
+  assert.equal(memoryUseMeter(1), 1);
+  assert.equal(memoryUseMeter(2), 2);
+  assert.equal(memoryUseMeter(4), 4, 'four uses light every segment');
+  assert.equal(memoryUseMeter(17), 4, 'beyond four stays full, not clipped visually');
+  assert.equal(memoryUseMeter('3'), 3, 'counts arrive as text from storage');
+  assert.equal(memoryUseMeter(undefined), 0, 'a missing count reads as never used');
+  assert.equal(memoryUseMeter(-2), 0, 'nonsense never lights anything');
+});
+
 // ------------------------------------------------------- ShareMemory module
 
 const { create: createShareMemory } = require('../share-memory.js');
@@ -313,7 +422,7 @@ function memoryHarness(overrides) {
     // One saved fact by default, so use-detection tests have something to find.
     fetchJson: async (url, init) => {
       calls.push({ url, init: init || {} });
-      return { ok: true, status: 200, data: { id: 'abc123', url: '/s/abc123', facts: [{ text: 'prefers Python' }] } };
+      return { ok: true, status: 200, data: { id: 'abc123', url: '/s/abc123', facts: [{ text: 'prefers Python' }], max: 200 } };
     },
     storage: {
       getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -394,11 +503,33 @@ test('memory facts flow through the module, and clear-all sends the contract bod
   assert.deepEqual(calls[0].init.body, '{"all":true}', 'the contract body, not an empty one');
   await h.mod.upsertFact('  prefers Python  ', false);
   assert.deepEqual(h.mod.factsList().map((f) => f.text), ['prefers Python'], 'trimmed and stored');
+  const saved = await h.mod.upsertFact('another fact', false);
+  assert.equal(saved.ok, true, 'a successful save says so');
   const ack = await h.mod.memoryTool({ text: 'ships on Friday' });
   assert.match(ack, /Saved to memory: \"ships on Friday\"/);
   assert.equal(await h.mod.memoryTool({ text: '   ' }), 'Error: text is required.');
   await h.mod.clearAllFacts();
   assert.deepEqual(h.mod.factsList(), []);
+});
+
+test('a refused save is reported, to the page and to the model', async () => {
+  // The server caps facts ("Memory is full — remove something first"). A
+  // module that swallowed that sentence would leave the Add button silent
+  // and would tell the model "Saved to memory" about a save that failed --
+  // a lie the model would then repeat to the user.
+  const h = memoryHarness({
+    fetchJson: async () => ({ ok: false, status: 400, data: { error: 'Memory is full — remove something first' } }),
+  });
+  const refused = await h.mod.upsertFact('one more fact', false);
+  assert.deepEqual(refused, { ok: false, error: 'Memory is full — remove something first' });
+  assert.deepEqual(h.mod.factsList(), [], 'a refused save stores nothing');
+  const ack = await h.mod.memoryTool({ text: 'one more fact' });
+  assert.match(ack, /^Error: Memory is full/);
+  assert.match(ack, /was not saved/);
+  const dead = await h.mod.upsertFact('x', false);
+  const h2 = memoryHarness({ fetchJson: async () => { throw new Error('down'); } });
+  const offline = await h2.mod.upsertFact('x', false);
+  assert.deepEqual(offline, { ok: false, error: 'The server did not answer' }, 'a network failure says so too');
 });
 
 test('per-chat opt-out persists, and an opted-out chat records no use', async () => {
@@ -426,4 +557,35 @@ test('recordUse counts new uses, not redraws', async () => {
   assert.equal(counts['prefers Python'], 2, 'each completion counts once');
   h.mod.recordUse(reply, { convoId: 'c1', restoring: true });
   assert.equal(h.mod.useCounts()['prefers Python'], 2, 'a redraw re-detects but never re-counts');
+});
+
+test('loadFacts reads the server cap; capacityInfo turns it into near/full states', async () => {
+  const h = memoryHarness();
+  await h.mod.loadFacts();
+  assert.deepEqual(h.mod.capacityInfo(), { state: 'ok', remaining: 199, max: 200 },
+    'the server max rides the list response; one fact saved');
+  const noMax = memoryHarness({
+    fetchJson: async () => ({ ok: true, status: 200, data: { facts: [{ text: 'a' }] } }),
+  });
+  await noMax.mod.loadFacts();
+  assert.equal(noMax.mod.capacityInfo(), null, 'an older backend that reports no cap gets silence, not a guess');
+  const full = memoryHarness({
+    fetchJson: async () => ({ ok: true, status: 200, data: { facts: Array.from({ length: 200 }, (_, i) => ({ text: 'f' + i })), max: 200 } }),
+  });
+  await full.mod.loadFacts();
+  assert.deepEqual(full.mod.capacityInfo(), { state: 'full', remaining: 0, max: 200 });
+  const near = memoryHarness({
+    fetchJson: async () => ({ ok: true, status: 200, data: { facts: Array.from({ length: 196 }, (_, i) => ({ text: 'f' + i })), max: 200 } }),
+  });
+  await near.mod.loadFacts();
+  assert.deepEqual(near.mod.capacityInfo(), { state: 'near', remaining: 4, max: 200 },
+    'at 5 or fewer slots the store reads as nearly full');
+});
+
+test('the server reports its fact cap on the list endpoint', async () => {
+  await withApp(async (base) => {
+    const res = await (await fetch(base + '/api/memory')).json();
+    assert.equal(typeof res.max, 'number', 'the cap rides the list response');
+    assert.ok(res.max > 0, 'and is a real cap');
+  });
 });

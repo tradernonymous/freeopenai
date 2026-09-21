@@ -25,6 +25,8 @@ const {
 const { loadFromIndex, assertScannerCanRead, assertSandboxCovers } = require('./helpers/index-html.js');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // The panel's open/close/tab machinery is extracted together, because the
 // interesting rules are the ones between them: that opening draws the section it
@@ -468,8 +470,8 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   }
   // The shell carries the class the toggle flips -- a toggle for a class nobody
   // sets is a button that does nothing.
-  assert.match(HTML, /class="chat-shell[^"]*"/);
-  assert.match(HTML, /\.chat-shell\.session-hidden \.session-panel/);
+  assert.match(CSS, /class="chat-shell[^"]*"/);
+  assert.match(CSS, /\.chat-shell\.session-hidden \.session-panel/);
   // The panel is still one thing, not two: the width-budget rule that used to
   // arbitrate between two pop-ups has nothing left to arbitrate.
   assert.doesNotMatch(HTML, /panelsFitTogether|PANELS_BESIDE_MEASURE_PX/);
@@ -484,7 +486,7 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   // control every turn needs was behind a panel.
   assert.match(panel, /bottom: var\(--panel-floor, 10px\)/);
   assert.match(HTML, /function syncPanelFloor\(\)/, 'nothing measures the composer');
-  const floor = HTML.slice(HTML.indexOf('function syncPanelFloor()'), HTML.indexOf('function watchPanelFloor()'));
+  const floor = HTML.slice(APP_JS.indexOf('function syncPanelFloor()'), APP_JS.indexOf('function watchPanelFloor()'));
   assert.match(floor, /shellBox\.bottom - composerBox\.top \+ 10/, 'the floor is not derived from the composer');
   assert.match(floor, /Math\.max\(10, /, 'a collapsed composer would put the panel through the floor');
   assert.match(HTML, /panelFloorObserver = new ResizeObserver/, 'the floor does not follow a growing composer');
@@ -499,9 +501,9 @@ test('the session surface is one glass pop-up, and a drawer on a phone', () => {
   assert.doesNotMatch(panel, /flex-shrink/, 'a floating panel is not a layout column');
   // One scroll region: the section scrolls, and neither list keeps a scrollbar
   // of its own. Two nested scrollers inside 300px is a maze.
-  assert.match(HTML, /\.session-section \{ display: none; flex: 1; min-height: 0; overflow-y: auto;/);
-  assert.match(HTML, /\.session-section\.active \{ display: block; \}/);
-  assert.match(HTML, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
+  assert.match(CSS, /\.session-section \{ display: none; flex: 1; min-height: 0; overflow-y: auto;/);
+  assert.match(CSS, /\.session-section\.active \{ display: block; \}/);
+  assert.match(CSS, /\.session-section \.rail-list, \.session-section \.todo-list \{ flex: none; overflow: visible; \}/);
   // Hidden has to mean gone, not merely invisible: a transparent panel still
   // swallows the clicks meant for the transcript underneath it.
   const putAway = HTML.slice(HTML.indexOf('.chat-shell.session-hidden .session-panel {'), HTML.indexOf('.session-tabs {'));
@@ -533,7 +535,7 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // controls became one chip in the settings group.
   assert.match(HTML, /id="sessionToggle"/);
   assert.match(HTML, /id="sessionChip"/);
-  assert.match(HTML, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
+  assert.match(CSS, /<button class="session-chip"[^>]*id="sessionChip"[^>]*onclick="toggleSessionPanel\(\)"/);
   // The actions group is down to attach alone, and it now leads the settings row
   // rather than holding a line of its own -- so the slice runs from the group to
   // the first control after it.
@@ -555,7 +557,7 @@ test('the composer and the chat bar each carry one control for the surface', () 
   // way would spend the allowance before anyone touched anything.
   assert.match(HTML, /let drawWithPuter = localStorage\.getItem\(IMAGE_PUTER_KEY\) === '1';/);
   assert.match(HTML, /onclick="startImageTurn\(\)"/);
-  const hero = HTML.slice(HTML.indexOf('function startImageTurn()'), HTML.indexOf('function startPlanTurn()'));
+  const hero = HTML.slice(APP_JS.indexOf('function startImageTurn()'), APP_JS.indexOf('function startPlanTurn()'));
   assert.match(hero, /if \(!imageMode\) toggleImageMode\(\);/);
 });
 
@@ -578,7 +580,7 @@ test('every control in the toolbar is built from the same four values', () => {
   assert.match(composer, /\.composer-attach \{[^}]*background: var\(--ctl-bg\)/);
   assert.match(composer, /\.composer-attach \{[^}]*border-color: var\(--border\)/);
   // A visible keyboard focus ring on all of them, which the pills never had.
-  assert.match(HTML, /\.effort-chip:focus-visible[\s\S]{0,200}box-shadow: var\(--glow\)/);
+  assert.match(CSS, /\.effort-chip:focus-visible[\s\S]{0,200}box-shadow: var\(--glow\)/);
 });
 
 test('the reasoning summary can be switched off, and the setting reaches old replies', () => {
@@ -589,15 +591,15 @@ test('the reasoning summary can be switched off, and the setting reaches old rep
   assert.match(HTML, /document\.getElementById\('reasoningCheck'\)\.checked = reasoningVisible/);
   // Both renderers consult it, so a reply that arrives while it is off leaves
   // no scratchpad behind...
-  const strip = HTML.slice(HTML.indexOf('function setReasoningStrip'), HTML.indexOf('function setReasoningContent'));
+  const strip = HTML.slice(APP_JS.indexOf('function setReasoningStrip'), APP_JS.indexOf('function setReasoningContent'));
   assert.match(strip, /!text \|\| !reasoningVisible/);
-  const content = HTML.slice(HTML.indexOf('function setReasoningContent'), HTML.indexOf('// Puter streams reasoning'));
+  const content = HTML.slice(APP_JS.indexOf('function setReasoningContent'), HTML.indexOf('// Puter streams reasoning'));
   assert.match(content, /!text \|\| !reasoningVisible/);
   // ...but the text is still recorded, so switching it on shows the reasoning of
   // replies that already happened rather than only the next one.
   assert.match(strip, /if \(text\) el\.dataset\.rawReasoning = text;/);
   assert.match(content, /if \(text\) el\.dataset\.rawReasoning = text;/);
-  const toggle = HTML.slice(HTML.indexOf('function setReasoningVisible'), HTML.indexOf('// Ticking a row goes through'));
+  const toggle = HTML.slice(APP_JS.indexOf('function setReasoningVisible'), HTML.indexOf('// Ticking a row goes through'));
   assert.match(toggle, /querySelectorAll\('\.message\.bot'\)/);
 });
 
@@ -605,14 +607,14 @@ test('the skills panel records what applied, per conversation', () => {
   // Written on the turn, from what actually rode along -- not from what was
   // pinned, which would claim credit for skills the router never used.
   assert.match(HTML, /logSkillsUsed\(activeConversationId, activeSkills\)/);
-  const log = HTML.slice(HTML.indexOf('function logSkillsUsed'), HTML.indexOf('function renderSkillRail'));
+  const log = HTML.slice(APP_JS.indexOf('function logSkillsUsed'), APP_JS.indexOf('function renderSkillRail'));
   assert.match(log, /pinned: !!skill\.pinned/);
   assert.match(log, /turns: prev\.turns \+ 1/);
   // Every path that changes which chat is open redraws it, from one place.
-  assert.match(HTML, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
+  assert.match(CSS, /renderSkillBar\(\);[\s\S]{0,320}renderSkillRail\(\);/);
   // A skill that is no longer installed cannot be pinned, so tapping it drops
   // the row rather than offering something that cannot work.
-  const tap = HTML.slice(HTML.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
+  const tap = HTML.slice(APP_JS.indexOf('function dropSkillUseRow'), HTML.indexOf('// --- Sending a work step'));
   assert.match(tap, /if \(isPinned\) \{ removePinnedSkill\(name\); return; \}/);
   assert.match(tap, /no longer installed/);
   // But an empty catalogue is not a missing skill: a chat that never needed a

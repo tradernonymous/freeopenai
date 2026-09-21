@@ -1,0 +1,82 @@
+appId: com.neura.os
+---
+# Navigation: mode switching progress
+- launchApp
+- assertVisible:
+    text: "Chat"
+- tapOn:
+    text: "Plan"
+    optional: true
+- assertVisible:
+    text: "Plan"
+    timeout: 5000
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    text: "Build"
+    optional: true
+- assertVisible:
+    text: "Build"
+    timeout: 5000
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    text: "Chat"
+    optional: true
+- assertVisible:
+    text: "Chat"
+    timeout: 5000
+
+---
+# Navigation: session panel progress
+- launchApp
+- assertVisible:
+    text: "Chat"
+- tapOn:
+    id: "session_button"
+    optional: true
+- tapOn:
+    text: "Session"
+    optional: true
+- assertVisible:
+    text: "Skills"
+    optional: true
+- tapOn:
+    text: "Tasks"
+    optional: true
+- assertVisible:
+    text: "Tasks"
+    optional: true
+- tapOn:
+    text: "Image"
+    optional: true
+- assertVisible:
+    text: "Image"
+    optional: true
+- tapOn:
+    id: "session_button"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- assertNotVisible:
+    text: "Skills"
+    timeout: 5000
+
+---
+# Navigation: history drawer
+- launchApp
+- assertVisible:
+    text: "Chat"
+- tapOn:
+    id: "drawer_button"
+    optional: true
+- assertVisible:
+    text: "Recent Chats"
+    optional: true
+- tapOn:
+    text: "New chat"
+    optional: true
+- assertVisible:
+    id: "chat_input"
+    timeout: 5000

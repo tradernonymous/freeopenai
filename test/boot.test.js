@@ -80,13 +80,17 @@ function bootSandbox() {
 }
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const chatlib = fs.readFileSync(path.join(__dirname, '..', 'chatlib.js'), 'utf8');
 // share-memory.js loads via its own <script src> too, and the page builds its
-// one instance in top-level scope.
+// one instance in top-level scope. canvas-artifacts.js is the same pattern.
 const shareMemoryLib = fs.readFileSync(path.join(__dirname, '..', 'share-memory.js'), 'utf8');
+const canvasArtifactsLib = fs.readFileSync(path.join(__dirname, '..', 'canvas-artifacts.js'), 'utf8');
 
-test('index.html has exactly one main inline script', () => {
-  assert.equal(inlineScripts(html).length, 1);
+test('app.js contains the main application script', () => {
+  assert.ok(appJs.length > 1000, 'app.js should contain the main application code');
+  assert.ok(appJs.includes('initializeApp'), 'app.js should define initializeApp()');
 });
 
 test('the page initializes without a temporal-dead-zone error', () => {
@@ -95,10 +99,11 @@ test('the page initializes without a temporal-dead-zone error', () => {
   // chatlib.js loads first in the page, via its own <script src>.
   vm.runInContext(chatlib, context);
   vm.runInContext(shareMemoryLib, context);
+  vm.runInContext(canvasArtifactsLib, context);
 
   let thrown = null;
   try {
-    vm.runInContext(inlineScripts(html)[0], context);
+    vm.runInContext(appJs, context);
   } catch (err) {
     thrown = err;
   }
@@ -112,7 +117,7 @@ test('the page initializes without a temporal-dead-zone error', () => {
 });
 
 test('state read during initialization is declared before initializeApp() runs', () => {
-  const script = inlineScripts(html)[0];
+  const script = appJs;
   const initCall = script.indexOf('\n        initializeApp();');
   assert.ok(initCall > 0, 'expected a top-level initializeApp() call');
 

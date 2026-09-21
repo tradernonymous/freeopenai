@@ -409,12 +409,31 @@ function currentAppUser(req) {
   return verifySession(sessionSecret, cookies[SESSION_COOKIE_NAME]);
 }
 
+// Origins the desktop shell actually runs on: the Tauri 2 production origin
+// (http://tauri.localhost on Windows, tauri://localhost on macOS/Linux) and
+// the vite dev server. Localhost on any port stays allowed for local
+// tooling. Everything else -- any public website -- gets no grant, because
+// reflecting an arbitrary origin back with credentials on would let it act
+// with the user's session cookie.
+function corsOriginFor(origin) {
+  if (!origin) return null;
+  if (origin === 'http://tauri.localhost' || origin === 'https://tauri.localhost' || origin === 'tauri://localhost') return origin;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+  return null;
+}
+
 function setSessionCookie(res, username, req) {
   const value = signSession(sessionSecret, username);
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  // The desktop shell is a separate origin, so a Lax cookie never rides its
+  // fetches and sign-in would not stick there. Browsers only accept a
+  // cross-site cookie as SameSite=None with Secure, which the https proxy
+  // header guarantees on Railway; same-site browser use keeps Lax.
+  const crossSite = secure !== '' && !!corsOriginFor(req.headers.origin);
+  const sameSite = crossSite ? '; SameSite=None; Secure' : `; SameSite=Lax${secure}`;
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
+    `${SESSION_COOKIE_NAME}=${value}; HttpOnly;${sameSite}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   );
 }
 
@@ -2242,7 +2261,9 @@ function memoryKey(req) {
 
 function handleMemoryList(req, res) {
   const list = memoryStore.get(memoryKey(req)) || [];
-  sendJson(res, 200, { facts: list });
+  // max rides along so the page can warn before the next save is refused,
+  // instead of the user meeting the cap as a failure.
+  sendJson(res, 200, { facts: list, max: MEMORY_MAX_FACTS });
 }
 
 function handleMemoryUpsert(req, res) {
@@ -2658,12 +2679,56 @@ function imageDrawOrder(requested, options) {
 // follows the conversation, so this is the operator's view of the order rather
 // than the browser's. It is also what a failure message is written from, so the
 // variables it names are the ones that would actually fix the setup.
+// Every image model this service could be asked for, best first.
+//
+// A picker that can only offer the one model the server already chose is not a
+// picker: on a gateway with several image models (OpenRouter, an OpenAI-shaped
+// proxy, a Google key) the choice is real and the user can see it. The list is
+// what this service actually has -- its own current model, the operator's
+// naming, and whatever its catalogue publishes that can draw -- and never a
+// model invented here, because sending an id a service does not serve is how a
+// draw fails with someone else's error message.
+function imageModelChoices(id, candidate, store) {
+  const out = [];
+  const push = (value) => {
+    const text = String(value || '').trim();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  push(candidate && candidate.model);
+  if (store) {
+    push(store.modelEnv ? process.env[store.modelEnv] : '');
+    push(store.defaultModel);
+    push(store.discoveredModel);
+    for (const alt of (Array.isArray(store.models) ? store.models : [])) push(alt);
+  }
+  const warm = modelCache.get(id);
+  if (warm && Array.isArray(warm.models)) {
+    const rank = (text) => IMAGE_MODEL_MARKERS.findIndex((marker) => text.toLowerCase().includes(marker));
+    const drawable = warm.models
+      .map((m) => (typeof m === 'string' ? m : (m && m.id) || ''))
+      .filter(Boolean)
+      .filter((text) => {
+        const lower = text.toLowerCase();
+        if (IMAGE_MODEL_NOT.some((word) => lower.includes(word))) return false;
+        return rank(text) >= 0;
+      })
+      // The same ranking discovery uses, so the model the server would pick is
+      // the first row of the list rather than a separate opinion.
+      .sort((a, b) => rank(a) - rank(b));
+    for (const text of drawable) push(text);
+  }
+  return out.slice(0, 12);
+}
+
 function imageProviderRow(id, provider, candidate, store) {
   return {
     id,
     label: provider.label,
     ready: !candidate.error,
     model: candidate.model || '',
+    // What the picker offers for this service. `model` stays as the one it is
+    // ready to use, so an older client that reads only that is unaffected.
+    models: imageModelChoices(id, candidate, store),
     reason: candidate.error || '',
     // Only the store that states its dimensions has any: everywhere else a size
     // is a preference the upstream may or may not know.
@@ -5479,6 +5544,28 @@ function createRequestHandler(root) {
   return (req, res) => {
     const urlPath = req.url.split('?')[0];
 
+    // ---- desktop CORS -------------------------------------------------
+    // The Tauri webview is a different origin from the engine site, so the
+    // browser blocks every fetch unless the response carries
+    // Access-Control-Allow-Origin -- and any non-simple request (the JSON
+    // login POST, PUT/DELETE routes) needs the OPTIONS preflight answered,
+    // which previously fell through the router as 405 and killed those
+    // calls before auth ever ran.
+    const allowOrigin = corsOriginFor(req.headers.origin);
+    if (allowOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Max-Age', '600');
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+    }
+
     if (req.method === 'POST' && urlPath === '/api/login') {
       handleLogin(req, res);
       return;
@@ -5629,6 +5716,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  corsOriginFor,
   githubApiHeaders,
   resolveSafePath,
   isAssetPath,

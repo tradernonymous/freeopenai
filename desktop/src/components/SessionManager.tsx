@@ -1,54 +1,59 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api';
+import { OPEN_CHAT_EVENT } from '../screens/ChatScreen';
+import type { ChatSession } from '../screens/ChatScreen';
+// UMD module: loaded for its side effect, read off globalThis. The history this
+// panel shows is the chat store's, not a second parse of localStorage.
+import '../chats.js';
 
-interface Session {
-  id: string;
-  title?: string;
-  createdAt: number;
-  messageCount?: number;
+const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
+
+interface Props {
+  onExport: () => void;
+  onImport: (file: File) => void;
+  importMsg: string;
 }
 
-export default function SessionManager() {
-  const [sessions, setSessions] = useState<Session[]>([]);
+/** History panel: the chats saved on this machine, newest first. */
+export default function SessionManager({ onExport, onImport, importMsg }: Props) {
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    loadSessions();
+    setSessions(chats.byRecency(chats.readStore()) as ChatSession[]);
   }, []);
 
-  const loadSessions = async () => {
-    try {
-      const data = await api.chat({ messages: [], model: '', stream: false });
-      setSessions([]);
-    } catch {
-      setSessions([]);
-    }
-  };
-
-  const filtered = sessions.filter((s) => !search || (s.title || '').toLowerCase().includes(search.toLowerCase()));
+  const filtered = sessions.filter((s) =>
+    !search ||
+    (s.title || '').toLowerCase().includes(search.toLowerCase()) ||
+    s.messages.some((m) => m.content.toLowerCase().includes(search.toLowerCase())));
 
   return (
     <div className="session-manager">
       <div className="session-manager-header">
         <h3>History</h3>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search sessions…"
-        />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search chats…" />
       </div>
       <div className="session-list">
         {filtered.map((s) => (
-          <div key={s.id} className="session-item">
+          <div key={s.id} className="session-item" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_CHAT_EVENT, { detail: s.id }))}>
             <div className="session-title">{s.title || 'Untitled'}</div>
             <div className="session-meta">
-              <span>{new Date(s.createdAt).toLocaleDateString()}</span>
-              {s.messageCount != null && <span>{s.messageCount} msgs</span>}
+              <span>{new Date(s.updatedAt || Date.now()).toLocaleString()}</span>
+              <span>{s.messages.length} msgs</span>
             </div>
           </div>
         ))}
-        {filtered.length === 0 && <div className="empty">No sessions yet</div>}
+        {filtered.length === 0 && <div className="empty">No chats match.</div>}
       </div>
+      <div className="session-manager-footer">
+        <button onClick={onExport}>Export</button>
+        <label className="import-label">
+          Import
+          <input type="file" accept="application/json" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); }} />
+        </label>
+      </div>
+      {importMsg && <div className="sidebar-hint">{importMsg}</div>}
     </div>
   );
 }

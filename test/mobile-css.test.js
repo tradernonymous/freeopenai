@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // The one prelude that names a small screen. A landscape phone is normally
 // wider than 640px -- 844x390 is typical -- so keying the ergonomic fixes to
@@ -14,8 +16,8 @@ const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 // and the JS reads the same string.
 const SMALL_CONDITION = '(max-width: 640px), (max-height: 520px) and (orientation: landscape)';
 const SMALL_PRELUDE = '@media ' + SMALL_CONDITION;
-const SMALL = HTML.slice(HTML.indexOf(SMALL_PRELUDE), HTML.indexOf('@media (max-width: 380px)'));
-const LANDSCAPE = HTML.slice(HTML.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
+const SMALL = CSS.slice(CSS.indexOf(SMALL_PRELUDE), CSS.indexOf('@media (max-width: 380px)'));
+const LANDSCAPE = CSS.slice(CSS.indexOf('@media (max-height: 520px) and (orientation: landscape) {'));
 
 // Every `selector { ... }` pair inside a media block, so an assertion can ask
 // about a rule rather than about a slice of text that a reorder would move.
@@ -39,7 +41,7 @@ test('the composer area never pads the bottom safe-area inset the body already p
   // body { padding-bottom: env(safe-area-inset-bottom) } plus the same inset
   // again on .chat-input-area doubled the dead zone under the composer on
   // every phone with a home indicator.
-  const blocks = [...HTML.matchAll(/\.chat-input-area\s*\{[^}]*\}/g)].map((m) => m[0]);
+  const blocks = [...CSS.matchAll(/\.chat-input-area\s*\{[^}]*\}/g)].map((m) => m[0]);
   assert.ok(blocks.length >= 3, 'expected the base rule plus both media overrides -- re-point this test');
   for (const block of blocks) {
     assert.doesNotMatch(
@@ -49,7 +51,7 @@ test('the composer area never pads the bottom safe-area inset the body already p
     );
   }
   // The body inset itself stays: it is the single source of the inset.
-  assert.match(HTML, /body\s*\{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom\)/);
+  assert.match(CSS, /body\s*\{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom\)/);
 });
 
 test('CSS and JS name the same small screen, and the JS adds nothing of its own', () => {
@@ -58,11 +60,11 @@ test('CSS and JS name the same small screen, and the JS adds nothing of its own'
   // cover over the chat. It drifted before by carrying a (hover: none) test the
   // CSS does not have, which is how a short landscape window got an overlay
   // that started open.
-  const declared = HTML.match(/const SMALL_SCREEN_QUERY = '([^']+)'/);
+  const declared = APP_JS.match(/const SMALL_SCREEN_QUERY = '([^']+)'/);
   assert.ok(declared, 'SMALL_SCREEN_QUERY is gone -- re-point this test');
   assert.equal(declared[1], SMALL_CONDITION, 'the JS condition and the CSS prelude have drifted apart');
 
-  const fn = HTML.match(/function isNarrowScreen\(\)\s*\{[\s\S]*?\n        \}/);
+  const fn = APP_JS.match(/function isNarrowScreen\(\)\s*\{[\s\S]*?\n        \}/);
   assert.ok(fn, 'isNarrowScreen is gone -- re-point this test');
   assert.match(fn[0], /matchMedia\(SMALL_SCREEN_QUERY\)/, 'isNarrowScreen must read the shared condition');
   assert.doesNotMatch(fn[0], /hover:\s*none/, 'the CSS has no pointer test here, so the JS must not invent one');
@@ -131,13 +133,13 @@ test('every control in the composer row is one height on a small screen', () => 
     assert.ok(shortened.includes(sel), `${sel} must shorten with the rest of the strip in landscape`);
   }
   // And the one native widget in the row shares the control radius.
-  const select = HTML.match(/\n        \.effort-select \{[^}]*\}/);
+  const select = CSS.match(/\n        \.effort-select \{[^}]*\}/);
   assert.ok(select, '.effort-select is gone -- re-point this test');
   assert.match(select[0], /border-radius: var\(--ctl-r\)/);
 });
 
 test('a finger-sized target is one number, not a scatter of 44px literals', () => {
-  assert.match(HTML, /--touch:\s*44px/, 'the touch token is gone -- re-point this test');
+  assert.match(CSS, /--touch:\s*44px/, 'the touch token is gone -- re-point this test');
   const sized = rules(SMALL).filter((r) => /min-height:\s*var\(--touch\)/.test(r.body));
   assert.ok(sized.length, 'the shared block must size its selects with var(--touch)');
   assert.match(SMALL, /\.settings-row select\s*\{[^}]*min-height:\s*var\(--touch\)/);
@@ -147,14 +149,14 @@ test('a screen with no hover reveals its own delete controls', () => {
   // The history delete and the todo remove are hover-only by default, which on
   // a touchscreen is never. Keyed to the pointer rather than the width, because
   // a touchscreen laptop has no hover either.
-  const noHover = HTML.match(/@media \(hover: none\)\s*\{[\s\S]*?\n        \}/);
+  const noHover = CSS.match(/@media \(hover: none\)\s*\{[\s\S]*?\n        \}/);
   assert.ok(noHover, 'the (hover: none) block is gone -- re-point this test');
   assert.match(noHover[0], /\.history-item \.history-delete, \.todo-remove\s*\{\s*opacity:\s*1/);
 });
 
 test('the bar height is a token, so no block can set a different one by hand', () => {
-  assert.match(HTML, /--bar-h:\s*44px/);
-  assert.match(HTML, /\.chat-bar\s*\{[^}]*height:\s*var\(--bar-h\)/);
+  assert.match(CSS, /--bar-h:\s*44px/);
+  assert.match(CSS, /\.chat-bar\s*\{[^}]*height:\s*var\(--bar-h\)/);
   assert.match(SMALL, /:root\s*\{\s*--bar-h:\s*52px/);
   assert.match(LANDSCAPE, /:root\s*\{\s*--bar-h:\s*46px/);
 });
@@ -166,7 +168,7 @@ test('the chat card shrinks to the shell instead of overflowing it on a phone', 
   // bar's right edge (the menu button) past the viewport, and .chat-shell's
   // overflow:hidden clipped it. The toolbar scrolls now; the card must not
   // blow out to its min-content width.
-  const block = HTML.match(/\.chat-card\s*\{[^}]*\}/);
+  const block = CSS.match(/\.chat-card\s*\{[^}]*\}/);
   assert.ok(block, '.chat-card rule is gone -- re-point this test');
   assert.match(block[0], /min-width:\s*0/, 'the card must be allowed to shrink -- a refactor re-added min-width:auto');
 });

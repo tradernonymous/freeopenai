@@ -12,30 +12,26 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "longDescription": "FreeAI4U Desktop — the free AI coding agent for Windows. Chat, plan, build, and design with local-first privacy.",
-    "shortDescription": "FreeAI4U Desktop",
+    "longDescription": "NeuraOS Desktop — chat, images, local models and approval-gated builds, in one window.",
+    "shortDescription": "NeuraOS Desktop",
     "category": "productivity",
     "fileAssociations": [],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
     }
   },
-  "productName": "FreeAI4U Desktop",
-  "version": "2.0.0",
+  "productName": "NeuraOS Desktop",
+  "version": "2.8.1",
   "identifier": "com.freeai4u.desktop",
-  "plugins": {
-    "window-state": {},
-    "store": {},
-    "updater": {
-      "active": true
-    }
-  },
   "app": {
     "windows": [
       {
-        "title": "FreeAI4U Desktop",
+        "title": "NeuraOS",
         "width": 1360,
         "height": 900,
         "resizable": true,
@@ -45,7 +41,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* wss://*.puter.com; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
     },
     "trayIcon": {
       "iconPath": "icons/icon.png",
