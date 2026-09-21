@@ -3,6 +3,8 @@
 export interface LocalModelEntry {
   /** Hugging Face GGUF repository. */
   id: string;
+  /** The one file in it the app downloads. */
+  file: string;
   label: string;
   note: string;
   quant: string;
@@ -32,6 +34,13 @@ export interface FitReport {
 export type LocalModelState = 'stopped' | 'starting' | 'ready' | 'error';
 
 export declare const CATALOGUE: LocalModelEntry[];
+export declare function parseHfRef(input: string): { repo: string; file: string; quant: string } | null;
+export declare function parseQuant(name: string): string;
+export declare function isSplit(name: string): boolean;
+export declare function toolRisk(quant: string): string;
+export declare function quantRank(quant: string): number;
+export declare function pickDefaultFile(files: Array<{ name: string; size: number }>, machineInfo?: MachineFacts): { name: string; size: number } | null;
+export declare function downloadLabel(progress: any): string;
 export declare const STATES: LocalModelState[];
 export declare function machine(): MachineFacts;
 export declare function fit(entry: Partial<LocalModelEntry>, machineInfo?: MachineFacts): FitReport;
@@ -57,6 +66,8 @@ export declare function providerRow(status: any): {
   baseUrl: string;
   local: boolean;
   model: string;
+  apiKey: string;
+  file: string;
 } | null;
 export declare function chatBody(model: string, messages: Array<{ role: string; content: any }>): {
   model: string;

@@ -27,8 +27,11 @@ mod local;
 mod models;
 mod net;
 mod save;
+mod secrets;
 mod webview2;
 use tauri::generate_handler;
+use tauri::Emitter;
+use tauri_plugin_deep_link::DeepLinkExt;
 
 // Set only by the tray Quit: the close handler hides the window (tray-style),
 // so it has to be able to tell a close from a quit.
@@ -55,6 +58,8 @@ fn main() {
         // Registered first: a second launch must focus the window that exists
         // rather than build a second tray icon and a second app object.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A neuraos:// link in the second launch's argv is delivered by
+            // the deep-link plugin (single-instance's `deep-link` feature).
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -66,6 +71,10 @@ fn main() {
             net::remote_get,
             net::remote_download,
             net::run_installer,
+            net::open_url,
+            secrets::secret_get,
+            secrets::secret_set,
+            secrets::secret_delete,
             diag::diagnostics,
             local::local_pick_folder,
             local::local_list_dir,
@@ -79,8 +88,17 @@ fn main() {
             models::local_open_releases,
             models::local_model_start,
             models::local_model_status,
-            models::local_model_stop
+            models::local_model_stop,
+            models::local_model_download,
+            models::local_model_download_cancel,
+            models::local_models_list,
+            models::local_model_delete,
+            models::local_models_scan
         ])
+        // neuraos:// links: "Use this model" on Hugging Face, once NeuraOS is
+        // listed there, and the app's own bookmarklet until then. The URL is
+        // handed to the frontend as an event; nothing is acted on here.
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         // Registered for the frontend's future use; today the app stores its
@@ -93,6 +111,20 @@ fn main() {
             if let Ok(dir) = app.path().app_log_dir() {
                 crash::set_path(dir.join(crash::CRASH_FILE));
             }
+            // Deep links arrive as a list of URLs; the frontend decides what
+            // a neuraos://model?repo=... means.
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                let _ = handle.emit("deep-link", urls);
+            });
+            // A dev build is not installed, so the scheme is registered at
+            // runtime; the installer registers it for a release.
+            #[cfg(debug_assertions)]
+            {
+                let _ = app.deep_link().register_all();
+            }
+
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;

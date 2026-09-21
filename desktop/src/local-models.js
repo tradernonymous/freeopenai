@@ -26,55 +26,217 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   var GB = 1024 * 1024 * 1024;
 
-  // Sizes are the published Q4_K_M file sizes, rounded up, and they are what
-  // the fit check uses. A repo with no listed quant lets llama.cpp choose.
+  // Unsloth's Dynamic 2.0 GGUFs, one file each, sizes read from the Hub API
+  // on 2026-09-22 and rounded up; they are what the fit check uses. The
+  // UD-Q4_K_XL quant is Unsloth's own recommended default, and every entry
+  // here keeps tool calling intact (their guide: 1-bit quants do not).
+  // Smallest first so a 4 GB machine sees something it can run at the top.
   var CATALOGUE = [
     {
-      id: 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF',
-      label: 'Qwen3 Coder 30B (MoE)',
-      note: 'The strongest free coder here, and a mixture-of-experts, so it is fast for its size.',
-      quant: 'Q4_K_M',
-      sizeGb: 18.6,
-      context: 32768,
-      quality: 'best',
-    },
-    {
-      id: 'unsloth/Qwen2.5-Coder-7B-Instruct-GGUF',
-      label: 'Qwen2.5 Coder 7B',
-      note: 'The everyday coding model: good edits, quick on a laptop CPU.',
-      quant: 'Q4_K_M',
-      sizeGb: 4.7,
-      context: 32768,
-      quality: 'good',
-    },
-    {
-      id: 'unsloth/gemma-3-4b-it-GGUF',
-      label: 'Gemma 3 4B',
-      note: 'General chat and writing. Small enough to leave running.',
-      quant: 'Q4_K_M',
-      sizeGb: 3.1,
-      context: 32768,
-      quality: 'good',
-    },
-    {
-      id: 'unsloth/Llama-3.2-3B-Instruct-GGUF',
-      label: 'Llama 3.2 3B',
-      note: 'Fast, light, and honest about being small. Good first local model.',
-      quant: 'Q4_K_M',
-      sizeGb: 2.0,
+      id: 'unsloth/Qwen3.5-4B-GGUF',
+      file: 'Qwen3.5-4B-UD-Q4_K_XL.gguf',
+      label: 'Qwen3.5 4B',
+      note: 'Small and quick: drafts, summaries, short coding help. Runs on a CPU.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 2.8,
       context: 16384,
       quality: 'light',
     },
     {
-      id: 'unsloth/Llama-3.2-1B-Instruct-GGUF',
-      label: 'Llama 3.2 1B',
-      note: 'The smallest useful thing here: drafts, summaries, autocomplete.',
-      quant: 'Q4_K_M',
-      sizeGb: 0.8,
-      context: 8192,
+      id: 'unsloth/gemma-4-E2B-it-GGUF',
+      file: 'gemma-4-E2B-it-UD-Q4_K_XL.gguf',
+      label: 'Gemma 4 E2B',
+      note: 'Chat and writing on laptops with no GPU or 4 GB of VRAM.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 3.0,
+      context: 16384,
       quality: 'light',
     },
+    {
+      id: 'unsloth/gemma-4-E4B-it-GGUF',
+      file: 'gemma-4-E4B-it-UD-Q4_K_XL.gguf',
+      label: 'Gemma 4 E4B',
+      note: 'The everyday model for an 8 GB machine: good answers, tool calls that work.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 4.8,
+      context: 32768,
+      quality: 'good',
+    },
+    {
+      id: 'unsloth/Qwen3.5-9B-GGUF',
+      file: 'Qwen3.5-9B-UD-Q4_K_XL.gguf',
+      label: 'Qwen3.5 9B',
+      note: 'Better reasoning and coding; wants 8 GB of VRAM or 16 GB of RAM.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 5.6,
+      context: 32768,
+      quality: 'good',
+    },
+    {
+      id: 'unsloth/gemma-4-12b-it-GGUF',
+      file: 'gemma-4-12b-it-UD-Q4_K_XL.gguf',
+      label: 'Gemma 4 12B',
+      note: 'A strong general model for a 16 GB machine.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 6.9,
+      context: 32768,
+      quality: 'good',
+    },
+    {
+      id: 'unsloth/gpt-oss-20b-GGUF',
+      file: 'gpt-oss-20b-UD-Q4_K_XL.gguf',
+      label: 'gpt-oss 20B',
+      note: 'OpenAI’s open model: agent and tool-heavy work on 12–16 GB.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 11.1,
+      context: 32768,
+      quality: 'best',
+    },
+    {
+      id: 'unsloth/Qwen3.8-27B-GGUF',
+      file: 'Qwen3.8-27B-UD-Q4_K_XL.gguf',
+      label: 'Qwen3.8 27B',
+      note: 'Frontier-class open model for a 24 GB GPU or 32 GB of RAM.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 16.4,
+      context: 32768,
+      quality: 'best',
+    },
+    {
+      id: 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF',
+      file: 'Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf',
+      label: 'Qwen3 Coder 30B (MoE)',
+      note: 'The strongest free coder here; a mixture-of-experts, so fast for its size.',
+      quant: 'UD-Q4_K_XL',
+      sizeGb: 16.5,
+      context: 32768,
+      quality: 'best',
+    },
   ];
+
+  // ---- what the user pasted -------------------------------------------------
+
+  /**
+   * parseHfRef(input)
+   *
+   * Everything a person might paste to name a model, reduced to
+   * { repo, file, quant }: a repo id, a Hub URL (the repo page, a folder, a
+   * file under blob/ or resolve/), a `repo:QUANT` spec, an hf.co short link,
+   * or a neuraos://model?repo=&file= deep link. null when it is none of those.
+   */
+  function parseHfRef(input) {
+    var text = String(input || '').trim();
+    if (!text) return null;
+    var repo = '';
+    var file = '';
+    var quant = '';
+    var m;
+    if (/^neuraos:\/\//i.test(text)) {
+      try {
+        var u = new URL(text);
+        repo = u.searchParams.get('repo') || u.searchParams.get('model') || '';
+        file = u.searchParams.get('file') || '';
+        quant = u.searchParams.get('quant') || '';
+      } catch {
+        return null;
+      }
+    } else if ((m = text.match(/^(?:https?:\/\/)?(?:www\.)?(?:huggingface\.co|hf\.co)\/([^\/?#\s]+)\/([^\/?#\s]+)(?:\/(?:tree|blob|resolve)\/[^\/?#\s]+(?:\/([^?#\s]+))?)?\/?(?:[?#].*)?$/i))) {
+      repo = m[1] + '/' + m[2];
+      var rest = m[3] ? decodeURIComponent(m[3]) : '';
+      if (/\.gguf$/i.test(rest)) file = rest;
+      else if (rest && parseQuant(rest)) quant = parseQuant(rest);
+    } else if ((m = text.match(/^([\w.-]+)\/([\w.-]+)(?::([\w.-]+))?$/))) {
+      repo = m[1] + '/' + m[2];
+      quant = m[3] || '';
+    } else {
+      return null;
+    }
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.split('/').some(function (p) { return p.startsWith('.'); })) return null;
+    if (!quant && file) quant = parseQuant(file);
+    return { repo: repo, file: file, quant: quant.toUpperCase() };
+  }
+
+  /** The quant tag in a file name: UD-Q4_K_XL, Q4_K_M, IQ2_XXS, BF16... */
+  function parseQuant(name) {
+    var base = String(name || '').replace(/\.gguf$/i, '');
+    var m = base.match(/((?:UD-)?(?:IQ[0-9]+_[A-Z0-9_]+|Q[0-9]+_[A-Z0-9_]+)|BF16|F16|F32)/i);
+    return m ? m[1].toUpperCase() : '';
+  }
+
+  /** Multi-part files (…-00001-of-00003.gguf) need every part; the app fetches
+   *  one file at a time, so they are shown but not offered. */
+  function isSplit(name) {
+    return /-\d{5}-of-\d{5}\.gguf$/i.test(String(name || ''));
+  }
+
+  /**
+   * What a quant does to tool calling, in words. Unsloth's own tool-calling
+   * guide: 1-bit quants break it; 2-bit is the smallest that still works.
+   */
+  function toolRisk(quant) {
+    var q = String(quant || '').toUpperCase();
+    if (/(^|-)(IQ1|Q1)/.test(q)) return 'breaks tool calling (1-bit)';
+    if (/(^|-)(IQ2|Q2)/.test(q)) return 'weaker tool calling (2-bit)';
+    return '';
+  }
+
+  /**
+   * quantRank(quant)
+   *
+   * The order the app prefers quants in when the user has not named one: the
+   * file with the LOWEST rank that also fits the machine is the default. A
+   * rank of Infinity means "never pick this on the user's behalf" (it can
+   * still be chosen by hand).
+   *
+   * TODO(human): decide the preference order. Unsloth recommends UD-Q4_K_XL
+   * as the default and Q4_K_M as the plain fallback; UD-Q2_K_XL is the
+   * smallest quant that keeps tool calling; IQ1_* breaks it; Q8_0/BF16/F16
+   * are for people with the memory to spare and are rarely the right default.
+   * Return a number for the given quant string (already upper-cased; may be
+   * '' when the file name carries no tag).
+   */
+  function quantRank(quant) {
+    var q = String(quant || '').toUpperCase();
+    // TODO(human)
+    return q ? 50 : Infinity;
+  }
+
+  /**
+   * The file to offer first from a repo's GGUF list: split files and
+   * tool-breaking quants are skipped, then the best-ranked quant that fits
+   * this machine, then the best-ranked quant at all.
+   */
+  function pickDefaultFile(files, machineInfo) {
+    var spec = machineInfo || machine();
+    var rows = (Array.isArray(files) ? files : [])
+      .filter(function (f) { return f && /\.gguf$/i.test(f.name || '') && !isSplit(f.name); })
+      .map(function (f) {
+        var quant = parseQuant(f.name);
+        return {
+          file: f,
+          quant: quant,
+          rank: quantRank(quant),
+          fits: fit({ sizeGb: Number(f.size || 0) / GB, context: 16384 }, spec).fits,
+        };
+      })
+      .filter(function (r) { return isFinite(r.rank) && !/1-bit/.test(toolRisk(r.quant)); })
+      .sort(function (a, b) { return a.rank - b.rank || Number(a.file.size || 0) - Number(b.file.size || 0); });
+    if (!rows.length) return null;
+    var fitting = rows.filter(function (r) { return r.fits; });
+    return (fitting[0] || rows[0]).file;
+  }
+
+  /** "1.2 of 4.8 GB · 25%" for a download in flight. */
+  function downloadLabel(progress) {
+    var p = progress || {};
+    var got = Number(p.received || 0) / GB;
+    var total = Number(p.total || 0) / GB;
+    if (p.error) return 'Stopped: ' + p.error;
+    if (p.cancelled) return 'Paused at ' + got.toFixed(1) + ' GB';
+    if (p.done) return total.toFixed(1) + ' GB, done';
+    if (!total) return got.toFixed(2) + ' GB so far';
+    return got.toFixed(1) + ' of ' + total.toFixed(1) + ' GB · ' + Math.floor((got / total) * 100) + '%';
+  }
 
   /** What the machine can hold. `deviceMemory` is in GB, rounded down by the
    *  browser and capped at 8, so this is a floor and the guard is generous. */
@@ -161,13 +323,21 @@
     return state;
   }
 
+  /** What to call a running model: the repo's name, or the file's. */
+  function shortName(value) {
+    var v = value || {};
+    if (v.repo) return String(v.repo).split('/').pop();
+    if (v.file) return String(v.file).split(/[\\/]/).pop().replace(/\.gguf$/i, '');
+    return 'model';
+  }
+
   /** The one-line chip: what is loaded, on which port, for how long. */
   function statusLine(status) {
     var value = status || {};
     var state = stateOf(value);
     if (state === 'stopped') return 'No local model running';
     if (state === 'error') return 'Local model failed: ' + (value.detail || 'no reason reported');
-    var name = value.repo ? String(value.repo).split('/').pop() : 'model';
+    var name = shortName(value);
     var where = value.base_url || ('http://127.0.0.1:' + (value.port || ''));
     if (state === 'starting') return 'Loading ' + name + '…';
     var seconds = Math.max(0, Math.round(Number(value.uptime_ms || 0) / 1000));
@@ -178,14 +348,18 @@
   function providerRow(status) {
     var value = status || {};
     if (stateOf(value) !== 'ready') return null;
+    var name = shortName(value);
     return {
       id: 'local',
-      label: 'Local · ' + (value.repo ? String(value.repo).split('/').pop() : 'model'),
+      label: 'Local · ' + name,
       configured: true,
       kind: 'chat',
       baseUrl: value.base_url,
       local: true,
-      model: value.repo,
+      model: value.repo || name,
+      // The key the shell started the server with; api.ts sends it.
+      apiKey: String(value.api_key || ''),
+      file: String(value.file || ''),
     };
   }
 
@@ -235,6 +409,13 @@
 
   return {
     CATALOGUE: CATALOGUE,
+    parseHfRef: parseHfRef,
+    parseQuant: parseQuant,
+    isSplit: isSplit,
+    toolRisk: toolRisk,
+    quantRank: quantRank,
+    pickDefaultFile: pickDefaultFile,
+    downloadLabel: downloadLabel,
     STATES: STATES,
     WARMUP_MS: WARMUP_MS,
     warmup: warmup,

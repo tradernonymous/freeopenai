@@ -185,6 +185,28 @@ fn client() -> Result<reqwest::Client, String> {
 }
 
 async fn get_following(url: &str, extra: &[String]) -> Result<reqwest::Response, String> {
+    get_following_with(url, extra, None, None).await
+}
+
+/// Whether a bearer token may be sent to this URL: only the Hub itself. A
+/// redirect to a CDN host must not carry it -- the same rule the official
+/// huggingface_hub client applies.
+pub fn may_carry_token(url: &str) -> bool {
+    match host_of(url) {
+        Some(host) => host == "huggingface.co" || host.ends_with(".huggingface.co"),
+        None => false,
+    }
+}
+
+/// The GET behind every fetch here, following redirects by hand so each hop is
+/// checked. `resume_from` becomes a Range header (a partial download picks up
+/// where it stopped); `token` is sent only to hosts may_carry_token allows.
+pub async fn get_following_with(
+    url: &str,
+    extra: &[String],
+    resume_from: Option<u64>,
+    token: Option<&str>,
+) -> Result<reqwest::Response, String> {
     let client = client()?;
     let mut current = url.trim().to_string();
     for _ in 0..=MAX_REDIRECTS {
@@ -194,8 +216,18 @@ async fn get_following(url: &str, extra: &[String]) -> Result<reqwest::Response,
                 host_of(&current).unwrap_or_else(|| current.clone())
             ));
         }
-        let response = client
-            .get(&current)
+        let mut request = client.get(&current);
+        if let Some(from) = resume_from {
+            if from > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={}-", from));
+            }
+        }
+        if let Some(t) = token {
+            if !t.is_empty() && may_carry_token(&current) {
+                request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", t));
+            }
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| format!("{}: {}", current, e))?;
@@ -295,6 +327,65 @@ pub async fn remote_download(
     }))
 }
 
+/// Pages this shell will open in the user's browser: sign-in and release
+/// pages. A command that opens an arbitrary URL is a command a page could
+/// abuse, so the list is short and https-only.
+pub const OPEN_HOSTS: &[&str] = &[
+    "github.com",
+    "huggingface.co",
+    "puter.com",
+    "*.puter.com",
+    "unsloth.ai",
+    "docs.unsloth.ai",
+];
+
+pub fn may_open(url: &str) -> bool {
+    if scheme_of(url).as_deref() != Some("https") {
+        return false;
+    }
+    match host_of(url) {
+        Some(host) => OPEN_HOSTS.iter().any(|entry| host_matches(&host, entry)),
+        None => false,
+    }
+}
+
+/// Hand a URL to the default browser. Windows goes through `cmd start` with
+/// no console window; elsewhere xdg-open.
+pub fn open_in_browser(url: &str) -> Result<(), String> {
+    if !may_open(url) {
+        return Err(format!(
+            "refused to open {} (only https pages on {} are opened)",
+            host_of(url).unwrap_or_else(|| url.to_string()),
+            OPEN_HOSTS.join(", ")
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = std::process::Command::new("cmd");
+        // `start` treats & and ^ as shell characters; the URL is quoted so a
+        // query string survives, and the empty "" is start's window title.
+        cmd.args(["/d", "/s", "/c", "start", "", &url.replace('&', "^&")]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    open_in_browser(url.trim())
+}
+
 #[cfg(windows)]
 fn spawn_detached(program: &Path, args: &[String]) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
@@ -346,6 +437,24 @@ mod tests {
 
     fn extra(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn only_https_pages_on_the_short_list_are_opened() {
+        assert!(may_open("https://puter.com/action/sign-in?x=1"));
+        assert!(may_open("https://api.puter.com/x"));
+        assert!(may_open("https://github.com/ggml-org/llama.cpp/releases/latest"));
+        assert!(!may_open("http://puter.com/"));
+        assert!(!may_open("https://example.com/"));
+        assert!(!may_open("file:///C:/Windows/System32/calc.exe"));
+        assert!(!may_open("https://puter.com.evil.com/"));
+    }
+
+    #[test]
+    fn a_token_goes_to_the_hub_and_never_to_a_cdn_hop() {
+        assert!(may_carry_token("https://huggingface.co/unsloth/x/resolve/main/y.gguf"));
+        assert!(!may_carry_token("https://cas-bridge.xethub.hf.co/xet-bridge-us/abc"));
+        assert!(!may_carry_token("https://cdn-lfs.hf.co/repos/x"));
     }
 
     #[test]

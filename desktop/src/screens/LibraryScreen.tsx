@@ -57,6 +57,8 @@ export default function LibraryScreen() {
   const [hfPolling, setHfPolling] = useState(false);
 
   useEffect(() => {
+    const onAuth = () => setHfSignedIn(hfAuth.signedIn());
+    window.addEventListener(hfAuth.AUTH_CHANGED_EVENT, onAuth);
     setHfSignedIn(hfAuth.signedIn());
     if (hfAuth.signedIn()) {
       hfAuth.fetchUser().then(u => { if (u) setHfUser(u); });

@@ -26,6 +26,16 @@ export interface HfDeviceCode {
 }
 
 export declare const TOKEN_KEY: string;
+export declare const SECRET_TOKEN: string;
+export declare const SECRET_USER: string;
+export declare const AUTH_CHANGED_EVENT: string;
+export interface SecretStore {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+export declare function configureStore(store: SecretStore | null): void;
+export declare function hydrate(): Promise<boolean>;
 export declare const CLIENT_ID: string;
 export declare const SCOPE: string;
 

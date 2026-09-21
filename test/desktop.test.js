@@ -65,10 +65,14 @@ test('the UI version constant matches the built version (update check + badges)'
   assert.equal(m[1], pkg.version);
 });
 
-test('tauri.conf.json: plugins ship no config maps (the window-state startup panic)', () => {
+test('tauri.conf.json: only deep-link has a plugin config (the window-state startup panic)', () => {
   const conf = JSON.parse(read('src-tauri', 'tauri.conf.json'));
-  assert.equal(conf.plugins, undefined,
-    'window-state/store reject config maps; `{}` under plugins panics every launch');
+  // window-state and store reject config maps -- `{}` under their key panics
+  // every launch. deep-link is the one plugin that MUST be configured here:
+  // the scheme list is what the installer registers.
+  assert.deepEqual(Object.keys(conf.plugins || {}), ['deep-link'],
+    'window-state/store reject config maps; only deep-link may be configured');
+  assert.deepEqual(conf.plugins['deep-link'], { desktop: { schemes: ['neuraos'] } });
 });
 
 test('the shell: release is windowed (no console flash) and never expect()s at boot', () => {

@@ -151,14 +151,19 @@ export async function streamLocalChat(
   messages: Array<{ role: string; content: any }>,
   onFrame: (frame: StreamFrame) => void,
   signal?: AbortSignal,
+  apiKey?: string,
 ): Promise<void> {
   const origin = String(baseUrl || '').replace(/\/+$/, '');
   if (!origin) throw new ApiError(0, 'No local model server is running.');
+  // The shell starts llama-server with a random --api-key so that nothing
+  // else on this machine (or a web page in a browser) can use the port.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   let res: Response;
   try {
     res = await fetch(`${origin}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ model: model || 'local', messages, stream: true }),
       signal,
     });

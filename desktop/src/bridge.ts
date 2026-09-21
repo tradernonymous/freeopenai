@@ -214,7 +214,11 @@ export interface LocalModelStatus {
   state: 'stopped' | 'starting' | 'ready' | 'error';
   repo: string;
   quant: string;
+  /** The file it was started from, when it was a file and not a -hf spec. */
+  file: string;
   port: number;
+  /** The bearer token the server was started with; every request must carry it. */
+  api_key: string;
   pid: number;
   uptime_ms: number;
   base_url: string;
@@ -242,6 +246,8 @@ export async function localOpenReleases(): Promise<void> {
 export async function localModelStart(args: {
   repo: string;
   quant?: string;
+  /** A file in the models folder, or an absolute path the scan found. Wins over repo. */
+  file?: string;
   port?: number;
   ctx?: number;
   gpuLayers?: number;
@@ -292,4 +298,108 @@ export async function shellFetch(input: RequestInfo | URL): Promise<Response> {
     json: async () => JSON.parse(res.body),
     text: async () => res.body,
   } as unknown as Response;
+}
+
+// ---- opening a page in the user's browser --------------------------------
+//
+// The shell refuses anything that is not https on a short host list (net.rs
+// OPEN_HOSTS): this is for sign-in pages and release pages, not a launcher.
+export async function openUrl(url: string): Promise<void> {
+  await call('open_url', { url });
+}
+
+// ---- the weights themselves ---------------------------------------------
+//
+// Downloaded by the shell into <app data>/models with progress events
+// (`local-download`), resumed from a .part if they stopped, and listed from
+// there -- or found where another tool (Unsloth Studio, the Hugging Face
+// cache, LM Studio) already put them.
+
+export interface LocalModelFile {
+  file: string;
+  path: string;
+  bytes: number;
+  /** A .part a download left behind: resumable, not runnable. */
+  partial: boolean;
+}
+
+export interface LocalDownloadProgress {
+  repo: string;
+  file: string;
+  received: number;
+  total: number;
+  done: boolean;
+  cancelled: boolean;
+  error: string;
+  path: string;
+}
+
+export async function localModelDownload(args: { repo: string; file: string; token?: string }): Promise<{
+  path: string;
+  bytes: number;
+  resumed?: boolean;
+  already?: boolean;
+  cancelled?: boolean;
+}> {
+  return call('local_model_download', { repo: args.repo, file: args.file, token: args.token ?? null });
+}
+
+export async function localModelDownloadCancel(): Promise<{ cancelling: boolean; file: string }> {
+  return call('local_model_download_cancel');
+}
+
+export async function localModelsList(): Promise<{ dir: string; files: LocalModelFile[] }> {
+  return call('local_models_list');
+}
+
+export async function localModelDelete(file: string): Promise<{ removed: number }> {
+  return call('local_model_delete', { file });
+}
+
+export async function localModelsScan(dirs?: string[]): Promise<{ dirs: string[]; files: LocalModelFile[] }> {
+  return call('local_models_scan', { dirs: dirs ?? [] });
+}
+
+/** Subscribe to a shell event through Tauri's event plugin (see onLocalRun). */
+async function subscribe<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+  const w = window as any;
+  const internals = w.__TAURI_INTERNALS__;
+  if (!internals || typeof internals.invoke !== 'function' || typeof internals.transformCallback !== 'function') {
+    return () => {};
+  }
+  const id = internals.transformCallback((payload: T) => handler(payload), false);
+  try {
+    await call('plugin:event|listen', { event, target: { kind: 'Any' }, handler: id });
+  } catch {
+    return () => {};
+  }
+  return () => {
+    call('plugin:event|unlisten', { event, eventId: id }).catch(() => {});
+  };
+}
+
+export function onLocalDownload(handler: (progress: LocalDownloadProgress) => void): Promise<() => void> {
+  return subscribe<LocalDownloadProgress>('local-download', handler);
+}
+
+/** neuraos:// links handed over by the shell, as a list of URLs. */
+export function onDeepLink(handler: (urls: string[]) => void): Promise<() => void> {
+  return subscribe<string[]>('deep-link', (payload) => handler(Array.isArray(payload) ? payload : [String(payload)]));
+}
+
+// ---- secrets ---------------------------------------------------------------
+//
+// The OS credential store (secrets.rs). Keys are the app's own short names;
+// a value is whatever string the caller stores (the HF token JSON).
+
+export async function secretGet(key: string): Promise<string | null> {
+  return (await call<string | null>('secret_get', { key })) ?? null;
+}
+
+export async function secretSet(key: string, value: string): Promise<void> {
+  await call('secret_set', { key, value });
+}
+
+export async function secretDelete(key: string): Promise<void> {
+  await call('secret_delete', { key });
 }

@@ -7,6 +7,9 @@ const assert = require('node:assert/strict');
 // the API surface.
 
 const hfAuth = require('../desktop/src/hf-auth.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const read = (...parts) => fs.readFileSync(path.join(__dirname, '..', ...parts), 'utf8');
 const hfModels = require('../desktop/src/hf-models.js');
 
 // ---- hf-auth -------------------------------------------------------------
@@ -229,5 +232,89 @@ describe('hf-inference', () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+// ---- the token's home ----------------------------------------------------
+//
+// Under the shell the token lives in the OS credential store (secrets.rs),
+// mirrored in memory; a token found in localStorage is moved there once.
+
+describe('hf-auth secret store', () => {
+  function fakeStore() {
+    const rows = new Map();
+    return {
+      rows,
+      get: async (k) => (rows.has(k) ? rows.get(k) : null),
+      set: async (k, v) => { rows.set(k, v); },
+      remove: async (k) => { rows.delete(k); },
+    };
+  }
+  function fakeLocalStorage(initial = {}) {
+    const rows = new Map(Object.entries(initial));
+    return {
+      getItem: (k) => (rows.has(k) ? rows.get(k) : null),
+      setItem: (k, v) => rows.set(k, String(v)),
+      removeItem: (k) => rows.delete(k),
+      rows,
+    };
+  }
+
+  it('hydrate moves a localStorage token into the store and removes the plain-text copy', async () => {
+    const store = fakeStore();
+    const token = { access_token: 'abc', expires_at: Date.now() + 60_000 };
+    globalThis.localStorage = fakeLocalStorage({ [hfAuth.TOKEN_KEY]: JSON.stringify(token), [hfAuth.USER_KEY || 'freeai4u.hf_user']: '{"name":"me"}' });
+    try {
+      hfAuth.configureStore(store);
+      assert.equal(hfAuth.signedIn(), false, 'nothing is read from localStorage while a store is configured');
+      assert.equal(await hfAuth.hydrate(), true);
+      assert.equal(hfAuth.signedIn(), true);
+      assert.equal(hfAuth.accessToken().access_token, 'abc');
+      assert.equal(store.rows.get(hfAuth.SECRET_TOKEN), JSON.stringify(token));
+      assert.equal(globalThis.localStorage.getItem(hfAuth.TOKEN_KEY), null, 'the plain-text copy is gone');
+      assert.deepEqual(hfAuth.cachedUser(), { name: 'me' });
+    } finally {
+      hfAuth.configureStore(null);
+      delete globalThis.localStorage;
+    }
+  });
+
+  it('save and clear go to the store, never to localStorage, and announce themselves', async () => {
+    const store = fakeStore();
+    globalThis.localStorage = fakeLocalStorage();
+    let announced = 0;
+    const scope = globalThis;
+    const hadDispatch = typeof scope.dispatchEvent === 'function';
+    scope.dispatchEvent = () => { announced += 1; return true; };
+    scope.Event = scope.Event || function Event(name) { this.type = name; };
+    try {
+      hfAuth.configureStore(store);
+      await hfAuth.hydrate();
+      hfAuth.saveToken({ access_token: 'new', expires_at: Date.now() + 60_000 });
+      await new Promise((r) => setImmediate(r));
+      assert.equal(JSON.parse(store.rows.get(hfAuth.SECRET_TOKEN)).access_token, 'new');
+      assert.equal(globalThis.localStorage.rows.size, 0, 'localStorage stays empty');
+      assert.equal(hfAuth.signedIn(), true);
+      hfAuth.clearToken();
+      await new Promise((r) => setImmediate(r));
+      assert.equal(store.rows.has(hfAuth.SECRET_TOKEN), false);
+      assert.equal(hfAuth.signedIn(), false);
+      assert.ok(announced >= 3, `hydrate, save and clear each announce (${announced})`);
+    } finally {
+      hfAuth.configureStore(null);
+      delete globalThis.localStorage;
+      if (!hadDispatch) delete scope.dispatchEvent;
+    }
+  });
+
+  it('the app configures the store under the shell and the screens listen', () => {
+    const app = read('desktop', 'src', 'App.tsx');
+    assert.match(app, /hfAuth\.configureStore\(\{/);
+    assert.match(app, /hfAuth\.hydrate\(\)/);
+    assert.match(read('desktop', 'src', 'screens', 'ChatScreen.tsx'), /hfAuth\.AUTH_CHANGED_EVENT/);
+    assert.match(read('desktop', 'src', 'screens', 'LibraryScreen.tsx'), /hfAuth\.AUTH_CHANGED_EVENT/);
+    const secrets = read('desktop', 'src-tauri', 'src', 'secrets.rs');
+    assert.match(secrets, /use keyring::Entry;/);
+    assert.match(secrets, /KEYS: &\[&str\] = &\["hf_token", "hf_user"\]/, 'only the app\'s own keys');
   });
 });

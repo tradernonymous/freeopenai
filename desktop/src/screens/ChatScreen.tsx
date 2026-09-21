@@ -99,6 +99,8 @@ interface ProviderRow {
   baseUrl?: string;
   model?: string;
   local?: boolean;
+  /** The --api-key the shell started llama-server with. */
+  apiKey?: string;
 }
 
 export default function ChatScreen() {
@@ -114,6 +116,13 @@ export default function ChatScreen() {
   const [models, setModels] = useState<Array<{ id: string; free?: string }>>([]);
   // The picker's list: the engine's providers plus a local model if one is up.
   const [hfToken, setHfToken] = useState<string | null>(() => hfAuth.accessToken()?.access_token || null);
+  // The token lives in the OS credential store under the shell and is read
+  // asynchronously at boot (hf-auth.js hydrate); this hears it arrive.
+  useEffect(() => {
+    const onAuth = () => setHfToken(hfAuth.accessToken()?.access_token || null);
+    window.addEventListener(hfAuth.AUTH_CHANGED_EVENT, onAuth);
+    return () => window.removeEventListener(hfAuth.AUTH_CHANGED_EVENT, onAuth);
+  }, []);
   const hfRow = hfInference.providerRow(hfToken);
   const choices = [
     ...(localRow && !providerRows.some((p) => p.id === 'local') ? [localRow] : []),
@@ -357,7 +366,7 @@ export default function ChatScreen() {
       } else if (active.provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', active.model, turns, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
-        }, controller.signal);
+        }, controller.signal, localRow?.apiKey || undefined);
       } else {
         await streamChat(active.provider, { model: active.model, messages: turns }, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
@@ -474,7 +483,7 @@ export default function ChatScreen() {
       } else if (provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
           if (frame.content) append(frame.content);
-        }, controller.signal);
+        }, controller.signal, localRow?.apiKey || undefined);
       } else {
         await streamChat(active.provider, { model, messages: turns }, (frame) => {
           if (frame.content) append(frame.content);

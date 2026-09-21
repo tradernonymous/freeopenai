@@ -4015,3 +4015,74 @@ button.linkish {
 .diff-add { color: var(--ok); background: rgba(74, 222, 128, 0.08); display: block; }
 .diff-del { color: var(--err); background: rgba(248, 113, 113, 0.08); display: block; }
 .diff-ctx { color: var(--text-2); }
+
+/* ---- Local models: add, download, already here ------------------------- */
+.local-heading {
+  margin: 18px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.local-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.local-add input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.local-hub {
+  margin-bottom: 8px;
+}
+.local-hub-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+  font-size: 12px;
+}
+.local-row.is-default {
+  border-color: var(--accent);
+}
+.local-row-name .chip {
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 1px 6px;
+}
+.local-download {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+.local-download.is-error {
+  border-color: var(--warn, #d29922);
+}
+.local-download-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.local-download-head .settings-hint {
+  margin-left: auto;
+}
+.local-download-bar {
+  height: 4px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--bg-3, var(--border));
+  overflow: hidden;
+}
+.local-download-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}

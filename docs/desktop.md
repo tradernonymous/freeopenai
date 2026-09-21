@@ -142,7 +142,16 @@ A model can run on this machine, and it answers in the Chat screen as **Local** 
 
 The binary is the user's. This app neither ships `llama-server.exe` nor downloads one behind their back: **Open the llama.cpp releases** takes them to the page, **I have the file…** takes the file they unzip into the app's own folder (checked by name first — a path is not a licence to run whatever is at it), and the app runs it from there, or from `PATH` if a copy is already installed. A verified download of a release whose digest we have not published would be a claim this app cannot make, so it does not make it.
 
-Start passes `-hf <repo>:<quant>`, so **llama.cpp fetches and caches the weights itself** — the Unsloth-documented path, and the reason there is no GGUF downloader in this repo. The server is started on `--host 127.0.0.1` only, and the app reaps the child on quit: a model server left running after the window is gone is a process the user cannot see.
+**The weights are the app's business** (Phase 0 of the roadmap). Settings → Local models has four ways in, top to bottom:
+
+1. **Add from Hugging Face** — paste a repo (`unsloth/gemma-4-E4B-it-GGUF`), a model page link, a folder link or a `.gguf` file link (`src/local-models.js` `parseHfRef` reads all of them, and a `neuraos://model?repo=…&file=…` deep link). The app lists the repo's GGUF files with quant, size and whether they fit this machine, marks the one it would pick (`pickDefaultFile`: Unsloth's `UD-Q4_K_XL` first, never a split part, never a 1-bit quant — Unsloth's guide says those break tool calling), and **Download** streams it into `<app data>/models` with a progress bar (`models.rs` `local_model_download`, `local-download` events). A download lands in `<name>.part` and is renamed only when whole; a `.part` left by a pause or a crash is **Resumed** with a Range request. One download at a time.
+2. **Recommended** — Unsloth Dynamic quants, one file each, smallest first, sizes read from the Hub.
+3. **Downloaded** — what is in the models folder, with Start and Delete.
+4. **Already on this PC** — GGUFs another tool downloaded (the Hugging Face cache, Unsloth Studio, LM Studio, or any folder you choose) run from where they are. Safetensors cannot: llama-server needs GGUF.
+
+Start passes `-m <file>` for a file the app has, or `-hf <repo>:<quant>` for a repo it has not fetched (llama.cpp's own downloader, silently). Every start adds `--jinja` — without it the OpenAI `tools` field is ignored — and a random `--api-key` that the chat sends as a bearer token, so nothing else on the machine (or a web page in a browser) can use the port. The server is started on `--host 127.0.0.1` only, and the app reaps the child on quit: a model server left running after the window is gone is a process the user cannot see.
+
+"Use this model" on Hugging Face lists local apps that Hugging Face itself maintains; NeuraOS appears there only after an upstream pull request, which needs a public release first. Until then the `neuraos://` scheme is registered (`tauri-plugin-deep-link`) and any link of that shape opens Settings with the model looked up; nothing downloads on the strength of a link.
 
 `--ctx-size` and `--threads` come from the machine, and the **memory guard** is the part that matters: starting a model the machine cannot hold is the one way this feature can freeze a computer, so `src/local-models.js` estimates weights + KV cache + overhead against the memory the browser reports (which is rounded down and capped, so it is treated as a floor), refuses what does not fit, and says the numbers. A model that only just fits is called *tight* rather than comfortable.
 
@@ -150,7 +159,7 @@ Lifecycle in one rule: a server that has not answered `/health` is **starting**,
 
 ## Hugging Face integration
 
-Library → **Hugging Face** lets the user sign in with their HF account (device-code OAuth, [`src/hf-auth.js`](../desktop/src/hf-auth.js)), search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. The token is stored in `localStorage` under `freeai4u.hf_token` and is never sent to the engine.
+Library → **Hugging Face** lets the user sign in with their HF account (device-code OAuth, [`src/hf-auth.js`](../desktop/src/hf-auth.js)), search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. The OAuth scope includes `inference-api`, so the same token works for chat through the Hugging Face router (`src/hf-inference.js`).
 
 The model browser shows each GGUF file's quant tag (`Q4_K_M`, `Q8_0`, `F16`, etc.), a rough RAM fit estimate (`fits 8GB`, `fits 16GB`), and whether the repo is gated. Gated repos require the HF token to unlock downloads.
 

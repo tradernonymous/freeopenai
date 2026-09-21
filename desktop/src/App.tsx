@@ -15,7 +15,13 @@ import CodeScreen from './screens/CodeScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { hasShell, pickFolder } from './bridge';
+import { hasShell, onDeepLink, pickFolder, secretDelete, secretGet, secretSet } from './bridge';
+import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
+import './hf-auth.js';
+import './local-models.js';
+
+const hfAuth: typeof import('./hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const localModels: typeof import('./local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 import CommandPalette, { type PaletteEntry } from './components/CommandPalette';
 import StatusBar from './components/StatusBar';
 import Icon from './components/Icon';
@@ -112,6 +118,39 @@ export default function App() {
         setSignedIn(false);
         setOutcome(connection.classify({ error: err, origin: api.getServer() }));
       });
+  }, []);
+
+  // Under the shell the Hugging Face token lives in the OS credential store,
+  // not localStorage: point hf-auth at it and read it in (moving a plain-text
+  // token over on the first run). Screens hear AUTH_CHANGED_EVENT when it lands.
+  useEffect(() => {
+    if (!hasShell()) return;
+    hfAuth.configureStore({
+      get: (key: string) => secretGet(key),
+      set: (key: string, value: string) => secretSet(key, value),
+      remove: (key: string) => secretDelete(key),
+    });
+    hfAuth.hydrate().catch(() => { /* not signed in is a normal state */ });
+  }, []);
+
+  // neuraos://model?repo=...&file=... -- from a Hugging Face "Use this model"
+  // entry once NeuraOS is listed there, or the app's own bookmarklet. Nothing
+  // is downloaded on the strength of a link: Settings opens with the model
+  // looked up and the person clicks Download.
+  useEffect(() => {
+    if (!hasShell()) return;
+    let stop = () => {};
+    onDeepLink((urls) => {
+      for (const url of urls) {
+        const ref = localModels.parseHfRef(url);
+        if (!ref) continue;
+        try { localStorage.setItem(PENDING_MODEL_KEY, JSON.stringify(ref)); } catch { /* best effort */ }
+        setView('settings');
+        window.dispatchEvent(new Event(PENDING_MODEL_EVENT));
+        return;
+      }
+    }).then((unsubscribe) => { stop = unsubscribe; });
+    return () => stop();
   }, []);
 
   useEffect(() => {

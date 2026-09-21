@@ -9,10 +9,17 @@
 //      shows a code and a URL, the user authorises in any browser, and the app
 //      polls until the token arrives.
 //
-// The token is stored in localStorage under the key `freeai4u.hf_token`. It
-// is never logged, never committed, and never sent to the FreeAI4U engine —
-// it stays on this machine and is only used for Hugging Face Hub requests
-// (model downloads, gated-repo access).
+// Where the token lives: under the desktop shell, in the OS credential store
+// (Credential Manager on Windows; secrets.rs), read once at boot by hydrate()
+// into memory and written back on every change. In a plain browser -- vite
+// dev, the web build -- there is no such store, and localStorage under
+// `freeai4u.hf_token` is what there is. A token found in localStorage when a
+// store IS available is moved into the store and removed, so an existing
+// install stops holding it in plain text on its first run.
+//
+// The token is never logged, never committed, and never sent to the FreeAI4U
+// engine -- it stays on this machine and is only used for Hugging Face
+// requests (model downloads, gated-repo access, the inference router).
 //
 // UMD like the repo's other shared modules.
 (function (root, factory) {
@@ -22,6 +29,11 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   var TOKEN_KEY = 'freeai4u.hf_token';
   var USER_KEY  = 'freeai4u.hf_user';
+  // The credential-store names (secrets.rs KEYS), and the event fired when
+  // the token changes or arrives, so a mounted screen can re-read it.
+  var SECRET_TOKEN = 'hf_token';
+  var SECRET_USER = 'hf_user';
+  var AUTH_CHANGED_EVENT = 'freeai4u:hf-auth-changed';
 
   // HF's public OAuth app — no client secret, PKCE only.
   var CLIENT_ID = '3087aa798961c2c8e4432978c9641a19';
@@ -55,13 +67,88 @@
 
   // --- token store --------------------------------------------------------
 
+  // The credential store, when there is one: { get(key), set(key, value),
+  // remove(key) }, all returning promises. Reads are synchronous everywhere
+  // else in this module, so the store is mirrored in memory by hydrate().
+  var secretStore = null;
+  var memory = { token: null, user: null, hydrated: false };
+
+  function browserStorage() {
+    try {
+      var scope = typeof globalThis !== 'undefined' ? globalThis : {};
+      return scope.localStorage || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function announce() {
+    try {
+      var scope = typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope && typeof scope.dispatchEvent === 'function' && typeof scope.Event === 'function') {
+        scope.dispatchEvent(new scope.Event(AUTH_CHANGED_EVENT));
+      }
+    } catch { /* a listener is a convenience, not a requirement */ }
+  }
+
+  function configureStore(store) {
+    secretStore = store && typeof store.get === 'function' ? store : null;
+    memory = { token: null, user: null, hydrated: false };
+  }
+
+  /**
+   * Read the store into memory, moving a localStorage token into it on the
+   * way. Resolves with whether a token is now present. Safe to call with no
+   * store (a no-op) and safe to call twice.
+   */
+  async function hydrate() {
+    if (!secretStore) return signedIn();
+    var storage = browserStorage();
+    try {
+      var raw = await secretStore.get(SECRET_TOKEN);
+      var rawUser = await secretStore.get(SECRET_USER);
+      if (!raw && storage) {
+        // First run after the move: the plain-text copy is taken in and
+        // removed. The user copy is not a secret, but it goes with its token.
+        var legacy = storage.getItem(TOKEN_KEY);
+        var legacyUser = storage.getItem(USER_KEY);
+        if (legacy) {
+          await secretStore.set(SECRET_TOKEN, legacy);
+          raw = legacy;
+          storage.removeItem(TOKEN_KEY);
+        }
+        if (legacyUser) {
+          await secretStore.set(SECRET_USER, legacyUser);
+          rawUser = legacyUser;
+          storage.removeItem(USER_KEY);
+        }
+      }
+      memory.token = raw ? JSON.parse(raw) : null;
+      memory.user = rawUser ? JSON.parse(rawUser) : null;
+    } catch {
+      memory.token = null;
+      memory.user = null;
+    }
+    memory.hydrated = true;
+    announce();
+    return signedIn();
+  }
+
   function saveToken(token) {
+    if (secretStore) {
+      memory.token = token;
+      Promise.resolve(secretStore.set(SECRET_TOKEN, JSON.stringify(token))).catch(function () {});
+      announce();
+      return;
+    }
     try {
       localStorage.setItem(TOKEN_KEY, JSON.stringify(token));
     } catch { /* best effort */ }
+    announce();
   }
 
   function loadToken() {
+    if (secretStore) return memory.token || null;
     try {
       var raw = localStorage.getItem(TOKEN_KEY);
       if (!raw) return null;
@@ -72,10 +159,28 @@
   }
 
   function clearToken() {
+    if (secretStore) {
+      memory.token = null;
+      memory.user = null;
+      Promise.resolve(secretStore.remove(SECRET_TOKEN)).catch(function () {});
+      Promise.resolve(secretStore.remove(SECRET_USER)).catch(function () {});
+      announce();
+      return;
+    }
     try {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(USER_KEY);
     } catch { /* best effort */ }
+    announce();
+  }
+
+  function saveUser(user) {
+    if (secretStore) {
+      memory.user = user;
+      Promise.resolve(secretStore.set(SECRET_USER, JSON.stringify(user))).catch(function () {});
+      return;
+    }
+    try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
   }
 
   /** The access token string, or null when not signed in. */
@@ -248,7 +353,7 @@
       });
       if (!res.ok) return null;
       var user = await res.json();
-      try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
+      saveUser(user);
       return user;
     } catch {
       return null;
@@ -256,6 +361,7 @@
   }
 
   function cachedUser() {
+    if (secretStore) return memory.user || null;
     try {
       var raw = localStorage.getItem(USER_KEY);
       return raw ? JSON.parse(raw) : null;
@@ -281,6 +387,11 @@
 
   return {
     TOKEN_KEY: TOKEN_KEY,
+    SECRET_TOKEN: SECRET_TOKEN,
+    SECRET_USER: SECRET_USER,
+    AUTH_CHANGED_EVENT: AUTH_CHANGED_EVENT,
+    configureStore: configureStore,
+    hydrate: hydrate,
     CLIENT_ID: CLIENT_ID,
     SCOPE: SCOPE,
     signedIn: signedIn,
