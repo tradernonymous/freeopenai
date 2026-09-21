@@ -16,7 +16,10 @@ function read(...parts) {
 
 test('design generation goes through the engine chat route, not the placeholder', () => {
   const screen = read('src', 'screens', 'DesignScreen.tsx');
-  assert.match(screen, /streamChat\(/, 'generation rides the real chat route');
+  // streamChat is invoked through a ternary now (a saved/local provider uses
+  // streamMine instead), so the name no longer sits directly against its own
+  // call parens -- streamChat)(... is the real call site.
+  assert.match(screen, /streamChat\)?\(/, 'generation rides the real chat route');
   assert.match(screen, /api\.designGenerate/, 'the project hook is still recorded');
   const server = fs.readFileSync(path.join(DESKTOP, '..', 'server.js'), 'utf8');
   assert.match(
