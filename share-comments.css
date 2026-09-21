@@ -1,0 +1,30 @@
+/* Share Comments Styles */
+.share-fork-btn:hover {
+    background: var(--accent) !important;
+    color: var(--bg) !important;
+}
+.share-comments-section {
+    margin-top: 12px;
+}
+.comments-list {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+.comments-list::-webkit-scrollbar {
+    width: 6px;
+}
+.comments-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.comments-list::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+.comment-item:hover {
+    background: var(--surface-2);
+}
+#commentInput:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-bg);
+}

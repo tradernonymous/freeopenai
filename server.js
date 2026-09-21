@@ -29,7 +29,9 @@ const {
 } = require('./github.js');
 const { createBuildSessions, handleBuildRoute, resolveInside, protectedPath, searchFolder, refusedGit } = require('./agent-sessions.js');
 const workspace = require('./workspace-isolation.js');
+const { limiter, ENDPOINT_LIMITS } = require('./rate-limits.js');
 const { PresenceServer } = require('./websocket-server.js');
+const { WsAuth } = require('./websocket-auth.js');
 
 const port = process.env.PORT || 3000;
 const rootDir = __dirname;
@@ -52,6 +54,7 @@ if (!sessionSecret) {
   sessionSecret = crypto.randomBytes(32).toString('hex');
   console.warn('SESSION_SECRET not set — using an ephemeral secret; sessions will not survive a restart.');
 }
+const wsAuth = new WsAuth(sessionSecret);
 
 // A transient provider answer — 429 from a free tier, or the 5xx/no-response
 // of a busy or overloaded upstream — means the work deserves another try rather
