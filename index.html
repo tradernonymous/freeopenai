@@ -41,7 +41,7 @@
         </div>
         <div class="top-nav-links">
             <div class="nav-chat-group" onmouseenter="showChatHistory()" onmouseleave="hideChatHistory()">
-                <button class="top-nav-link active" type="button" onclick="switchViewFromDrawer('chat'); updateNavActive(this);" aria-label="Chat">
+                <button class="top-nav-link active" type="button" onclick="switchView('chat'); updateNavActive(this);" aria-label="Chat">
                     <i class="fas fa-comment-dots"></i>
                     <span>Chat</span>
                 </button>
@@ -55,33 +55,44 @@
                     <div class="chat-history-list" id="chatHistoryList"></div>
                 </div>
             </div>
-            <button class="top-nav-link" type="button" onclick="switchViewFromDrawer('models'); updateNavActive(this);" aria-label="Models">
+            <button class="top-nav-link" type="button" onclick="switchView('models'); updateNavActive(this);" aria-label="Models">
                 <i class="fas fa-microchip"></i>
                 <span>Models</span>
             </button>
-            <button class="top-nav-link" type="button" onclick="switchViewFromDrawer('settings'); updateNavActive(this);" aria-label="Settings">
+            <button class="top-nav-link" type="button" onclick="switchView('settings'); updateNavActive(this);" aria-label="Settings">
                 <i class="fas fa-cog"></i>
                 <span>Settings</span>
             </button>
-            <button class="top-nav-link" type="button" onclick="switchViewFromDrawer('gallery'); updateNavActive(this);" aria-label="Gallery">
+            <button class="top-nav-link" type="button" onclick="switchView('gallery'); updateNavActive(this);" aria-label="Gallery">
                 <i class="fas fa-images"></i>
                 <span>Gallery</span>
             </button>
-            <button class="top-nav-link" type="button" onclick="switchViewFromDrawer('build'); updateNavActive(this);" aria-label="Build">
+            <button class="top-nav-link" type="button" onclick="switchView('build'); updateNavActive(this);" aria-label="Build">
                 <i class="fas fa-hammer"></i>
                 <span>Build</span>
             </button>
+            <button class="top-nav-link" type="button" onclick="switchView('design'); updateNavActive(this);" aria-label="Design">
+                <i class="fas fa-pen-ruler"></i>
+                <span>Design</span>
+            </button>
         </div>
         <div class="top-nav-actions">
+            <!-- Replaces the old hamburger menu: that drawer's own rows were
+                 mostly broken (calls to functions that no longer existed) or
+                 already reachable elsewhere (Appearance has its own icon,
+                 Settings/Gallery/Models/Build are top-nav tabs). The command
+                 palette was the drawer's one row with no other touch-friendly
+                 entry point (Ctrl+P has no phone equivalent), so it gets the
+                 slot instead. -->
+            <button class="icon-btn" type="button" onclick="openPalette()" title="Command palette" aria-label="Command palette">
+                <i class="fas fa-magnifying-glass"></i>
+            </button>
             <button class="icon-btn" type="button" onclick="toggleHelp()" title="Help" aria-label="Help">
                 <i class="fas fa-question-circle"></i>
             </button>
-            <button class="icon-btn" type="button" onclick="openDrawer()" title="Menu" aria-label="Menu">
-                <i class="fas fa-bars"></i>
-            </button>
         </div>
     </nav>
-    
+
 
     <div class="load-error-banner" id="loadErrorBanner" role="alert">
         <span id="loadErrorText">Puter.js failed to load.</span>
@@ -123,10 +134,6 @@
                             <button class="icon-btn" id="themeToggle" title="Appearance" aria-label="Appearance" aria-haspopup="menu" aria-expanded="false" onclick="toggleThemeMenu(event)">
                                 <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                                 <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-                            </button>
-                            <button class="menu-trigger-btn" type="button" onclick="openDrawer()" aria-label="Open menu" title="Menu">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                                <span class="signed-in-dot"></span>
                             </button>
                         </div>
                     </div>
@@ -789,76 +796,12 @@
 
     <div class="theme-menu" id="themeMenu" role="menu" aria-label="Appearance" hidden></div>
 
-    <div class="modal-overlay drawer-overlay" id="drawerOverlay" onclick="closeDrawer();">
-        <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Menu" onclick="event.stopPropagation();">
-            <div class="drawer-header">
-                <span class="drawer-title">NeuraOS</span>
-                <button class="modal-close" type="button" onclick="closeDrawer();" aria-label="Close menu">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-                        <nav class="drawer-nav">
-                <!-- Utility actions (not in top nav) -->
-                <button class="drawer-nav-btn" type="button" onclick="openPaletteFromDrawer()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    Command palette
-                </button>
-                <button class="drawer-nav-btn" type="button" onclick="toggleThemeMenu(event)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-                    Appearance
-                </button>
-                <button class="drawer-nav-btn" type="button" data-view="design" onclick="switchViewFromDrawer('design')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
-                    Design
-                </button>
-                <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                    Save chat as PDF
-                </button>
-
-                <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
-
-                <div style="padding: 0 12px; margin-bottom: 4px;">
-                    <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);">Workspace</span>
-                </div>
-                <button class="drawer-nav-btn" type="button" onclick="toggleSessionPanel(); closeDrawer();">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                    Session & Todos
-                </button>
-                <button class="drawer-nav-btn" type="button" onclick="toggleCanvasPane(); closeDrawer();">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
-                    Code Canvas
-                </button>
-
-                <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
-
-                <div style="padding: 0 12px; margin-bottom: 4px;">
-                    <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);">Resources</span>
-                </div>
-                <button class="drawer-nav-btn" type="button" onclick="showSkillsLibrary && showSkillsLibrary(); closeDrawer();">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                    Skills Library
-                </button>
-                <button class="drawer-nav-btn" type="button" onclick="showAgentsManager && showAgentsManager(); closeDrawer();">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    Agents
-                </button>
-                <button class="drawer-nav-btn" type="button" onclick="window.open('https://github.com/tradernonymous/freeopenai', '_blank'); closeDrawer();">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-                    GitHub
-                </button>
-            </nav>
-            <div class="drawer-footer">
-                <div class="auth-area">
-                    <button class="icon-btn" id="authButton" title="Sign in" aria-label="Sign in" onclick="handleAuthClick()">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </button>
-                    <span class="auth-name" id="authName" hidden></span>
-                </div>
-                <button class="icon-btn-text" type="button" onclick="newChat(); closeDrawer();">New chat</button>
-            </div>
-        </div>
-    </div>
+    <!-- The hamburger drawer that used to live here is gone: most of its rows
+         called functions that no longer existed (showSkillsLibrary,
+         showAgentsManager, toggleCanvasPane), and the rest duplicated a
+         top-nav tab or an icon that already exists elsewhere on screen
+         (Appearance, Settings, Session & Todos). Command palette, its one
+         row with no other touch-friendly entry point, moved to the top nav. -->
 
     <script src="inline-diffs.js"></script>
     <script src="live-presence.js"></script>

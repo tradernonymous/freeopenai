@@ -16,24 +16,6 @@ function updateNavActive(btn) {
             if (dd) dd.classList.remove('open');
         }
 
-function updateNavActive(btn) {
-            document.querySelectorAll('.top-nav-link').forEach(b => b.classList.remove('active'));
-            if (btn) btn.classList.add('active');
-        }
-        function showChatHistory() {
-            const dd = document.getElementById('chatHistoryDropdown');
-            if (dd) {
-                const src = document.getElementById('historyList');
-                const dst = document.getElementById('chatHistoryList');
-                if (src && dst) dst.innerHTML = src.innerHTML;
-                dd.classList.add('open');
-            }
-        }
-        function hideChatHistory() {
-            const dd = document.getElementById('chatHistoryDropdown');
-            if (dd) dd.classList.remove('open');
-        }
-
 // Global state
         let currentUser = null;
         // Saved conversations, declared with the other state because
@@ -1094,7 +1076,6 @@ function updateNavActive(btn) {
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
         const lightboxDownload = document.getElementById('lightboxDownload');
-        const drawerOverlay = document.getElementById('drawerOverlay');
         const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
         const attachTrigger = document.getElementById('attachTrigger');
         const attachMenu = document.getElementById('attachMenu');
@@ -1397,7 +1378,6 @@ function updateNavActive(btn) {
 
         function switchView(name) {
             Object.entries(views).forEach(([key, el]) => el.classList.toggle('active', key === name));
-            document.querySelectorAll('.drawer-nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
             if (name === 'settings') {
                 refreshGithubStatus();
                 renderServerWorkspaceFiles();
@@ -1409,9 +1389,11 @@ function updateNavActive(btn) {
             }
         }
 
+        // Kept as a thin alias: the command palette's own action list (below)
+        // still calls it by this name, from before the drawer it used to also
+        // close was removed.
         function switchViewFromDrawer(name) {
             switchView(name);
-            closeDrawer();
         }
 
         // The settings rail is navigation, not filtering: clicking a chip shows
@@ -1602,10 +1584,16 @@ function updateNavActive(btn) {
             const signedIn = !!currentUser;
             const name = signedIn ? (currentUser.username || currentUser.email || currentUser.name || 'Signed in') : '';
 
-            authButton.title = signedIn ? 'Sign out' : 'Sign in';
-            authButton.setAttribute('aria-label', authButton.title);
-            authName.hidden = !signedIn;
-            authName.textContent = name;
+            // authButton/authName lived in the drawer, since removed; Settings
+            // -> Account and the Image tab carry the sign-in control now.
+            if (authButton) {
+                authButton.title = signedIn ? 'Sign out' : 'Sign in';
+                authButton.setAttribute('aria-label', authButton.title);
+            }
+            if (authName) {
+                authName.hidden = !signedIn;
+                authName.textContent = name;
+            }
 
             settingsAuthStatus.textContent = signedIn
                 ? `Signed in as ${name}`
@@ -4252,15 +4240,13 @@ function updateNavActive(btn) {
         // No PDF library: every browser already writes one from a print, and on
         // a phone it lands in the share sheet as "Save to Files".
         function exportChatPdf() {
-            closeDrawer();
             if (!messages.length) {
                 showStatus('error', 'Nothing to save yet');
                 return;
             }
             // Print styles only emit the active view, so make sure it's the chat.
             switchView('chat');
-            // Let the drawer finish closing, or it prints over the transcript.
-            setTimeout(() => window.print(), 250);
+            window.print();
         }
 
         async function appSignOut() {
@@ -4271,11 +4257,6 @@ function updateNavActive(btn) {
             }
         }
 
-        // Kept as the drawer's "New chat" entry point. It no longer destroys
-        // anything -- the previous conversation stays in the sidebar.
-        function newChat() {
-            startNewConversation();
-        }
 
         function clearAllHistory() {
             if (!confirm('Delete every saved chat? This cannot be undone.')) return;
@@ -4562,10 +4543,9 @@ function updateNavActive(btn) {
             if (needsPuterLogin() && puter.auth && typeof puter.auth.isSignedIn === 'function' && !puter.auth.isSignedIn()) {
                 // Said once. Every Send while it stands used to add another copy
                 // of this line, so a user who tried twice got a transcript of the
-                // same refusal -- and the advice named an icon that is not on
-                // screen: the sign-in lives in the chat drawer's footer, and the
-                // provider menu is the way past Puter entirely.
-                const notice = 'Puter needs an account before it can answer. Sign in with the account button in the chat drawer, or pick another provider in the model menu.';
+                // same refusal -- and the advice must name where sign-in actually
+                // lives, not an icon that used to be on screen.
+                const notice = 'Puter needs an account before it can answer. Sign in from Settings -> Account, or the Session panel\'s Image tab -- or pick another provider in the model menu.';
                 const last = messages[messages.length - 1];
                 if (!last || last.type !== 'system' || last.content !== notice) addMessage('system', notice, { error: true });
                 return;
@@ -7655,104 +7635,16 @@ function updateNavActive(btn) {
             }
         } catch { /* stub DOM */ }
 
-        // Command palette (Ctrl+P): models plus actions, filtered as you type.
-        // OpenCode's command_list parity. Lookups happen on open, so the
-        // boot-test stub never trips over missing nodes at load.
-        let paletteIndex = 0;
-        let paletteItems = [];
-        // The palette is the app's jump-to-anything, and a phone has no Ctrl+P
-        // to open it with -- so the drawer offers it as a row too.
-        function openPaletteFromDrawer() {
-            closeDrawer();
-            openPalette();
-        }
-        function paletteActions() {
-            const actions = [
-                { label: 'New chat', hint: 'session', run: () => startNewConversation() },
-                { label: 'Toggle theme', hint: 'theme', run: () => toggleTheme() },
-                { label: 'Toggle compact notices', hint: 'details', run: () => setCompactNotices(!compactNotices) },
-                { label: 'Go to Settings', hint: 'view', run: () => switchView('settings') },
-                { label: 'Go to Models', hint: 'view', run: () => switchView('models') },
-                { label: 'Go to Chat', hint: 'view', run: () => switchView('chat') },
-            ];
-            if (isTyping) actions.unshift({ label: 'Stop generation', hint: 'interrupt', run: () => stopGeneration() });
-            return actions;
-        }
-        function openPalette() {
-            const overlay = document.getElementById('paletteOverlay');
-            const input = document.getElementById('paletteInput');
-            if (!overlay || !input) return;
-            overlay.hidden = false;
-            input.value = '';
-            renderPalette('');
-            input.focus();
-        }
-        function closePalette() {
-            const overlay = document.getElementById('paletteOverlay');
-            if (overlay) overlay.hidden = true;
-            if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
-        }
-        function renderPalette(filter) {
-            const list = document.getElementById('paletteList');
-            if (!list) return;
-            const q = (filter || '').trim().toLowerCase();
-            const models = (providerModels || []).map((m) => ({
-                label: 'Model: ' + m.id,
-                hint: (function () { try { return describeProviderModel(m) || m.id; } catch { return m.id; } })(),
-                run: () => selectModel(m.id),
-            }));
-            const items = [...models, ...paletteActions()].filter((it) => !q || (it.label + ' ' + it.hint).toLowerCase().includes(q));
-            paletteItems = items;
-            paletteIndex = 0;
-            list.innerHTML = '';
-            items.slice(0, 30).forEach((it, i) => {
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'palette-item' + (i === 0 ? ' selected' : '');
-                b.setAttribute('role', 'option');
-                const name = document.createElement('span');
-                name.textContent = it.label;
-                const hint = document.createElement('span');
-                hint.className = 'k';
-                hint.textContent = it.hint;
-                b.appendChild(name);
-                b.appendChild(hint);
-                b.addEventListener('click', () => { closePalette(); it.run(); });
-                list.appendChild(b);
-            });
-        }
-        function movePalette(dir) {
-            const list = document.getElementById('paletteList');
-            if (!list || !paletteItems.length) return;
-            paletteIndex = (paletteIndex + dir + paletteItems.length) % paletteItems.length;
-            [...list.children].forEach((el, i) => el.classList.toggle('selected', i === paletteIndex));
-            const sel = list.children[paletteIndex];
-            if (sel && typeof sel.scrollIntoView === 'function') sel.scrollIntoView({ block: 'nearest' });
-        }
-        function runPalette() {
-            const it = paletteItems[paletteIndex];
-            closePalette();
-            if (it) it.run();
-        }
-        function handleGlobalKeys(e) {
-            if (!e) return;
-            if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'k')) {
-                e.preventDefault();
-                const overlay = document.getElementById('paletteOverlay');
-                if (overlay && !overlay.hidden) closePalette();
-                else openPalette();
-                return;
-            }
-            const overlay = document.getElementById('paletteOverlay');
-            if (!overlay || overlay.hidden) return;
-            if (e.key === 'Escape') closePalette();
-            else if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
-            else if (e.key === 'Enter') { e.preventDefault(); runPalette(); }
-        }
-        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-            document.addEventListener('keydown', handleGlobalKeys);
-        }
+        // The real Command Palette (openPalette/closePalette/renderPalette,
+        // driven by paletteCommands) lives further down this file. An earlier,
+        // richer implementation used to live here -- model search plus
+        // keyboard nav via movePalette/runPalette -- but a same-named function
+        // declared twice at this scope means the later one wins the binding;
+        // this block's declarations were being fully shadowed, and its
+        // handleGlobalKeys kept a second, independent keydown listener
+        // reading paletteItems/paletteIndex that the winning renderPalette
+        // never actually populated. Dead code with its own dead event
+        // listener, removed rather than left shadowed.
 
         function saveUserPreferences() {
             rememberPreference('puterChatModel', selectedModel);
@@ -8684,19 +8576,8 @@ function updateNavActive(btn) {
             if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
         }
 
-        function openDrawer() {
-            lastFocusedBeforeModal = document.activeElement;
-            drawerOverlay.classList.add('open');
-            drawerOverlay.querySelector('.modal-close').focus();
-        }
-        function closeDrawer() {
-            drawerOverlay.classList.remove('open');
-            if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') lastFocusedBeforeModal.focus();
-        }
-
         function getModalCloser(overlay) {
             if (overlay === helpOverlay) return closeHelp;
-            if (overlay === drawerOverlay) return closeDrawer;
             if (overlay === githubConfirmOverlay) return () => githubConfirmResolve('cancel');
             if (overlay && overlay.id === 'shareOverlay') return closeShareModal;
             if (overlay && overlay.id === 'imageConfirmOverlay') return () => closeImageConfirm(false);

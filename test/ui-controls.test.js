@@ -195,14 +195,9 @@ test('the busy row names the step instead of three dots and silence', () => {
 });
 
 test('the palette can be opened without a keyboard', () => {
-  // Ctrl+P opens the app's jump-to-anything, and a phone has no Ctrl+P. The
-  // drawer closes first so the palette is not sitting behind the panel.
-  assert.match(HTML, /onclick="openPaletteFromDrawer\(\)"/, 'the drawer needs a row that opens the palette');
-  assertScannerCanRead(['openPaletteFromDrawer']);
-  const order = [];
-  const deps = { closeDrawer: () => order.push('close'), openPalette: () => order.push('open') };
-  assertSandboxCovers(['openPaletteFromDrawer'], deps);
-  const { openPaletteFromDrawer } = loadFromIndex(['openPaletteFromDrawer'], deps);
-  openPaletteFromDrawer();
-  assert.deepEqual(order, ['close', 'open']);
+  // Ctrl+K opens the app's jump-to-anything, and a phone has no Ctrl+K --
+  // the top nav carries a button for it (the hamburger drawer this used to
+  // live in is gone: most of its rows called functions that no longer
+  // existed, and the rest duplicated a top-nav tab or icon).
+  assert.match(HTML, /onclick="openPalette\(\)"/, 'the top nav needs a button that opens the palette');
 });

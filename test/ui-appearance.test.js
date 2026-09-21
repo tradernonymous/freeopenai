@@ -36,18 +36,14 @@ test('the palette is the neutral ladder, not white on black', () => {
 
 test('the appearance toggle is reachable at every size, including the smallest phone', () => {
   // It used to be hidden below 380px with "Ctrl+P still reaches it" as the
-  // reason -- which is no reason at all on a phone.
+  // reason -- which is no reason at all on a phone. The drawer used to carry
+  // a second, redundant row that opened the same picker as a fallback; the
+  // drawer is gone now (most of its other rows called functions that no
+  // longer existed), but the guarantee that actually matters -- the header
+  // button is never hidden -- does not depend on that fallback and still
+  // holds on its own.
   assert.doesNotMatch(HTML, /#themeToggle \{ display: none/, 'the appearance toggle is hidden on a narrow screen again');
   assert.match(HTML, /id="themeToggle"[^>]*onclick="toggleThemeMenu\(event\)"/, 'the header button has to open the picker');
-  // The drawer row carries an icon between the handler and its label, so the two
-  // halves are checked separately rather than across the icon's markup.
-  assert.match(HTML, /<button class="drawer-nav-btn" type="button" onclick="toggleThemeMenu\(event\)">/, 'the drawer needs a row that opens it too');
-  // Sliced from the drawer's own <nav>: the settings rail has a <nav> too, and
-  // searching from zero finds that one's close tag first and reads nothing.
-  const drawerAt = HTML.indexOf('<nav class="drawer-nav">');
-  assert.ok(drawerAt > 0, 'the drawer nav is gone -- re-point this test');
-  const drawer = HTML.slice(drawerAt, HTML.indexOf('</nav>', drawerAt));
-  assert.match(drawer, /Appearance/, 'the drawer row has to say what it is');
   assert.match(HTML, /class="theme-menu" id="themeMenu"/, 'the picker is missing from the page');
   // A phone gets it as a sheet at the bottom, where a thumb already is.
   assert.match(CSS, /\.theme-menu \{ left: 12px; right: 12px; bottom: /, 'the picker has no small-screen placement');
