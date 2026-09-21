@@ -29,7 +29,10 @@
   var TOKEN_URL = 'https://huggingface.co/oauth/token';
   var DEVICE_URL = 'https://huggingface.co/oauth/device';
   var API_ME    = 'https://huggingface.co/api/whoami-v2';
-  var SCOPE = 'read-repos write-repos';
+  // `inference-api` is the scope the router (hf-inference.js) checks. Without
+  // it every chat turn answers 401 with a token that otherwise works fine for
+  // the Hub, which is the most confusing failure this app can produce.
+  var SCOPE = 'read-repos write-repos inference-api';
 
   // --- helpers ------------------------------------------------------------
 

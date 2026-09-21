@@ -150,3 +150,84 @@ describe('hf-models', () => {
     assert.ok(!url.includes('token='));
   });
 });
+
+// ---- hf-inference --------------------------------------------------------
+//
+// The provider used to build https://api.huggingface.co/models/<m>/v1/... which
+// is not a documented Hugging Face endpoint; every turn failed before the
+// token was checked. The router is the one OpenAI-compatible base HF documents.
+
+const hfInference = require('../desktop/src/hf-inference.js');
+
+describe('hf-inference', () => {
+  it('talks to the documented router, and only to it', () => {
+    assert.equal(hfInference.API_BASE, 'https://router.huggingface.co/v1');
+    assert.equal(hfInference.chatUrl(), 'https://router.huggingface.co/v1/chat/completions');
+    const source = require('node:fs').readFileSync(require.resolve('../desktop/src/hf-inference.js'), 'utf8');
+    assert.ok(!source.includes('api.huggingface.co'), 'the undocumented host must be gone');
+  });
+
+  it('asks the router for the cheapest provider unless the user chose one', () => {
+    assert.equal(hfInference.modelId('Qwen/Qwen3.8-27B'), 'Qwen/Qwen3.8-27B:cheapest');
+    assert.equal(hfInference.modelId('Qwen/Qwen3.8-27B:fastest'), 'Qwen/Qwen3.8-27B:fastest');
+    assert.equal(hfInference.modelId('Qwen/Qwen3.8-27B:novita'), 'Qwen/Qwen3.8-27B:novita');
+    assert.equal(hfInference.modelId('  '), '');
+  });
+
+  it('the sign-in scope includes inference-api, or the router refuses the token', () => {
+    assert.ok(hfAuth.SCOPE.split(' ').includes('inference-api'));
+  });
+
+  it('turns a 401 into the permission the token is missing', () => {
+    assert.match(hfInference.explain(401, ''), /Make calls to Inference Providers/);
+    assert.match(hfInference.explain(403, ''), /Make calls to Inference Providers/);
+    assert.match(hfInference.explain(402, ''), /credits/);
+    assert.match(hfInference.explain(500, 'boom'), /500: boom/);
+  });
+
+  it('lists live models from GET /v1/models and falls back to the curated list', async () => {
+    const calls = [];
+    const fakeFetch = async (url, init) => {
+      calls.push({ url, auth: init.headers.Authorization });
+      return {
+        ok: true,
+        json: async () => ({ data: [
+          { id: 'a/b', providers: [{ provider: 'novita' }, { provider: 'together' }] },
+          { id: 'c/d', providers: [] },
+          { nope: true },
+        ] }),
+      };
+    };
+    const live = await hfInference.fetchModels('tok', fakeFetch);
+    assert.equal(calls[0].url, 'https://router.huggingface.co/v1/models');
+    assert.equal(calls[0].auth, 'Bearer tok');
+    assert.deepEqual(live, [{ id: 'a/b', free: '2 providers' }, { id: 'c/d', free: 'HF router' }]);
+
+    const down = await hfInference.fetchModels('tok', async () => ({ ok: false }));
+    assert.equal(down, hfInference.FREE_MODELS);
+    const threw = await hfInference.fetchModels('tok', async () => { throw new Error('offline'); });
+    assert.equal(threw, hfInference.FREE_MODELS);
+    assert.deepEqual(await hfInference.fetchModels(null, fakeFetch), []);
+  });
+
+  it('streams through the router with the token and the policy suffix', async () => {
+    const seen = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      seen.push({ url, body: JSON.parse(init.body), auth: init.headers.Authorization });
+      const text = 'data: {"choices":[{"delta":{"content":"hi"}}],"model":"m"}\n\ndata: [DONE]\n';
+      return new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    try {
+      const frames = [];
+      await hfInference.streamChat('a/b', [{ role: 'user', content: 'x' }], (f) => frames.push(f), undefined, 'tok');
+      assert.equal(seen[0].url, hfInference.chatUrl());
+      assert.equal(seen[0].auth, 'Bearer tok');
+      assert.equal(seen[0].body.model, 'a/b:cheapest');
+      assert.equal(seen[0].body.stream, true);
+      assert.deepEqual(frames, [{ content: 'hi', model: 'm' }, { done: true }]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
