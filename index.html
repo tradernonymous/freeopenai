@@ -646,18 +646,14 @@
             display: flex;
             flex-direction: column;
             min-height: 0;
-            /* min-width:auto lets the card refuse to shrink below its widest
-               content, and the composer's toolbar row is a long line of
-               flex-shrink:0 controls. On a phone that pushed the card to its
-               min-content width and the chat bar's right edge (menu button)
-               past the viewport, clipped by .chat-shell. 0 lets it shrink so
-               the toolbar scrolls inside the composer instead. */
             min-width: 0;
             position: relative;
             isolation: isolate;
             background: var(--surface);
             border: 1px solid var(--border);
-            overflow: visible;
+            border-radius: var(--r-lg);
+            box-shadow: var(--lift), 0 8px 32px rgba(0,0,0,0.18);
+            overflow: hidden;
         }
         /* The transcript is a window inside the app frame, not the frame itself.
            Edge to edge it read as "the page" rather than as a conversation with
@@ -666,16 +662,15 @@
            The small-screen layer drops the inset -- a phone's transcript wants
            every pixel -- and the card keeps `overflow: visible` because the
            model picker and attach menu hang below the composer. */
-        #viewChat { padding: 10px; }
-        #viewChat .chat-card { border-radius: var(--r-lg); box-shadow: var(--lift); }
+        #viewChat { padding: 12px; display: flex; flex-direction: column; }
         #viewChat .chat-card::before {
             content: "";
-            position: absolute; inset: -1px; pointer-events: none; z-index: 2;
+            position: absolute; inset: 0; pointer-events: none; z-index: 2;
             border: 1px solid transparent; border-radius: inherit;
             background: linear-gradient(115deg, transparent 18%, var(--accent) 42%, transparent 62%) border-box;
             mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
             mask-composite: exclude;
-            opacity: .18; background-size: 240% 100%;
+            opacity: .12; background-size: 240% 100%;
             animation: edge-scan 9s linear infinite;
         }
         @keyframes edge-scan { from { background-position: 140% 0; } to { background-position: -140% 0; } }
@@ -3030,38 +3025,55 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
             </div>
-            <nav class="drawer-nav">
-                <button class="drawer-nav-btn active" type="button" data-view="chat" onclick="switchViewFromDrawer('chat')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    Chat
-                </button>
-                <button class="drawer-nav-btn" type="button" data-view="models" onclick="switchViewFromDrawer('models')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-                    Models
-                </button>
-                <button class="drawer-nav-btn" type="button" data-view="settings" onclick="switchViewFromDrawer('settings')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    Settings
-                </button>
-                <button class="drawer-nav-btn" type="button" data-view="gallery" onclick="switchViewFromDrawer('gallery')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                    Gallery
-                </button>
-                <button class="drawer-nav-btn" type="button" data-view="design" onclick="switchViewFromDrawer('design')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
-                    Design
+                        <nav class="drawer-nav">
+                <!-- Utility actions (not in top nav) -->
+                <button class="drawer-nav-btn" type="button" onclick="openPaletteFromDrawer()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Command palette
                 </button>
                 <button class="drawer-nav-btn" type="button" onclick="toggleThemeMenu(event)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                     Appearance
                 </button>
-                <button class="drawer-nav-btn" type="button" onclick="openPaletteFromDrawer()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    Command palette
+                <button class="drawer-nav-btn" type="button" data-view="design" onclick="switchViewFromDrawer('design')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+                    Design
                 </button>
                 <button class="drawer-nav-btn" type="button" onclick="exportChatPdf()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                     Save chat as PDF
+                </button>
+
+                <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
+
+                <div style="padding: 0 12px; margin-bottom: 4px;">
+                    <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);">Workspace</span>
+                </div>
+                <button class="drawer-nav-btn" type="button" onclick="toggleSessionPanel(); closeDrawer();">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    Session & Todos
+                </button>
+                <button class="drawer-nav-btn" type="button" onclick="toggleCanvasPane(); closeDrawer();">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                    Code Canvas
+                </button>
+
+                <div style="height: 1px; background: var(--border); margin: 8px 0;"></div>
+
+                <div style="padding: 0 12px; margin-bottom: 4px;">
+                    <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted);">Resources</span>
+                </div>
+                <button class="drawer-nav-btn" type="button" onclick="showSkillsLibrary && showSkillsLibrary(); closeDrawer();">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    Skills Library
+                </button>
+                <button class="drawer-nav-btn" type="button" onclick="showAgentsManager && showAgentsManager(); closeDrawer();">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    Agents
+                </button>
+                <button class="drawer-nav-btn" type="button" onclick="window.open('https://github.com/tradernonymous/freeopenai', '_blank'); closeDrawer();">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                    GitHub
                 </button>
             </nav>
             <div class="drawer-footer">
@@ -3072,7 +3084,6 @@
                     <span class="auth-name" id="authName" hidden></span>
                 </div>
                 <button class="icon-btn-text" type="button" onclick="newChat(); closeDrawer();">New chat</button>
-                <button class="icon-btn-text" type="button" onclick="appSignOut();" title="Sign out of this app instance">Sign out</button>
             </div>
         </div>
     </div>

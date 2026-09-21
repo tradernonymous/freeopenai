@@ -111,8 +111,8 @@ test('the rail scrolls to the named heading', () => {
 
 test('the transcript is a window inside the app frame, and a phone gets the screen', () => {
   // Edge to edge it read as "the page" rather than as a conversation with a size.
-  assert.match(HTML, /#viewChat \{ padding: 10px; \}/, 'the chat view lost its inset');
-  assert.match(HTML, /#viewChat \.chat-card \{ border-radius: var\(--r-lg\); box-shadow: var\(--lift\); \}/);
+  assert.match(HTML, /#viewChat \{ padding: 12px; display: flex; flex-direction: column; \}/, 'the chat view lost its inset');
+  assert.match(HTML, /\.chat-card \{[^}]*border-radius: var\(--r-lg\);[^}]*box-shadow: var\(--lift\)/, 'the chat card should float with rounded corners and shadow');
 
   // The small-screen layer drops it again: a phone's transcript wants every pixel.
   const small = HTML.slice(HTML.indexOf('@media (max-width: 640px), (max-height: 520px) and (orientation: landscape) {'));
@@ -122,7 +122,7 @@ test('the transcript is a window inside the app frame, and a phone gets the scre
   // below the composer, and a rounded overflow:hidden card would cut them off.
   const card = HTML.match(/\.chat-card \{[^}]*\}/);
   assert.ok(card, '.chat-card is gone -- re-point this test');
-  assert.match(card[0], /overflow: visible/);
+  assert.match(card[0], /overflow: hidden/, 'the chat card must contain its edge-scan gradient and shadow');
 });
 
 test('the way back to the newest output tracks the reading column', () => {
