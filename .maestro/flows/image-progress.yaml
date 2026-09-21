@@ -11,14 +11,11 @@ appId: com.neura.os
     id: "send_button"
 - extendedWaitUntil:
     visible:
-      text: "DRAW"
+      text: "Stop"
     timeout: 15000
-- assertVisible:
-    text: "Image generation"
-    optional: true
 - extendedWaitUntil:
-    visible:
-      text: "READY"
+    notVisible:
+      text: "Stop"
     timeout: 90000
 - extendedWaitUntil:
     visible:
@@ -37,10 +34,11 @@ appId: com.neura.os
     id: "send_button"
 - extendedWaitUntil:
     visible:
-      text: "STOP"
+      text: "Stop"
     timeout: 15000
 - tapOn:
-    text: "STOP"
-- assertVisible:
-    text: "READY"
+    text: "Stop"
+- extendedWaitUntil:
+    notVisible:
+      text: "Stop"
     timeout: 10000

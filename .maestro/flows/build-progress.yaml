@@ -20,14 +20,14 @@ appId: com.neura.os
       text: "RUNNING"
     timeout: 15000
 - assertVisible:
-    text: "1 step"
+    text: ".*1 steps"
     optional: true
 - assertVisible:
-    text: "2 steps"
+    text: ".*2 steps"
     optional: true
 - extendedWaitUntil:
     visible:
-      text: "READY"
+      text: "DONE"
     timeout: 60000
 - extendedWaitUntil:
     visible:
@@ -52,11 +52,11 @@ appId: com.neura.os
       text: "RUNNING"
     timeout: 15000
 - assertVisible:
-    text: "step"
+    text: ".*steps"
     optional: true
 - extendedWaitUntil:
     visible:
-      text: "READY"
+      text: "DONE"
     timeout: 120000
 - assertVisible:
     id: "chat_input"

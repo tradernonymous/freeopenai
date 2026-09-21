@@ -1,96 +1,86 @@
 appId: com.neura.os
 ---
-# File operations: workspace file listing
+# Build mode: stage a file write and open the review sheet.
+# There is no standalone file-browser screen in this app -- Build mode's file
+# tools stage into Conversation.pendingWrites and surface as a banner over the
+# composer (ui/WorkspaceScreens.kt: PendingWritesBanner, WorkspaceReviewSheet).
 - launchApp
-- assertVisible:
-    text: "Settings"
-    optional: true
 - tapOn:
-    text: "Settings"
+    text: "Build"
     optional: true
 - assertVisible:
-    text: "Workspace"
-    optional: true
+    id: "chat_input"
 - tapOn:
-    text: "Workspace"
-    optional: true
-- assertVisible:
-    text: "Files"
-    optional: true
+    id: "chat_input"
+- inputText: "create a file named notes.txt with the text hello"
+- tapOn:
+    id: "send_button"
 - extendedWaitUntil:
     visible:
-      text: "READY"
+      text: ".*waiting for your approval"
+    timeout: 60000
+- tapOn:
+    text: "Review"
+    optional: true
+- assertVisible:
+    text: "Review changes"
+    optional: true
+- assertVisible:
+    text: "notes.txt"
+    optional: true
+
+---
+# Build mode: approve a staged write, applying it to the conversation's files.
+- launchApp
+- tapOn:
+    text: "Build"
+    optional: true
+- assertVisible:
+    id: "chat_input"
+- tapOn:
+    id: "chat_input"
+- inputText: "create a file named applied.txt with the text hello"
+- tapOn:
+    id: "send_button"
+- extendedWaitUntil:
+    visible:
+      text: ".*waiting for your approval"
+    timeout: 60000
+- tapOn:
+    text: "Review"
+    optional: true
+- tapOn:
+    text: ".*Apply.*"
+    optional: true
+- extendedWaitUntil:
+    notVisible:
+      text: "Review changes"
     timeout: 10000
 
 ---
-# File operations: create file
+# Build mode: reject a staged write, leaving the conversation's files untouched.
 - launchApp
 - tapOn:
-    text: "Settings"
-    optional: true
-- tapOn:
-    text: "Workspace"
-    optional: true
-- tapOn:
-    text: "Create file"
+    text: "Build"
     optional: true
 - assertVisible:
-    text: "Filename"
-    optional: true
-- inputText: "maestro-test.txt"
+    id: "chat_input"
 - tapOn:
-    text: "Create"
-    optional: true
+    id: "chat_input"
+- inputText: "create a file named rejected.txt with the text hello"
+- tapOn:
+    id: "send_button"
 - extendedWaitUntil:
     visible:
-      text: "maestro-test.txt"
-    timeout: 10000
-- extendedWaitUntil:
-    visible:
-      text: "READY"
-    timeout: 10000
-
----
-# File operations: read file
-- launchApp
+      text: ".*waiting for your approval"
+    timeout: 60000
 - tapOn:
-    text: "Settings"
+    text: "Review"
     optional: true
 - tapOn:
-    text: "Workspace"
-    optional: true
-- tapOn:
-    text: "maestro-test.txt"
-    optional: true
-- assertVisible:
-    text: "maestro-test.txt"
+    text: "Reject all"
     optional: true
 - extendedWaitUntil:
-    visible:
-      text: "READY"
-    timeout: 10000
-
----
-# File operations: delete file
-- launchApp
-- tapOn:
-    text: "Settings"
-    optional: true
-- tapOn:
-    text: "Workspace"
-    optional: true
-- tapOn:
-    text: "maestro-test.txt"
-    optional: true
-- tapOn:
-    text: "Delete"
-    optional: true
-- assertVisible:
-    text: "Confirm"
-    optional: true
-- tapOn:
-    text: "Confirm"
-    optional: true
-- assertNotVisible:
-    text: "maestro-test.txt"
+    notVisible:
+      text: "Review changes"
     timeout: 10000

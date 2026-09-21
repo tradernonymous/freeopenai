@@ -13,15 +13,9 @@ appId: com.neura.os
 - tapOn:
     id: "send_button"
     optional: true
-- assertVisible:
-    text: "SENDING"
-    optional: true
-- assertVisible:
-    text: "RECEIVING"
-    optional: true
 - extendedWaitUntil:
-    visible:
-      text: "READY"
+    notVisible:
+      text: "Stop"
     timeout: 30000
 - extendedWaitUntil:
     visible:
@@ -44,13 +38,13 @@ appId: com.neura.os
     optional: true
 - extendedWaitUntil:
     visible:
-      text: "STOP"
+      text: "Stop"
     timeout: 10000
 - tapOn:
-    text: "STOP"
+    text: "Stop"
 - extendedWaitUntil:
-    visible:
-      text: "READY"
+    notVisible:
+      text: "Stop"
     timeout: 10000
 
 ---
@@ -64,10 +58,10 @@ appId: com.neura.os
     text: "Voice mode"
     optional: true
 - assertVisible:
-    text: "Voice mode active"
+    text: "Listening"
     optional: true
 - tapOn:
-    text: "Voice mode active"
+    text: "End voice"
     optional: true
 - assertVisible:
     id: "chat_input"

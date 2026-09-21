@@ -38,33 +38,19 @@ appId: com.neura.os
 - tapOn:
     id: "session_button"
     optional: true
-- tapOn:
+- assertVisible:
     text: "Session"
+    optional: true
+- assertVisible:
+    text: "Mode"
     optional: true
 - assertVisible:
     text: "Skills"
     optional: true
-- tapOn:
-    text: "Tasks"
-    optional: true
-- assertVisible:
-    text: "Tasks"
-    optional: true
-- tapOn:
-    text: "Image"
-    optional: true
-- assertVisible:
-    text: "Image"
-    optional: true
-- tapOn:
-    id: "session_button"
-    optional: true
-- tapOn:
-    text: "Close"
-    optional: true
+- back
 - extendedWaitUntil:
     notVisible:
-      text: "Skills"
+      text: "Session"
     timeout: 5000
 
 ---
@@ -76,7 +62,7 @@ appId: com.neura.os
     id: "drawer_button"
     optional: true
 - assertVisible:
-    text: "Recent Chats"
+    text: "Search"
     optional: true
 - tapOn:
     text: "New chat"
