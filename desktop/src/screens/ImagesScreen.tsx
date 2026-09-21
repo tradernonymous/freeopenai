@@ -6,7 +6,7 @@ import SelectPill from '../components/SelectPill';
 import '../images.js';
 import '../failure.js';
 import '../puter.js';
-import { hasShell, openUrl } from '../bridge';
+import { hasShell, puterSigninOpen } from '../bridge';
 
 const images: typeof import('../images.js') = (globalThis as any).FreeAI4UImages;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
@@ -86,10 +86,10 @@ export default function ImagesScreen() {
   const connectPuter = () => {
     setPuterMsg('');
     setBusy(true);
-    // Under the shell the sign-in page opens in the system browser through
-    // Rust (an https allowlist, not a general launcher); in a plain browser a
-    // new tab does. Either way there is no popup to be blocked.
-    const open = hasShell() ? (url: string) => openUrl(url) : undefined;
+    // Under the shell the sign-in page opens in the system browser THROUGH a
+    // redirect page the shell serves on 127.0.0.1: Puter's page is blank
+    // without a referrer, and a URL launched by Windows has none.
+    const open = hasShell() ? (url: string) => puterSigninOpen(url) : undefined;
     puter.signIn(open ? { open } : undefined)
       .then((ok: boolean) => {
         setSignedIn(!!ok);

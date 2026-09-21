@@ -108,14 +108,31 @@ fn find_binary(app: &tauri::AppHandle) -> Option<(PathBuf, &'static str)> {
             return Some((own, "app"));
         }
     }
-    let path = std::env::var_os("PATH")?;
-    for entry in std::env::split_paths(&path) {
-        let candidate = entry.join(binary_name());
-        if candidate.is_file() {
-            return Some((candidate, "path"));
+    if let Some(path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&path) {
+            let candidate = entry.join(binary_name());
+            if candidate.is_file() {
+                return Some((candidate, "path"));
+            }
         }
     }
-    None
+    // Unsloth Studio installs a llama.cpp build of its own. It is run from
+    // where it is (it needs the DLLs beside it), never copied.
+    unsloth_binaries().into_iter().find(|p| p.is_file()).map(|p| (p, "unsloth"))
+}
+
+/// Where Unsloth Studio keeps its prebuilt llama-server.
+pub fn unsloth_binaries() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+        return Vec::new();
+    };
+    let root = PathBuf::from(home).join(".unsloth").join("llama.cpp");
+    vec![
+        root.join("build").join("bin").join("Release").join(binary_name()),
+        root.join("build").join("bin").join(binary_name()),
+        root.join("llama.cpp").join("build").join("bin").join("Release").join(binary_name()),
+        root.join(binary_name()),
+    ]
 }
 
 fn log_file(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -574,6 +591,9 @@ pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// The smallest file the scan calls a model.
+pub const SCAN_MIN_BYTES: u64 = 64 * 1024 * 1024;
+
 fn downloading() -> &'static Mutex<Option<String>> {
     static ACTIVE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(None))
@@ -877,8 +897,11 @@ pub fn local_models_scan(dirs: Option<Vec<String>>) -> serde_json::Value {
     }
     let mut files = Vec::new();
     for root in &roots {
-        gguf_entries(root, 4, &mut files, false);
+        gguf_entries(root, 5, &mut files, false);
     }
+    // llama.cpp ships tiny vocab-only .gguf files (ggml-vocab-*.gguf); they
+    // are not models. Anything under 64 MB is not one either.
+    files.retain(|f| f.bytes >= SCAN_MIN_BYTES && !f.file.to_ascii_lowercase().starts_with("ggml-vocab-"));
     files.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     serde_json::json!({
         "dirs": roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),

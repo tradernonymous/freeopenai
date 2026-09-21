@@ -96,12 +96,16 @@ test('the Puter row is offered whether or not the engine mentions it', () => {
 
 test('the screen opens the sign-in page through the shell, never a popup', () => {
   const screen = read('desktop', 'src', 'screens', 'ImagesScreen.tsx');
-  assert.match(screen, /openUrl\(url\)/);
+  assert.match(screen, /puterSigninOpen\(url\)/);
   assert.match(screen, /puter\.signIn\(open \? \{ open \} : undefined\)/);
   const bridge = read('desktop', 'src', 'bridge.ts');
-  assert.match(bridge, /call\('open_url', \{ url \}\)/);
+  assert.match(bridge, /call\('puter_signin_open', \{ url \}\)/);
   const shell = read('desktop', 'src-tauri', 'src', 'net.rs');
-  assert.match(shell, /pub fn open_url\(/, 'the shell has the command');
-  assert.match(shell, /OPEN_HOSTS/, 'and it is allowlisted');
-  assert.match(read('desktop', 'src-tauri', 'src', 'main.rs'), /net::open_url/);
+  // Puter's page is blank without a referrer, so the shell serves a redirect
+  // page on loopback and opens that -- for a puter.com sign-in URL and nothing else.
+  assert.match(shell, /pub fn puter_signin_open\(url: String\)/, 'the shell has the command');
+  assert.match(shell, /pub fn is_puter_signin\(url: &str\)/, 'and it takes only a Puter sign-in URL');
+  assert.match(shell, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, 'on loopback, on a port of its own');
+  assert.match(shell, /location\.replace\(/);
+  assert.match(read('desktop', 'src-tauri', 'src', 'main.rs'), /net::puter_signin_open/);
 });

@@ -10,12 +10,10 @@ import {
   localModelStatus,
   localModelStop,
   localModelsList,
-  localModelsScan,
   localOpenReleases,
   localServerFind,
   localServerPick,
   onLocalDownload,
-  pickFolder,
   type LocalDownloadProgress,
   type LocalModelFile,
   type LocalModelStatus,
@@ -25,10 +23,13 @@ import {
 import '../local-models.js';
 import '../hf-models.js';
 import '../hf-auth.js';
+import '../saved-models.js';
+import MyModels from './MyModels';
 
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 const hfModels: typeof import('../hf-models.js') = (globalThis as any).FreeAI4UHfModels;
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 
 // Local models, in Settings.
 //
@@ -103,9 +104,6 @@ export default function LocalModelsCard() {
   const [hub, setHub] = useState<{ repo: string; files: HubFile[]; gated: boolean; license: string } | null>(null);
   const [hubError, setHubError] = useState('');
 
-  // What other tools already put on this machine.
-  const [found, setFound] = useState<{ dirs: string[]; files: LocalModelFile[] } | null>(null);
-  const [scanning, setScanning] = useState(false);
 
   const refresh = useCallback(() => {
     if (!hasShell()) return;
@@ -263,7 +261,12 @@ export default function LocalModelsCard() {
       .then((result) => {
         if (result.cancelled) pushToast('info', 'Download paused. Start it again to resume.');
         else if (result.already) pushToast('info', 'That file was already here.');
-        else pushToast('ok', `${file.split('/').pop()} downloaded.`);
+        else {
+          // A finished download is one of the person's models: it goes
+          // straight into the pickers under Unsloth Local.
+          savedModels.add({ kind: 'unsloth', path: result.path, bytes: result.bytes, detail: localModels.parseQuant(file) });
+          pushToast('ok', `${file.split('/').pop()} downloaded and added to your models.`);
+        }
       })
       .catch((e: unknown) => {
         const message = (e as Error).message || String(e);
@@ -284,18 +287,6 @@ export default function LocalModelsCard() {
       .then(() => pushToast('info', `${file} deleted.`))
       .catch((e: unknown) => setError((e as Error).message || String(e)))
       .finally(() => { setBusy(''); refresh(); });
-  };
-
-  const scan = (extra?: string) => {
-    setScanning(true);
-    localModelsScan(extra ? [extra] : [])
-      .then(setFound)
-      .catch((e: unknown) => setError((e as Error).message || String(e)))
-      .finally(() => setScanning(false));
-  };
-
-  const chooseFolder = () => {
-    pickFolder().then((dir) => { if (dir) scan(dir); }).catch(() => { /* cancelled */ });
   };
 
   const running = localModels.stateOf(status);
@@ -406,6 +397,8 @@ export default function LocalModelsCard() {
             About {facts.ramGb} GB of memory reported{facts.ramKnown ? '' : ' (estimated)'} · {facts.cores} threads
           </span>
         </div>
+
+        <MyModels />
 
         {/* ---- 1. paste anything from Hugging Face ---------------------------- */}
         <h3 className="local-heading">Add from Hugging Face</h3>
@@ -574,6 +567,17 @@ export default function LocalModelsCard() {
                         {isThisFile(f.file) ? 'Running' : 'Start'}
                       </button>
                     )}
+                    {!f.partial && (
+                      <button
+                        onClick={() => {
+                          const r = savedModels.add({ kind: 'unsloth', path: f.path, bytes: f.bytes, detail: localModels.parseQuant(f.file) });
+                          pushToast(r.added ? 'ok' : 'info', r.added ? `${f.file} added to your models.` : r.reason);
+                        }}
+                        title="Keep this model in the Chat, Design and Code pickers"
+                      >
+                        Add
+                      </button>
+                    )}
                     <button
                       onClick={() => remove(f.file)}
                       disabled={!!busy || downloading || isThisFile(f.file)}
@@ -586,46 +590,6 @@ export default function LocalModelsCard() {
               })}
             </div>
           </>
-        )}
-
-        {/* ---- 4. already on this PC ------------------------------------------- */}
-        <h3 className="local-heading">Already on this PC</h3>
-        <p className="settings-hint">
-          GGUF files another tool downloaded — Unsloth Studio, the Hugging Face cache, LM Studio — can run from
-          where they are. Safetensors models cannot: llama-server needs GGUF.
-        </p>
-        <div className="local-status-row">
-          <button onClick={() => scan()} disabled={scanning}>{scanning ? 'Scanning…' : 'Scan the usual folders'}</button>
-          <button onClick={chooseFolder} disabled={scanning}>Choose a folder…</button>
-        </div>
-        {found && (
-          found.files.length ? (
-            <div className="local-catalogue">
-              {found.files.map((f) => {
-                const report = fitOf(f.bytes);
-                return (
-                  <div key={f.path} className={`local-row ${report.fits ? '' : 'cannot'}`}>
-                    <div className="local-row-main">
-                      <span className="local-row-name"><span className="mono">{f.file}</span></span>
-                      <span className="local-row-note mono">{f.path}</span>
-                    </div>
-                    <span className="local-row-size">{(f.bytes / GB).toFixed(1)} GB</span>
-                    <button
-                      onClick={() => start({ id: f.file, context: 16384 }, report.tight, f.path)}
-                      disabled={!report.fits || !!busy || isThisFile(f.path)}
-                      title={report.fits ? 'Run this file from where it is' : report.reason}
-                    >
-                      {isThisFile(f.path) ? 'Running' : 'Start'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="settings-hint">
-              No GGUF files in {found.dirs.length ? found.dirs.join(', ') : 'the usual folders'}. Choose the folder your other app downloads into.
-            </p>
-          )
         )}
 
         {error && <div className="failure-card">

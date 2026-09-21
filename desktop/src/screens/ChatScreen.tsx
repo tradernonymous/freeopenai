@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
-import { hasShell, localModelStatus } from '../bridge';
+import { hasShell, localModelStatus, openUrl } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
@@ -8,6 +8,9 @@ import ModePicker from '../components/ModePicker';
 // UMD modules: loaded for their side effect, read off globalThis.
 import RadialMenu, { type RadialItem } from '../components/RadialMenu';
 import { pushToast } from '../components/Toasts';
+import RunSettings from '../components/RunSettings';
+import { isSavedProvider, streamSaved } from '../run-model';
+import '../saved-models.js';
 import '../chats.js';
 import '../failure.js';
 import '../fallback.js';
@@ -20,6 +23,7 @@ const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFail
 const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFallback;
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
 
 export interface Msg {
@@ -123,8 +127,33 @@ export default function ChatScreen() {
     window.addEventListener(hfAuth.AUTH_CHANGED_EVENT, onAuth);
     return () => window.removeEventListener(hfAuth.AUTH_CHANGED_EVENT, onAuth);
   }, []);
+  // "My models": Ollama Local and Unsloth Local, holding what was added in
+  // Settings -> Local models. They lead the list: they are the person's own.
+  const [savedRows, setSavedRows] = useState<ProviderRow[]>(() => savedModels.providerRows());
+  const [savedTick, setSavedTick] = useState(0);
+  useEffect(() => {
+    const onSaved = () => { setSavedRows(savedModels.providerRows()); setSavedTick((n) => n + 1); };
+    window.addEventListener(savedModels.CHANGED_EVENT, onSaved);
+    return () => window.removeEventListener(savedModels.CHANGED_EVENT, onSaved);
+  }, []);
+  const [runOpen, setRunOpen] = useState(false);
+  // Hugging Face sign-in, right here: a device code, the same flow Library uses.
+  const [hfCode, setHfCode] = useState<{ user_code: string; verification_uri: string } | null>(null);
+  const signInHf = () => {
+    hfAuth.startDeviceCode()
+      .then((dc: any) => {
+        setHfCode({ user_code: dc.user_code, verification_uri: dc.verification_uri });
+        const page = dc.verification_uri_complete || dc.verification_uri;
+        if (hasShell()) openUrl(page).catch(() => { /* the code and the address are on screen */ });
+        else window.open(page, '_blank');
+        return hfAuth.pollDeviceCode(dc.device_code, dc.interval, Date.now() + dc.expires_in * 1000);
+      })
+      .then(() => { setHfCode(null); pushToast('ok', 'Signed in to Hugging Face.'); })
+      .catch((e: unknown) => { setHfCode(null); pushToast('error', ((e as Error).message || String(e)).split('\n')[0]); });
+  };
   const hfRow = hfInference.providerRow(hfToken);
   const choices = [
+    ...savedRows,
     ...(localRow && !providerRows.some((p) => p.id === 'local') ? [localRow] : []),
     ...(hfRow && !providerRows.some((p) => p.id === 'hf') ? [hfRow] : []),
     ...providerRows,
@@ -220,10 +249,24 @@ export default function ChatScreen() {
       setModels([]);
       return;
     }
-    // HF Inference has its own curated model list.
+    // One of "my models": the list is what was added, nothing to ask anybody.
+    if (isSavedProvider(active.provider)) {
+      const mine = savedModels.modelsFor(active.provider);
+      setModels(mine);
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === active.id && !mine.some((m) => m.id === s.model) ? { ...s, model: mine[0]?.id || '' } : s);
+        saveSessions(next);
+        return next;
+      });
+      return;
+    }
+    // HF: the curated list at once, then what the router serves right now.
     if (active.provider === 'hf') {
       setModels(hfInference.models(hfToken));
-      return;
+      let stale = false;
+      hfInference.fetchModels(hfToken).then((live) => { if (!stale && live.length) setModels(live); });
+      return () => { stale = true; };
     }
     // A local server serves exactly the model it was started with, so its list
     // is that one model -- asked of the shell, not of the engine.
@@ -253,7 +296,7 @@ export default function ChatScreen() {
       })
       .catch(() => { if (!gone) setModels([]); });
     return () => { gone = true; };
-  }, [active?.provider, active?.id]);
+  }, [active?.provider, active?.id, savedTick]);
 
   // open a session from History
   useEffect(() => {
@@ -363,6 +406,10 @@ export default function ChatScreen() {
         await hfInference.streamChat(active.model, turns, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
         }, controller.signal, hfToken || undefined);
+      } else if (isSavedProvider(active.provider)) {
+        await streamSaved(active.provider, active.model, turns, (frame: StreamFrame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal, (stage) => { if (stage) pushToast('info', stage); });
       } else if (active.provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', active.model, turns, (frame: StreamFrame) => {
           if (frame.content) append(frame.content);
@@ -480,6 +527,10 @@ export default function ChatScreen() {
         await hfInference.streamChat(model, turns, (frame) => {
           if (frame.content) append(frame.content);
         }, controller.signal, hfToken || undefined);
+      } else if (isSavedProvider(provider)) {
+        await streamSaved(provider, model, turns, (frame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal, (stage) => { if (stage) pushToast('info', stage); });
       } else if (provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
           if (frame.content) append(frame.content);
@@ -677,9 +728,31 @@ export default function ChatScreen() {
             onPick={(provider, model) => patchSession(active.id, { provider, model })}
             disabled={sending}
           />
+          {isSavedProvider(active.provider) && (
+            <button onClick={() => setRunOpen((open) => !open)} title="Run settings for this model" aria-label="Run settings" aria-pressed={runOpen}>
+              <Icon name="settings" size={15} />
+            </button>
+          )}
           <button onClick={startNew} title="New chat" aria-label="New chat"><Icon name="plus" size={15} /></button>
         </div>
       </header>
+
+      {active.provider === 'hf' && !hfToken && (
+        <div className="hf-signin-banner" role="status">
+          {hfCode ? (
+            <span>
+              Enter <strong className="mono">{hfCode.user_code}</strong> at{' '}
+              <span className="mono">{hfCode.verification_uri}</span> (it opened in your browser). This finishes on its own.
+            </span>
+          ) : (
+            <>
+              <span>Hugging Face needs a sign-in. The token stays on this PC, in Windows Credential Manager.</span>
+              <button className="primary" onClick={signInHf}>Sign in to Hugging Face</button>
+            </>
+          )}
+        </div>
+      )}
+      <RunSettings open={runOpen && isSavedProvider(active.provider)} onClose={() => setRunOpen(false)} provider={active.provider} model={active.model} />
 
       <div
         className="chat-messages"

@@ -26,6 +26,7 @@ mod diag;
 mod local;
 mod models;
 mod net;
+mod ollama;
 mod save;
 mod secrets;
 mod webview2;
@@ -72,6 +73,13 @@ fn main() {
             net::remote_download,
             net::run_installer,
             net::open_url,
+            net::puter_signin_open,
+            ollama::ollama_tags,
+            ollama::ollama_ps,
+            ollama::ollama_eject,
+            ollama::ollama_start,
+            ollama::shell_chat_stream,
+            ollama::shell_chat_cancel,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,

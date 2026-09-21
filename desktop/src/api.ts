@@ -152,6 +152,8 @@ export async function streamLocalChat(
   onFrame: (frame: StreamFrame) => void,
   signal?: AbortSignal,
   apiKey?: string,
+  /** Sampling fields (temperature, top_p, ...) from the model's run settings. */
+  extra?: Record<string, unknown>,
 ): Promise<void> {
   const origin = String(baseUrl || '').replace(/\/+$/, '');
   if (!origin) throw new ApiError(0, 'No local model server is running.');
@@ -164,7 +166,7 @@ export async function streamLocalChat(
     res = await fetch(`${origin}/v1/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model: model || 'local', messages, stream: true }),
+      body: JSON.stringify({ ...(extra || {}), model: model || 'local', messages, stream: true }),
       signal,
     });
   } catch (err) {

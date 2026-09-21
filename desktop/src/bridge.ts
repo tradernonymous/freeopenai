@@ -403,3 +403,86 @@ export async function secretSet(key: string, value: string): Promise<void> {
 export async function secretDelete(key: string): Promise<void> {
   await call('secret_delete', { key });
 }
+
+// ---- Puter sign-in ----------------------------------------------------------
+//
+// Puter's sign-in page renders nothing without a referrer, and a URL launched
+// by the OS has none. The shell serves a one-line redirect page on 127.0.0.1
+// and opens that, so the browser arrives at Puter from a page (net.rs).
+export async function puterSigninOpen(url: string): Promise<void> {
+  await call('puter_signin_open', { url });
+}
+
+// ---- Ollama, and streaming from a model server on this machine ------------------
+//
+// All of it goes through the shell (ollama.rs): Ollama refuses a Tauri
+// window's origin, and the shell checks that every address is loopback.
+
+export async function ollamaTags(base?: string): Promise<any> {
+  return call('ollama_tags', { base: base ?? null });
+}
+
+export async function ollamaPs(base?: string): Promise<any> {
+  return call('ollama_ps', { base: base ?? null });
+}
+
+export async function ollamaEject(base: string, model: string): Promise<void> {
+  await call('ollama_eject', { base: base || null, model });
+}
+
+export async function ollamaStart(base?: string): Promise<{ started: boolean; running: boolean }> {
+  return call('ollama_start', { base: base ?? null });
+}
+
+interface ShellChatEvent {
+  id: string;
+  status?: number;
+  chunk?: string;
+  done?: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
+
+/**
+ * POST a JSON body to a model server on this machine and receive the reply a
+ * chunk at a time. Resolves when the body ends; rejects with AbortError when
+ * `signal` fires (the shell is told to stop reading too).
+ */
+export async function shellPostStream(
+  args: { url: string; body: string; apiKey?: string },
+  onChunk: (text: string) => void,
+  onStatus?: (status: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const id = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  let settle: (error?: Error) => void = () => {};
+  const finished = new Promise<void>((resolve, reject) => {
+    settle = (error) => (error ? reject(error) : resolve());
+  });
+  const stop = await subscribe<ShellChatEvent>('shell-chat', (event) => {
+    if (!event || event.id !== id) return;
+    if (typeof event.status === 'number') onStatus?.(event.status);
+    if (typeof event.chunk === 'string') onChunk(event.chunk);
+    if (event.error) settle(new Error(event.error));
+    else if (event.done) settle();
+  });
+  const onAbort = () => {
+    call('shell_chat_cancel', { id }).catch(() => {});
+    const error = new Error('aborted');
+    error.name = 'AbortError';
+    settle(error);
+  };
+  if (signal?.aborted) onAbort();
+  signal?.addEventListener('abort', onAbort);
+  // The command resolves when the stream ends, but events can still be in
+  // flight at that moment: the `done` event is what finishes this, and a
+  // command failure (refused address, nothing listening) is an error.
+  call('shell_chat_stream', { id, url: args.url, body: args.body, apiKey: args.apiKey ?? null })
+    .catch((e: unknown) => settle(e instanceof Error ? e : new Error(String(e))));
+  try {
+    await finished;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    stop();
+  }
+}

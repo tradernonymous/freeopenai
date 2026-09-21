@@ -10,13 +10,14 @@ export interface HfModelOption {
 export interface HfProviderRow {
   id: string;
   label: string;
+  configured: boolean;
   freeTier: { text: string };
 }
 
 export declare const API_BASE: string;
 export declare const DEFAULT_SUFFIX: string;
 export declare const FREE_MODELS: HfModelOption[];
-export declare function providerRow(token: string | null): HfProviderRow | null;
+export declare function providerRow(token: string | null): HfProviderRow;
 export declare function models(token: string | null): HfModelOption[];
 export declare function fetchModels(token: string | null, fetchImpl?: typeof fetch): Promise<HfModelOption[]>;
 export declare function chatUrl(): string;

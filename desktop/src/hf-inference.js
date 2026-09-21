@@ -52,10 +52,21 @@
    * there is no HF token (the user must sign in first).
    */
   function providerRow(token) {
-    if (!token) return null;
+    // Always offered. It used to appear only after a sign-in made on another
+    // screen (Library), so nobody could find it; signed out, the row is still
+    // there and Chat shows the sign-in right under the header.
+    if (!token) {
+      return {
+        id: 'hf',
+        label: 'Hugging Face',
+        configured: false,
+        freeTier: { text: 'Sign in with your Hugging Face account to use it' },
+      };
+    }
     return {
       id: 'hf',
       label: 'Hugging Face',
+      configured: true,
       // Honest about the money: the free monthly credit is small and the rest
       // is billed to the user's HF account.
       freeTier: { text: 'Inference Providers — monthly free credits, then your HF billing' },

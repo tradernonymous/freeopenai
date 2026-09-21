@@ -168,8 +168,11 @@ test('Settings lets a person paste a model, download it, resume it, and run what
   assert.match(card, /localModelDownload\(\{ repo, file/);
   assert.match(card, /localModelDownloadCancel\(\)/);
   assert.match(card, /onLocalDownload\(/);
-  assert.match(card, /localModelsScan\(/);
-  assert.match(card, /pickFolder\(\)/);
+  // Finding what is already on the PC moved to My models (the Unsloth toggle).
+  const mine = read('desktop', 'src', 'components', 'MyModels.tsx');
+  assert.match(mine, /localModelsScan\(/);
+  assert.match(mine, /pickFolder\(\)/);
+  assert.match(card, /<MyModels \/>/);
   assert.match(card, /PENDING_MODEL_KEY/);
   // A split file is shown but not offered; a 1-bit quant is labelled.
   assert.match(card, /localModels\.isSplit\(f\.name\)/);

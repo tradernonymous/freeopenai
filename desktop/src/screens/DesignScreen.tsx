@@ -3,6 +3,8 @@ import { api, streamChat } from '../api';
 import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
 import SelectPill from '../components/SelectPill';
+import { isSavedProvider, streamSaved } from '../run-model';
+import '../saved-models.js';
 // The design modules are UMD (shared with node:test): the import runs the
 // factory, which hangs the API off globalThis in the browser.
 import '../design/brand.js';
@@ -10,6 +12,12 @@ import '../design/slop.js';
 
 const brand: typeof import('../design/brand.js') = (globalThis as any).FreeAI4UBrand;
 const slop: typeof import('../design/slop.js') = (globalThis as any).FreeAI4USlop;
+const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
+
+/** "My models" behind the same call shape streamChat has. */
+const streamMine: typeof streamChat = (provider, body, onFrame, signal) =>
+  streamSaved(provider, body.model, body.messages, onFrame, signal);
+const mineRows = () => savedModels.providerRows().map((p) => ({ id: p.id, label: p.label }));
 
 interface Template {
   id: string;
@@ -89,13 +97,24 @@ export default function DesignScreen() {
     refresh();
     api.providers().then((rows: any) => {
       const chat = (Array.isArray(rows) ? rows : []).filter((p: any) => p.kind !== 'image' && p.configured);
-      setProviders(chat.map((p: any) => ({ id: p.id, label: p.label })));
+      setProviders([...mineRows(), ...chat.map((p: any) => ({ id: p.id, label: p.label }))]);
       if (chat.length) setProvider(chat[0].id);
-    }).catch(() => setProviders([]));
+      else if (mineRows().length) setProvider(mineRows()[0].id);
+    }).catch(() => {
+      // No engine is not no models: what runs on this PC is still offered.
+      setProviders(mineRows());
+      if (mineRows().length) setProvider(mineRows()[0].id);
+    });
   }, [refresh]);
 
   useEffect(() => {
     if (!provider) { setModels([]); return; }
+    if (isSavedProvider(provider)) {
+      const ids = savedModels.modelsFor(provider).map((m) => m.id);
+      setModels(ids);
+      setModel((m) => (ids.includes(m) ? m : ids[0] || ''));
+      return;
+    }
     api.models(provider).then((rows: any) => {
       const ids = (Array.isArray(rows) ? rows : []).map((r: any) => String(r.id || r));
       setModels(ids);
@@ -161,7 +180,7 @@ export default function DesignScreen() {
     abortRef.current = controller;
     let acc = '';
     try {
-      await streamChat(provider, {
+      await (isSavedProvider(provider) ? streamMine : streamChat)(provider, {
         model,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },

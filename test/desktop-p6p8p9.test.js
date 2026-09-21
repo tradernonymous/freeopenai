@@ -13,9 +13,14 @@ describe('hf-inference', () => {
     assert.equal(typeof hfInference.streamChat, 'function');
   });
 
-  it('providerRow returns null without a token', () => {
-    assert.equal(hfInference.providerRow(null), null);
-    assert.equal(hfInference.providerRow(''), null);
+  it('providerRow is always offered, and says it needs a sign-in without a token', () => {
+    // It used to be null, which hid Hugging Face until a sign-in made on
+    // another screen: nobody could find it. Chat now signs in on the spot.
+    for (const none of [null, '']) {
+      const row = hfInference.providerRow(none);
+      assert.equal(row.id, 'hf');
+      assert.equal(row.configured, false);
+    }
   });
 
   it('providerRow returns a row with a token', () => {

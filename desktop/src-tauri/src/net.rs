@@ -386,6 +386,105 @@ pub fn open_url(url: String) -> Result<(), String> {
     open_in_browser(url.trim())
 }
 
+/// The OS half of open_in_browser, with no policy: callers decide what may be
+/// opened. Windows goes through `cmd start` with no console window.
+fn launch(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/d", "/s", "/c", "start", "", &url.replace('&', "^&")]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// Whether a URL is a Puter sign-in page: https, puter.com, /action/sign-in.
+pub fn is_puter_signin(url: &str) -> bool {
+    if scheme_of(url).as_deref() != Some("https") {
+        return false;
+    }
+    let host_ok = matches!(host_of(url).as_deref(), Some("puter.com"));
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+    let path = rest.split_once('/').map(|(_, p)| p).unwrap_or("");
+    host_ok && path.starts_with("action/sign-in?")
+}
+
+/// The redirect page: one line of script, the URL embedded as a JSON string
+/// (with `<` escaped) so nothing in it can break out of the script.
+pub fn redirect_page(url: &str) -> String {
+    let literal = serde_json::to_string(url)
+        .unwrap_or_else(|_| String::from("\"\""))
+        .replace('<', "\\u003c");
+    let mut page = String::new();
+    page.push_str("<!doctype html><meta charset=\"utf-8\"><title>NeuraOS - Puter sign-in</title>");
+    page.push_str("<body style=\"font:14px system-ui;background:#0b0d10;color:#c9d1d9;padding:32px\">Opening Puter sign-in...");
+    page.push_str("<script>location.replace(");
+    page.push_str(&literal);
+    page.push_str(");</script>");
+    page
+}
+
+/// Open Puter's sign-in page THROUGH a page of our own.
+///
+/// Puter's sign-in page renders nothing unless it was opened from another page
+/// ("No referrer found" in its console): it names the referring site as the
+/// app asking for the account. A URL launched by the OS has no referrer, which
+/// is why the desktop's sign-in opened a blank tab. So the shell serves a
+/// one-line redirect page on 127.0.0.1 for a few minutes and opens THAT; the
+/// browser then arrives at Puter from `http://127.0.0.1:<port>/`.
+///
+/// The listener answers every request with the same page, accepts only the
+/// sign-in URL it was started for, binds loopback only, and goes away on its
+/// own.
+#[tauri::command(async)]
+pub fn puter_signin_open(url: String) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    let url = url.trim().to_string();
+    if !is_puter_signin(&url) {
+        return Err("only a puter.com sign-in page is opened this way".to_string());
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("no loopback port: {}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let page = redirect_page(&url);
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut served = 0u32;
+        while std::time::Instant::now() < deadline && served < 8 {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer);
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: origin\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        page.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(page.as_bytes());
+                    let _ = stream.flush();
+                    served += 1;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(150)),
+            }
+        }
+    });
+    launch(&format!("http://127.0.0.1:{}/", port))?;
+    Ok(serde_json::json!({ "port": port }))
+}
+
 #[cfg(windows)]
 fn spawn_detached(program: &Path, args: &[String]) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
@@ -437,6 +536,22 @@ mod tests {
 
     fn extra(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn only_a_puter_sign_in_page_gets_the_redirect() {
+        assert!(is_puter_signin("https://puter.com/action/sign-in?embedded_in_popup=true&msg_id=1"));
+        assert!(!is_puter_signin("http://puter.com/action/sign-in?x=1"));
+        assert!(!is_puter_signin("https://puter.com.evil.com/action/sign-in?x=1"));
+        assert!(!is_puter_signin("https://puter.com/other?x=1"));
+        assert!(!is_puter_signin("https://evil.com/action/sign-in?x=1"));
+    }
+
+    #[test]
+    fn the_redirect_page_cannot_be_broken_out_of() {
+        let page = redirect_page("https://puter.com/action/sign-in?a=\"</script><script>alert(1)//");
+        assert!(page.contains("location.replace("));
+        assert!(!page.contains("</script><script>alert"), "the URL is a JSON string with < escaped");
     }
 
     #[test]

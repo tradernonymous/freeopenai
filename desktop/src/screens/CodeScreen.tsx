@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
 import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
+import SelectPill from '../components/SelectPill';
+import { isSavedProvider, streamSaved } from '../run-model';
+import '../saved-models.js';
 import { hasShell, pickFolder, listLocalDir, readLocalFile, writeLocalFile, editLocalFile, runLocal } from '../bridge';
 // UMD modules: loaded for their side effect, read off globalThis.
 import '../coding-agent.js';
@@ -64,6 +67,34 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
   const [error, setError] = useState('');
   const [model, setModel] = useState('');
   const [provider, setProvider] = useState('');
+  // The agent never had a way to be given a model, so it never had one. The
+  // list is "my models" first, then the engine's first ready provider.
+  const [modelChoices, setModelChoices] = useState<Array<{ provider: string; model: string; label: string }>>([]);
+  useEffect(() => {
+    const saved = (globalThis as any).FreeAI4USavedModels as typeof import('../saved-models.js');
+    const mine = saved.list().map((m) => ({
+      provider: saved.PROVIDERS[m.kind].id,
+      model: m.name,
+      label: `${saved.PROVIDERS[m.kind].label} \u00b7 ${m.name}`,
+    }));
+    setModelChoices(mine);
+    if (mine.length) { setProvider(mine[0].provider); setModel(mine[0].model); }
+    api.providers()
+      .then((rows: any) => {
+        const ready = (Array.isArray(rows) ? rows : []).find((p: any) => p.kind !== 'image' && p.configured);
+        if (!ready) return null;
+        return api.models(ready.id).then((list: any) => {
+          const engine = (Array.isArray(list) ? list : []).slice(0, 12).map((r: any) => ({
+            provider: String(ready.id),
+            model: String(r.id || r),
+            label: `${ready.label} \u00b7 ${String(r.id || r)}`,
+          }));
+          setModelChoices([...mine, ...engine]);
+          if (!mine.length && engine.length) { setProvider(engine[0].provider); setModel(engine[0].model); }
+        });
+      })
+      .catch(() => { /* no engine: my models are still there */ });
+  }, []);
   const [rejectReason, setRejectReason] = useState('');
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -87,13 +118,16 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
             if (frame.content) content += frame.content;
             if (frame.done) resolve(content);
           };
-          // Try local first if provider is 'local'.
-          if (provider === 'local') {
+          // "My models" run on this PC; the stream ending is the answer ending
+          // whether or not a `done` frame came.
+          if (isSavedProvider(provider)) {
+            streamSaved(provider, model, messages, onFrame).then(() => resolve(content)).catch(reject);
+          } else if (provider === 'local') {
             streamLocalChat('http://127.0.0.1:8080', model, messages, onFrame)
-              .catch(reject);
+              .then(() => resolve(content)).catch(reject);
           } else {
             streamChat(provider, { model, messages, stream: true }, onFrame)
-              .catch(reject);
+              .then(() => resolve(content)).catch(reject);
           }
         });
       },
@@ -210,6 +244,13 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
 
       <div className="code-layout">
         <div className="code-request-bar">
+          <SelectPill
+            label="Model"
+            title="Model the coding agent uses"
+            value={provider && model ? `${provider}|${model}` : ''}
+            options={modelChoices.map((c) => ({ value: `${c.provider}|${c.model}`, label: c.label }))}
+            onPick={(value) => { const [p, ...rest] = value.split('|'); setProvider(p || ''); setModel(rest.join('|')); }}
+          />
           <input
             value={request}
             onChange={(e) => setRequest(e.target.value)}
