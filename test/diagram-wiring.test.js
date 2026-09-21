@@ -150,8 +150,11 @@ test('tapping Diagram twice draws, then puts the drawing away', () => {
   };
   const textEl = {
     innerHTML: '',
-    querySelectorAll(sel) { return sel === 'pre' ? [pre] : []; },
-    querySelector(sel) { return sel === 'pre[data-lang="html"]' ? null : null; },
+    querySelectorAll(sel) {
+      if (sel === 'pre') return [pre];
+      if (sel === 'pre[data-lang]') return [pre].filter((p) => p.dataset && p.dataset.lang);
+      return [];
+    },
   };
   const el = {
     dataset: {},
@@ -163,6 +166,7 @@ test('tapping Diagram twice draws, then puts the drawing away', () => {
     openHtmlPreview: () => {},
     openCanvasForBlock: () => {},
     collectCanvasBlocks: () => {},
+    CANVAS_ARTIFACT_LANGS: ['html', 'jsx', 'tsx', 'js', 'javascript'],
     renderDiagram: (holder, code) => renders.push([holder, code]),
     document: {
       createElement: (tag) => ({

@@ -900,6 +900,7 @@ function updateNavActive(btn) {
             onOpenPane: () => { if (typeof toggleSessionPanel === 'function') toggleSessionPanel(false, false); },
             onBlocks: () => renderCanvasPicker(),
         });
+        const CANVAS_ARTIFACT_LANGS = CanvasArtifacts.CANVAS_LANGS;
         // Where the transcript sits, and who is allowed to move it. The app used
         // to write scrollTop = scrollHeight from ten places, nine of them
         // unconditional -- a streaming reply dragged the reader back to the
@@ -6532,22 +6533,22 @@ function updateNavActive(btn) {
                 // page script reaches neither this document nor its storage,
                 // and it only ever runs on an explicit tap. The Canvas button
                 // sends the same code to the persistent pane instead.
-                if (pre.dataset && pre.dataset.lang === 'html') {
+                if (pre.dataset && CANVAS_ARTIFACT_LANGS.indexOf(pre.dataset.lang) !== -1) {
                     const view = document.createElement('button');
                     view.type = 'button';
                     view.className = 'code-preview-btn';
                     view.textContent = 'Preview';
-                    view.setAttribute('aria-label', 'Preview this HTML in a sandbox');
+                    view.setAttribute('aria-label', 'Preview this block in a sandbox');
                     view.addEventListener('click', () => {
                         const code = pre.querySelector('code');
-                        openHtmlPreview(code ? code.textContent : pre.textContent);
+                        openHtmlPreview(code ? code.textContent : pre.textContent, pre.dataset.lang);
                     });
                     pre.appendChild(view);
                     const canvas = document.createElement('button');
                     canvas.type = 'button';
                     canvas.className = 'code-canvas-btn';
                     canvas.textContent = 'Canvas';
-                    canvas.setAttribute('aria-label', 'Open this HTML in the canvas');
+                    canvas.setAttribute('aria-label', 'Open this block in the canvas');
                     canvas.addEventListener('click', () => openCanvasForBlock(pre));
                     pre.appendChild(canvas);
                 }
@@ -6588,10 +6589,11 @@ function updateNavActive(btn) {
                 });
                 pre.appendChild(btn);
             });
-            // A completed HTML block just landed on screen. Keep the canvas
-            // picker honest: blocks are only in the DOM once their closing
-            // fence arrives, so this runs once per block, never mid-stream.
-            if (textEl.querySelector('pre[data-lang="html"]')) collectCanvasBlocks();
+            // A completed canvas-eligible block just landed on screen. Keep
+            // the canvas picker honest: blocks are only in the DOM once their
+            // closing fence arrives, so this runs once per block, never
+            // mid-stream.
+            if (Array.prototype.some.call(textEl.querySelectorAll('pre[data-lang]'), (p) => CANVAS_ARTIFACT_LANGS.indexOf(p.dataset.lang) !== -1)) collectCanvasBlocks();
         }
 
         // A sandboxed stage for HTML blocks: the frame carries sandbox without
@@ -6599,7 +6601,7 @@ function updateNavActive(btn) {
         // no cookies, no storage -- and the document is a snapshot, assigned
         // once through the property (never an attribute, so there is no
         // quoting to escape and nothing for a later pass to rewrite).
-        function openHtmlPreview(code) {
+        function openHtmlPreview(code, lang) {
             closeHtmlPreview();
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -6624,7 +6626,11 @@ function updateNavActive(btn) {
             frame.className = 'html-preview-frame';
             frame.setAttribute('sandbox', 'allow-scripts');
             frame.setAttribute('title', 'Sandboxed HTML preview');
-            frame.srcdoc = String(code);
+            // html (or no lang given, the legacy call shape) stays a raw
+            // passthrough -- a browser renders a bare fragment in srcdoc fine.
+            // jsx/tsx/js is not valid HTML on its own, so it must go through
+            // the React/Babel document builder to run at all.
+            frame.srcdoc = (lang && lang !== 'html') ? artifactDocument(code, lang) : String(code);
             dialog.appendChild(head);
             dialog.appendChild(frame);
             overlay.appendChild(dialog);
@@ -6646,12 +6652,12 @@ function updateNavActive(btn) {
         // Build the document a block runs in: a plain wrapper so a fragment
         // renders, React + Babel for a block that opens with the react marker.
         // The rule lives in the module; this is the name the page already calls.
-        function artifactDocument(code) { return canvasArtifacts.buildArtifactDocument(code); }
+        function artifactDocument(code, lang) { return canvasArtifacts.buildArtifactDocument(code, lang); }
 
-        function renderCanvasArtifact(code) {
+        function renderCanvasArtifact(code, lang) {
             const frame = document.getElementById('canvasFrame');
             if (!frame) return;
-            frame.srcdoc = artifactDocument(code);
+            frame.srcdoc = artifactDocument(code, lang);
         }
 
         function canvasShell() {
@@ -6682,7 +6688,7 @@ function updateNavActive(btn) {
             if (!blocks.length) {
                 if (count) count.textContent = 'no blocks yet';
                 const opt = document.createElement('option');
-                opt.textContent = 'No HTML blocks in this chat yet';
+                opt.textContent = 'No artifacts in this chat yet';
                 opt.disabled = true;
                 select.appendChild(opt);
             } else {
@@ -6723,7 +6729,7 @@ function updateNavActive(btn) {
             const select = document.getElementById('canvasSelect');
             if (frame) {
                 frame.title = block ? block.label : 'Sandboxed artifact preview';
-                renderCanvasArtifact(block ? block.code : '');
+                renderCanvasArtifact(block ? block.code : '', block ? block.lang : undefined);
             }
             if (select && blocks.length) select.value = String(at);
         }

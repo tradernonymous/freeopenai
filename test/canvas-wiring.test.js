@@ -69,7 +69,7 @@ function harness({ pres = [], stored = null, failSets = false, shellHidden = tru
     canvasCount: makeEl(),
     canvasScrim: makeEl(),
   };
-  const chat = { querySelectorAll(sel) { return sel === '.message .message-text pre[data-lang="html"]' ? pres : []; } };
+  const chat = { querySelectorAll(sel) { return sel === '.message .message-text pre[data-lang]' ? pres : []; } };
   const storage = makeStorage({ failSets, stored });
   const sessionToggles = [];
   const module = createCanvasArtifacts({
@@ -86,9 +86,9 @@ function harness({ pres = [], stored = null, failSets = false, shellHidden = tru
   return { module, els, storage, sessionToggles, chat, shell: shellEl, drawn: () => blocksDrawn };
 }
 
-function preBlock(code) {
+function preBlock(code, lang = 'html') {
   return {
-    dataset: { lang: 'html' },
+    dataset: { lang },
     querySelector(sel) { return sel === 'code' ? { textContent: code } : null; },
     textContent: code,
   };
@@ -127,6 +127,33 @@ test('the react marker switches the body out to a JSX stage', () => {
 
 test('the marker constant is shared with the page, not re-declared', () => {
   assert.equal(REACT_MARKER, '<!-- canvas react -->');
+});
+
+test('a jsx-fenced block is a JSX stage on its own, no marker required', () => {
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('const App = () => <h1>hi</h1>;', 'jsx');
+  assert.ok(doc.includes('text/babel'));
+  assert.ok(doc.includes('const App = () => <h1>hi</h1>;'));
+  assert.ok(!doc.includes(REACT_MARKER), 'no marker was in the source, so none should appear in the output');
+});
+
+test('a tsx-fenced block adds the typescript babel preset', () => {
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('const App = () => <h1>hi</h1>;', 'tsx');
+  assert.match(doc, /data-presets="typescript"/);
+});
+
+test('a plain js fence still gets the React/Babel stage (canvas is opt-in per block already)', () => {
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('console.log(1)', 'js');
+  assert.ok(doc.includes('text/babel'));
+});
+
+test('an html fence without the marker keeps the plain-wrapper behaviour, unaffected by the lang table', () => {
+  const h = harness();
+  const doc = h.module.buildArtifactDocument('<b>hi</b>', 'html');
+  assert.ok(!doc.includes('text/babel'));
+  assert.ok(doc.includes('<body><b>hi</b></body>'));
 });
 
 // ---- pane show/hide and persistence ----------------------------------------
@@ -206,6 +233,14 @@ test('an empty chat resets the list instead of keeping stale blocks', () => {
   h.module.selectBlock(0);
   assert.equal(h.module.blocksList().length, 0);
   assert.equal(h.module.currentIndex(), -1);
+});
+
+test('collectBlocks picks up jsx/tsx/js fences alongside html, and ignores unrelated languages', () => {
+  const h = harness({ pres: [preBlock('<b>a</b>', 'html'), preBlock('const x=1', 'jsx'), preBlock('graph TD', 'mermaid'), preBlock('print(1)', 'python')] });
+  const blocks = h.module.collectBlocks();
+  assert.equal(blocks.length, 2, 'only the html and jsx fences are canvas-eligible');
+  assert.equal(blocks[0].label, 'HTML — <b>a</b>');
+  assert.equal(blocks[1].label, 'JSX — const x=1');
 });
 
 test('openForPre registers an unseen block, selects it, and shows the pane', () => {

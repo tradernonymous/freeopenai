@@ -23,6 +23,12 @@
   const HIDDEN_KEY = 'freeopenaiCanvasHidden';
   // A block that opens with this marker is a JSX stage, not a plain page.
   const REACT_MARKER = '<!-- canvas react -->';
+  // Fences in these languages get a Preview/Canvas button. jsx/tsx/js/javascript
+  // run through the React+Babel stage directly -- the marker above stays only
+  // for the rarer case of an html-fenced block that still wants React.
+  const CANVAS_LANGS = ['html', 'jsx', 'tsx', 'js', 'javascript'];
+  const REACT_LANGS = ['jsx', 'tsx', 'js', 'javascript'];
+  const LANG_LABELS = { html: 'HTML', jsx: 'JSX', tsx: 'TSX', js: 'JS', javascript: 'JS' };
 
   function create(deps) {
     const {
@@ -48,16 +54,20 @@
     // marker gets React + Babel so JSX actually runs. Script tags are
     // written as split strings so this page's own <script> never closes
     // early on the string content.
-    function buildArtifactDocument(code) {
+    function buildArtifactDocument(code, lang) {
       const text = String(code || '');
       const trimmed = text.replace(/^\s+/, '');
-      if (trimmed.indexOf(REACT_MARKER) === 0) {
-        const body = trimmed.slice(REACT_MARKER.length);
+      const markedReact = trimmed.indexOf(REACT_MARKER) === 0;
+      // A jsx/tsx/js fence is a JSX stage on its own -- the marker is only
+      // needed to opt an html-fenced block into the same treatment.
+      if (markedReact || REACT_LANGS.indexOf(lang) !== -1) {
+        const body = markedReact ? trimmed.slice(REACT_MARKER.length) : trimmed;
+        const tsPreset = lang === 'tsx' ? ' data-presets="typescript"' : '';
         return '<!doctype html><html><head><meta charset="utf-8">'
           + '<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><' + '/script>'
           + '<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><' + '/script>'
           + '<script src="https://unpkg.com/@babel/standalone/babel.min.js"><' + '/script>'
-          + '</head><body><div id="root"></div><script type="text/babel">'
+          + '</head><body><div id="root"></div><script type="text/babel"' + tsPreset + '>'
           + body
           + '<' + '/script></body></html>';
       }
@@ -78,9 +88,10 @@
 
     // The label names the block from its first content, so the picker is
     // readable without opening anything.
-    function labelFor(code) {
+    function labelFor(code, lang) {
       const first = String(code || '').replace(/\s+/g, ' ').trim().slice(0, 42);
-      return 'HTML — ' + (first || 'empty block');
+      const tag = LANG_LABELS[lang] || 'HTML';
+      return tag + ' — ' + (first || 'empty block');
     }
 
     function codeOfPre(pre) {
@@ -100,11 +111,13 @@
       // put when a newer one arrives.
       const wasFollowing = !hadBlocks || index === blocks.length - 1;
       blocks = [];
-      const pres = chatMessages.querySelectorAll('.message .message-text pre[data-lang="html"]');
+      const pres = chatMessages.querySelectorAll('.message .message-text pre[data-lang]');
       pres.forEach((pre) => {
+        const lang = pre.dataset && pre.dataset.lang;
+        if (CANVAS_LANGS.indexOf(lang) === -1) return;
         const code = codeOfPre(pre);
         if (blocks.some((b) => b.code === code)) return;
-        blocks.push({ code, label: labelFor(code) });
+        blocks.push({ code, lang, label: labelFor(code, lang) });
       });
       if (!blocks.length) index = -1;
       else if (wasFollowing || index < 0) index = blocks.length - 1;
@@ -121,9 +134,10 @@
     // it. The block is a live copy of whatever is on screen.
     function openForPre(pre) {
       const code = codeOfPre(pre);
+      const lang = pre.dataset && pre.dataset.lang;
       const hit = blocks.findIndex((b) => b.code === code);
       const at = hit === -1 ? blocks.length : hit;
-      if (hit === -1) blocks.push({ code, label: labelFor(code) });
+      if (hit === -1) blocks.push({ code, lang, label: labelFor(code, lang) });
       selectBlock(at);
       showPane(true);
     }
@@ -198,5 +212,5 @@
     };
   }
 
-  return { create, REACT_MARKER };
+  return { create, REACT_MARKER, CANVAS_LANGS };
 });

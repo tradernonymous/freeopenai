@@ -32,12 +32,13 @@ function runSetMessageContent(content, langs) {
   }));
   const textEl = {
     innerHTML: '',
-    querySelectorAll(sel) { return sel === 'pre' ? pres : []; },
-    // setMessageContent checks whether a completed HTML block is on screen to
-    // resync the canvas picker; the html block counts as such a block.
-    querySelector(sel) {
-      if (sel === 'pre[data-lang="html"]') return langs.includes('html') ? pres.find((p) => p.dataset && p.dataset.lang === 'html') || {} : null;
-      return null;
+    querySelectorAll(sel) {
+      if (sel === 'pre') return pres;
+      // setMessageContent checks whether a completed canvas-eligible block is
+      // on screen to resync the canvas picker; only blocks that actually
+      // carry a data-lang qualify, same as the real DOM selector.
+      if (sel === 'pre[data-lang]') return pres.filter((p) => p.dataset && p.dataset.lang);
+      return [];
     },
   };
   const el = {
@@ -55,6 +56,7 @@ function runSetMessageContent(content, langs) {
     // tests; for the renderer they are collaborators that must exist.
     openCanvasForBlock: () => {},
     collectCanvasBlocks: () => {},
+    CANVAS_ARTIFACT_LANGS: ['html', 'jsx', 'tsx', 'js', 'javascript'],
     document: { createElement: (tag) => makeNode(tag) },
   };
   assertScannerCanRead(['setMessageContent']);
@@ -65,12 +67,15 @@ function runSetMessageContent(content, langs) {
 }
 
 test('a fenced block with a language gets a language chip plus the Copy button', () => {
-  const run = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
-  assert.equal(run.el.dataset.rawContent, '```js\nconst x = 1;\n```');
-  assert.match(run.textEl.innerHTML, /data-lang="js"/);
+  // python is deliberately not a canvas-eligible language here, so this stays
+  // a test of the generic chip+Copy wiring rather than colliding with the
+  // canvas button gate covered separately below.
+  const run = runSetMessageContent('```python\nx = 1\n```', ['python']);
+  assert.equal(run.el.dataset.rawContent, '```python\nx = 1\n```');
+  assert.match(run.textEl.innerHTML, /data-lang="python"/);
   assert.equal(run.inserted.length, 1);
   assert.equal(run.inserted[0][0].className, 'code-lang');
-  assert.equal(run.inserted[0][0].textContent, 'js');
+  assert.equal(run.inserted[0][0].textContent, 'python');
   assert.equal(run.appended.length, 1);
   assert.equal(run.appended[0].className, 'code-copy-btn');
 });
@@ -83,15 +88,20 @@ test('a fenced block without a language gets only the Copy button', () => {
   assert.equal(run.appended[0].textContent, 'Copy');
 });
 
-test('an HTML block gets a Preview and a Canvas button; other languages do not', () => {
+test('html and jsx/js blocks get a Preview and a Canvas button; other languages do not', () => {
   const html = runSetMessageContent('```html\n<b>hi</b>\n```', ['html']);
-  const labels = html.appended.map((node) => node.textContent);
-  assert.ok(labels.includes('Preview'), 'the HTML block has no way to show itself');
-  assert.ok(labels.includes('Canvas'), 'the HTML block has no way to reach the canvas');
-  assert.ok(labels.includes('Copy'));
-  const js = runSetMessageContent('```js\nconst x = 1;\n```', ['js']);
-  assert.ok(!js.appended.map((node) => node.textContent).includes('Preview'), 'a JS block cannot run here, so it must not offer to');
-  assert.ok(!js.appended.map((node) => node.textContent).includes('Canvas'), 'a JS block cannot run here, so it must not offer the canvas');
+  const htmlLabels = html.appended.map((node) => node.textContent);
+  assert.ok(htmlLabels.includes('Preview'), 'the HTML block has no way to show itself');
+  assert.ok(htmlLabels.includes('Canvas'), 'the HTML block has no way to reach the canvas');
+  assert.ok(htmlLabels.includes('Copy'));
+  const jsx = runSetMessageContent('```jsx\nconst App = () => <b>hi</b>;\n```', ['jsx']);
+  const jsxLabels = jsx.appended.map((node) => node.textContent);
+  assert.ok(jsxLabels.includes('Preview'), 'a jsx fence is canvas-eligible too, not html-only');
+  assert.ok(jsxLabels.includes('Canvas'));
+  const python = runSetMessageContent('```python\nx = 1\n```', ['python']);
+  const pyLabels = python.appended.map((node) => node.textContent);
+  assert.ok(!pyLabels.includes('Preview'), 'python cannot run in the sandbox, so it must not offer to');
+  assert.ok(!pyLabels.includes('Canvas'), 'python cannot run in the sandbox, so it must not offer the canvas');
 });
 
 test('a mermaid block gets a Diagram button; other languages do not', () => {
@@ -101,7 +111,7 @@ test('a mermaid block gets a Diagram button; other languages do not', () => {
   assert.ok(!js.appended.map((node) => node.textContent).includes('Diagram'));
 });
 
-function runHtmlPreview(code) {
+function runHtmlPreview(code, lang) {
   const added = [];
   let current = null;
   function makeNode(tag) {
@@ -124,11 +134,11 @@ function runHtmlPreview(code) {
     body: { appendChild: (node) => added.push(node) },
     getElementById: (id) => (current && current.id === id ? current : null),
   };
-  const deps = { document: fakeDocument };
+  const deps = { document: fakeDocument, artifactDocument: (c) => '<!--artifact-->' + c };
   assertScannerCanRead(['openHtmlPreview', 'closeHtmlPreview']);
   assertSandboxCovers(['openHtmlPreview', 'closeHtmlPreview'], deps);
   const page = loadFromIndex(['openHtmlPreview', 'closeHtmlPreview'], deps);
-  page.openHtmlPreview(code);
+  page.openHtmlPreview(code, lang);
   current = added[0];
   return { page, overlay: current, added };
 }
@@ -146,6 +156,13 @@ test('openHtmlPreview stages the snippet in an opaque-origin frame', () => {
   assert.equal(frame.attrs.sandbox, 'allow-scripts');
   assert.ok(!frame.attrs.sandbox.includes('same-origin'), 'the frame must never rejoin this origin');
   assert.equal(frame.srcdoc, '<b>hi</b>');
+});
+
+test('openHtmlPreview routes a non-html language through the artifact document builder', () => {
+  const { overlay } = runHtmlPreview('const App = () => <h1>hi</h1>;', 'jsx');
+  const dialog = overlay.children[0];
+  const frame = dialog.children[dialog.children.length - 1];
+  assert.equal(frame.srcdoc, '<!--artifact-->const App = () => <h1>hi</h1>;', 'a jsx fence is not valid HTML on its own, so it must go through the builder');
 });
 
 test('closeHtmlPreview removes the stage', () => {
