@@ -535,21 +535,6 @@ module.exports = [
     },
   },
   {
-    // Share enhanced: document, window, atob, btoa
-    files: ['share-enhanced.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        atob: 'readonly',
-        btoa: 'readonly',
-        fetch: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-      },
-    },
-  },
-  {
     // Service worker: self, caches
     files: ['sw.js'],
     languageOptions: {
