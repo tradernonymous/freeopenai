@@ -28,7 +28,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// A text file larger than this is not a document, it is a data dump: read the
 /// head and say so.
@@ -169,6 +169,42 @@ pub fn relative_to(root: &Path, file: &Path) -> String {
         ".".to_string()
     } else {
         text
+    }
+}
+
+/// A fresh, empty folder for one throwaway run.
+///
+/// This is the part of the plan's "build sandbox" that is honestly available
+/// here. It is NOT a security boundary and this app does not pretend it is:
+/// the command still runs as the user, with the user's rights, and can still
+/// read whatever the user can read. What it buys is the half that matters for
+/// day-to-day work -- a build script, an installer, a `npm ci` that decides to
+/// write where it was started, writes into a folder that is deleted the moment
+/// the run ends. The opened project is not what got scribbled on.
+fn scratch_dir(app: &tauri::AppHandle, run_id: &str) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("No cache folder to build a sandbox in: {}", e))?
+        .join("sandbox")
+        .join(safe_segment(run_id));
+    std::fs::create_dir_all(&base).map_err(|e| format!("Could not make the sandbox: {}", e))?;
+    Ok(base)
+}
+
+/// A run id is a name the frontend makes up, so it is treated like anything
+/// else crossing that boundary: only characters a folder name can be built
+/// from survive, and an id that leaves nothing behind still gets a name.
+fn safe_segment(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
+    if cleaned.is_empty() {
+        "run".to_string()
+    } else {
+        cleaned
     }
 }
 
@@ -404,6 +440,7 @@ pub fn local_run(
     cwd: Option<String>,
     timeout_ms: Option<u64>,
     approve_risky: Option<bool>,
+    sandbox: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let root_path = PathBuf::from(&root);
     if !root_path.is_dir() {
@@ -422,9 +459,26 @@ pub fn local_run(
             ));
         }
     }
-    let work_dir = match cwd.as_deref().map(str::trim).filter(|c| !c.is_empty() && *c != ".") {
-        Some(rel) => resolve_inside(&root_path, rel)?,
-        None => root_path.clone(),
+    // A sandbox run happens somewhere of this app's choosing, so a cwd would be
+    // a second, quieter answer to "where does this run" -- refused rather than
+    // ignored, because the caller that asked for both meant one of them.
+    let scratch = if sandbox.unwrap_or(false) {
+        if cwd.as_deref().map(str::trim).filter(|c| !c.is_empty() && *c != ".").is_some() {
+            return Err(
+                "Refused: a sandbox run starts in its own empty folder, so it cannot also be given a cwd."
+                    .to_string(),
+            );
+        }
+        Some(scratch_dir(&app, &run_id)?)
+    } else {
+        None
+    };
+    let work_dir = match &scratch {
+        Some(dir) => dir.clone(),
+        None => match cwd.as_deref().map(str::trim).filter(|c| !c.is_empty() && *c != ".") {
+            Some(rel) => resolve_inside(&root_path, rel)?,
+            None => root_path.clone(),
+        },
     };
     if !work_dir.is_dir() {
         return Err(format!(
@@ -472,10 +526,23 @@ pub fn local_run(
     let out_text = out_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
     let err_text = err_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
 
+    // The scratch folder goes away whatever happened: finished, refused at the
+    // gate above (so we never get here), or timed out and tree-killed. Nothing
+    // a throwaway run wrote outlives the run.
+    let in_sandbox = scratch.is_some();
+    if let Some(dir) = &scratch {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     Ok(serde_json::json!({
         "runId": run_id,
         "command": trimmed,
-        "cwd": relative_to(&root_path, &work_dir),
+        "sandbox": in_sandbox,
+        "cwd": if in_sandbox {
+            "(scratch)".to_string()
+        } else {
+            relative_to(&root_path, &work_dir)
+        },
         "absoluteCwd": work_dir.display().to_string(),
         "exitCode": code,
         "timedOut": timed_out,
@@ -609,6 +676,19 @@ mod tests {
         assert!(resolve_inside(&r, "a\0b").is_err());
         // A colon is a drive letter or an NTFS stream, never a file name.
         assert!(resolve_inside(&r, "dir:stream").is_err());
+    }
+
+    #[test]
+    fn a_scratch_name_cannot_climb_out_of_its_folder() {
+        // The run id is the only part of the sandbox path that comes from the
+        // frontend, so it is the only part that needs proving.
+        assert_eq!(safe_segment("run-1712345678901"), "run-1712345678901");
+        assert_eq!(safe_segment("../../etc"), "etc");
+        assert_eq!(safe_segment(r"..\..\Windows"), "Windows");
+        assert_eq!(safe_segment(""), "run");
+        assert_eq!(safe_segment("..."), "run");
+        assert_eq!(safe_segment("a/b"), "ab");
+        assert!(safe_segment(&"x".repeat(200)).len() <= 64);
     }
 
     #[test]

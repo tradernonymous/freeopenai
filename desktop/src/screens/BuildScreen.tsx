@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api';
 import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
+import PlanCanvas from '../components/PlanCanvas';
 
 interface Step {
   id: string | number;
@@ -38,7 +39,11 @@ interface BuildSession {
 
 const STATUS_CLASS: Record<string, string> = {
   running: 'running',
+  // The engine names a running step's first frame "started"; without this the
+  // one step a reader most wants to find is the only unstyled line in the list.
+  started: 'running',
   done: 'done',
+  skipped: 'done',
   failed: 'error',
   cancelled: 'error',
   expired: 'error',
@@ -198,6 +203,17 @@ export default function BuildScreen() {
     if (activeId && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [active?.steps.length, activeId]);
 
+  // The canvas and the list are two views of one plan, so selecting a node
+  // scrolls the matching line into sight and lights it. The key is the same
+  // `id:index` pair the canvas builds in src/plan-graph.js -- spelled once here
+  // and once there, which is what test/desktop-plan.test.js holds together.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const focusedRef = useRef<HTMLDivElement>(null);
+  const focusStep = useCallback((key: string) => {
+    setFocusedKey(key);
+    requestAnimationFrame(() => focusedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }, []);
+
   if (!enabled) {
     return (
       <div className="screen build">
@@ -281,9 +297,21 @@ export default function BuildScreen() {
                 </div>
               )}
 
+              <PlanCanvas
+                steps={active.steps}
+                selectedKey={focusedKey}
+                onSelect={focusStep}
+              />
+
               <div className="build-steps" ref={listRef}>
                 {active.steps.map((step, i) => (
-                  <div key={`${step.id}-${i}`} className={`step ${STATUS_CLASS[step.phase] || ''}`}>
+                  <div
+                    key={`${step.id}-${i}`}
+                    ref={focusedKey === `${step.id}:${i}` ? focusedRef : undefined}
+                    className={`step ${STATUS_CLASS[step.phase] || ''} ${
+                      focusedKey === `${step.id}:${i}` ? 'focused' : ''
+                    }`}
+                  >
                     <div className="step-indicator" />
                     <div className="step-body">
                       <div className="step-title">{step.title}</div>

@@ -36,7 +36,7 @@ interface Entry {
   /** The shell's id for this run, so live chunks land on the right entry. */
   runId?: string;
   /** Set when the command is destructive and needs a yes before it runs. */
-  pending?: { command: string; cwd: string; reason: string };
+  pending?: { command: string; cwd: string; reason: string; scratch: boolean };
 }
 
 let counter = 0;
@@ -57,6 +57,9 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
   const [history, setHistory] = useState<Entry[]>([]);
   const [input, setInput] = useState('');
   const [ownCwd, setOwnCwd] = useState('');
+  // Scratch mode: run in a folder the shell makes and deletes, not in the
+  // project. Off by default, because the common case is wanting the project.
+  const [scratch, setScratch] = useState(false);
   const [recall, setRecall] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -119,12 +122,12 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
   });
 
   const execute = useCallback(
-    (command: string, runCwd: string, id: string, approveRisky: boolean) => {
+    (command: string, runCwd: string, id: string, approveRisky: boolean, inScratch: boolean) => {
       const runId = nextId();
       setHistory((prev) =>
         prev.map((h) => (h.id === id ? { ...h, runId, out: 'Running…', kind: 'running', pending: undefined } : h)),
       );
-      runLocal({ root, runId, command, cwd: runCwd, approveRisky })
+      runLocal({ root, runId, command, cwd: inScratch ? '' : runCwd, approveRisky, sandbox: inScratch })
         .then((res) => patch(id, runResult.formatRun(res) as Partial<Entry>))
         .catch((e: unknown) => patch(id, { out: (e as Error).message || String(e), kind: 'err' }));
     },
@@ -140,14 +143,14 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
       if (reason) {
         setHistory((prev) => [
           ...prev,
-          { id, cmd: command, out: '', kind: 'note', pending: { command, cwd: runCwd, reason } },
+          { id, cmd: command, out: '', kind: 'note', pending: { command, cwd: runCwd, reason, scratch } },
         ]);
         return;
       }
       setHistory((prev) => [...prev, { id, cmd: command, out: 'Running…', kind: 'running' }]);
-      execute(command, runCwd, id, false);
+      execute(command, runCwd, id, false, scratch);
     },
-    [execute],
+    [execute, scratch],
   );
 
   const submit = useCallback(
@@ -159,6 +162,17 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
 
       if (command === 'clear' || command === 'cls') {
         setHistory([]);
+        return;
+      }
+
+      // A scratch run has no project folder to move around in, so `cd` is
+      // answered plainly instead of being decided and then discarded.
+      if (scratch && /^cd(\s|$)/i.test(command)) {
+        const id = nextId();
+        setHistory((prev) => [
+          ...prev,
+          { id, cmd: command, out: 'Scratch mode has no folders to move between — turn it off to cd.', kind: 'note' },
+        ]);
         return;
       }
 
@@ -188,7 +202,7 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
       }
       queue(command, cwd);
     },
-    [root, cwd, setCwd, queue],
+    [root, cwd, scratch, setCwd, queue],
   );
 
   const settle = (entry: Entry, approve: boolean) => {
@@ -197,7 +211,7 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
       patch(entry.id, { pending: undefined, out: 'Cancelled — nothing was run.', kind: 'note' });
       return;
     }
-    execute(entry.pending.command, entry.pending.cwd, entry.id, true);
+    execute(entry.pending.command, entry.pending.cwd, entry.id, true, entry.pending.scratch);
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -253,8 +267,19 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
         <span className="dock-title">
           <Icon name="terminal" size={13} /> Local terminal
         </span>
-        <span className="terminal-cwd" title="Runs on this machine, inside the open folder">
-          <Icon name="folder" size={12} /> {cwdPath}
+        <button
+          className={`dock-toggle ${scratch ? 'on' : ''}`}
+          onClick={() => setScratch((on) => !on)}
+          aria-pressed={scratch}
+          title="Run in a folder this app creates and deletes, instead of in the open project"
+        >
+          <Icon name="shield" size={12} /> Scratch
+        </button>
+        <span
+          className="terminal-cwd"
+          title={scratch ? 'Runs on this machine, in a throwaway folder' : 'Runs on this machine, inside the open folder'}
+        >
+          <Icon name="folder" size={12} /> {scratch ? 'scratch' : cwdPath}
         </span>
         <button className="dock-action" onClick={() => setHistory([])} title="Clear the scrollback" aria-label="Clear">
           <Icon name="close" size={12} />

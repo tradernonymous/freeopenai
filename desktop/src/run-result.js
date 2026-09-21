@@ -20,6 +20,7 @@
     var stdout = String(res.stdout == null ? '' : res.stdout);
     var stderr = String(res.stderr == null ? '' : res.stderr);
     var notes = [];
+    if (res.sandbox) notes.push('in a throwaway folder');
     if (res.timedOut) notes.push('timed out');
     if (res.exitCode != null && res.exitCode !== 0) notes.push('exit ' + res.exitCode);
     if (res.stdoutTruncated || res.stderrTruncated) notes.push('output truncated');

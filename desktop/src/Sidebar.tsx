@@ -17,13 +17,14 @@ import { APP_VERSION } from './version';
 
 const NAV_ITEMS: Array<{ id: NavId; label: string; icon: IconName; keys: string }> = [
   { id: 'chat', label: 'Chat', icon: 'chat', keys: 'Alt+1' },
-  { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+2' },
-  { id: 'build', label: 'Builds', icon: 'build', keys: 'Alt+3' },
-  { id: 'local', label: 'Local', icon: 'terminal', keys: 'Alt+4' },
-  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+5' },
-  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+6' },
+  { id: 'code', label: 'Code', icon: 'terminal', keys: 'Alt+2' },
+  { id: 'images', label: 'Images', icon: 'image', keys: 'Alt+3' },
+  { id: 'build', label: 'Builds', icon: 'build', keys: 'Alt+4' },
+  { id: 'local', label: 'Local', icon: 'folder', keys: 'Alt+5' },
+  { id: 'design', label: 'Design', icon: 'design', keys: 'Alt+6' },
+  { id: 'library', label: 'Library', icon: 'library', keys: 'Alt+7' },
   { id: 'files', label: 'Files', icon: 'folder', keys: 'Alt+F' },
-  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+7' },
+  { id: 'settings', label: 'Settings', icon: 'settings', keys: 'Alt+8' },
 ];
 
 const PANEL_ITEMS: Array<{ key: 'folder' | 'terminal' | 'sessions' | 'builds' | 'knowledge'; label: string; icon: IconName; title: string }> = [
@@ -34,7 +35,7 @@ const PANEL_ITEMS: Array<{ key: 'folder' | 'terminal' | 'sessions' | 'builds' | 
   { key: 'knowledge', label: 'Skills', icon: 'skills', title: 'Skills and memory' },
 ];
 
-export type NavId = 'chat' | 'images' | 'build' | 'local' | 'design' | 'library' | 'files' | 'settings';
+export type NavId = 'chat' | 'code' | 'images' | 'build' | 'local' | 'design' | 'library' | 'files' | 'settings';
 
 export interface PanelKeyMap {
   folder: boolean;

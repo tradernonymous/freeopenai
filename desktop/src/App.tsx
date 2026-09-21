@@ -11,6 +11,7 @@ import FilesScreen from './screens/FilesScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
+import CodeScreen from './screens/CodeScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
@@ -251,7 +252,7 @@ export default function App() {
 
   // Alt+1..7 walks the sidebar in its displayed order; Ctrl+K is the palette.
   useEffect(() => {
-    const order: View[] = ['chat', 'images', 'build', 'local', 'design', 'library', 'files', 'settings'];
+    const order: View[] = ['chat', 'code', 'images', 'build', 'local', 'design', 'library', 'files', 'settings'];
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       if ((e.ctrlKey || e.metaKey) && key === 'k') {
@@ -382,6 +383,7 @@ export default function App() {
               ) : (
                 <>
                   {view === 'chat' && <ChatScreen />}
+                  {view === 'code' && <CodeScreen localRoot={localRoot} />}
                   {view === 'design' && <DesignScreen />}
                   {view === 'images' && <ImagesScreen />}
                   {view === 'build' && <BuildScreen />}

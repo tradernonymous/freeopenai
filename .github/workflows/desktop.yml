@@ -62,6 +62,11 @@ jobs:
           test/desktop-contract.test.js
           test/desktop-fallback.test.js
           test/desktop-radial.test.js
+          test/desktop-plan.test.js
+          test/desktop-hf.test.js
+          test/desktop-coding-agent.test.js
+          test/desktop-handoff.test.js
+          test/desktop-cors.test.js
       # Code signing is a certificate, not code, so the pipeline is built to
       # switch on the moment the repository has one and to be exactly today's
       # build when it does not. `bundle.windows.certificateThumbprint` is

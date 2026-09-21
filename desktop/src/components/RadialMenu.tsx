@@ -26,10 +26,12 @@ interface Props {
   x: number;
   y: number;
   items: RadialItem[];
+  /** What the ring is acting on, for a screen reader. */
+  label?: string;
   onClose: () => void;
 }
 
-export default function RadialMenu({ x, y, items, onClose }: Props) {
+export default function RadialMenu({ x, y, items, label, onClose }: Props) {
   const firstRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export default function RadialMenu({ x, y, items, onClose }: Props) {
       <div
         className="radial"
         role="menu"
-        aria-label="Actions for this message"
+        aria-label={label ? `Actions for ${label}` : 'Actions for this message'}
         style={{ left: ring.cx, top: ring.cy }}
         onMouseDown={(event) => event.stopPropagation()}
       >

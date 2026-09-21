@@ -273,6 +273,76 @@ test('the viewer is read-only, and the write path is the agent\'s', () => {
   assert.match(main, /local::local_edit_file/);
 });
 
+// ---- the throwaway folder -------------------------------------------------
+//
+// The plan calls this the build sandbox. It is not a security boundary and the
+// shell says so in its own comment; what it is is a promise that a run asked
+// for in scratch mode cannot write into the folder being worked on. These tests
+// hold the promise to the parts that can be checked without running the app.
+
+test('a scratch run is given its own folder, outside the project', () => {
+  const source = rust();
+  const body = source.match(/fn scratch_dir\([\s\S]*?\n\}/);
+  assert.ok(body, 'scratch_dir must exist');
+  // Somewhere the app owns, never inside the open folder: a scratch run that
+  // started in the project would be the thing this mode exists to avoid.
+  assert.match(body[0], /app_cache_dir/);
+  assert.doesNotMatch(body[0], /root/);
+});
+
+test('the scratch folder is deleted whatever the run did', () => {
+  // Line endings are whatever the checkout says; the rule is about order.
+  const source = rust().replace(/\r\n/g, '\n');
+  // Removed once, after the streams are joined and before the result is built,
+  // so the success, failure and timeout paths all leave nothing behind.
+  const cleanup = source.match(/let in_sandbox = scratch\.is_some\(\);\n\s*if let Some\(dir\) = &scratch \{\n\s*let _ = std::fs::remove_dir_all\(dir\);/);
+  assert.ok(cleanup, 'the scratch folder must be removed on the way out');
+  assert.ok(
+    source.indexOf('let in_sandbox') < source.indexOf('"runId": run_id'),
+    'cleanup happens before the result is returned',
+  );
+});
+
+test('a run id from the frontend cannot climb out of the sandbox', () => {
+  const source = rust();
+  assert.match(source, /fn safe_segment\(raw: &str\) -> String/);
+  assert.match(source, /c\.is_ascii_alphanumeric\(\) \|\| \*c == '-' \|\| \*c == '_'/);
+  assert.match(source, /a_scratch_name_cannot_climb_out_of_its_folder/);
+});
+
+test('a sandbox run cannot also be given a cwd', () => {
+  const source = rust();
+  // Two answers to "where does this run" is one answer too many, and silently
+  // preferring one of them is how a caller ends up running somewhere it did
+  // not ask for.
+  assert.match(source, /a sandbox run starts in its own empty folder/);
+  const bridge = read('desktop', 'src', 'bridge.ts');
+  assert.match(bridge, /sandbox: args\.sandbox \?\? false/);
+  assert.match(bridge, /cwd: args\.cwd \?\? ''/);
+});
+
+test('the terminal offers scratch mode and says where the run went', () => {
+  const dock = read('desktop', 'src', 'components', 'LocalTerminal.tsx');
+  assert.match(dock, /dock-toggle \$\{scratch \? 'on' : ''\}/);
+  assert.match(dock, /sandbox: inScratch/);
+  // Scratch mode has no folders to move between, so `cd` is answered rather
+  // than silently ignored.
+  assert.match(dock, /Scratch mode has no folders to move between/);
+  // A run that reaches a prompt carries its mode with it, or approving it would
+  // quietly run it somewhere else.
+  assert.match(dock, /pending: \{ command, cwd: runCwd, reason, scratch \}/);
+  assert.match(dock, /entry\.pending\.scratch/);
+  assert.match(dock, /scratch \? 'scratch' : cwdPath/);
+});
+
+test('the result says it ran in a throwaway folder', () => {
+  const runResult = require('../desktop/src/run-result.js');
+  const plain = runResult.formatRun({ stdout: 'hi', exitCode: 0, durationMs: 5 });
+  assert.doesNotMatch(plain.out, /throwaway/);
+  const scratch = runResult.formatRun({ stdout: 'hi', exitCode: 0, durationMs: 5, sandbox: true });
+  assert.match(scratch.out, /in a throwaway folder/);
+});
+
 test('sizes and folder names read the way a person would say them', () => {
   assert.equal(localFs.formatBytes(0), '');
   assert.equal(localFs.formatBytes(512), '512 B');

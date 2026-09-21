@@ -1,9 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import Icon from '../components/Icon';
 import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
-// UMD module: loaded for its side effect, read off globalThis.
+// UMD modules: loaded for their side effect, read off globalThis.
 import '../chats.js';
+import '../hf-auth.js';
+import '../hf-models.js';
+
+const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const hfModels: typeof import('../hf-models.js') = (globalThis as any).FreeAI4UHfModels;
 
 // Named for the store, not `chats`: this screen already has a `chats` state.
 const chatStore: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
@@ -14,6 +19,18 @@ interface Skill {
   description: string;
 }
 
+interface HfModel {
+  id: string;
+  author?: string;
+  downloads?: number;
+  likes?: number;
+  tags?: string[];
+  siblings?: Array<{ rfilename?: string; name?: string; size?: number }>;
+  cardData?: { license?: string };
+  license?: string;
+  gated?: boolean | string;
+}
+
 /** Library: the engine's skill catalogue plus the chats saved on this machine. */
 export default function LibraryScreen() {
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -22,6 +39,70 @@ export default function LibraryScreen() {
   const [error, setError] = useState('');
   const [chats, setChats] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // --- HuggingFace state ---
+  const [hfSignedIn, setHfSignedIn] = useState(false);
+  const [hfUser, setHfUser] = useState<any>(null);
+  const [hfQuery, setHfQuery] = useState('');
+  const [hfResults, setHfResults] = useState<HfModel[]>([]);
+  const [hfLoading, setHfLoading] = useState(false);
+  const [hfError, setHfError] = useState('');
+  const [hfDeviceCode, setHfDeviceCode] = useState<any>(null);
+  const [hfPolling, setHfPolling] = useState(false);
+
+  useEffect(() => {
+    setHfSignedIn(hfAuth.signedIn());
+    if (hfAuth.signedIn()) {
+      hfAuth.fetchUser().then(u => { if (u) setHfUser(u); });
+    }
+  }, []);
+
+  const hfSearch = useCallback(async () => {
+    const q = hfQuery.trim();
+    if (!q) return;
+    setHfLoading(true);
+    setHfError('');
+    try {
+      const headers = hfAuth.authHeaders();
+      const results = await hfModels.searchModels(q, { limit: 20, authHeaders: headers });
+      setHfResults(Array.isArray(results) ? results : []);
+    } catch (err) {
+      setHfError((err as Error).message);
+    } finally {
+      setHfLoading(false);
+    }
+  }, [hfQuery]);
+
+  const hfSignIn = useCallback(async () => {
+    setHfError('');
+    try {
+      const dc = await hfAuth.startDeviceCode();
+      setHfDeviceCode(dc);
+      setHfPolling(true);
+      // Poll in background.
+      hfAuth.pollDeviceCode(dc.device_code, dc.interval, Date.now() + dc.expires_in * 1000)
+        .then(() => {
+          setHfSignedIn(true);
+          setHfDeviceCode(null);
+          setHfPolling(false);
+          hfAuth.fetchUser().then(u => { if (u) setHfUser(u); });
+        })
+        .catch(() => {
+          setHfPolling(false);
+          setHfDeviceCode(null);
+        });
+    } catch (err) {
+      setHfError((err as Error).message);
+      setHfPolling(false);
+    }
+  }, []);
+
+  const hfSignOut = useCallback(() => {
+    hfAuth.signOut();
+    setHfSignedIn(false);
+    setHfUser(null);
+    setHfResults([]);
+  }, []);
 
   const load = () => {
     setLoading(true);
@@ -55,6 +136,83 @@ export default function LibraryScreen() {
           </button>
         </div>
       </header>
+
+      {/* --- HuggingFace section --- */}
+      <section className="hf-section">
+        <h3 className="col-title">
+          <Icon name="image" size={14} /> Hugging Face
+          {hfSignedIn && hfUser && (
+            <span className="hf-user"> · {hfUser.name || hfUser.fullname}
+              <button className="hf-link" onClick={hfSignOut}>sign out</button>
+            </span>
+          )}
+        </h3>
+        {!hfSignedIn ? (
+          <div className="hf-signin">
+            <p>Sign in to browse and download GGUF models (including gated repos).</p>
+            {hfDeviceCode ? (
+              <div className="hf-device-code">
+                <p>Open <a href={hfDeviceCode.verification_url} target="blank" rel="noreferrer">{hfDeviceCode.verification_url}</a> and enter:</p>
+                <div className="hf-code">{hfDeviceCode.user_code}</div>
+                <p>{hfPolling ? 'Waiting for authorization…' : ''}</p>
+              </div>
+            ) : (
+              <button className="primary" onClick={hfSignIn}>
+                <Icon name="terminal" size={13} /> Sign in with Hugging Face
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="hf-browser">
+            <div className="hf-search-bar">
+              <input
+                value={hfQuery}
+                onChange={(e) => setHfQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') hfSearch(); }}
+                placeholder="Search GGUF models (e.g. Qwen3-Coder, Llama-3, Unsloth)"
+              />
+              <button onClick={hfSearch} disabled={hfLoading || !hfQuery.trim()}>
+                {hfLoading ? 'Searching…' : 'Search'}
+              </button>
+            </div>
+            {hfError && <div className="stream-error">{hfError}</div>}
+            <div className="hf-results">
+              {hfResults.map((m) => {
+                const ggufCount = (m.siblings || []).filter((s: any) => /\.gguf$/i.test(s.rfilename || s.name || '')).length;
+                const gated = hfModels.isGated(m);
+                return (
+                  <div key={m.id} className="hf-model-card">
+                    <div className="hf-model-header">
+                      <span className="hf-model-name">{m.id}</span>
+                      {gated && <span className="hf-badge gated">gated</span>}
+                      {ggufCount > 0 && <span className="hf-badge gguf">{ggufCount} GGUF</span>}
+                    </div>
+                    <div className="hf-model-meta">
+                      {m.downloads != null && <span>{(m.downloads || 0).toLocaleString()} downloads</span>}
+                      {m.likes != null && <span>{m.likes} likes</span>}
+                      {hfModels.licenseShort(m) && <span>{hfModels.licenseShort(m)}</span>}
+                    </div>
+                    {ggufCount > 0 && (
+                      <div className="hf-model-files">
+                        {hfModels.ggufFiles(m).slice(0, 5).map((f: any) => (
+                          <div key={f.name} className="hf-file">
+                            <span className="hf-file-name">{f.name}</span>
+                            <span className="hf-file-meta">{f.quant} · {hfModels.formatSize(f.size)}{f.fitsRam ? ` · fits ${f.fitsRam}` : ''}</span>
+                          </div>
+                        ))}
+                        {ggufCount > 5 && <div className="hf-file more">…and {ggufCount - 5} more</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {hfResults.length === 0 && !hfLoading && !hfError && (
+                <div className="empty">Search for GGUF models to see available quants and sizes.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
 
       <div className="library-layout">
         <section className="library-col">

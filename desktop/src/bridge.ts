@@ -109,6 +109,8 @@ export interface LocalRunResult {
   command: string;
   cwd: string;
   absoluteCwd: string;
+  /** True when the run happened in the shell's throwaway folder. */
+  sandbox?: boolean;
   exitCode: number | null;
   timedOut: boolean;
   durationMs: number;
@@ -165,6 +167,12 @@ export async function runLocal(args: {
   cwd?: string;
   timeoutMs?: number;
   approveRisky?: boolean;
+  /**
+   * Run in a fresh, empty folder the shell deletes afterwards instead of in
+   * the open project. Not a security boundary -- the command still runs as the
+   * user -- but nothing it writes lands in the folder being worked on.
+   */
+  sandbox?: boolean;
 }): Promise<LocalRunResult> {
   return call<LocalRunResult>('local_run', {
     root: args.root,
@@ -173,6 +181,7 @@ export async function runLocal(args: {
     cwd: args.cwd ?? '',
     timeoutMs: args.timeoutMs,
     approveRisky: args.approveRisky ?? false,
+    sandbox: args.sandbox ?? false,
   });
 }
 

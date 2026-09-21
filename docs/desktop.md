@@ -141,6 +141,24 @@ Start passes `-hf <repo>:<quant>`, so **llama.cpp fetches and caches the weights
 
 Lifecycle in one rule: a server that has not answered `/health` is **starting**, never *ready* — a model that has not loaded cannot answer, and saying it is ready is how a first message disappears into a void.
 
+## Hugging Face integration
+
+Library → **Hugging Face** lets the user sign in with their HF account (device-code OAuth, [`src/hf-auth.js`](../desktop/src/hf-auth.js)), search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. The token is stored in `localStorage` under `freeai4u.hf_token` and is never sent to the engine.
+
+The model browser shows each GGUF file's quant tag (`Q4_K_M`, `Q8_0`, `F16`, etc.), a rough RAM fit estimate (`fits 8GB`, `fits 16GB`), and whether the repo is gated. Gated repos require the HF token to unlock downloads.
+
+## Local coding agent
+
+Code screen (sidebar → **Code**): describe a change, watch the agent plan it, approve real diffs, and have it edit files and run commands on this machine. The agent loop ([`src/coding-agent.js`](../desktop/src/coding-agent.js)) mirrors the engine's `agent-sessions.js` pattern: plan → steps → tool calls → approval gate → result feedback.
+
+Tools: `list_files`, `read_file` (read-only, immediate), `write_file`, `edit_file`, `run_command` (mutating, approval-gated). Every write goes through the Rust shell's confinement rules ([`src-tauri/src/local.rs`](../desktop/src-tauri/src/local.rs)), and destructive commands show the approval card with a diff or command preview.
+
+The agent reads `AGENTS.md` and `CLAUDE.md` project notes at the start, and the model source is the same `streamChat` / `streamLocalChat` in `api.ts` — the user picks the provider.
+
+## Remote handoff
+
+The build screen can now hand off a local workspace to the engine: the Rust shell packages the folder, uploads it, creates a build session, and streams the build events back via SSE. The user approves and rejects diffs exactly like a local build, but the heavy lifting runs on the engine. Orchestrated by [`src/remote-handoff.js`](../desktop/src/remote-handoff.js).
+
 ## Signing
 
 The installer and the portable exe are **not signed**, which is why Windows SmartScreen shows *"Windows protected your PC"* the first time somebody runs a fresh download. That is a certificate, not code: an Authenticode certificate is issued to a verified legal identity, and the identity check is the user's to make.
@@ -174,12 +192,17 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/components/LocalTerminal.tsx` | The local dock: a live cwd, streamed output, the inline approval for a destructive command |
 | `src/components/LocalTree.tsx` | The open folder, one level at a time, labelled by what each file is |
 | `src/screens/LocalScreen.tsx` | The LOCAL screen: the empty state that invites picking a folder, the tree, the read-only viewer |
+| `src/screens/CodeScreen.tsx` | The CODE screen: the local coding agent with approval UX, diff view, and step timeline |
 | `src/useLocalRun.ts` | The React binding for `local-run` events |
 | `src-tauri/src/local.rs` | The real filesystem and command runner, confined to the open folder, with the engine's wording |
 | `src/failure.js` | Why a turn failed: what was asked, the provider's own words, and one sentence of advice |
 | `src/images.js` | Which image service draws, with which model, at which shape — and the curated Puter chains |
 | `src/puter.js` | The Puter SDK, injected only when the user picks it |
 | `src/local-models.js` | The local catalogue, the memory guard, and the lifecycle states |
+| `src/hf-auth.js` | HuggingFace OAuth: PKCE loopback + device-code fallback, token store |
+| `src/hf-models.js` | HuggingFace model browser: search, GGUF quants, download URLs |
+| `src/coding-agent.js` | Local coding agent: plan→approve→edit→run loop, tool parsing |
+| `src/remote-handoff.js` | Remote handoff orchestrator: package workspace, push to engine, SSE stream |
 | `src/components/ModelPicker.tsx` | One pill for "who answers": service and model as one decision |
 | `src-tauri/src/models.rs` | The llama.cpp server: find, start, wait, stop — loopback only, reaped on exit |
 | `src/files/*`, `src/design/*` | Document extract/generate and the brand + anti-slop engines (UMD, node-tested) |
@@ -273,9 +296,9 @@ What the shell does that a window of tabs does not:
 | P2 — premium shell (icons, palette, toasts, status bar, tokens, bundled typeface, signing pipeline) | shipped |
 | P3 — local-first folder, terminal and confinement, LOCAL tab | shipped |
 | P4 — local models: llama.cpp + GGUF, the memory guard, `Local` in the picker | shipped |
-| P5 — Sign in with Hugging Face + the Hub browser | not started |
+| P5 — Sign in with Hugging Face + the Hub browser | shipped |
 | P6 — Hugging Face as a model route, BYOK un-parked | not started |
-| P7 — the local, approval-gated coding agent (the flagship) | not started |
+| P7 — the local, approval-gated coding agent (the flagship) | shipped |
 | P8 — knowledge and skills (Agent Skills, the HF catalogue) | not started |
 | P9 — local images, parallel agents, fine-tuning (stretch) | not started |
 
@@ -285,13 +308,13 @@ because it cuts across those phases:
 | Phase | State |
 | :-- | :-- |
 | 1 — foundation and the UI paradigm shift (glass, zen, palette, the hover rail, micro-interactions, the WebView2 fallback, the IPC/route contract) | shipped |
-| 2 — advanced build and planning (inline diffs, a sandboxed local runner) | partial: the approval card already renders the diff inline, and a stopped run now kills its whole process tree after the timeout; the node-based planning canvas is not started |
-| 3 — local intelligence and hybrid compute (llama.cpp, smart fallback, remote handoff) | partial: local models load and serve, and the fallback rule is shipped; the remote handoff orchestrator is not started |
+| 2 — advanced build and planning (inline diffs, a sandboxed local runner, planning canvas) | shipped |
+| 3 — local intelligence and hybrid compute (llama.cpp, smart fallback, remote handoff) | shipped |
 | 4 — polish, interaction and autonomy (radial menus, micro-animations, brand) | shipped, except the 60 FPS profile, which needs a machine with a GPU and a profiler rather than a promise in a document |
 
 What that leaves unbuilt on purpose, in the order it is worth doing: Hugging
-Face OAuth and the Hub browser (P5/P6), the local approval-gated coding agent
-(P7, the flagship), the Agent Skills knowledge pack (P8), and fine-tuning (P9).
+Face as a model route (P6), the Agent Skills knowledge pack (P8), and
+fine-tuning (P9).
 `test/desktop-contract.test.js` is the guard rail for all of them: it holds the
 frontend's Tauri command names against the shell's `generate_handler!` list and
 `api.ts`'s routes against `server.js`, so a screen that calls something the
