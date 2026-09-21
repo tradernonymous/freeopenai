@@ -292,7 +292,7 @@ function skillsAllowedForMode(mode) {
 // those are the groups the executor checks, so a write added without one is
 // still stopped by the approval dialog every write already goes through.
 const TOOL_GROUPS = {
-  research: ['web_search', 'web_fetch'],
+  research: ['web_search', 'web_fetch', 'mcp_call', 'mcp_list_tools'],
   shell: ['run_command'],
   workspaceRead: ['workspace_list_files', 'workspace_read_file', 'workspace_search_files'],
   workspaceWrite: ['workspace_write_file', 'workspace_edit_file', 'workspace_delete_file'],
@@ -2086,6 +2086,57 @@ const WEB_TOOL_NAMES = WEB_TOOLS.map((t) => t.function.name);
 
 function isWebTool(name) {
   return WEB_TOOL_NAMES.includes(name);
+}
+
+// MCP (Model Context Protocol): tools on a server the user registered
+// themselves (Settings), addressed by name rather than one tool per remote
+// tool -- the set of servers and what each exposes is user-controlled and can
+// change between turns, where the tool list sent to a provider cannot. Same
+// trust model as web_fetch above: offered in every mode, no approval gate, so
+// a user should only register servers they trust.
+function mcpTool(serverSummaries) {
+  const known = (serverSummaries || [])
+    .map((s) => s.name + (s.tools && s.tools.length ? ': ' + s.tools.map((t) => t.name).join(', ') : ' (tools not loaded yet)'))
+    .join('; ');
+  return {
+    type: 'function',
+    function: {
+      name: 'mcp_call',
+      description: 'Call a tool on an MCP server the user has registered.'
+        + (known ? ' Registered servers and their tools: ' + known + '.' : ' No MCP servers are registered yet -- tell the user to add one in Settings.')
+        + ' Use mcp_list_tools first if unsure what a server offers or its tools are not listed above.',
+      parameters: {
+        type: 'object',
+        properties: {
+          server: { type: 'string', description: 'The registered server\'s name.' },
+          tool: { type: 'string', description: 'The tool name to call on that server.' },
+          arguments: { type: 'object', description: 'Arguments for the tool, matching its input schema.' },
+        },
+        required: ['server', 'tool'],
+      },
+    },
+  };
+}
+
+const MCP_LIST_TOOLS = {
+  type: 'function',
+  function: {
+    name: 'mcp_list_tools',
+    description: 'List the tools a registered MCP server exposes, with descriptions and input schemas. Call this before mcp_call when unsure what a server offers.',
+    parameters: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'The registered server\'s name.' },
+      },
+      required: ['server'],
+    },
+  },
+};
+
+const MCP_TOOL_NAMES = ['mcp_call', 'mcp_list_tools'];
+
+function isMcpTool(name) {
+  return MCP_TOOL_NAMES.includes(name);
 }
 
 // A small scratch space of text files the model can keep notes and drafts in.
@@ -5420,6 +5471,9 @@ if (typeof module !== 'undefined' && module.exports) {
     GITHUB_TOOL_NAMES,
     WEB_TOOLS,
     WEB_TOOL_NAMES,
+    mcpTool,
+    MCP_LIST_TOOLS,
+    isMcpTool,
     MAX_TOOL_ROUNDS,
     TOOL_ROUNDS_EXHAUSTED_PROMPT,
     EMPTY_REPLY_NUDGE,

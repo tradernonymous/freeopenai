@@ -1381,6 +1381,7 @@ function updateNavActive(btn) {
             if (name === 'settings') {
                 refreshGithubStatus();
                 renderServerWorkspaceFiles();
+                renderMcpServers();
             }
             if (name === 'gallery') renderGallery();
             if (name === 'design') {
@@ -1990,6 +1991,145 @@ function updateNavActive(btn) {
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) return 'Error: ' + (data.error || 'fetch failed');
                     return 'Title: ' + (data.title || '(untitled)') + '\nURL: ' + data.url + '\n\n' + data.text;
+                }
+                return 'Error: unknown tool ' + name;
+            } catch (err) {
+                return 'Error: ' + err.message;
+            }
+        }
+
+        // MCP servers the user registered themselves (Settings), each an
+        // {name, url, tools} record. A small capped array in localStorage --
+        // the same shape as any other user preference, not per-chat state, so
+        // a server registered once is available to every chat.
+        const MCP_SERVERS_KEY = 'freeopenaiMcpServers';
+        const MCP_MAX_SERVERS = 6;
+
+        function mcpServers() {
+            try {
+                const list = JSON.parse(localStorage.getItem(MCP_SERVERS_KEY) || '[]');
+                return Array.isArray(list) ? list : [];
+            } catch {
+                return [];
+            }
+        }
+
+        function saveMcpServers(list) {
+            rememberPreference(MCP_SERVERS_KEY, JSON.stringify(list.slice(0, MCP_MAX_SERVERS)));
+        }
+
+        function findMcpServer(name) {
+            return mcpServers().find((s) => s.name === name) || null;
+        }
+
+        async function addMcpServer(name, url) {
+            const trimmedName = String(name || '').trim();
+            const trimmedUrl = String(url || '').trim();
+            if (!trimmedName || !trimmedUrl) { showStatus('error', 'Name and URL are both required'); return; }
+            const list = mcpServers();
+            if (list.length >= MCP_MAX_SERVERS && !list.some((s) => s.name === trimmedName)) {
+                showStatus('error', 'Up to ' + MCP_MAX_SERVERS + ' MCP servers -- remove one first');
+                return;
+            }
+            const next = list.filter((s) => s.name !== trimmedName);
+            next.push({ name: trimmedName, url: trimmedUrl, tools: [] });
+            saveMcpServers(next);
+            renderMcpServers();
+            await refreshMcpServerTools(trimmedName);
+        }
+
+        function removeMcpServer(name) {
+            saveMcpServers(mcpServers().filter((s) => s.name !== name));
+            renderMcpServers();
+        }
+
+        async function refreshMcpServerTools(name) {
+            const server = findMcpServer(name);
+            if (!server) return;
+            try {
+                const res = await fetch('/api/mcp/tools', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: server.url }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) { showStatus('error', data.error || 'Could not load that server\'s tools'); return; }
+                saveMcpServers(mcpServers().map((s) => (s.name === name ? { ...s, tools: data.tools || [] } : s)));
+                renderMcpServers();
+            } catch (err) {
+                showStatus('error', 'Could not reach that MCP server: ' + err.message);
+            }
+        }
+
+        function renderMcpServers() {
+            const list = document.getElementById('mcpServerList');
+            if (!list) return;
+            const servers = mcpServers();
+            list.innerHTML = '';
+            if (!servers.length) {
+                const empty = document.createElement('p');
+                empty.className = 'settings-hint';
+                empty.textContent = 'No MCP servers registered yet.';
+                list.appendChild(empty);
+                return;
+            }
+            servers.forEach((s) => {
+                const row = document.createElement('div');
+                row.className = 'workspace-row';
+                const label = document.createElement('span');
+                label.textContent = s.name + ' (' + (s.tools && s.tools.length ? s.tools.length + ' tools' : 'not loaded') + ')';
+                row.appendChild(label);
+                const refresh = document.createElement('button');
+                refresh.type = 'button';
+                refresh.className = 'icon-btn-text';
+                refresh.textContent = 'Refresh';
+                refresh.addEventListener('click', () => refreshMcpServerTools(s.name));
+                row.appendChild(refresh);
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'icon-btn-text danger';
+                remove.textContent = 'Remove';
+                remove.addEventListener('click', () => removeMcpServer(s.name));
+                row.appendChild(remove);
+                list.appendChild(row);
+            });
+        }
+
+        function addMcpServerFromForm() {
+            const nameInput = document.getElementById('mcpServerName');
+            const urlInput = document.getElementById('mcpServerUrl');
+            if (!nameInput || !urlInput) return;
+            addMcpServer(nameInput.value, urlInput.value);
+            nameInput.value = '';
+            urlInput.value = '';
+        }
+
+        async function runMcpTool(name, args) {
+            try {
+                const server = findMcpServer(args && args.server);
+                if (!server) return 'Error: no registered MCP server named ' + JSON.stringify(args && args.server);
+                if (name === 'mcp_list_tools') {
+                    const res = await fetch('/api/mcp/tools', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: server.url }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'could not list tools');
+                    saveMcpServers(mcpServers().map((s) => (s.name === server.name ? { ...s, tools: data.tools || [] } : s)));
+                    renderMcpServers();
+                    return JSON.stringify(data.tools || []);
+                }
+                if (name === 'mcp_call') {
+                    if (!args.tool) return 'Error: tool is required.';
+                    const res = await fetch('/api/mcp/call', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: server.url, tool: args.tool, arguments: (args.arguments && typeof args.arguments === 'object') ? args.arguments : {} }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) return 'Error: ' + (data.error || 'that call failed');
+                    return data.text || '(empty result)';
                 }
                 return 'Error: unknown tool ' + name;
             } catch (err) {
@@ -3810,6 +3950,7 @@ function updateNavActive(btn) {
             }
             if (isGithubTool(name)) return runGithubTool(name, args);
             if (isWebTool(name)) return runWebTool(name, args);
+            if (isMcpTool(name)) return runMcpTool(name, args);
             if (isRunTool(name)) return runCommandTool(name, args);
             if (isWorkspaceTool(name)) return runWorkspaceTool(name, args);
             if (isTaskTool(name)) return runTaskTool(name, args);
@@ -4719,6 +4860,10 @@ function updateNavActive(btn) {
                     // that holds against a model with a tool in front of it.
                     const offered = [...WEB_TOOLS, ...WORKSPACE_TOOLS, ...TASK_TOOLS];
                     if (githubConnected) offered.push(...GITHUB_TOOLS);
+                    // Offered whenever at least one server is registered -- an
+                    // empty list would just be a tool that always refuses.
+                    const registeredMcpServers = mcpServers();
+                    if (registeredMcpServers.length) offered.push(mcpTool(registeredMcpServers), MCP_LIST_TOOLS);
                     // Only when this server actually runs them. The refusal below
                     // is still there for a server that changes its mind mid-session.
                     if (serverRunReady) offered.push(...RUN_TOOLS);

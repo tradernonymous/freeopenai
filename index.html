@@ -415,6 +415,7 @@
                     <button class="settings-nav-btn" type="button" data-section="account" onclick="jumpToSettingsSection('account')">Account</button>
                     <button class="settings-nav-btn" type="button" data-section="github" onclick="jumpToSettingsSection('github')">GitHub</button>
                     <button class="settings-nav-btn" type="button" data-section="server" onclick="jumpToSettingsSection('server')">Server</button>
+                    <button class="settings-nav-btn" type="button" data-section="mcp" onclick="jumpToSettingsSection('mcp')">MCP</button>
                     <button class="settings-nav-btn" type="button" data-section="health" onclick="jumpToSettingsSection('health')">Health</button>
                 </nav>
                 <div class="settings-body">
@@ -570,6 +571,27 @@
                             <strong>Server response limits</strong>
                             <p class="settings-hint" id="limitsHint">Loading…</p>
                         </div>
+                    </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="mcp" hidden>
+                    <h3 class="settings-section-title" id="settingsSectionMcp">MCP servers</h3>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Register a server</strong>
+                            <p class="settings-hint">Lets the model call tools on an MCP server you point it at. Only add servers you trust -- calls run with no approval step, the same as web search and web fetch.</p>
+                        </div>
+                        <div class="github-browser-row">
+                            <input type="text" id="mcpServerName" placeholder="Name, e.g. github">
+                            <input type="text" id="mcpServerUrl" placeholder="https://example.com/mcp">
+                            <button class="icon-btn-text" onclick="addMcpServerFromForm()">Add</button>
+                        </div>
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Registered servers</strong>
+                            <p class="settings-hint">Up to 6. Refresh after a server's tools change.</p>
+                        </div>
+                        <div class="workspace-list" id="mcpServerList" aria-label="Registered MCP servers"></div>
                     </div>
                     </section>
                     <section class="settings-tab-panel" data-tab="health" hidden>

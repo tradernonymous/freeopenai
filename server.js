@@ -5266,6 +5266,155 @@ async function readPublicPage(raw) {
   throw new Error('Too many redirects');
 }
 
+// MCP (Model Context Protocol) client: lets a chat call a tool on a server the
+// user registered themselves. No SDK -- this app has zero runtime npm
+// dependencies (package.json), so the wire format is hand-rolled JSON-RPC 2.0
+// over the Streamable HTTP transport, the same way readPublicPage above
+// hand-rolls an HTTP client rather than pulling one in.
+//
+// Stateless by design: rather than caching a session across separate API
+// calls (this app keeps no server-side session state per external service),
+// every call here does its own initialize -> notifications/initialized ->
+// the real request handshake fresh, on one connection. Three round-trips per
+// tool call, but no session-id bookkeeping to get wrong or expire.
+const MCP_TIMEOUT_MS = 20000;
+const MCP_MAX_BYTES = 256 * 1024;
+
+// One JSON-RPC request/notification over the session opened above. A
+// notification (no id) gets no response body back from a compliant server;
+// method calls do. SSRF-checked exactly like readPublicPage: every hop's
+// resolved address must be public before it is ever requested.
+async function mcpRpc(url, sessionId, body, expectReply) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+    if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+    const res = await fetch(url, {
+      method: 'POST',
+      redirect: 'manual',
+      signal: controller.signal,
+      headers,
+      body: JSON.stringify(body),
+    });
+    const newSessionId = res.headers.get('mcp-session-id') || sessionId || null;
+    if (!expectReply) return { sessionId: newSessionId, result: null };
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    if (text.length > MCP_MAX_BYTES) throw new Error('The server answered with too much data');
+    const contentType = res.headers.get('content-type') || '';
+    let payload;
+    if (contentType.includes('text/event-stream')) {
+      // Streamable HTTP may answer a single request with one SSE event
+      // instead of a plain JSON body; the last `data:` line carries it.
+      const dataLines = text.split('\n').filter((l) => l.startsWith('data:'));
+      if (!dataLines.length) throw new Error('The server sent an empty event stream');
+      payload = JSON.parse(dataLines[dataLines.length - 1].slice(5).trim());
+    } else {
+      payload = JSON.parse(text);
+    }
+    if (payload && payload.error) throw new Error(payload.error.message || 'The server refused that call');
+    return { sessionId: newSessionId, result: payload ? payload.result : null };
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('The server took too long to answer');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The full handshake a Streamable HTTP MCP server expects before it will
+// answer a real request: initialize, then the initialized notification.
+async function mcpHandshake(url) {
+  const init = await mcpRpc(url, null, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'NeuraOS', version: '1.0' },
+    },
+  }, true);
+  await mcpRpc(url, init.sessionId, { jsonrpc: '2.0', method: 'notifications/initialized' }, false);
+  return init.sessionId;
+}
+
+// Resolves a user-supplied MCP server URL the same way readPublicPage does:
+// scheme-checked, then every address it resolves to must be public.
+async function assertMcpUrlIsPublic(raw) {
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch {
+    throw new Error('A valid http(s) MCP server URL is required');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http(s) MCP servers can be reached');
+  }
+  let addresses;
+  try {
+    addresses = await lookupAllAddresses(parsed.hostname);
+  } catch {
+    throw new Error('Could not resolve that MCP server host');
+  }
+  if (!addresses.length || addresses.some(isNonPublicAddress)) {
+    throw new Error('That MCP server address is not reachable from here');
+  }
+  return parsed.href;
+}
+
+async function mcpListTools(req, res) {
+  readJsonBody(req, 4 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    let url;
+    try {
+      url = await assertMcpUrlIsPublic(body && body.url);
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message });
+    }
+    try {
+      const sessionId = await mcpHandshake(url);
+      const { result } = await mcpRpc(url, sessionId, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, true);
+      const tools = (result && Array.isArray(result.tools)) ? result.tools : [];
+      sendJson(res, 200, { tools: tools.map((t) => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} })) });
+    } catch (e) {
+      sendJson(res, 502, { error: 'Could not list that server\'s tools: ' + e.message });
+    }
+  });
+}
+
+async function mcpCallTool(req, res) {
+  readJsonBody(req, 64 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const toolName = body && typeof body.tool === 'string' ? body.tool.trim() : '';
+    if (!toolName) return sendJson(res, 400, { error: 'tool is required' });
+    let url;
+    try {
+      url = await assertMcpUrlIsPublic(body && body.url);
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message });
+    }
+    try {
+      const sessionId = await mcpHandshake(url);
+      const { result } = await mcpRpc(url, sessionId, {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: toolName, arguments: (body && body.arguments && typeof body.arguments === 'object') ? body.arguments : {} },
+      }, true);
+      const content = (result && Array.isArray(result.content)) ? result.content : [];
+      const text = content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
+      sendJson(res, 200, { text: text || JSON.stringify(result || {}), isError: !!(result && result.isError) });
+    } catch (e) {
+      sendJson(res, 502, { error: 'That MCP call failed: ' + e.message });
+    }
+  });
+}
+
 // Instant push for a build waiting on its owner, so an approval shows up even
 // with the app fully closed -- the SSE stream in agent-sessions.js already
 // covers an open app instantly, so this only has to matter when that stream
@@ -5637,6 +5786,8 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
     if (urlPath === '/api/llm/websearch' && req.method === 'GET') return llmWebsearch(req, res);
     if (urlPath === '/api/llm/fetch' && req.method === 'GET') return llmFetch(req, res);
+    if (urlPath === '/api/mcp/tools' && req.method === 'POST') return mcpListTools(req, res);
+    if (urlPath === '/api/mcp/call' && req.method === 'POST') return mcpCallTool(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);

@@ -139,6 +139,7 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
     showStatus: (kind, text) => events.push(kind + ': ' + text),
     isGithubTool: (n) => n.startsWith('github_'),
     isWebTool: (n) => n.startsWith('web_'),
+    isMcpTool: (n) => n.startsWith('mcp_'),
     isUseSkillTool: (n) => n === 'use_skill',
     // The workspace has its own dispatch branch. The sandbox has to know about
     // it even though this file never calls one, or the loop's dependency guard
@@ -223,6 +224,7 @@ function harness({ toolCalls, rounds = null, webResult = null, taskGraph = null,
       runs.push({ name, phase: 'end' });
       return webResult || 'web:' + name;
     },
+    runMcpTool: async (name) => 'mcp:' + name,
     runUseSkillTool: async () => 'skill',
     // `rounds` lets a test script what the model asks for turn by turn, which
     // is what a repeat across rounds needs; `toolCalls` stays the simple case.
