@@ -20,7 +20,7 @@
     </td>
     <td width="33%" valign="top">
       <h3>🔀 Model switching</h3>
-      Swap between the GPT-6 / 5.6 / 4o families, the Codex coding models, and Claude from the header, the Models tab, or Settings. Your pick is remembered next visit.
+      Swap between the GPT-6 / 5.6 / 4o families, the Codex coding models, and Claude from the composer's model picker or Settings. Your pick is remembered next visit.
     </td>
   </tr>
   <tr>
