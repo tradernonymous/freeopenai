@@ -1,0 +1,84 @@
+/* Phase 4: Performance Optimization Styles */
+
+/* Virtual scrolling placeholder for off-screen messages */
+.message[data-virt-hidden="1"] {
+    display: none !important;
+}
+
+/* Lazy loading placeholder for images */
+img[data-src] {
+    background: var(--surface-2);
+    min-height: 100px;
+    border-radius: var(--r-sm);
+}
+
+/* Code block loading state */
+pre[data-loading="true"]::after {
+    content: "Loading...";
+    display: block;
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* Smooth scroll behavior */
+.chat-messages {
+    scroll-behavior: smooth;
+    will-change: scroll-position;
+}
+
+/* GPU-accelerated animations */
+.message {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
+}
+
+/* Reduce paint complexity for large transcripts */
+.chat-messages > .message:nth-child(n+50) {
+    contain: layout style paint;
+}
+
+/* Optimize hover effects for performance */
+.drawer-nav-btn,
+.hero-card,
+.model-card {
+    will-change: transform;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* Lazy image fade-in */
+img.loaded {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Code block syntax highlighting colors */
+pre code .keyword { color: #569cd6; }
+pre code .string { color: #ce9178; }
+pre code .comment { color: #6a9955; }
+pre code .number { color: #b5cea8; }
+pre code .function { color: #dcdcaa; }
+
+/* Performance indicator (dev only) */
+.perf-indicator {
+    position: fixed;
+    bottom: 8px;
+    left: 8px;
+    padding: 4px 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    font-size: 10px;
+    color: var(--text-muted);
+    z-index: 100;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.perf-indicator:hover {
+    opacity: 1;
+}
