@@ -21,9 +21,7 @@
     <script src="hub.js" defer></script>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="phase1-zen.css">
-    <link rel="stylesheet" href="mermaid-canvas.css">
     <link rel="stylesheet" href="inline-diffs.css">
-    <link rel="stylesheet" href="live-preview.css">
     <link rel="stylesheet" href="live-presence.css">
     <link rel="stylesheet" href="share-enhanced.css">
     <link rel="stylesheet" href="rich-context-menus.css">
@@ -225,10 +223,6 @@
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
                                         <span>Files<br><span class="attach-item-hint">Any text file — code, config, logs</span></span>
                                     </button>
-                                    <button class="attach-menu-item" type="button" role="option" aria-selected="false" data-kind="voice" onclick="selectAttachKind('voice')">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M8 14l2-2l8 8"/><path d="M16 14l2-2l8-8"/></svg>
-                                        <span>Voice<br><span class="attach-item-hint">Start dictation / speak selection</span></span>
-                                    </button>
                                 </div>
                                 <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(this)">
                             </div>
@@ -328,12 +322,13 @@
                                 <label for="imagePuterSwitch">Draw with Puter <span class="session-switch-note">spends credits</span></label>
                                 <input type="checkbox" id="imagePuterSwitch" onchange="setDrawWithPuter(this.checked)">
                             </div>
+                            <!-- Puter sign-in was only reachable from the drawer footer or
+                                 Settings -> Account, nowhere near the one switch that
+                                 actually needs it. -->
                             <div class="session-switch">
-                                <label for="voiceModeSwitch">Start voice dictation</label>
-                                <input type="checkbox" id="voiceModeSwitch" onchange="triggerVoiceMode(this.checked)">
+                                <label>Puter account</label>
+                                <button class="icon-btn-text" id="imagePuterAuthButton" onclick="handleAuthClick()">Sign in</button>
                             </div>
-                            <p class="session-hint">Off, text is sent as normal chat. On, voice mode starts listening (if a microphone is available) and can read selections out loud.</p>
-                            <p class="session-hint">This uses the browser's speech recognition if available, and Edge TTS for audio output.</p>
                             <h4 class="session-subhead">Shape</h4>
                             <p class="session-hint" id="sessionImageShape">No shape named — the service picks.</p>
                             <p class="session-hint">Name one in the prompt to change it: “1024x1024”, “16:9”, “wide”, “tall”, “square”.</p>
@@ -406,7 +401,7 @@
             <div class="view" id="viewSettings">
                 
                 <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
-                    <button class="settings-nav-btn" type="button" data-section="model" onclick="jumpToSettingsSection('model')">Model</button>
+                    <button class="settings-nav-btn active" type="button" data-section="model" onclick="jumpToSettingsSection('model')">Model</button>
                     <button class="settings-nav-btn" type="button" data-section="chat" onclick="jumpToSettingsSection('chat')">Chat</button>
                     <button class="settings-nav-btn" type="button" data-section="workspace" onclick="jumpToSettingsSection('workspace')">Workspace</button>
                     <button class="settings-nav-btn" type="button" data-section="skills" onclick="jumpToSettingsSection('skills')">Skills</button>
@@ -416,6 +411,7 @@
                     <button class="settings-nav-btn" type="button" data-section="health" onclick="jumpToSettingsSection('health')">Health</button>
                 </nav>
                 <div class="settings-body">
+                    <section class="settings-tab-panel" data-tab="model">
                     <h3 class="settings-section-title" id="settingsSectionModel">Model</h3>
                     <div class="settings-row">
                         <div>
@@ -424,47 +420,8 @@
                         </div>
                         <select id="defaultModelSelect" aria-label="Default model"></select>
                     </div>
-                    <h3 class="settings-section-title" id="settingsSectionAccount">Account</h3>
-                    <div class="settings-row">
-                        <div>
-                            <strong>Account</strong>
-                            <p class="settings-hint" id="settingsAuthStatus">Not signed in</p>
-                        </div>
-                        <button class="icon-btn-text" id="settingsAuthButton" onclick="handleAuthClick()">Sign in</button>
-                    </div>
-                    <div class="settings-row">
-                        <div>
-                            <strong>Conversation history</strong>
-                            <p class="settings-hint">Every chat is stored only in this browser (localStorage). No server-side copy exists.</p>
-                        </div>
-                        <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
-                    </div>
-                    <h3 class="settings-section-title" id="settingsSectionWorkspace">Workspace</h3>
-                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
-                        <div>
-                            <strong>Workspace files</strong>
-                            <p class="settings-hint" id="workspaceStatus">Empty.</p>
-                        </div>
-                        <div class="workspace-list" id="workspaceFileList" aria-label="Workspace files"></div>
-                    </div>
-                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
-                        <div>
-                            <strong>Server files</strong>
-                            <p class="settings-hint" id="serverWorkspaceStatus">Loading…</p>
-                        </div>
-                        <div class="workspace-list" id="serverWorkspaceFileList" aria-label="Files on the server"></div>
-                    </div>
-                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
-                        <div>
-                            <strong>Tasks</strong>
-                            <p class="settings-hint" id="taskStatus">Empty.</p>
-                        </div>
-                        <div class="workspace-list" id="taskListRows" aria-label="Recorded tasks"></div>
-                        <div style="margin-top: 8px;">
-                            <button class="icon-btn-text" onclick="openSessionPanel('tasks')">Show the panel</button>
-                            <button class="icon-btn-text danger" onclick="clearTaskList(true)">Clear the task list</button>
-                        </div>
-                    </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="chat" hidden>
                     <h3 class="settings-section-title" id="settingsSectionChat">Chat</h3>
                     <div class="settings-row">
                         <div>
@@ -508,6 +465,36 @@
                         </div>
                         <input type="checkbox" id="compactCheck" onchange="setCompactSession(this.checked)" aria-label="Send a compact history">
                     </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="workspace" hidden>
+                    <h3 class="settings-section-title" id="settingsSectionWorkspace">Workspace</h3>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Workspace files</strong>
+                            <p class="settings-hint" id="workspaceStatus">Empty.</p>
+                        </div>
+                        <div class="workspace-list" id="workspaceFileList" aria-label="Workspace files"></div>
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Server files</strong>
+                            <p class="settings-hint" id="serverWorkspaceStatus">Loading…</p>
+                        </div>
+                        <div class="workspace-list" id="serverWorkspaceFileList" aria-label="Files on the server"></div>
+                    </div>
+                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
+                        <div>
+                            <strong>Tasks</strong>
+                            <p class="settings-hint" id="taskStatus">Empty.</p>
+                        </div>
+                        <div class="workspace-list" id="taskListRows" aria-label="Recorded tasks"></div>
+                        <div style="margin-top: 8px;">
+                            <button class="icon-btn-text" onclick="openSessionPanel('tasks')">Show the panel</button>
+                            <button class="icon-btn-text danger" onclick="clearTaskList(true)">Clear the task list</button>
+                        </div>
+                    </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="skills" hidden>
                     <h3 class="settings-section-title" id="settingsSectionSkills">Skills</h3>
                     <div class="settings-row" style="flex-direction: column; align-items: stretch;">
                         <div>
@@ -516,6 +503,25 @@
                         </div>
                         <div class="skills-list" id="skillsList" aria-label="Installed agent skills"></div>
                     </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="account" hidden>
+                    <h3 class="settings-section-title" id="settingsSectionAccount">Account</h3>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Account</strong>
+                            <p class="settings-hint" id="settingsAuthStatus">Not signed in</p>
+                        </div>
+                        <button class="icon-btn-text" id="settingsAuthButton" onclick="handleAuthClick()">Sign in</button>
+                    </div>
+                    <div class="settings-row">
+                        <div>
+                            <strong>Conversation history</strong>
+                            <p class="settings-hint">Every chat is stored only in this browser (localStorage). No server-side copy exists.</p>
+                        </div>
+                        <button class="icon-btn-text danger" onclick="clearAllHistory()">Delete all chats</button>
+                    </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="github" hidden>
                     <h3 class="settings-section-title" id="settingsSectionGithub">GitHub</h3>
                     <div class="settings-row" id="githubDisconnectedRow">
                         <div>
@@ -549,6 +555,8 @@
                             <p class="settings-hint" id="githubActionStatus"></p>
                         </div>
                     </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="server" hidden>
                     <h3 class="settings-section-title" id="settingsSectionServer">Server</h3>
                     <div class="settings-row">
                         <div>
@@ -556,15 +564,16 @@
                             <p class="settings-hint" id="limitsHint">Loading…</p>
                         </div>
                     </div>
-                </div>
+                    </section>
+                    <section class="settings-tab-panel" data-tab="health" hidden>
                     <h3 class="settings-section-title" id="settingsSectionHealth">
                         <i class="fas fa-heartbeat" style="margin-right: 8px;"></i>Provider Health
                     </h3>
-                    <div class="settings-row" style="flex-direction: column; align-items: stretch;">
-                        <div>
+                    <details class="settings-row settings-row-column" open>
+                        <summary>
                             <strong>Real-time provider status</strong>
-                            <p class="settings-hint">Shows which providers are ready, rate-limited, or offline. Click refresh to check now.</p>
-                        </div>
+                            <p class="settings-hint">Shows which providers are ready, rate-limited, or offline. Click to collapse; the refresh button re-checks.</p>
+                        </summary>
                         <div class="provider-health-grid" id="providerHealthGrid">
                             <div class="provider-health-card" data-provider="nara">
                                 <div class="provider-health-status" id="naraStatus">
@@ -582,22 +591,6 @@
                                 <div class="provider-health-name">OpenRouter</div>
                                 <div class="provider-health-info">Multiple free models</div>
                             </div>
-                            <div class="provider-health-card" data-provider="cliproxy">
-                                <div class="provider-health-status" id="cliproxyStatus">
-                                    <span class="health-dot health-unknown"></span>
-                                    <span class="health-label">Checking...</span>
-                                </div>
-                                <div class="provider-health-name">CLIProxyAPI</div>
-                                <div class="provider-health-info">Gemini via CLI login</div>
-                            </div>
-                            <div class="provider-health-card" data-provider="kiro">
-                                <div class="provider-health-status" id="kiroStatus">
-                                    <span class="health-dot health-unknown"></span>
-                                    <span class="health-label">Checking...</span>
-                                </div>
-                                <div class="provider-health-name">Kiro Gateway</div>
-                                <div class="provider-health-info">Claude, DeepSeek, Qwen</div>
-                            </div>
                             <div class="provider-health-card" data-provider="puter">
                                 <div class="provider-health-status" id="puterStatus">
                                     <span class="health-dot health-unknown"></span>
@@ -609,10 +602,10 @@
                         </div>
                         <div style="margin-top: 12px; display: flex; gap: 8px;">
                             <button class="icon-btn-text" onclick="refreshProviderHealth()">Refresh Status</button>
-                            <button class="icon-btn-text" onclick="testAllProviders()">Test All Providers</button>
                         </div>
-                    </div>
-
+                    </details>
+                    </section>
+                </div>
             </div>
             <div class="view" id="viewGallery">
                 

@@ -1414,18 +1414,21 @@ function updateNavActive(btn) {
             closeDrawer();
         }
 
-        // The settings rail is navigation, not filtering: clicking a chip is a
-        // request to go there, so the named heading is brought to the top of the
-        // scrolling body rather than nudged into view.
+        // The settings rail is navigation, not filtering: clicking a chip shows
+        // that section's panel and hides every other one, and marks the chip
+        // that did it. Each rail chip's data-section names the panel's
+        // data-tab -- the same slug the heading id also carries, kept for the
+        // scroll-margin polish once a panel is visible.
         function jumpToSettingsSection(slug) {
-            const heading = document.getElementById('settingsSection' + String(slug || '').charAt(0).toUpperCase() + String(slug || '').slice(1));
-            if (!heading || typeof heading.scrollIntoView !== 'function') return;
-            let reduced = false;
-            try {
-                reduced = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-                    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-            } catch { /* a stub DOM with no matchMedia still gets the jump */ }
-            heading.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+            const wanted = String(slug || '');
+            const panels = document.querySelectorAll('.settings-tab-panel');
+            panels.forEach((panel) => {
+                panel.hidden = panel.getAttribute('data-tab') !== wanted;
+            });
+            const buttons = document.querySelectorAll('.settings-nav-btn');
+            buttons.forEach((btn) => {
+                btn.classList.toggle('active', btn.getAttribute('data-section') === wanted);
+            });
         }
 
         function toggleModelDropdown() {
@@ -1610,6 +1613,8 @@ function updateNavActive(btn) {
                     ? 'Not signed in — required to chat'
                     : 'Not signed in — not needed for ' + selectedProvider);
             settingsAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
+            const imagePuterAuthButton = document.getElementById('imagePuterAuthButton');
+            if (imagePuterAuthButton) imagePuterAuthButton.textContent = signedIn ? 'Sign out' : 'Sign in';
 
             document.querySelectorAll('.menu-trigger-btn').forEach((btn) => btn.classList.toggle('signed-in', signedIn));
         }
@@ -7171,13 +7176,6 @@ function updateNavActive(btn) {
             if (attachMenu.classList.contains('open')) closeAttachMenu();
             else openAttachMenu();
         }
-        // Trigger the voice dictation / TTS panel.
-        function triggerVoiceMode() {
-            toggleSessionPanel();
-            setImageMode(false);
-            document.getElementById('voiceModeSwitch').checked = true;
-            setDrawWithPuter(false);
-        }
         // The attach menu is anchored to the paperclip's own rect and to the left
         // edge of it, unlike the model menu, which is anchored to its trigger's
         // right edge: this one opens from the start of the controls row.
@@ -7240,13 +7238,7 @@ function updateNavActive(btn) {
                 ? 'image/*'
                 : kind === 'document'
                     ? '.pdf,.docx'
-                    : kind === 'voice'
-                        ? ''
-                        : '';
-            if (kind === 'voice') {
-                triggerVoiceMode();
-                return;
-            }
+                    : '';
             fileInput.click();
         }
 
@@ -8862,7 +8854,7 @@ document.addEventListener('keydown', function(e) {
 var providerHealthState = {};
 
 function refreshProviderHealth() {
-    var providers = ['nara', 'openrouter', 'cliproxy', 'kiro', 'puter'];
+    var providers = ['nara', 'openrouter', 'puter'];
     
     providers.forEach(function(provider) {
         var statusEl = document.getElementById(provider + 'Status');
@@ -8894,38 +8886,6 @@ function refreshProviderHealth() {
                 } else {
                     dot.className = 'health-dot health-unknown';
                     label.textContent = 'Unknown';
-                }
-            })
-            .catch(function() {
-                dot.className = 'health-dot health-error';
-                label.textContent = 'Error';
-            });
-    });
-}
-
-function testAllProviders() {
-    // Test each provider with a simple request
-    var providers = ['nara', 'openrouter', 'cliproxy', 'kiro', 'puter'];
-    
-    providers.forEach(function(provider) {
-        var statusEl = document.getElementById(provider + 'Status');
-        if (!statusEl) return;
-        
-        var dot = statusEl.querySelector('.health-dot');
-        var label = statusEl.querySelector('.health-label');
-        
-        dot.className = 'health-dot health-unknown';
-        label.textContent = 'Testing...';
-        
-        // Simple test request
-        fetch('/api/llm/test?provider=' + provider)
-            .then(function(res) {
-                if (res.ok) {
-                    dot.className = 'health-dot health-ready';
-                    label.textContent = 'Working';
-                } else {
-                    dot.className = 'health-dot health-error';
-                    label.textContent = 'Failed';
                 }
             })
             .catch(function() {

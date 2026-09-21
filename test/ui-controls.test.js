@@ -87,30 +87,47 @@ test('every settings section in the rail has a heading to land on, and back', ()
   assert.ok(nav > 0 && body > 0 && nav < body, 'the rail must sit above the scrolling settings body');
 });
 
-test('the rail scrolls to the named heading', () => {
+// Each rail chip shows exactly one panel and hides the rest -- the previous
+// behaviour (scrollIntoView on a heading, every panel rendered at once) was
+// the bug: a single long page with a rail that only pretended to switch tabs.
+test('the rail shows the named panel and hides the others, and marks its chip active', () => {
   assertScannerCanRead(['jumpToSettingsSection']);
-  const calls = [];
-  let asked = null;
+  function makePanel(tab) {
+    return { getAttribute: (n) => (n === 'data-tab' ? tab : null), hidden: false };
+  }
+  function makeButton(section) {
+    return {
+      getAttribute: (n) => (n === 'data-section' ? section : null),
+      classList: {
+        list: [],
+        toggle(cls, on) {
+          if (on) { if (!this.list.includes(cls)) this.list.push(cls); } else { this.list = this.list.filter((c) => c !== cls); }
+        },
+      },
+    };
+  }
+  const panels = [makePanel('model'), makePanel('chat'), makePanel('health')];
+  const buttons = [makeButton('model'), makeButton('chat'), makeButton('health')];
   const deps = {
     document: {
-      getElementById(id) {
-        asked = id;
-        return id === 'settingsSectionChat' ? { scrollIntoView: (opts) => calls.push(opts) } : null;
+      querySelectorAll(sel) {
+        if (sel === '.settings-tab-panel') return panels;
+        if (sel === '.settings-nav-btn') return buttons;
+        return [];
       },
     },
-    window: { matchMedia: () => ({ matches: false }) },
   };
   assertSandboxCovers(['jumpToSettingsSection'], deps);
   const { jumpToSettingsSection } = loadFromIndex(['jumpToSettingsSection'], deps);
 
   jumpToSettingsSection('chat');
-  assert.equal(asked, 'settingsSectionChat', 'the slug has to reach the heading id');
-  assert.deepEqual(calls, [{ block: 'start', behavior: 'smooth' }]);
+  assert.deepEqual(panels.map((p) => p.hidden), [true, false, true], 'only the chat panel is shown');
+  assert.deepEqual(buttons.map((b) => b.classList.list.includes('active')), [false, true, false], 'only the chat chip is marked active');
 
-  // A heading that is not there is a no-op, not a throw: the page is also
-  // driven by a stub DOM in the tests next door.
+  // A slug that names nothing hides every panel rather than throwing -- the
+  // rail always calls this with one of its own chip's data-section values.
   jumpToSettingsSection('nowhere');
-  assert.equal(calls.length, 1);
+  assert.deepEqual(panels.map((p) => p.hidden), [true, true, true]);
 });
 
 test('the transcript is a window inside the app frame, and a phone gets the screen', () => {

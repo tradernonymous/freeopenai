@@ -412,10 +412,17 @@ body.zen-mode main {
 }
 
 /* ---- Chat Messages: Scrollable Area (instant scroll: see style.css) ---- */
+/* No fixed height here: .chat-shell is a flex column (style.css), so
+   .chat-messages already fills the space above the composer via its own
+   flex: 1; min-height: 0. A height: calc(100vh - <guessed composer height>)
+   used to fight that -- and since the composer floats via position: fixed
+   (out of flow entirely), any mismatch between the guess and its real height
+   let streamed text render underneath it, hidden. padding-bottom reserves
+   clearance instead, generously enough to survive the composer growing with
+   a multi-line draft. */
 .chat-messages {
-    height: calc(100vh - 48px - 200px - 24px);
     overflow-y: auto;
-    padding: 24px 16px;
+    padding: 24px 16px 140px;
 }
 
 /* ---- Empty State: Centered ---- */

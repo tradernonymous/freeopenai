@@ -1436,11 +1436,14 @@
            all. */
         .gallery-tile { cursor: zoom-in; }
 
-        /* Input area - unified pill composer */
+        /* Input area - unified pill composer.
+           No background/border/padding here: phase1-zen.css turns this into a
+           floating, centered pill (position: fixed), and the old bar's solid
+           background + border-top rode along as dead weight -- a visible
+           colored box around the actual glass composer instead of an
+           invisible wrapper. The composer's own chrome (phase1-zen.css) is
+           the only visible surface now. */
         .chat-input-area {
-            border-top: 1px solid var(--border);
-            background: var(--bg-elevated);
-            padding: 12px 16px;
             /* The way back to the newest output is anchored here, so it tracks
                the composer as the textarea grows instead of living at a guessed
                offset from the card. */
@@ -1725,14 +1728,24 @@
         }
         .settings-nav-btn:hover { background: var(--ctl-bg-hover); border-color: var(--border-strong); color: var(--text); }
         .settings-nav-btn:focus-visible { outline: none; box-shadow: var(--glow); border-color: var(--accent); }
-        /* The heading is the group label and the jump target of the rail above,
-           which is why it carries the id the rail looks for. */
+        .settings-nav-btn.active { background: var(--accent-bg); border-color: var(--accent); color: var(--text); }
+        /* Each rail chip shows exactly one panel now -- the panels used to all
+           render at once with the rail only scrolling to one of them, which is
+           a single long page pretending to be tabs. */
+        .settings-tab-panel {
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .settings-tab-panel[hidden] { display: none; }
+        /* The heading is the group label the rail's chip names. */
         .settings-section-title {
             font-size: 11px; font-weight: 600; text-transform: uppercase;
             letter-spacing: .08em; color: var(--text-muted);
             padding-top: 6px; scroll-margin-top: 12px;
         }
-        .settings-body > .settings-section-title:first-child { padding-top: 0; }
+        .settings-tab-panel > .settings-section-title:first-child { padding-top: 0; }
+        #settingsSectionHealth { cursor: default; }
+        .settings-row summary { cursor: pointer; list-style: none; }
+        .settings-row summary::-webkit-details-marker { display: none; }
         .github-panel-head {
             display: flex; align-items: center; justify-content: space-between;
             gap: 10px; width: 100%; flex-wrap: wrap;
