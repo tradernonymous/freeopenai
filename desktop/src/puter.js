@@ -117,24 +117,90 @@
   }
 
   /** Somebody's own choice of click, never a side effect of a background draw. */
-  function signIn() {
+  // How long a sign-in may take before this gives up: the person has to find
+  // the browser tab, type a password, maybe do 2FA.
+  var SIGNIN_TIMEOUT_MS = 5 * 60 * 1000;
+  var SIGNIN_POLL_MS = 2000;
+
+  function uuid() {
+    var c = typeof crypto !== 'undefined' ? crypto : null;
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+    var out = '';
+    for (var i = 0; i < 32; i += 1) out += Math.floor(Math.random() * 16).toString(16);
+    return out;
+  }
+
+  /** The sign-in page for a session, in the shape the SDK itself builds. */
+  function signInUrl(api, session) {
+    var origin = (api && api.defaultGUIOrigin) || 'https://puter.com';
+    return origin + '/action/sign-in?embedded_in_popup=true&msg_id=1&cross_origin_isolated=true&signin_session=' + encodeURIComponent(session);
+  }
+
+  /** Where the SDK waits for that session's token. */
+  function waitUrl(api) {
+    return ((api && api.defaultAPIOrigin) || 'https://api.puter.com') + '/login/wait';
+  }
+
+  /**
+   * signIn(options)
+   *
+   * The SDK's own `puter.auth.signIn()` opens a popup with window.open() and
+   * waits for the popup to postMessage the token back. A Tauri webview sends
+   * window.open() to the system browser, where there is no opener to post
+   * to -- so the button "did nothing". The SDK also has a second path, used
+   * when a page is cross-origin isolated: the sign-in URL carries a session
+   * id and the SDK polls POST /login/wait for that session's token. That path
+   * needs no popup, so this is that path, driven by hand:
+   *
+   *   1. open the sign-in page (in whatever the caller says: the system
+   *      browser under the shell, a tab in a plain browser),
+   *   2. poll /login/wait with the session until it answers with auth_token,
+   *   3. hand the token to the SDK with setAuthToken, which is what its own
+   *      flow does last.
+   *
+   * `options.open(url)` opens the page; `options.fetchImpl` and `options.sleep`
+   * are for tests. Resolves true once the SDK says somebody is signed in.
+   */
+  function signIn(options) {
+    var opts = options || {};
     return ensure().then(function (api) {
-      if (!api.auth || typeof api.auth.signIn !== 'function') {
+      if (!api.auth || typeof api.setAuthToken !== 'function') {
         throw new Error('This Puter build has no sign-in.');
       }
-      if (api.auth.isSignedIn()) return true;
-      return Promise.resolve(api.auth.signIn()).then(function () {
-        return isSignedIn();
+      if (isSignedIn()) return true;
+      var open = typeof opts.open === 'function' ? opts.open : function (url) {
+        if (typeof window !== 'undefined' && typeof window.open === 'function') window.open(url, '_blank');
+      };
+      var doFetch = opts.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+      if (!doFetch) throw new Error('Puter needs a browser window.');
+      var sleep = opts.sleep || function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+      var session = uuid();
+      var deadline = Date.now() + (opts.timeoutMs || SIGNIN_TIMEOUT_MS);
+      return Promise.resolve(open(signInUrl(api, session))).then(function poll() {
+        if (Date.now() >= deadline) throw new Error('Puter sign-in timed out. Try again, and finish signing in within five minutes.');
+        return doFetch(waitUrl(api), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: session }),
+        }).then(function (res) {
+          if (!res || !res.ok) return sleep(SIGNIN_POLL_MS).then(poll);
+          return res.json().then(function (data) {
+            var token = data && data.auth_token;
+            if (!token) return sleep(SIGNIN_POLL_MS).then(poll);
+            api.setAuthToken(token);
+            return isSignedIn();
+          });
+        }, function () {
+          return sleep(SIGNIN_POLL_MS).then(poll);
+        });
       });
     });
   }
-
   function signOut() {
     var api = sdk();
     if (api && api.auth && typeof api.auth.signOut === 'function') return Promise.resolve(api.auth.signOut());
     return Promise.resolve();
   }
-
   function onAuthChange(handler) {
     var api = sdk();
     if (!api || !api.auth || typeof api.auth.onAuthStateChanged !== 'function') return function () {};
@@ -186,6 +252,8 @@
     isSignedIn: isSignedIn,
     user: user,
     signIn: signIn,
+    signInUrl: signInUrl,
+    waitUrl: waitUrl,
     signOut: signOut,
     onAuthChange: onAuthChange,
     imageToDataUrl: imageToDataUrl,

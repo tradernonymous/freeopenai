@@ -85,7 +85,10 @@
         edits: String(r.edits || ''),
       };
     });
-    var browser = body.browser;
+    // Puter runs in this webview, on the user's account, so whether it is
+    // offered is not the engine's call: an engine that never mentions it (or
+    // one this app cannot reach) still leaves the row in the list.
+    var browser = body.browser && body.browser.id ? body.browser : { id: BROWSER_ID, label: 'Puter' };
     if (browser && browser.id) {
       out.push({
         id: String(browser.id),

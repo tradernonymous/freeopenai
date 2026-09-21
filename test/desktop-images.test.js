@@ -170,7 +170,7 @@ test('the screen sends the service it chose, not a bare model id', () => {
   // Puter is drawn in the browser, through the SDK bridge, only when chosen.
   assert.match(screen, /puter\.draw\(text, \{ model, ratio: shape\.ratio/);
   assert.match(screen, /Sign in to Puter/);
-  assert.match(screen, /puter\.signIn\(\)/);
+  assert.match(screen, /puter\.signIn\(/);
   // The picture says who drew it, and the failure says what was tried.
   assert.match(screen, /job\.who/);
   assert.match(screen, /job\.notes/);

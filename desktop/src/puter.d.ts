@@ -10,7 +10,14 @@ export declare function ensure(): Promise<any>;
 export declare function loaded(): boolean;
 export declare function isSignedIn(): boolean;
 export declare function user(): any;
-export declare function signIn(): Promise<boolean>;
+export declare function signInUrl(api: any, session: string): string;
+export declare function waitUrl(api: any): string;
+export declare function signIn(options?: {
+  open?: (url: string) => void | Promise<void>;
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+}): Promise<boolean>;
 export declare function signOut(): Promise<void>;
 export declare function onAuthChange(handler: (who: any) => void): () => void;
 export declare function imageToDataUrl(result: any): Promise<string>;
