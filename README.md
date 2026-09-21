@@ -24,9 +24,9 @@
 
 | 💬 **Chat** | 🧩 **Plan · Build** | 🛠️ **Remote builds** |
 | :-- | :-- | :-- |
-| Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, no key at all**. Web search built in. | One switch. **Build edits files on the server, runs tests and git** — you approve every change. Skills, tasks, GitHub tools. | Search, read, edit, run, commit on your server. Approve from any device. |
+| Puter, Cloudflare, NVIDIA, OpenRouter, Nara, OmniRoute — plus **Kilo Code and OVHcloud, no key at all**. Web search built in. Bring your own MCP server for extra tools. | One switch. **Build edits files on the server, runs tests and git** — you approve every change. Skills, tasks, GitHub tools. | Search, read, edit, run, commit on your server. Approve from any device. |
 | 📲 **Android** | 🖥️ **Windows** | 🖼️ **Images** |
-| Real tabs — **Chat · Images · Tools · Skills · Library · Settings** — each keeping its own place. Chat · Plan · Build toggle — Build edits this chat's own files, staged for your approval. Puter models, remote builds with approvals. A dropped connection retries the reply on its own once you're back online. | One `.exe`. Builds panel beside the chat, and it says when a newer one is out. | Free FLUX first. Puter only when you switch it on. |
+| Real tabs — **Chat · Images · Tools · Skills · Library · Settings** — each keeping its own place. Chat · Plan · Build toggle — Build edits this chat's own files, staged for your approval. Puter models, remote builds with approvals. A dropped connection retries the reply on its own once you're back online. | One `.exe`. Builds panel beside the chat, and it says when a newer one is out. | Free FLUX first, now with Pollinations.ai and Gemini too. Puter only when you switch it on. |
 
 **Free models only, limits on the row.** The picker shows what a free tier allows — `free · 2/min · per IP · shared` — and Settings → Chat hides metered rows. A rate-limited provider is waited on only as long as the turn is worth: past `RATE_LIMIT_RETRY_BUDGET_MS` the work moves to another provider, so a task pauses instead of stopping. See [Configuration](docs/configuration.md) and [Free models, no key](docs/free-services.md).
 
@@ -37,6 +37,9 @@
 
 | | |
 | :-- | :-- |
+| **Arena mode** | A Session-panel switch fans your next message to a few already-configured providers at once, each streaming into its own bubble — pick the best reply instead of guessing which model to ask. |
+| **MCP client** | Point the app at any Streamable-HTTP MCP server (Settings → MCP) and its tools join the model's toolbox for that chat — no server restart, no SDK. |
+| **Two more free image providers** | Pollinations.ai (no key, no signup) and Gemini's native image model join the free draw order automatically once configured. |
 | **Share a chat** | Every chat gets a ↗ button: publish a frozen, read-only link anyone can open — no account needed to read — and revoke it whenever. Set `SHARE_STORE_PATH` on a persistent volume and links survive redeploys. |
 | **Memory** | The model saves small facts (Session → Memory shows them); every chat offers them as context, and you can switch it off per chat or forget anything. |
 | **Android real tabs** | Chat, Images, Tools, Skills, Library and Settings are peer destinations now — switching back resumes exactly where you left each one. |
