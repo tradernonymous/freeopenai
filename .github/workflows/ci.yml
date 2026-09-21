@@ -74,10 +74,12 @@ jobs:
       - name: Create and start emulator
         run: |
           echo "no" | avdmanager create avd -n test -k "system-images;android-35;google_apis;arm64-v8a" --force
-          $ANDROID_HOME/emulator/emulator -avd test -no-snapshot-load -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
-          adb wait-for-device
-          # Bounded waits from here: a wedged emulator must fail this step in
-          # minutes, not sit until the job timeout.
+          # -no-accel: the macOS runners expose no nested hypervisor (the
+          # emulator dies with "failed to initialize HVF"), so TCG emulates
+          # the ARM guest. Slow to boot, but it boots; the waits below bound
+          # a wedge to minutes instead of the job timeout. No bare
+          # `adb wait-for-device` anywhere: it waits forever.
+          $ANDROID_HOME/emulator/emulator -avd test -no-accel -no-snapshot-load -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
           started=""
           for i in $(seq 1 18); do
             if adb devices | grep -q emulator; then started="yes"; break; fi
@@ -85,7 +87,7 @@ jobs:
           done
           if [ -z "$started" ]; then echo "emulator did not appear in adb devices"; adb devices; exit 1; fi
           booted=""
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted="yes"; break; fi
             sleep 10
           done

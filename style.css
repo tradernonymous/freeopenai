@@ -2161,13 +2161,6 @@
             #viewChat .chat-bar-title .dot,
             #viewChat .chat-bar-title .brand-name { display: none; }
             .command-state { font-size: 8px; padding-inline: 5px; }
-            /* The provider name truncates the same way the model name does, so
-               it can give up width here; the full list is a tap away either
-               way. 58px is the point the row's content plus the mode chip's
-               44px finger-target overhang fits the 274px a 360px phone gives
-               the strip -- any wider and the target's spill past the row's end
-               reads as a scroll. */
-            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 58px; }
             /* The mode dot is decoration on top of a label that already says the
                mode ("Chat"/"Plan"/"Build") and a chip that already recolors for
                it -- dropping the 6px dot plus its 6px gap buys the model button
@@ -2269,6 +2262,17 @@
             .composer-model-controls .model-trigger > svg { flex-shrink: 0; }
         }
 
+        /* A 390px phone gives the strip 304px, and DejaVu (the CI runner's
+           typeface) sets ~10px wider than Segoe, which squeezed the model
+           button under the smoke's 24px floor. The provider name truncates
+           the same way the model name does, so it gives up the width here;
+           the full list is a tap away either way. After the wider phone
+           rules so it only governs 381-440px: the 58px rule below still
+           wins at 360 and under. */
+        @media (max-width: 440px) {
+            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 80px; }
+        }
+
         /* A 360px phone gives the settings strip 274px, and the six controls at
            their tightened sizes want all of it -- exact-fit flex arithmetic then
            loses a subpixel to rounding and the strip reports a scroll it never
@@ -2287,6 +2291,13 @@
                strip reports as a scroll -- the controls themselves fit. Padding
                is outside the flex content box, so the filler button cannot eat
                it: the spill lands on padding and the strip genuinely fits. */
+            /* The provider name truncates the same way the model name does, so
+               it can give up width here; the full list is a tap away either
+               way. 58px is the point the row's content plus the mode chip's
+               44px finger-target overhang fits the 274px a 360px phone gives
+               the strip -- any wider and the target's spill past the row's end
+               reads as a scroll. Last so it beats the 80px rule above. */
+            .composer-controls .effort-select, .composer-controls #providerSelect { max-width: 58px; }
             .composer-settings { padding-right: 6px; }
         }
 
