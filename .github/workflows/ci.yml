@@ -51,67 +51,66 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Maestro UI tests for Android - runs on macOS for emulator support
-  # Phase 4: Progress tracking UI tests
+  # Maestro UI tests for Android - runs against a debug build in an emulator.
+  # Phase 4: Progress tracking UI tests.
+  #
+  # Runs on ubuntu-latest via reactivecircus/android-emulator-runner instead of
+  # a hand-rolled boot loop on macos-latest: macOS runners have no nested
+  # hypervisor at all, so the emulator only ever boots in software mode there
+  # (TCG), and the "appear in adb devices" step's 3-minute budget was too
+  # tight for that cold boot on a shared runner -- it failed to even reach
+  # that point on roughly 20 consecutive CI runs despite several rounds of
+  # targeted fixes. android.yml's own `smoke` job already proves this same
+  # action + api-29 x86_64 image boots reliably on ubuntu-latest, so this
+  # reuses that proven combination instead of continuing to re-tune the macOS
+  # one.
   maestro:
-    runs-on: macos-latest
-    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
         with:
-          # arm64, not x86_64: macos-latest runners are Apple Silicon, and the
-          # translated x86_64 image never finished booting -- two runs in a row
-          # sat in the boot wait until the 40-minute job timeout.
-          packages: platform-tools platforms;android-35 system-images;android-35;google_apis;arm64-v8a
-          emulator: true
-      - name: Create and start emulator
-        run: |
-          echo "no" | avdmanager create avd -n test -k "system-images;android-35;google_apis;arm64-v8a" --force
-          # -accel off: the macOS runners expose no nested hypervisor (the
-          # emulator dies with "failed to initialize HVF"), so TCG emulates
-          # the ARM guest. Slow to boot, but it boots; the waits below bound
-          # a wedge to minutes instead of the job timeout. No bare
-          # `adb wait-for-device` anywhere: it waits forever.
-          # (`-no-accel` looks equivalent but the emulator still probes HVF;
-          # only `-accel off` disables it.)
-          $ANDROID_HOME/emulator/emulator -avd test -accel off -no-snapshot-load -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &
-          started=""
-          for i in $(seq 1 18); do
-            if adb devices | grep -q emulator; then started="yes"; break; fi
-            sleep 10
-          done
-          if [ -z "$started" ]; then echo "emulator did not appear in adb devices"; adb devices; exit 1; fi
-          booted=""
-          for i in $(seq 1 90); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted="yes"; break; fi
-            sleep 10
-          done
-          if [ -z "$booted" ]; then echo "emulator never finished booting"; exit 1; fi
-          echo "emulator booted"
-      - name: Install Maestro
-        run: |
-          curl -Ls "https://get.maestro.mobile.dev" | bash
-          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+          packages: platform-tools
+      - run: yes | sdkmanager --licenses
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        with:
+          gradle-version: 8.10.2
       - name: Build debug APK
         run: |
           cd android
           ./gradlew assembleDebug --no-daemon
-      - name: Install APK
+      - name: Install Maestro
         run: |
-          adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-      - name: Run Maestro tests
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+      # Same alignment android.yml's smoke job needs: the runner pre-sets
+      # ANDROID_AVD_HOME to a nonstandard path, but the pinned emulator-runner
+      # insists the AVD lives at ~/.android/avd.
+      - name: Align the AVD home for the emulator action
         run: |
-          cd .maestro
-          maestro test flows/
-        env:
-          MAESTRO_DRIVER_STARTUP_TIMEOUT: "120000"
+          mkdir -p "$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+      - name: Boot the emulator and run Maestro flows
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@1b48cf25bcdcd1c835908e340039354ff983978a
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
+          # Single flat command, same reason as android.yml's smoke.sh: the
+          # action splices script: into its own shell and mangles embedded
+          # if/fi and $(...), so the real logic lives in a checked-in file.
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/maestro-smoke.sh"
       - name: Upload Maestro reports
         if: always()
         uses: actions/upload-artifact@v4
