@@ -175,7 +175,6 @@ var ShareEnhanced = (function() {
     
     function showShareModal(chatId) {
         currentShareId = chatId;
-        if (typeof ShareComments !== 'undefined') ShareComments.setShareId(chatId);
         
         var overlay = document.getElementById('shareOverlay');
         if (overlay) {
