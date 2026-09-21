@@ -123,7 +123,8 @@
   var SIGNIN_POLL_MS = 2000;
 
   function uuid() {
-    var c = typeof crypto !== 'undefined' ? crypto : null;
+    var scope = typeof globalThis !== 'undefined' ? globalThis : {};
+    var c = scope.crypto || null;
     if (c && typeof c.randomUUID === 'function') return c.randomUUID();
     var out = '';
     for (var i = 0; i < 32; i += 1) out += Math.floor(Math.random() * 16).toString(16);
@@ -169,7 +170,8 @@
       }
       if (isSignedIn()) return true;
       var open = typeof opts.open === 'function' ? opts.open : function (url) {
-        if (typeof window !== 'undefined' && typeof window.open === 'function') window.open(url, '_blank');
+        var scope = typeof globalThis !== 'undefined' ? globalThis : {};
+        if (typeof scope.open === 'function') scope.open(url, '_blank');
       };
       var doFetch = opts.fetchImpl || (typeof fetch === 'function' ? fetch : null);
       if (!doFetch) throw new Error('Puter needs a browser window.');

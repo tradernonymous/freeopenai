@@ -219,7 +219,7 @@ describe('hf-inference', () => {
     globalThis.fetch = async (url, init) => {
       seen.push({ url, body: JSON.parse(init.body), auth: init.headers.Authorization });
       const text = 'data: {"choices":[{"delta":{"content":"hi"}}],"model":"m"}\n\ndata: [DONE]\n';
-      return new Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      return new globalThis.Response(text, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
     try {
       const frames = [];
@@ -291,12 +291,12 @@ describe('hf-auth secret store', () => {
       hfAuth.configureStore(store);
       await hfAuth.hydrate();
       hfAuth.saveToken({ access_token: 'new', expires_at: Date.now() + 60_000 });
-      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setTimeout(r, 0));
       assert.equal(JSON.parse(store.rows.get(hfAuth.SECRET_TOKEN)).access_token, 'new');
       assert.equal(globalThis.localStorage.rows.size, 0, 'localStorage stays empty');
       assert.equal(hfAuth.signedIn(), true);
       hfAuth.clearToken();
-      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setTimeout(r, 0));
       assert.equal(store.rows.has(hfAuth.SECRET_TOKEN), false);
       assert.equal(hfAuth.signedIn(), false);
       assert.ok(announced >= 3, `hydrate, save and clear each announce (${announced})`);
