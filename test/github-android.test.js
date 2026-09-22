@@ -37,6 +37,24 @@ async function handoff(base, session) {
   return (await res.json()).handoff;
 }
 
+// Runs one full android connect (or "add another account") round trip and
+// returns the sealed session it produced.
+async function connectOnce(base, session, { adding = false } = {}) {
+  const code = await handoff(base, session);
+  const authRes = await fetch(base + `/api/github/authorize?client=android&handoff=${code}${adding ? '&add=1' : ''}`, { redirect: 'manual' });
+  assert.equal(authRes.status, 302, 'test setup: authorize must redirect to github.com');
+  const authCookies = cookieMap(authRes.headers.getSetCookie ? authRes.headers.getSetCookie() : [authRes.headers.get('set-cookie')]);
+  const cbRes = await fetch(base + `/api/github/callback?code=abc&state=${authCookies.fo_gh_state}`, {
+    headers: { Cookie: Object.entries(authCookies).map(([k, v]) => `${k}=${v}`).join('; ') },
+    redirect: 'manual',
+  });
+  assert.equal(cbRes.status, 302, 'test setup: callback must redirect to the deep link');
+  const pickupCode = new URL(cbRes.headers.get('location')).searchParams.get('code');
+  const pickupRes = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${session}` } });
+  assert.equal(pickupRes.status, 200, 'test setup: pickup must succeed');
+  return (await pickupRes.json()).session;
+}
+
 async function withApp(env, fn) {
   const saved = {};
   for (const k of VARS) { saved[k] = process.env[k]; delete process.env[k]; }
@@ -45,18 +63,19 @@ async function withApp(env, fn) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const realFetch = global.fetch;
+  let nextGithubLogin = 'octo';
   global.fetch = (url, init) => {
     const href = String(url);
     if (href.startsWith('https://github.com/login/oauth/access_token')) {
-      return Promise.resolve({ ok: true, json: async () => ({ access_token: 'gho_test' }) });
+      return Promise.resolve({ ok: true, json: async () => ({ access_token: 'gho_test_' + nextGithubLogin }) });
     }
     if (href === 'https://api.github.com/user') {
-      return Promise.resolve({ ok: true, json: async () => ({ login: 'octo', avatar_url: 'https://x/o.png' }) });
+      return Promise.resolve({ ok: true, json: async () => ({ login: nextGithubLogin, avatar_url: `https://x/${nextGithubLogin}.png` }) });
     }
     return realFetch(url, init);
   };
   try {
-    await fn({ base });
+    await fn({ base, setGithubLogin: (login) => { nextGithubLogin = login; } });
   } finally {
     global.fetch = realFetch;
     server.close();
@@ -139,7 +158,7 @@ test('the full android round trip: handoff proves identity, authorize never sees
     assert.equal(statusRes.status, 200);
     const status = await statusRes.json();
     assert.equal(status.connected, true);
-    assert.deepEqual(status.accounts, [{ login: 'octo', avatarUrl: 'https://x/o.png' }]);
+    assert.deepEqual(status.accounts, [{ login: 'octo', avatarUrl: 'https://x/octo.png' }]);
   });
 });
 
@@ -164,6 +183,36 @@ test('a pickup code cannot be redeemed by a different signed-in user', async () 
 
     const legitimate = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${aliceSession}` } });
     assert.equal(legitimate.status, 404, 'a mismatched attempt still consumes the single use');
+  });
+});
+
+test('adding another account from Android merges with what is already connected, instead of replacing it', async () => {
+  await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw', GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }, async ({ base, setGithubLogin }) => {
+    const session = await login(base, 'alice', 'pw');
+
+    setGithubLogin('octo');
+    const firstSealed = await connectOnce(base, session);
+    const firstStatus = await (await fetch(base + '/api/github/status', { headers: { Cookie: `fo_auth=${session}; fo_gh=${firstSealed}` } })).json();
+    assert.deepEqual(firstStatus.accounts.map((a) => a.login), ['octo']);
+
+    // "Add another account" hands the app's already-connected fo_gh cookie
+    // along with fo_auth to /api/github/handoff -- the one point in the
+    // whole round trip that can see it -- so the merge below is exercised
+    // the same way the real app would trigger it.
+    setGithubLogin('hubot');
+    const handoffRes = await fetch(base + '/api/github/handoff', { method: 'POST', headers: { Cookie: `fo_auth=${session}; fo_gh=${firstSealed}` } });
+    const { handoff: code } = await handoffRes.json();
+    const authRes = await fetch(base + `/api/github/authorize?client=android&handoff=${code}&add=1`, { redirect: 'manual' });
+    const authCookies = cookieMap(authRes.headers.getSetCookie ? authRes.headers.getSetCookie() : [authRes.headers.get('set-cookie')]);
+    const cbRes = await fetch(base + `/api/github/callback?code=abc&state=${authCookies.fo_gh_state}`, {
+      headers: { Cookie: Object.entries(authCookies).map(([k, v]) => `${k}=${v}`).join('; ') },
+      redirect: 'manual',
+    });
+    const pickupCode = new URL(cbRes.headers.get('location')).searchParams.get('code');
+    const secondSealed = (await (await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${session}` } })).json()).session;
+
+    const finalStatus = await (await fetch(base + '/api/github/status', { headers: { Cookie: `fo_auth=${session}; fo_gh=${secondSealed}` } })).json();
+    assert.deepEqual(finalStatus.accounts.map((a) => a.login).sort(), ['hubot', 'octo'], 'both accounts present, not just the one just added');
   });
 });
 

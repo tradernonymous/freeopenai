@@ -168,6 +168,11 @@ interface Platform {
      * the person does it by hand in Settings, never the app itself. */
     fun deviceControlEnabled(): Boolean
     fun openAccessibilitySettings()
+    /** This app's own App Info screen -- the first stop for clearing
+     * Android 13+'s "Restricted setting" block, which refuses to let a
+     * sideloaded (non-Play-Store) app's Accessibility Service be turned on
+     * until the person allows it there first. */
+    fun openAppInfoSettings()
 }
 
 @Composable

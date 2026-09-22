@@ -144,9 +144,11 @@ class NativeApi(
 
     /** The Custom Tab URL that starts a GitHub connect, carrying [handoffCode]
      * from [githubHandoff] instead of any session material; see server.js's
-     * githubAuthorize. */
-    fun githubAuthorizeUrl(handoffCode: String): String =
-        session.server + "/api/github/authorize?client=android&handoff=" + java.net.URLEncoder.encode(handoffCode, "UTF-8")
+     * githubAuthorize. [adding] forces GitHub's account picker and merges
+     * the result with what is already connected, instead of replacing it. */
+    fun githubAuthorizeUrl(handoffCode: String, adding: Boolean = false): String =
+        session.server + "/api/github/authorize?client=android&handoff=" + java.net.URLEncoder.encode(handoffCode, "UTF-8") +
+            (if (adding) "&add=1" else "")
 
     /** Redeems the one-time code the github-connected deep link carried,
      * over this app's own authenticated connection -- never the Custom
@@ -158,6 +160,16 @@ class NativeApi(
         } catch (e: Exception) {
             throw ApiException("That connect link expired -- try connecting GitHub again.")
         }
+    }
+
+    /** The GitHub logins currently connected, newest-looking first is not
+     * guaranteed -- server order is whatever github.js's accounts array
+     * holds. Empty when nothing is connected or the fo_gh cookie lapsed. */
+    fun githubLogins(): List<String> = try {
+        val accounts = org.json.JSONObject(getJson("/api/github/status")).optJSONArray("accounts")
+        (0 until (accounts?.length() ?: 0)).mapNotNull { accounts?.optJSONObject(it)?.optString("login")?.ifEmpty { null } }
+    } catch (e: Exception) {
+        emptyList()
     }
 
     private fun postJson(path: String, body: String): String = withSession { cookie ->

@@ -28,16 +28,26 @@ object FileGenerator {
         override fun hashCode(): Int = name.hashCode() * 31 + content.contentHashCode()
     }
 
-    /** Scan agent text and extract detectable files (code blocks, JSON, markdown, CSV). */
+    /** Scan agent text and extract the one detectable file worth offering as a
+     * download (a code block, JSON payload, or CSV table).
+     *
+     * This used to also list every candidate found -- often several code
+     * blocks in one reply, plus the entire reply again as "response.md"
+     * whenever it merely had a heading and was over 200 chars, which fired on
+     * nearly every substantive answer. That buried the one file someone
+     * actually asked for under a stack of chips (and quietly wrote a copy of
+     * every long reply to Downloads/NeuraOS whether anyone wanted it or not).
+     * Without a reliable signal for "this is the file I meant" (that would
+     * need the request that preceded it, which this scanner never sees), the
+     * last candidate is the best single guess: in an agent's response the
+     * final block is the one most likely to be the finished deliverable
+     * rather than an earlier illustrative snippet. */
     fun detectFiles(agentOutput: String): List<GeneratedFile> {
         val files = mutableListOf<GeneratedFile>()
         files.addAll(extractCodeBlocks(agentOutput))
         files.addAll(extractJsonBlocks(agentOutput))
         files.addAll(extractCsvTables(agentOutput))
-        if (agentOutput.contains(Regex("^#{1,3}\\s+.+", RegexOption.MULTILINE)) && agentOutput.length > 200) {
-            files.add(GeneratedFile("response.md", "md", "text/markdown", agentOutput.toByteArray(Charsets.UTF_8), "Markdown document"))
-        }
-        return files
+        return listOfNotNull(files.lastOrNull())
     }
 
     /** Save to Downloads/NeuraOS/. Returns the path or null. */

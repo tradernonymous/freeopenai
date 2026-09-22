@@ -853,6 +853,17 @@ class NativeActivity : ComponentActivity(), Platform {
         }
     }
 
+    override fun openAppInfoSettings() {
+        try {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", packageName, null)),
+            )
+        } catch (e: ActivityNotFoundException) {
+            toast("No app info screen on this phone.")
+        }
+    }
+
     override fun appLockOn(): Boolean = vm.store.appLock
 
     override fun setAppLock(on: Boolean, onResult: (Boolean) -> Unit) {

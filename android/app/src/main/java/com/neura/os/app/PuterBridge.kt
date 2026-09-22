@@ -97,7 +97,10 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
      * WebView cannot complete is explained instead of shown, and anything
      * else is handed to the phone's real browser. */
     private fun openSignInPopup(resultMsg: Message): Boolean {
-        val activity = context as? Activity ?: return false
+        val activity = context as? Activity ?: run {
+            Toast.makeText(context, "Could not open Puter sign-in on this screen.", Toast.LENGTH_LONG).show()
+            return false
+        }
         val popup = WebView(context)
         popup.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         WebShell.harden(popup, "NeuraOS/" + BuildConfig.VERSION_NAME, popup = true)
@@ -134,6 +137,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         (resultMsg.obj as WebView.WebViewTransport).webView = popup
         resultMsg.sendToTarget()
         dialog.show()
+        Toast.makeText(context, "Opening Puter sign-in…", Toast.LENGTH_SHORT).show()
         return true
     }
 
@@ -270,7 +274,12 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     JSONObject().put("state", "missing")
                 }
                 when (status.optString("state")) {
-                    "pending" -> if (tries < 1200) pollSignIn(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
+                    // 500 * 300ms = 2.5 minutes: long enough for a real sign-in
+                    // (password, maybe 2FA), short enough that a genuinely
+                    // stuck popup surfaces a "timed out" notice instead of
+                    // leaving the button animating for six minutes with no
+                    // feedback at all.
+                    "pending" -> if (tries < 500) pollSignIn(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
                     "missing" -> done(Result.failure(IllegalStateException("Puter did not load")))
                     "done" -> {
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)

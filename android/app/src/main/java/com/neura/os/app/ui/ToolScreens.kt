@@ -433,20 +433,29 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
         SectionTitle("Connectors")
         val context = LocalContext.current
+        LaunchedEffect(vm.githubConnected) { vm.refreshGithubLogins() }
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("GitHub", style = MaterialTheme.typography.bodyMedium)
-                Text(if (vm.githubConnected) "Connected" else "Lets a chat read and edit repos you approve.", color = Palette.muted, fontSize = 12.sp)
+                Text(
+                    when {
+                        vm.githubLogins.isNotEmpty() -> "Connected: " + vm.githubLogins.joinToString(", ")
+                        vm.githubConnected -> "Connected"
+                        else -> "Lets a chat read and edit repos you approve."
+                    },
+                    color = Palette.muted,
+                    fontSize = 12.sp,
+                )
             }
             TextButton(
                 {
-                    vm.startGithubConnect { url ->
+                    vm.startGithubConnect(adding = vm.githubConnected) { url ->
                         CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
                     }
                 },
-                enabled = !vm.githubConnecting,
+                enabled = !vm.githubConnecting && vm.githubLogins.size < 3,
             ) {
-                Text(if (vm.githubConnecting) "Connecting…" else if (vm.githubConnected) "Reconnect" else "Connect")
+                Text(if (vm.githubConnecting) "Connecting…" else if (vm.githubConnected) "Add another account" else "Connect")
             }
         }
         SectionTitle("Server")
@@ -463,6 +472,15 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
             "Lets a chat you approve tap or scroll things on screen by their label -- only ever after you tap Approve on that one action. Off by default; this opens Android's own Settings to turn it on or off.",
             color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp),
         )
+        if (!deviceControlOn) {
+            Text(
+                "If Android says this toggle is a \"Restricted setting\" and won't switch on: that's Android 13+ refusing to enable Accessibility for any app installed outside the Play Store, not a bug here. Open this app's info screen below, tap the ⋮ menu in the top right, choose \"Allow restricted settings\", then come back to Accessibility settings and try again.",
+                color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp, top = 2.dp),
+            )
+            TextButton({ platform.openAppInfoSettings() }, contentPadding = PaddingValues(start = 14.dp)) {
+                Text("Open app info", fontSize = 12.sp)
+            }
+        }
         SectionTitle("Data")
         SettingRow("Delete all chats", null, danger = true) { confirmClear = true }
         SectionTitle("App")

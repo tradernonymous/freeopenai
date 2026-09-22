@@ -1222,16 +1222,31 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     val githubConnected: Boolean get() = store.githubSession != null
     var githubConnecting by mutableStateOf(false)
+    /** The connected logins, for Settings to show and to decide whether the
+     * button reads "Connect" or "Add another account". Fetched on demand
+     * (see Settings' LaunchedEffect); empty until then or when nothing is
+     * connected. */
+    var githubLogins by mutableStateOf<List<String>>(emptyList())
+
+    fun refreshGithubLogins() {
+        if (!githubConnected) { githubLogins = emptyList(); return }
+        io.execute {
+            val logins = api.githubLogins()
+            main.post { githubLogins = logins }
+        }
+    }
 
     /** Proves this session's identity over its own connection (a handoff
      * code, never the session itself -- see NativeApi.githubHandoff), builds
      * the Custom Tab URL from it, and hands that to [launch] on the main
-     * thread. The Settings row opens a Custom Tab with it. */
-    fun startGithubConnect(launch: (String) -> Unit) {
+     * thread. [adding] forces GitHub's account picker instead of reusing
+     * whoever it finds already signed in there. The Settings row opens a
+     * Custom Tab with it. */
+    fun startGithubConnect(adding: Boolean = false, launch: (String) -> Unit) {
         githubConnecting = true
         io.execute {
             val url = try {
-                api.githubAuthorizeUrl(api.githubHandoff())
+                api.githubAuthorizeUrl(api.githubHandoff(), adding)
             } catch (e: Exception) {
                 main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
                 return@execute
@@ -1247,7 +1262,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         io.execute {
             try {
                 store.githubSession = api.githubPickup(code)
-                main.post { githubConnecting = false; notice = "Connected to GitHub as " + login.ifEmpty { "your account" } + "." }
+                val logins = api.githubLogins()
+                main.post {
+                    githubConnecting = false
+                    githubLogins = logins
+                    notice = "Connected to GitHub as " + login.ifEmpty { "your account" } + "."
+                }
             } catch (e: Exception) {
                 main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
             }

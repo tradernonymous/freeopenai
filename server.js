@@ -630,6 +630,7 @@ function githubAuthorize(req, res) {
   // open deployment has no identity to bind the connection to either way.
   const android = query.get('client') === 'android';
   let androidUser = null;
+  let androidExistingAccounts = [];
   let androidUserResolved = false;
   if (android) {
     const handoff = query.get('handoff') || '';
@@ -641,6 +642,7 @@ function githubAuthorize(req, res) {
       return;
     }
     androidUser = entry ? entry.appUser : null;
+    androidExistingAccounts = entry ? entry.existingAccounts || [] : [];
     androidUserResolved = true;
   }
   const state = crypto.randomBytes(16).toString('hex');
@@ -649,11 +651,12 @@ function githubAuthorize(req, res) {
   const desktop = query.get('client') === 'desktop';
   if (android && androidUserResolved) {
     sweepExpired(githubAndroidState);
-    // Carries the resolved identity forward, keyed by the same `state` the
-    // callback already verifies against its cookie -- so the callback (hit
-    // by the same Custom Tab, still no fo_auth cookie of its own) can
-    // recover it without a session ever crossing into a cookie or a URL.
-    githubAndroidState.set(state, { appUser: androidUser, expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
+    // Carries the resolved identity (and, for "add another account", what is
+    // already connected) forward, keyed by the same `state` the callback
+    // already verifies against its cookie -- so the callback (hit by the
+    // same Custom Tab, still no fo_auth cookie of its own) can recover both
+    // without a session ever crossing into a cookie or a URL.
+    githubAndroidState.set(state, { appUser: androidUser, existingAccounts: androidExistingAccounts, expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
   }
   res.setHeader('Set-Cookie', [
     `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`,
@@ -690,18 +693,18 @@ async function githubCallback(req, res) {
   }
 
   // Android has no fo_auth cookie here either (same reason as the authorize
-  // hop): its identity rode forward keyed by this same `state` instead.
-  // Known simplification: because of that, "add another account" from
-  // Android does not see accounts connected from the web/desktop side in the
-  // same round trip -- accountsOf(null) below is empty, so a second connect
-  // from the phone replaces rather than merges. Single-account is the
-  // primary path this ships for.
+  // hop): its identity, and what it already has connected, rode forward
+  // keyed by this same `state` instead (captured back at /api/github/handoff,
+  // the one point in this whole trip where the app's own fo_gh cookie was
+  // actually present).
   const isAndroid = cookies[GITHUB_CLIENT_COOKIE] === 'android';
   let androidAppUser;
+  let androidExistingAccounts;
   if (isAndroid) {
     const entry = githubAndroidState.get(state);
     githubAndroidState.delete(state);
     androidAppUser = entry ? entry.appUser : null;
+    androidExistingAccounts = entry ? entry.existingAccounts || [] : [];
   }
 
   try {
@@ -725,7 +728,7 @@ async function githubCallback(req, res) {
     const { data: user } = await githubApiFetch(tokenData.access_token, 'https://api.github.com/user');
     // Keep any accounts already connected. Reconnecting the same GitHub login
     // replaces its entry rather than adding a duplicate.
-    const connected = accountsOf(getGithubSession(req));
+    const connected = isAndroid ? androidExistingAccounts : accountsOf(getGithubSession(req));
     const wasAlreadyConnected = connected.some((a) => a.login === (user && user.login));
     const wasAddingAnother = cookies[GITHUB_ADD_COOKIE] === '1';
     const existing = connected.filter((a) => a.login !== (user && user.login));
@@ -785,7 +788,15 @@ async function githubCallback(req, res) {
 function githubHandoffRoute(req, res) {
   sweepExpired(githubHandoff);
   const code = crypto.randomBytes(24).toString('hex');
-  githubHandoff.set(code, { appUser: currentAppUser(req), expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
+  // This call carries the app's real fo_auth AND fo_gh cookies (it is the
+  // app's own connection, unlike everything downstream of it) -- the one
+  // moment "add another account" can see what is already connected, so it
+  // is captured here and carried forward through the state that follows.
+  githubHandoff.set(code, {
+    appUser: currentAppUser(req),
+    existingAccounts: accountsOf(getGithubSession(req)),
+    expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS,
+  });
   sendJson(res, 200, { handoff: code });
 }
 
@@ -5642,6 +5653,41 @@ async function assertMcpUrlIsPublic(raw) {
   return parsed.href;
 }
 
+// Every /api/mcp/* route makes this server reach out to a user-named host, so
+// it is guarded like /api/github/*: a write from a foreign site is refused
+// (browsers always send Origin on a cross-site POST), and each client IP gets
+// MCP_RATE_LIMIT calls per window. Returns { status, error } or null.
+const MCP_RATE_LIMIT = 60;
+const MCP_RATE_WINDOW_MS = 60 * 1000;
+const mcpRequests = new Map();
+
+function mcpRouteRefusal(req, now = Date.now()) {
+  if (req.method !== 'GET' && isForeignOrigin(req)) return { status: 403, error: 'Cross-site request refused' };
+  if (mcpRequests.size > 5000) {
+    for (const [key, entry] of mcpRequests) if (now >= entry.resetAt) mcpRequests.delete(key);
+  }
+  if (!checkRateLimit(mcpRequests, clientIp(req), now, MCP_RATE_LIMIT, MCP_RATE_WINDOW_MS)) {
+    return { status: 429, error: 'Too many MCP requests — try again in a minute' };
+  }
+  return null;
+}
+
+// The `tools/call` result as an MCP App expects it in
+// ui/notifications/tool-result: content, structuredContent and isError only,
+// dropped entirely (the text still goes back) past MCP_MAX_BYTES.
+function mcpRawResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const raw = { content: Array.isArray(result.content) ? result.content : [], isError: !!result.isError };
+  if (result.structuredContent !== undefined) raw.structuredContent = result.structuredContent;
+  let size;
+  try {
+    size = Buffer.byteLength(JSON.stringify(raw), 'utf8');
+  } catch {
+    return null;
+  }
+  return size > MCP_MAX_BYTES ? null : raw;
+}
+
 async function mcpListTools(req, res) {
   readJsonBody(req, 4 * 1024, async (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
@@ -5690,7 +5736,10 @@ async function mcpCallTool(req, res) {
       }, true);
       const content = (result && Array.isArray(result.content)) ? result.content : [];
       const text = content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n');
-      sendJson(res, 200, { text: text || JSON.stringify(result || {}), isError: !!(result && result.isError) });
+      const reply = { text: text || JSON.stringify(result || {}), isError: !!(result && result.isError) };
+      const raw = mcpRawResult(result);
+      if (raw) reply.raw = raw;
+      sendJson(res, 200, reply);
     } catch (e) {
       sendJson(res, 502, { error: 'That MCP call failed: ' + e.message });
     }
@@ -6145,6 +6194,10 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/images/edits' && req.method === 'POST') return llmImage(req, res, 'edits');
     if (urlPath === '/api/llm/websearch' && req.method === 'GET') return llmWebsearch(req, res);
     if (urlPath === '/api/llm/fetch' && req.method === 'GET') return llmFetch(req, res);
+    if (urlPath.startsWith('/api/mcp/')) {
+      const refusal = mcpRouteRefusal(req);
+      if (refusal) return sendJson(res, refusal.status, { error: refusal.error });
+    }
     if (urlPath === '/api/mcp/tools' && req.method === 'POST') return mcpListTools(req, res);
     if (urlPath === '/api/mcp/call' && req.method === 'POST') return mcpCallTool(req, res);
     if (urlPath === '/api/mcp/resource' && req.method === 'POST') return mcpReadResource(req, res);
@@ -6290,6 +6343,9 @@ module.exports = {
   isPrivateIp,
   mcpUiMeta,
   mcpResourceContents,
+  mcpRawResult,
+  mcpRouteRefusal,
+  MCP_RATE_LIMIT,
   // Share-store seams: the file lifecycle runs at require time and on a
   // debounce, so a test drives these directly -- flush settles the write,
   // restart is what a reboot does.
