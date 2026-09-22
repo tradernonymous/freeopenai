@@ -13,6 +13,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import QuickAsk from './screens/QuickAsk';
 import { isQuickWindow } from './bridge';
+import { paintAppearance } from './theme';
 // Bundled, not borrowed from the machine: the app should look the same on every
 // Windows build rather than inheriting whatever Segoe happens to be installed.
 import '@fontsource-variable/inter';
@@ -54,6 +55,11 @@ window.addEventListener('error', (event) => {
 window.addEventListener('unhandledrejection', (event) => {
   if (rootIsEmpty()) paintFailure(event.reason);
 });
+
+// Theme, accent hue and motion are on <html> before React renders anything, so
+// the first frame is already in the person's colours and never animates when
+// they asked for less motion. A storage fault must not stop the app starting.
+try { paintAppearance(); } catch { /* the stylesheet defaults still apply */ }
 
 const container = rootElement();
 if (!container) {

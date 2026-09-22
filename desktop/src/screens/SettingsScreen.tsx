@@ -6,6 +6,7 @@ import DiagnosticsCard from '../components/DiagnosticsCard';
 import LocalModelsCard from '../components/LocalModelsCard';
 import ConnectorsCard from '../components/ConnectorsCard';
 import ShortcutsCard from '../components/ShortcutsCard';
+import AppearanceCard from '../components/AppearanceCard';
 import FileTree from '../components/FileTree';
 import Terminal from '../components/Terminal';
 
@@ -163,6 +164,11 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
           </section>
 
           <ConnectorsCard />
+
+          <section className="settings-section">
+            <h2>Appearance</h2>
+            <AppearanceCard />
+          </section>
 
           <section className="settings-section">
             <h2>Shortcuts</h2>

@@ -243,7 +243,7 @@
 /* The update banner's primary action: it downloads, verifies and installs. */
 .update-install {
   background: var(--accent);
-  color: var(--bg-0);
+  color: var(--accent-contrast);
   border: 1px solid var(--accent);
   border-radius: 4px;
   padding: 3px 9px;
@@ -286,9 +286,17 @@
   /* Was #6a7a64: 3.88:1 -- fine for large text, short of AA for the 11-13px
      hints and status text it is actually used for. */
   --text-3: #83917c;
-  --accent: #4ade80;
-  --accent-dim: rgba(74, 222, 128, 0.12);
-  --accent-mid: rgba(74, 222, 128, 0.35);
+  /* The accent is one hue the person picks (Settings > Appearance, painted on
+     <html> at boot); lightness and chroma are fixed per theme. OKLCH keeps
+     lightness perceptual, so every hue clears AA the way the default does:
+     L 0.80 / C 0.18 is >= 6.2:1 on --bg-0..--bg-3 and >= 9:1 under black text
+     at every hue (test/desktop-look.test.js). Hue 152 is the old #4ade80. */
+  --accent-h: 152;
+  --accent: oklch(0.8 0.18 var(--accent-h));
+  --accent-dim: oklch(0.8 0.18 var(--accent-h) / 0.12);
+  --accent-mid: oklch(0.8 0.18 var(--accent-h) / 0.35);
+  --accent-strong: oklch(0.66 0.16 var(--accent-h));
+  --accent-contrast: #000000;
   --ok: #4ade80;
   --warn: #facc15;
   --err: #f87171;
@@ -327,6 +335,16 @@
   --glass-border: rgba(255, 255, 255, 0.075);
   --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --glass-blur: 18px;
+  /* Depth in 2D: the panes float over a canvas a step darker than they are,
+     each with a 1px light along its top lip and a soft two-layer shadow. The
+     focused pane answers with a stronger shadow and an accent hairline -- no
+     transform, so nothing moves and nothing re-lays out. */
+  --pane-gap: 6px;
+  --canvas: #070a06;
+  --pane-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.32);
+  --pane-shadow-focus: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px var(--accent-mid), 0 2px 6px rgba(0, 0, 0, 0.45), 0 14px 40px rgba(0, 0, 0, 0.45);
+  --parallax-x: 0px;
+  --parallax-y: 0px;
 }
 
 [data-theme="light"] {
@@ -344,9 +362,9 @@
      surfaces they measured 3.6-4.3:1, i.e. short of AA at the sizes they are
      used at. */
   --text-3: #586653;
-  --accent: #166534;
-  --accent-dim: rgba(22, 101, 52, 0.08);
-  --accent-mid: rgba(22, 101, 52, 0.25);
+  --accent: oklch(0.45 0.11 var(--accent-h));
+  --accent-dim: oklch(0.45 0.11 var(--accent-h) / 0.08);
+  --accent-mid: oklch(0.45 0.11 var(--accent-h) / 0.25);
   --ok: #14703a;
   --warn: #8a5406;
   --err: #b91c1c;
@@ -357,6 +375,14 @@
   --glass-border: rgba(20, 30, 18, 0.1);
   --glass-light: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   --glass-blur: 14px;
+  /* The old #166534 is oklch(0.45 0.11 151): >= 5.2:1 on the light surfaces
+     and >= 6.7:1 under white text at every hue. Text on the accent is white
+     here -- black on #166534 measured 3:1 and failed AA. */
+  --accent-strong: oklch(0.36 0.09 var(--accent-h));
+  --accent-contrast: #ffffff;
+  --canvas: #e6ede2;
+  --pane-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), 0 1px 2px rgba(20, 30, 18, 0.08), 0 6px 20px rgba(20, 30, 18, 0.08);
+  --pane-shadow-focus: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 1px var(--accent-mid), 0 2px 4px rgba(20, 30, 18, 0.08), 0 12px 32px rgba(20, 30, 18, 0.14);
 }
 
 html, body, #root {
@@ -629,12 +655,12 @@ html, body, #root {
   width: var(--rail-tile);
   height: var(--rail-tile);
   border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), #166534);
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  color: #000;
+  color: var(--accent-contrast);
   font-size: 11px;
   letter-spacing: 0.5px;
 }
@@ -1050,7 +1076,7 @@ button:disabled {
 
 button.primary {
   background: var(--accent);
-  color: #000;
+  color: var(--accent-contrast);
   border-color: var(--accent);
   font-weight: 600;
 }
@@ -1173,7 +1199,7 @@ button.primary:hover:not(:disabled) {
   height: 38px;
   border-radius: 8px;
   background: var(--accent);
-  color: #000;
+  color: var(--accent-contrast);
   border: 0;
   font-size: 16px;
   font-weight: 700;
@@ -4129,7 +4155,7 @@ button.linkish {
 }
 .my-models-source button.active {
   background: var(--accent);
-  color: var(--accent-contrast, #fff);
+  color: var(--accent-contrast);
 }
 .hf-signin-banner {
   display: flex;
@@ -4830,3 +4856,216 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
 .evals-compare { margin-bottom: 12px; }
 .evals-table tr.is-regression td { background: color-mix(in srgb, var(--err) 12%, transparent); }
 .evals-table tr.is-regression td:first-child { box-shadow: inset 3px 0 0 var(--err); }
+
+/* ---- depth in 2D: floating panes over a quiet canvas ------------------- */
+
+/* The canvas under everything: a step darker than the panes, a wide static
+   glow from the top and a faint grain so the gradient never bands. Static --
+   painted once, no animation, no WebGL. The drifting ambient layer
+   (.app::before) still sits above it and under the panes. */
+.app {
+  background-color: var(--canvas);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 .06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(120% 70% at 50% -10%, color-mix(in oklch, var(--bg-2) 55%, transparent), transparent 70%);
+}
+
+/* The panes float: a gutter of canvas around each, a radius, the hairline
+   and the top lip of the glass, and a soft two-layer shadow. The rail stays
+   flush -- it is chrome, not a pane. Content inside is not blurred. */
+.app-body > .main,
+.app-body > .session-manager,
+.app-body > .local-tree {
+  margin: var(--pane-gap) var(--pane-gap) var(--pane-gap) 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--pane-shadow);
+  overflow: hidden;
+}
+
+.app-body > .main {
+  margin-left: var(--pane-gap);
+}
+
+/* With more than one pane open, the one holding focus lifts: a deeper shadow
+   and an accent hairline. Nothing moves, so nothing re-lays out; with one
+   pane there is nothing to tell apart, and it stays calm. */
+.app-body:has(> .session-manager, > .local-tree) > .main:focus-within,
+.app-body > .session-manager:focus-within,
+.app-body > .local-tree:focus-within {
+  box-shadow: var(--pane-shadow-focus);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-body > .main,
+  .app-body > .session-manager,
+  .app-body > .local-tree {
+    transition: box-shadow 180ms ease;
+  }
+
+  /* Parallax: the far layer follows the pointer by at most 6px (theme.ts
+     useParallax). `translate` composes with the drift's `transform`. */
+  :root:not([data-motion='reduced']) .app::before {
+    translate: var(--parallax-x) var(--parallax-y);
+  }
+}
+
+/* ---- reduce motion ------------------------------------------------------ */
+
+/* Settings > Appearance > Reduce motion (freeai4u.reduce_motion) puts
+   data-motion="reduced" on <html>; by default it follows the system. Either
+   way every transition, animation and the parallax stops -- including motion
+   declared inside the no-preference guards above, which the system query
+   alone would not reach when only the in-app switch is on. */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion='reduced'] .app::before {
+  translate: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+
+  .app::before {
+    translate: none;
+  }
+}
+
+/* ---- appearance card ---------------------------------------------------- */
+
+.appearance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.appearance-hue-value {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track is the choice: every hue at this theme's own lightness, so what
+   the slider shows is what the accent will be. */
+.hue-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(90deg in oklch longer hue, oklch(0.8 0.18 0), oklch(0.8 0.18 360));
+  cursor: pointer;
+}
+
+[data-theme='light'] .hue-slider {
+  background: linear-gradient(90deg in oklch longer hue, oklch(0.45 0.11 0), oklch(0.45 0.11 360));
+}
+
+.hue-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-0);
+  box-shadow: 0 0 0 1px var(--border), var(--shadow-1);
+}
+
+.swatches {
+  display: flex;
+  gap: 8px;
+}
+
+.swatch,
+.swatch:hover:not(:disabled) {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--bg-1);
+  background: oklch(0.8 0.18 var(--swatch-h));
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+[data-theme='light'] .swatch,
+[data-theme='light'] .swatch:hover:not(:disabled) {
+  background: oklch(0.45 0.11 var(--swatch-h));
+}
+
+.swatch:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px var(--text-3);
+}
+
+.swatch.is-active,
+.swatch.is-active:hover:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--text-1);
+}
+
+.appearance-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.appearance-preview .primary {
+  pointer-events: none;
+}
+
+.appearance-preview-link {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.appearance-preview-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-mid);
+  color: var(--accent);
+}
+
+/* ---- lazy screen skeleton ---------------------------------------------- */
+
+/* A screen's chunk usually lands in a frame or two; the skeleton only has to
+   hold the shape so the pane does not flash empty. It does not shimmer. */
+.screen-skeleton {
+  padding: 24px;
+  gap: 12px;
+}
+
+.skeleton-bar {
+  height: 12px;
+  width: 60%;
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+
+.skeleton-title {
+  height: 18px;
+  width: 28%;
+  margin-bottom: 8px;
+}
+
+.skeleton-short {
+  width: 40%;
+}

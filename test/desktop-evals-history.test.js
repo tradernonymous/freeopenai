@@ -213,20 +213,24 @@ test('nextEvalRun shares the recipes rule rather than copying it', () => {
 
 test('App runs the eval scheduler next to the recipe scheduler', () => {
   const app = read('desktop', 'src', 'App.tsx');
-  assert.match(app, /import EvalsScreen, \{ useEvalScheduler \} from '\.\/screens\/EvalsScreen'/);
+  // The hooks live in schedulers.ts (eager) so the Evals screen can be lazy.
+  assert.match(app, /import \{ useRecipeScheduler, useEvalScheduler \} from '\.\/schedulers'/);
   assert.match(app, /useRecipeScheduler\(\);\n\s*useEvalScheduler\(\);/);
 });
 
 test('the Evals screen saves every run, and the scheduler notifies on a regression', () => {
   const screen = read('desktop', 'src', 'screens', 'EvalsScreen.tsx');
+  const schedulers = read('desktop', 'src', 'schedulers.ts');
   assert.match(screen, /evals\.appendRun\(/);
-  assert.match(screen, /export function useEvalScheduler\(\)/);
-  assert.match(screen, /evals\.nextEvalRun\(/);
+  assert.match(schedulers, /export function useEvalScheduler\(\)/);
+  assert.match(schedulers, /evals\.nextEvalRun\(/);
+  assert.match(schedulers, /suiteRunning\(\)/, 'a suite already running is not started twice');
+  assert.match(screen, /export async function runScheduledEvals\(/);
   assert.match(screen, /evals\.regressions\(/);
   assert.match(screen, /notifyUser\('A model got worse'/);
   assert.match(screen, /pushToast\('warn'/);
   assert.match(screen, /hasShell\(\)/, 'local models are skipped without the desktop shell');
-  assert.match(screen, /setInterval\(tick, 60000\)/);
+  assert.match(schedulers, /setInterval\(tick, 60000\)/);
   assert.ok(!/<select/.test(screen), 'no native select');
   const css = read('desktop', 'src', 'index.css');
   assert.match(css, /\/\* ---- Evals history ---- \*\//);

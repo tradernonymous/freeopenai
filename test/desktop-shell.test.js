@@ -84,7 +84,8 @@ const PAIRS = [
   ['text-1', 'bg-0'], ['text-1', 'bg-1'], ['text-1', 'bg-2'],
   ['text-2', 'bg-1'], ['text-2', 'bg-2'],
   ['text-3', 'bg-1'], ['text-3', 'bg-2'],
-  ['accent', 'bg-0'], ['accent', 'bg-1'],
+  // The accent is oklch(L C var(--accent-h)) since the hue became a setting;
+  // test/desktop-look.test.js checks it against bg-0..bg-2 at EVERY hue.
   ['ok', 'bg-1'], ['warn', 'bg-1'], ['err', 'bg-1'],
 ];
 
@@ -105,9 +106,15 @@ for (const [theme, selector] of [['dark', ':root {'], ['light', '[data-theme="li
 test('the tokens the shell uses are defined in both themes', () => {
   const dark = tokensOf(':root {');
   const light = tokensOf('[data-theme="light"]');
-  for (const key of ['bg-0', 'bg-1', 'bg-2', 'border', 'text-1', 'text-2', 'text-3', 'accent', 'ok', 'warn', 'err']) {
+  for (const key of ['bg-0', 'bg-1', 'bg-2', 'border', 'text-1', 'text-2', 'text-3', 'ok', 'warn', 'err']) {
     assert.ok(dark[key], `dark theme defines --${key}`);
     assert.ok(light[key], `light theme defines --${key}`);
+  }
+  // The accent is derived from the hue, not a hex; both themes answer it.
+  const css = read('desktop', 'src', 'index.css');
+  for (const selector of [':root {', '[data-theme="light"]']) {
+    const at = css.indexOf(selector);
+    assert.match(css.slice(at, css.indexOf('}', at)), /--accent:\s*oklch\([^)]*var\(--accent-h\)\)/, `${selector} derives --accent`);
   }
 });
 

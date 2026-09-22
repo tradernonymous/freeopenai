@@ -130,24 +130,9 @@ export async function runScheduledEvals(schedule: EvalSchedule, startedAt = Date
   }
 }
 
-/** While the app runs: once a minute, run the eval suite if its schedule is due (evals.js nextEvalRun). */
-export function useEvalScheduler() {
-  useEffect(() => {
-    const tick = () => {
-      if (busyKind) return; // a run is in progress; the next tick picks it up
-      const schedule = evals.readSchedule();
-      const now = Date.now();
-      const next = evals.nextEvalRun(schedule, schedule.lastRunAt, now);
-      if (next == null || next > now) return;
-      // Stamped before the replies, so a slow suite is not started twice.
-      evals.writeSchedule({ ...schedule, lastRunAt: now });
-      runScheduledEvals(schedule, now).catch((e: unknown) => pushToast('error', `Scheduled evals failed: ${String((e as Error)?.message || e)}`));
-    };
-    const first = setTimeout(tick, 5000);
-    const timer = setInterval(tick, 60000);
-    return () => { clearTimeout(first); clearInterval(timer); };
-  }, []);
-}
+// The once-a-minute scheduler that calls runScheduledEvals lives in
+// ../schedulers.ts (useEvalScheduler), so App runs it at start while this
+// screen stays a lazy chunk; it checks suiteRunning() before starting a run.
 
 // ---- small pieces ------------------------------------------------------------------
 
