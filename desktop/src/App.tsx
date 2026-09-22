@@ -12,7 +12,7 @@ import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
 import CodeScreen from './screens/CodeScreen';
-import EvalsScreen from './screens/EvalsScreen';
+import EvalsScreen, { useEvalScheduler } from './screens/EvalsScreen';
 import AgentsScreen from './screens/AgentsScreen';
 import RecipesScreen, { useRecipeScheduler } from './screens/RecipesScreen';
 import ParallelScreen from './screens/ParallelScreen';
@@ -103,6 +103,7 @@ export default function App() {
   const [skillEntries, setSkillEntries] = useState<PaletteEntry[]>([]);
   // Scheduled recipes run while the app is open, whatever screen is showing.
   useRecipeScheduler();
+  useEvalScheduler();
 
   useEffect(() => {
     applyTheme(theme);

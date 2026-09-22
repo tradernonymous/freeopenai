@@ -4799,3 +4799,34 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
 .consent-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .consent-cmd { display: block; color: var(--text-3); word-break: break-all; }
 .consent-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* ---- Evals history ---- */
+.evals-schedule { display: flex; flex-direction: column; gap: 8px; }
+.evals-schedule-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.evals-schedule-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.evals-schedule-field input[type='number'] { width: 64px; }
+.evals-schedule-models { display: flex; flex-direction: column; gap: 4px; }
+.evals-schedule-models .chip { margin-left: 6px; }
+.evals-history-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.evals-history-head .local-heading { margin: 0; }
+.evals-history-head .settings-hint { margin: 0 auto 0 0; }
+.evals-trends { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 16px; margin: 10px 0; }
+.evals-trend { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.evals-trend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.evals-trend-last { min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+.evals-spark { flex: none; overflow: visible; }
+.evals-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.evals-spark circle { fill: var(--accent); }
+.evals-spark-top { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; }
+.evals-arrow { width: 14px; text-align: center; font-weight: 600; }
+.evals-arrow.is-up { color: var(--ok); }
+.evals-arrow.is-down { color: var(--err); }
+.evals-arrow.is-flat { color: var(--text-3); }
+.evals-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.evals-run { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; text-align: left; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: none; }
+.evals-run.active { border-color: var(--accent); background: var(--accent-dim); }
+.evals-run-when { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.evals-run-models { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-left: auto; }
+.evals-run-model { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.evals-compare { margin-bottom: 12px; }
+.evals-table tr.is-regression td { background: color-mix(in srgb, var(--err) 12%, transparent); }
+.evals-table tr.is-regression td:first-child { box-shadow: inset 3px 0 0 var(--err); }
