@@ -296,6 +296,37 @@
     return out;
   }
 
+  /**
+   * A GGUF header (the shell's gguf_info) -> { trainCtx, kvBytesPerToken, source }
+   * plus the facts the drawer shows. Read from the file before any load, so the
+   * first load is sized exactly. KV per token = K and V, f16 (2 bytes), for
+   * every layer and KV head: layers * kvHeads * (keyLen + valueLen) * 2 -- a
+   * head's length is key_length/value_length when given, else embedding/heads.
+   */
+  function parseGgufInfo(info) {
+    var h = info || {};
+    var num = function (v) {
+      var n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    var trainCtx = num(h.context_length);
+    var layers = num(h.block_count);
+    var heads = num(h.head_count);
+    var kvHeads = num(h.head_count_kv) || heads;
+    var embed = num(h.embedding_length);
+    var keyLen = num(h.key_length) || (heads && embed ? embed / heads : 0);
+    var valLen = num(h.value_length) || keyLen;
+    var kvBytes = layers && kvHeads && keyLen ? Math.round(layers * kvHeads * (keyLen + valLen) * 2) : 0;
+    var out = { source: 'gguf' };
+    if (trainCtx) out.trainCtx = trainCtx;
+    if (kvBytes) out.kvBytesPerToken = kvBytes;
+    if (typeof h.architecture === 'string' && h.architecture) out.arch = h.architecture.slice(0, 64);
+    if (layers) out.layers = layers;
+    if (typeof h.size_label === 'string' && h.size_label) out.sizeLabel = h.size_label.slice(0, 32);
+    if (num(h.sliding_window)) out.slidingWindow = num(h.sliding_window);
+    return out;
+  }
+
   /** llama-server's /v1/models answer -> { trainCtx, source }. */
   function parseLlamaModels(body) {
     var rows = (body && (body.data || body.models)) || [];
@@ -385,6 +416,7 @@
     setLimits: setLimits,
     parseOllamaShow: parseOllamaShow,
     parseLlamaModels: parseLlamaModels,
+    parseGgufInfo: parseGgufInfo,
     autoCtx: autoCtx,
     effectiveCtx: effectiveCtx,
     ctxSteps: ctxSteps,

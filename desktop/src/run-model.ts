@@ -12,7 +12,7 @@
 //     the caller is told the stage and can say "Loading…" instead of looking
 //     frozen. Sampling rides along; context/GPU layers are load-time.
 import { ApiError, streamLocalChat, type StreamFrame } from './api';
-import { hasShell, localModelStart, localModelStatus, shellPostStream, type LocalModelStatus } from './bridge';
+import { ggufInfo, hasShell, localModelStart, localModelStatus, shellPostStream, type LocalModelStatus } from './bridge';
 import './saved-models.js';
 import './run-settings.js';
 import './local-models.js';
@@ -75,10 +75,23 @@ export function resolvedValues(entry: SavedModel): RunValues {
 
 /**
  * Ask the model what it is: trained context and KV cost per token. Ollama
- * answers /api/show at once; llama-server answers /v1/models once loaded.
- * Remembered per model, so it is asked once.
+ * answers /api/show at once. A GGUF file answers from its own header, read by
+ * the shell BEFORE any load -- so even the first load is sized exactly;
+ * llama-server's /v1/models (once loaded) is the fallback for a header that
+ * cannot be read. Remembered per model, so it is asked once.
  */
 export async function detectLimits(entry: SavedModel, server?: { base_url: string; api_key?: string | null }): Promise<ModelLimits | null> {
+  if (entry.kind === 'unsloth' && entry.path && hasShell()) {
+    try {
+      const limits = runSettings.parseGgufInfo(await ggufInfo(entry.path));
+      if (limits.trainCtx || limits.kvBytesPerToken) {
+        runSettings.setLimits(entry.id, limits);
+        if (limits.trainCtx) return limits;
+      }
+    } catch {
+      /* an unreadable header: ask the loaded server below, when there is one */
+    }
+  }
   try {
     if (entry.kind === 'ollama') {
       if (!hasShell()) return null;
@@ -123,6 +136,8 @@ export async function ensureUnsloth(entry: SavedModel, force = false, onStage?: 
     const status = await localModelStatus().catch(() => null);
     if (status && status.state === 'ready' && status.file && sameFile(status.file, entry.path)) return status;
   }
+  // The file's header first, so this load's context is the exact one.
+  if (!runSettings.limitsFor(entry.id)?.trainCtx) await detectLimits(entry);
   onStage?.(`Loading ${entry.name}…`);
   const cores = Number((globalThis as any).navigator?.hardwareConcurrency) || 0;
   const status = await localModelStart({
@@ -130,9 +145,28 @@ export async function ensureUnsloth(entry: SavedModel, force = false, onStage?: 
     file: entry.path,
     ...runSettings.loadArgs(resolvedValues(entry), cores),
   });
-  // Learned on the first load: the next Auto is capped at the real maximum.
+  // A header that could not be read: learned from the server after this load.
   if (!runSettings.limitsFor(entry.id)?.trainCtx) detectLimits(entry, status).catch(() => {});
   return status;
+}
+
+/**
+ * Read the header of every GGUF in "my models" that has no limits yet, in the
+ * background. Runs whenever the list changes -- every place that adds a model
+ * (My models, a finished download) goes through saved-models -- so Auto is
+ * right on the very first run.
+ */
+export function learnLimits(): void {
+  if (!hasShell()) return;
+  for (const entry of savedModels.list()) {
+    if (entry.kind === 'unsloth' && entry.path && !runSettings.limitsFor(entry.id)) {
+      detectLimits(entry).catch(() => {});
+    }
+  }
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener(savedModels.CHANGED_EVENT, learnLimits);
 }
 
 /** One NDJSON line from Ollama's /api/chat, as a frame (or an error). */

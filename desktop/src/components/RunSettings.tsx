@@ -26,6 +26,12 @@ type RunValues = import('../run-settings.js').RunValues;
 //     person has said how much VRAM the card has (a webview cannot measure it).
 
 
+/** KV-cache bytes for 1,024 tokens, as MB (or GB past 1024 MB). */
+function kvPer1k(bytesPerToken: number): string {
+  const mb = (bytesPerToken * 1024) / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+}
+
 function readVram(): number {
   try {
     const n = Number(localStorage.getItem(VRAM_KEY));
@@ -62,6 +68,10 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
     setLoaded(current);
     setPresets(runSettings.presets());
     setLimits(runSettings.limitsFor(entry.id));
+    // A file added before headers were read: read it now, without loading.
+    if (entry.kind === 'unsloth' && !runSettings.limitsFor(entry.id)) {
+      detectLimits(entry).then(() => setLimits(runSettings.limitsFor(entry.id))).catch(() => {});
+    }
   }, [entry]);
 
   if (!open) return null;
@@ -82,9 +92,13 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
   const readLimits = () => {
     if (!entry) return;
     setBusy('limits');
+    // A local file answers from its header without loading; only a header
+    // that cannot be read falls back to loading it and asking llama-server.
     const ask = entry.kind === 'ollama'
       ? detectLimits(entry)
-      : ensureUnsloth(entry).then((status) => detectLimits(entry, status));
+      : detectLimits(entry).then((found) => found?.trainCtx
+        ? found
+        : ensureUnsloth(entry).then((status) => detectLimits(entry, status)));
     ask
       .then((found) => {
         setLimits(runSettings.limitsFor(entry.id));
@@ -167,6 +181,18 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
             <div className="settings-hint">
               {savedModels.PROVIDERS[entry.kind].label}{entry.detail ? ` · ${entry.detail}` : ''}
             </div>
+            {limits && (limits.arch || limits.layers || limits.trainCtx) && (
+              <div className="settings-hint" title={limits.source === 'gguf' ? 'Read from the model file’s header' : `Reported by ${limits.source || 'the model'}`}>
+                {[
+                  limits.arch,
+                  limits.sizeLabel,
+                  limits.trainCtx ? `trained for ${limits.trainCtx.toLocaleString()} tokens` : '',
+                  limits.layers ? `${limits.layers} layers` : '',
+                  limits.kvBytesPerToken ? `${kvPer1k(limits.kvBytesPerToken)} of cache per 1k tokens` : '',
+                  limits.slidingWindow ? `sliding window ${limits.slidingWindow.toLocaleString()}` : '',
+                ].filter(Boolean).join(' · ')}
+              </div>
+            )}
           </section>
 
           <section className="run-section">

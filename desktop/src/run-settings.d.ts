@@ -51,6 +51,28 @@ export interface ModelLimits {
   kvBytesPerToken?: number;
   source?: string;
   at?: number;
+  /** From a GGUF header: the architecture, layer count, size label, SWA window. */
+  arch?: string;
+  layers?: number;
+  sizeLabel?: string;
+  slidingWindow?: number;
+}
+/** A GGUF file's header as the shell's gguf_info returns it. */
+export interface GgufInfo {
+  version?: number;
+  architecture: string;
+  name?: string | null;
+  size_label?: string | null;
+  file_type?: number | null;
+  context_length?: number | null;
+  block_count?: number | null;
+  embedding_length?: number | null;
+  head_count?: number | null;
+  head_count_kv?: number | null;
+  key_length?: number | null;
+  value_length?: number | null;
+  sliding_window?: number | null;
+  complete?: boolean;
 }
 export declare const LIMITS_KEY: string;
 export declare const CTX_STEPS: number[];
@@ -60,6 +82,7 @@ export declare function limitsFor(modelId: string, storage?: any): ModelLimits |
 export declare function setLimits(modelId: string, limits: ModelLimits, storage?: any): boolean;
 export declare function parseOllamaShow(show: any): ModelLimits;
 export declare function parseLlamaModels(body: any): ModelLimits;
+export declare function parseGgufInfo(info: Partial<GgufInfo> | null | undefined): ModelLimits;
 export declare function autoCtx(limits: ModelLimits | null, model?: { bytes?: number; gpuLayers?: number }, machine?: { ramGb?: number; vramGb?: number }): number;
 export declare function effectiveCtx(values: Partial<RunValues>, limits: ModelLimits | null, model?: { bytes?: number; gpuLayers?: number }, machine?: { ramGb?: number; vramGb?: number }): number;
 export declare function ctxSteps(limits: ModelLimits | null): number[];

@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod crash;
 mod diag;
+mod gguf;
 mod local;
 mod mcp;
 mod models;
@@ -118,6 +119,7 @@ fn main() {
             models::local_models_list,
             models::local_model_delete,
             models::local_models_scan,
+            gguf::gguf_info,
             quick::quick_hotkey_set,
             quick::quick_hide,
             quick::main_show,

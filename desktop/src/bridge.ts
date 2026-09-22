@@ -615,3 +615,11 @@ export async function notifyUser(title: string, body: string): Promise<boolean> 
     return false;
   }
 }
+
+/**
+ * A local GGUF's header (trained context, layers, attention shape), read by
+ * the shell without loading the model. Part 1 is read for a split set.
+ */
+export async function ggufInfo(path: string): Promise<import('./run-settings.js').GgufInfo> {
+  return call<import('./run-settings.js').GgufInfo>('gguf_info', { path });
+}
