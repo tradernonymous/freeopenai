@@ -15,7 +15,7 @@
     shared images and selected text (all treated as untrusted input that only
     ever lands in a chat composer), a neuraos://github-connected deep link
     (a one-time pickup code from the server's own GitHub OAuth callback,
-    never a session -- see server.js and data/NativeApi.kt), and the Quick
+    never a session; see server.js and data/NativeApi.kt), and the Quick
     Settings tile, which only the system can bind. The FileProvider is not
     exported.
   - Chats, pictures, personas and prompts are sealed with a Keystore
