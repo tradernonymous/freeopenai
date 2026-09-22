@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import HfSignIn from '../components/HfSignIn';
 import { api } from '../api';
 import Icon from '../components/Icon';
+import { writeLocalFile } from '../bridge';
 import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
 // UMD modules: loaded for their side effect, read off globalThis.
 import '../chats.js';
@@ -20,6 +21,25 @@ interface Skill {
   source: string;
   name: string;
   description: string;
+}
+
+// The folder the local surfaces work in. App.tsx owns the state behind this
+// key; the Library only ever reads it, because a skill has to land in a real
+// folder and this screen is not the one that chooses which.
+const LOCAL_ROOT_KEY = 'freeai4u.localRoot';
+
+function readLocalRoot(): string {
+  try {
+    return localStorage.getItem(LOCAL_ROOT_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+/** What an install is doing right now, for the one row the user clicked. */
+interface InstallState {
+  phase: 'working' | 'done' | 'error';
+  text: string;
 }
 
 interface HfModel {
@@ -46,6 +66,13 @@ export default function LibraryScreen() {
   // --- HF Skills state ---
   const [hfCatalog, setHfCatalog] = useState<any[]>([]);
   const [hfCatalogLoading, setHfCatalogLoading] = useState(false);
+  // Keyed by slug, so two rows installing at once cannot show each other's
+  // progress or each other's failure.
+  const [installState, setInstallState] = useState<Record<string, InstallState>>({});
+  const [installed, setInstalled] = useState<import('../hf-skills.js').InstalledRecords>(
+    () => hfSkills.readInstalled(),
+  );
+  const [localRoot] = useState<string>(readLocalRoot);
 
   // --- HuggingFace state ---
   const [hfSignedIn, setHfSignedIn] = useState(false);
@@ -86,6 +113,41 @@ export default function LibraryScreen() {
     setHfUser(null);
     setHfResults([]);
   }, []);
+
+  // Nothing here runs on its own: this is what the user's click on Install
+  // does. The screen supplies the two things hf-skills.js refuses to invent --
+  // the token (as a header, never written into a file) and a writer bound to
+  // the open folder, which local.rs confines -- and hf-skills.js decides what
+  // may be written and where.
+  const installSkill = useCallback(async (skill: any) => {
+    const slug = hfSkills.skillSlug(skill?.name || '');
+    if (!slug) return;
+    setInstallState((s) => ({ ...s, [slug]: { phase: 'working', text: 'Starting…' } }));
+    try {
+      const result = await hfSkills.installSkill(skill, {
+        token: hfAuth.accessToken()?.access_token,
+        writeFile: (path: string, text: string) => writeLocalFile(localRoot, path, text),
+        onProgress: (p) => setInstallState((s) => ({
+          ...s,
+          [slug]: {
+            phase: 'working',
+            text: p.phase === 'done'
+              ? 'Finishing…'
+              : `${p.phase === 'fetch' ? 'Downloading' : 'Writing'} ${p.file} (${p.index + 1}/${p.total})`,
+          },
+        })),
+      });
+      setInstalled(hfSkills.rememberInstalled(skill, result));
+      setInstallState((s) => ({
+        ...s,
+        [slug]: { phase: 'done', text: `Installed ${result.files.length} file${result.files.length === 1 ? '' : 's'} into ${result.dir}` },
+      }));
+    } catch (err) {
+      // The whole point of the error path: say what failed, in the words
+      // hf-skills.js already chose, instead of a silent no-op.
+      setInstallState((s) => ({ ...s, [slug]: { phase: 'error', text: (err as Error).message } }));
+    }
+  }, [localRoot]);
 
   const load = () => {
     setLoading(true);
@@ -200,13 +262,44 @@ export default function LibraryScreen() {
           <h3 className="col-title">HF Skills ({hfCatalog.length})</h3>
           {hfCatalogLoading && <div className="empty">Loading HF skills…</div>}
           <div className="skill-list">
-            {hfCatalog.map((s: any) => (
-              <button key={s.name} className={`skill-item ${open?.name === s.name ? 'active' : ''}`} onClick={() => { setOpen({ name: s.name, description: s.description, source: s.repo || 'hf' }); setContent(s.content); }}>
-                <div className="skill-name">{s.name}</div>
-                <div className="skill-desc">{s.description}</div>
-                <div className="skill-src">{s.repo}{s.tags?.length ? ' · ' + s.tags.join(', ') : ''}</div>
-              </button>
-            ))}
+            {hfCatalog.map((s: any) => {
+              const slug = hfSkills.skillSlug(s.name || '');
+              const state = installState[slug];
+              const status = hfSkills.installStatus(s, installed);
+              const busy = state?.phase === 'working';
+              const record = installed[slug];
+              return (
+                <div key={s.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <button className={`skill-item ${open?.name === s.name ? 'active' : ''}`} onClick={() => { setOpen({ name: s.name, description: s.description, source: s.repo || 'hf' }); setContent(s.content); }}>
+                    <div className="skill-name">
+                      {s.name}
+                      {status !== 'install' && (
+                        <span className="hf-badge"> {status === 'update' ? 'update available' : 'installed'}</span>
+                      )}
+                    </div>
+                    <div className="skill-desc">{s.description}</div>
+                    <div className="skill-src">{s.repo}{s.tags?.length ? ' · ' + s.tags.join(', ') : ''}</div>
+                  </button>
+                  <div className="skill-src" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      onClick={() => installSkill(s)}
+                      disabled={busy || !localRoot}
+                      title={localRoot
+                        ? `Write this skill into ${hfSkills.SKILLS_DIR}/${slug} in the open folder`
+                        : 'Open a folder first — a skill installs into the folder you are working in'}
+                    >
+                      <Icon name="download" size={12} />{' '}
+                      {busy ? 'Installing…' : status === 'update' ? 'Update' : status === 'installed' ? 'Reinstall' : 'Install'}
+                    </button>
+                    {!localRoot && <span>Open a folder to install</span>}
+                    {localRoot && state?.phase === 'working' && <span>{state.text}</span>}
+                    {localRoot && state?.phase === 'done' && <span>{state.text}</span>}
+                    {localRoot && !state && record?.dir && <span>{record.dir}</span>}
+                  </div>
+                  {state?.phase === 'error' && <div className="stream-error">{state.text}</div>}
+                </div>
+              );
+            })}
             {!hfCatalog.length && !hfCatalogLoading && <div className="empty">No HF skills loaded — sign in to Hugging Face for the full catalog.</div>}
           </div>
         </section>
