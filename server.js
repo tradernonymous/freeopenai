@@ -5490,6 +5490,7 @@ async function assertMcpUrlIsPublic(raw) {
 // MCP_RATE_LIMIT calls per window. Returns { status, error } or null.
 const MCP_RATE_LIMIT = 60;
 const MCP_RATE_WINDOW_MS = 60 * 1000;
+// TODO(NEURA-038): per-process counts; move to shared storage if the engine ever runs as several instances.
 const mcpRequests = new Map();
 
 function mcpRouteRefusal(req, now = Date.now()) {

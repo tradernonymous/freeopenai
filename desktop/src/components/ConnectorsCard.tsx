@@ -39,6 +39,7 @@ export function landingNote(landed: string): { same: boolean; login: string } {
 export const GITHUB_CHANGED_EVENT = 'freeai4u:github-changed';
 
 /** Placeholder the language-server preset leaves for the person to replace; never a real package name. */
+// TODO(NEURA-025): replace with a real, maintained LSP-over-MCP package once one is chosen.
 const LSP_PLACEHOLDER = '<package>';
 
 function without<T>(map: Record<string, T>, key: string): Record<string, T> {
