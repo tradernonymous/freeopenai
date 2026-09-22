@@ -26,7 +26,8 @@ const MAGIC: u32 = 0x4655_4747;
 const MAX_KV: u64 = 100_000;
 /// A key is a short dotted name.
 const MAX_KEY: u64 = 64 * 1024;
-/// The longest string value that is kept (a name, a size label).
+/// The longest string value that is kept (a name, a size label, the chat
+/// template -- the largest real template is a few tens of kilobytes).
 const MAX_KEEP_STR: u64 = 1024 * 1024;
 /// Never read further into a file than this, header or not.
 const MAX_READ: u64 = 64 * 1024 * 1024;
@@ -64,6 +65,10 @@ pub struct GgufInfo {
     pub key_length: Option<u64>,
     pub value_length: Option<u64>,
     pub sliding_window: Option<u64>,
+    /// The model's own Jinja chat template, verbatim. The page renders it so a
+    /// prompt is shaped the way this model was trained, instead of generically.
+    /// Untrusted text from a downloaded file: it is carried, never trusted.
+    pub chat_template: Option<String>,
     /// False when the header could not be read to its end (a cap was hit or
     /// the file is cut short) but the architecture had already been found.
     pub complete: bool,
@@ -107,7 +112,11 @@ fn wanted(key: &str) -> bool {
     }
     matches!(
         key,
-        "general.architecture" | "general.name" | "general.size_label" | "general.file_type"
+        "general.architecture"
+            | "general.name"
+            | "general.size_label"
+            | "general.file_type"
+            | "tokenizer.chat_template"
     ) || ARCH_KEYS.iter().any(|suffix| key.ends_with(suffix))
 }
 
@@ -273,6 +282,7 @@ fn read_pairs<R: Read + Seek>(
                 "general.architecture" => info.architecture = s,
                 "general.name" => info.name = Some(s),
                 "general.size_label" => info.size_label = Some(s),
+                "tokenizer.chat_template" => info.chat_template = Some(s),
                 _ => {}
             },
             Val::Num(n) => {
@@ -515,6 +525,34 @@ mod tests {
         assert_eq!(info.head_count_kv, Some(8));
         assert_eq!(info.key_length, None);
         assert_eq!(info.sliding_window, None);
+        assert!(info.complete);
+    }
+
+    #[test]
+    fn the_chat_template_comes_out_whole() {
+        let mut g = Gguf::new();
+        let template = "{% for m in messages %}<|im_start|>{{ m['role'] }}
+{{ m['content'] }}<|im_end|>
+{% endfor %}";
+        g.string("general.architecture", "qwen3")
+            .string("tokenizer.chat_template", template)
+            .string_array("tokenizer.ggml.tokens", &["<s>", "hello"]);
+        let info = parse(Cursor::new(g.bytes(3))).unwrap();
+        assert_eq!(info.chat_template.as_deref(), Some(template));
+
+        // A file with no template says so, rather than inventing one.
+        let plain = parse(Cursor::new(llama().bytes(3))).unwrap();
+        assert_eq!(plain.chat_template, None);
+    }
+
+    #[test]
+    fn a_template_past_the_keep_cap_is_skipped() {
+        let mut g = Gguf::new();
+        let huge = "x".repeat((MAX_KEEP_STR + 1) as usize);
+        g.string("general.architecture", "llama")
+            .string("tokenizer.chat_template", &huge);
+        let info = parse(Cursor::new(g.bytes(3))).unwrap();
+        assert_eq!(info.chat_template, None);
         assert!(info.complete);
     }
 

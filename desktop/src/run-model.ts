@@ -11,15 +11,22 @@
 //     none) is loaded, it is started first -- which takes tens of seconds, so
 //     the caller is told the stage and can say "Loading…" instead of looking
 //     frozen. Sampling rides along; context/GPU layers are load-time.
+import { Template } from '@huggingface/jinja';
 import { ApiError, streamLocalChat, type StreamFrame } from './api';
 import { ggufInfo, hasShell, localModelStart, localModelStatus, shellPostStream, type LocalModelStatus } from './bridge';
 import './saved-models.js';
 import './run-settings.js';
 import './local-models.js';
+import './chat-template.js';
 
 const savedModels: typeof import('./saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const runSettings: typeof import('./run-settings.js') = (globalThis as any).FreeAI4URunSettings;
 const localModels: typeof import('./local-models.js') = (globalThis as any).FreeAI4ULocalModels;
+const chatTemplate: typeof import('./chat-template.js') = (globalThis as any).FreeAI4UChatTemplate;
+
+// The renderer is a UMD file with no import of its own, so the one place that
+// bundles Jinja is here.
+chatTemplate.setEngine(Template);
 
 type ModelLimits = import('./run-settings.js').ModelLimits;
 
@@ -83,7 +90,11 @@ export function resolvedValues(entry: SavedModel): RunValues {
 export async function detectLimits(entry: SavedModel, server?: { base_url: string; api_key?: string | null }): Promise<ModelLimits | null> {
   if (entry.kind === 'unsloth' && entry.path && hasShell()) {
     try {
-      const limits = runSettings.parseGgufInfo(await ggufInfo(entry.path));
+      const info = await ggufInfo(entry.path);
+      // The same read answers both questions, so the template costs nothing
+      // extra: opening a multi-gigabyte file once is the expensive part.
+      chatTemplate.remember(entry.id, chatTemplate.templateOf(info));
+      const limits = runSettings.parseGgufInfo(info);
       if (limits.trainCtx || limits.kvBytesPerToken) {
         runSettings.setLimits(entry.id, limits);
         if (limits.trainCtx) return limits;
@@ -167,6 +178,124 @@ export function learnLimits(): void {
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener(savedModels.CHANGED_EVENT, learnLimits);
+}
+
+// ---- the model's own chat template -------------------------------------------
+//
+// A GGUF carries the Jinja template the model was trained with. Sending the
+// messages list instead leaves the shape to whatever is downstream, and for a
+// model whose template differs -- where the system prompt goes, which tags a
+// thinking model opens -- the answer is wrong in a way that reads like a bad
+// model. So when the file has a template this page can render (chat-template.js
+// renders it under caps, because it is data out of a downloaded file), the turn
+// goes out as that exact prompt; otherwise nothing changes.
+
+/** Reasons already said once, so a refused template is not logged every turn. */
+const templateSaid = new Set<string>();
+
+function templateRefused(entry: SavedModel, reason: string): void {
+  const key = `${entry.id}:${reason}`;
+  if (templateSaid.has(key)) return;
+  templateSaid.add(key);
+  // Readable, and only ever a note: the turn still goes out the generic way.
+  console.warn(`${entry.name}: using the generic prompt because ${reason}.`);
+}
+
+/**
+ * The template for a model, read from its header once and remembered. '' means
+ * the file has none -- a real answer, remembered like any other. A header that
+ * could not be read is NOT remembered, because that is a condition that mends.
+ */
+export async function chatTemplateFor(entry: SavedModel): Promise<string> {
+  if (entry.kind !== 'unsloth' || !entry.path || !hasShell()) return '';
+  const known = chatTemplate.cached(entry.id);
+  if (known !== null) return known;
+  try {
+    const found = chatTemplate.templateOf(await ggufInfo(entry.path));
+    chatTemplate.remember(entry.id, found);
+    return found;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Send an already-shaped prompt to llama-server's text completion endpoint.
+ * True once it has streamed; false means nothing was read and the caller
+ * should send the messages the generic way instead.
+ *
+ * The prompt goes out WITHOUT a BOS token: llama-server tokenizes a prompt with
+ * its special tokens on and prepends the model's own, so chat-template.js drops
+ * the template's leading one rather than have the model see it twice.
+ */
+async function streamRendered(
+  status: LocalModelStatus,
+  entry: SavedModel,
+  prompt: string,
+  values: RunValues,
+  onFrame: (frame: StreamFrame) => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const origin = String(status.base_url || '').replace(/\/+$/, '');
+  if (!origin) return false;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (status.api_key) headers.Authorization = `Bearer ${status.api_key}`;
+  let res: Response;
+  try {
+    res = await fetch(`${origin}/v1/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...runSettings.openaiParams(values), model: entry.name || 'local', prompt, stream: true }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    // A server that is not answering: the generic path says so properly.
+    return false;
+  }
+  // An older server with no text-completion route answers 404: fall back
+  // rather than tell the person their model failed.
+  if (!res.ok || !res.body) {
+    try { await res.body?.cancel(); } catch { /* nothing was read */ }
+    return false;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    onFrame({ done: true });
+  };
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).replace(/\r$/, '');
+      buffer = buffer.slice(idx + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+      if (payload === '[DONE]') { finish(); continue; }
+      let frame: any;
+      try { frame = JSON.parse(payload); } catch { continue; }
+      if (frame && frame.error) {
+        const message = typeof frame.error === 'string' ? frame.error : frame.error.message;
+        throw new ApiError(0, message || 'The local model server stopped mid-answer.');
+      }
+      const choice = frame && frame.choices && frame.choices[0];
+      const text = choice && choice.text;
+      // Reasoning arrives as the model writes it (<think>…), which is how
+      // every other provider's shows: markdown.ts folds it.
+      if (typeof text === 'string' && text) onFrame({ content: text, model: frame.model });
+      if (choice && choice.finish_reason) finish();
+    }
+  }
+  finish();
+  return true;
 }
 
 /** One NDJSON line from Ollama's /api/chat, as a frame (or an error). */
@@ -321,10 +450,22 @@ export async function streamSaved(
   const status = await ensureUnsloth(entry, false, onStage);
   onStage?.('');
   const values = settingsFor(entry);
+  const shaped = runSettings.withSystem(messages, values);
+  // A turn that offers tools stays on the generic path: llama-server is started
+  // with --jinja precisely so it parses a tool call back out of the reply, and
+  // a raw completion gives it nothing to parse.
+  if (!(offered && offered.length)) {
+    const template = await chatTemplateFor(entry);
+    if (template) {
+      const rendered = chatTemplate.render(template, shaped);
+      if (rendered.reason) templateRefused(entry, rendered.reason);
+      else if (await streamRendered(status, entry, rendered.prompt, values, onFrame, signal)) return;
+    }
+  }
   return streamLocalChat(
     status.base_url,
     entry.name,
-    runSettings.withSystem(messages, values),
+    shaped,
     onFrame,
     signal,
     status.api_key || undefined,
