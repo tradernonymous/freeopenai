@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The app's own windows (main and the Quick window) may use Tauri's core APIs -- above all event listen, without which no shell event (GitHub sign-in finished, Ollama replies, download progress, deep links) ever reached the frontend. The remote GitHub sign-in window is deliberately not listed.",
+  "windows": ["main", "quick"],
+  "permissions": ["core:default"]
+}

@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { NAV_ITEMS } from '../Sidebar';
 import { pushToast } from './Toasts';
+import { hasShell, quickHotkeySet } from '../bridge';
 import '../keymap.js';
 
 const keymap: typeof import('../keymap.js') = (globalThis as any).FreeAI4UKeymap;
+
+/** The Quick window's global hotkey, as the person set it (the shell's default otherwise). */
+export const QUICK_HOTKEY_KEY = 'freeai4u.quick_hotkey';
+const QUICK_DEFAULT = 'Alt+Space';
 
 // Shortcuts, in Settings: the one table App.tsx resolves keys from, shown as a
 // list you can change. "Change" records the next combo pressed; a clash with
@@ -22,6 +27,24 @@ export default function ShortcutsCard() {
   const [overrides, setOverrides] = useState(() => keymap.readOverrides());
   const [on, setOn] = useState(() => keymap.enabled());
   const [recording, setRecording] = useState('');
+  const [quickKey, setQuickKey] = useState(() => { try { return localStorage.getItem(QUICK_HOTKEY_KEY) || QUICK_DEFAULT; } catch { return QUICK_DEFAULT; } });
+
+  // A global hotkey belongs to the whole desktop, so it is taken by the shell
+  // and can fail when another app owns the chord -- which is said, not hidden.
+  const recordQuick = (e: React.KeyboardEvent) => {
+    e.preventDefault();
+    if (e.key === 'Escape') { setRecording(''); return; }
+    const combo = keymap.comboOf(e);
+    if (!combo || !/^(Ctrl|Alt)\+/.test(combo)) return;
+    quickHotkeySet(combo.toLowerCase())
+      .then(() => {
+        try { localStorage.setItem(QUICK_HOTKEY_KEY, combo); } catch { /* this session has it */ }
+        setQuickKey(combo);
+        pushToast('ok', `The Quick window now opens with ${combo}, from any app.`);
+      })
+      .catch((err: unknown) => pushToast('error', ((err as Error).message || String(err)).split('\n')[0]))
+      .finally(() => setRecording(''));
+  };
   const bindings = keymap.withOverrides(overrides);
   const reserved = NAV_ITEMS.map((n) => ({ id: `go to ${n.label}`, keys: n.keys }));
   const clashes = keymap.conflicts(bindings, reserved);
@@ -58,6 +81,13 @@ export default function ShortcutsCard() {
             {b.custom && <button className="linkish" onClick={() => setOverrides(keymap.setOverride(b.id, null))}>Reset</button>}
           </div>
         ))}
+        <div className="shortcut-row">
+          <span className="shortcut-label">Quick window, from any app</span>
+          <kbd className={quickKey !== QUICK_DEFAULT ? 'is-custom' : ''}>{quickKey}</kbd>
+          {hasShell() && (recording === 'quick'
+            ? <button className="primary" autoFocus onKeyDown={recordQuick} onBlur={() => setRecording('')}>Press a combo…</button>
+            : <button onClick={() => setRecording('quick')}>Change</button>)}
+        </div>
         {NAV_ITEMS.map((n) => (
           <div key={n.id} className="shortcut-row">
             <span className="shortcut-label">Go to {n.label}</span>

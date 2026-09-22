@@ -17,6 +17,9 @@ tauri-plugin-window-state = "2"
 tauri-plugin-store = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-deep-link = "2"
+# Phase 5: the Quick window hotkey and system notifications.
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"

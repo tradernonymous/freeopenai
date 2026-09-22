@@ -11,6 +11,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import QuickAsk from './screens/QuickAsk';
+import { isQuickWindow } from './bridge';
 // Bundled, not borrowed from the machine: the app should look the same on every
 // Windows build rather than inheriting whatever Segoe happens to be installed.
 import '@fontsource-variable/inter';
@@ -62,7 +64,9 @@ if (!container) {
   try {
     ReactDOM.createRoot(container).render(
       <React.StrictMode>
-        <App />
+        {/* The Quick window (Alt+Space) is this same bundle in a window
+            labelled "quick": one small surface instead of the whole app. */}
+        {isQuickWindow() ? <QuickAsk /> : <App />}
       </React.StrictMode>
     );
   } catch (error) {

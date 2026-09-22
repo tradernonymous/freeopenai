@@ -4572,3 +4572,20 @@ button.linkish {
 .tweak input[type='color']::-webkit-color-swatch-wrapper { padding: 2px; }
 .tweak input[type='color']::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .inspector-tabs button { padding: 9px 6px; font-size: 11.5px; }
+
+/* ---- Phase 5: the Quick window (Alt+Space) -------------------------------- */
+body.quick-body { background: var(--bg-1); }
+.quick { display: flex; flex-direction: column; gap: 10px; height: 100vh; padding: 12px 14px; box-sizing: border-box; }
+.quick-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.quick-brand { font-weight: 700; color: var(--text-1); }
+.quick-model { color: var(--text-3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-answer { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; }
+.quick-q { color: var(--text-2); font-weight: 600; margin-bottom: 8px; }
+.quick-box { display: flex; gap: 8px; align-items: flex-end; border: 1px solid var(--accent-mid); border-radius: var(--radius-lg); padding: 8px 8px 8px 12px; background: var(--bg-2); }
+.quick-box textarea { flex: 1; background: transparent; border: 0; resize: none; outline: none; min-height: 40px; }
+.quick-continue { align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.hf-signin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.hf-token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
+.hf-token-form input { flex: 1 1 220px; min-width: 0; }
+.hf-steps { flex-basis: 100%; color: var(--text-2); }
+.hf-page { flex-basis: 100%; }

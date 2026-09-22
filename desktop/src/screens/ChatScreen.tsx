@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
-import { hasShell, listLocalDir, localModelStatus, openUrl, readLocalFile } from '../bridge';
+import { hasShell, listLocalDir, localModelStatus, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
@@ -495,6 +495,7 @@ export default function ChatScreen() {
     const controller = new AbortController();
     abortRef.current = controller;
     const sid = active.id;
+    const startedAt = Date.now();
     const append = (piece: string) => {
       setSessions((prev) => {
         const next = prev.map((s) => {
@@ -567,6 +568,7 @@ export default function ChatScreen() {
         // Stopping the turn is a Deny for whatever was waiting.
         approve: (event) => new Promise<boolean>((resolve) => {
           approvals.current[event.id] = resolve;
+          notifyUser('NeuraOS needs your OK', event.summary || event.name);
           controller.signal.addEventListener('abort', () => { delete approvals.current[event.id]; resolve(false); }, { once: true });
         }),
         onText: append,
@@ -576,6 +578,8 @@ export default function ChatScreen() {
       });
       // persist the finished transcript
       setSessions((prev) => { saveSessions(prev); return prev; });
+      // A reply that took a while, finished while the window was elsewhere.
+      if (Date.now() - startedAt > 15000) notifyUser('Reply ready', `${asked.model || 'The model'} answered: ${text.slice(0, 80)}`);
     } catch (err) {
       const aborted = (err as Error).name === 'AbortError';
       const told = failure.attribute({ ...asked, message: aborted ? '' : (err as Error).message });
@@ -792,6 +796,21 @@ export default function ChatScreen() {
     pushToast('info', 'Brief sent to Design.');
   };
 
+  // Read aloud with the voices Windows already has (speechSynthesis works in
+  // WebView2). Markdown is stripped so the voice does not read the syntax.
+  const [speaking, setSpeaking] = useState(false);
+  const readAloud = (text: string) => {
+    const synth = (globalThis as any).speechSynthesis as SpeechSynthesis | undefined;
+    if (!synth) { pushToast('warn', 'This window has no speech voices.'); return; }
+    if (synth.speaking) { synth.cancel(); setSpeaking(false); return; }
+    const plain = text.replace(/```[\s\S]*?```/g, ' (code) ').replace(/[#*_`>|-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const utterance = new SpeechSynthesisUtterance(plain.slice(0, 4000));
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    setSpeaking(true);
+    synth.speak(utterance);
+  };
+
   const addNote = (content: string) => {
     if (!active) return;
     patchSession(active.id, { messages: [...active.messages, { role: 'assistant', content, note: true, model: 'NeuraOS', ts: Date.now() }], draft: '' });
@@ -922,6 +941,12 @@ export default function ChatScreen() {
       { id: 'explain', label: 'Explain', icon: 'chat', run: () => ask(`Explain this:\n\n${fenced}`) },
       { id: 'rework', label: 'Rework', icon: 'build', run: () => ask(`Rework this and show the improved version:\n\n${fenced}`) },
       { id: 'design', label: 'To Design', icon: 'design', run: () => sendToDesign(snippet) },
+      {
+        id: 'speak',
+        label: speaking ? 'Stop' : 'Read aloud',
+        icon: 'activity',
+        run: () => readAloud(snippet),
+      },
     ];
     if (index >= 0) {
       // A new chat with everything up to here: try another direction without

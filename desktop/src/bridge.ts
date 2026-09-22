@@ -496,3 +496,40 @@ export async function authWindowOpen(url: string): Promise<void> {
 export function onConnectFinished(handler: (landed: string) => void): Promise<() => void> {
   return subscribe<string>('connect-finished', (landed) => handler(String(landed || '')));
 }
+
+// ---- Phase 5: Quick window and notifications ------------------------------
+//
+// quick.rs. The Quick window is the same frontend in a window labelled
+// "quick"; `?quick=1` lets a plain browser (vite dev) show it too.
+
+/** Whether this frontend is running in the Quick window. */
+export function isQuickWindow(): boolean {
+  try {
+    const label = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+    if (label) return label === 'quick';
+  } catch { /* not under the shell */ }
+  return new URLSearchParams(window.location.search).get('quick') === '1';
+}
+
+/** Take a new global hotkey for the Quick window ("alt+space", "ctrl+shift+k"). */
+export async function quickHotkeySet(combo: string): Promise<string> {
+  return call<string>('quick_hotkey_set', { combo });
+}
+
+export async function quickHide(): Promise<void> {
+  if (hasShell()) await call('quick_hide');
+}
+
+export async function mainShow(): Promise<void> {
+  if (hasShell()) await call('main_show');
+}
+
+/** A system notification when the main window is not in front; false when not shown. */
+export async function notifyUser(title: string, body: string): Promise<boolean> {
+  if (!hasShell()) return false;
+  try {
+    return await call<boolean>('notify', { title, body });
+  } catch {
+    return false;
+  }
+}

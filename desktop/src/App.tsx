@@ -15,7 +15,9 @@ import CodeScreen from './screens/CodeScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { hasShell, onDeepLink, pickFolder, secretDelete, secretGet, secretSet } from './bridge';
+import { hasShell, onDeepLink, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet } from './bridge';
+import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
+import { QUICK_HOTKEY_KEY } from './components/ShortcutsCard';
 import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
 import './hf-auth.js';
 import './local-models.js';
@@ -153,6 +155,28 @@ export default function App() {
       }
     }).then((unsubscribe) => { stop = unsubscribe; });
     return () => stop();
+  }, []);
+
+  // The Quick window hands a finished exchange over as a saved chat and this
+  // key; the main window opens it. A remapped global hotkey is re-taken at
+  // start (the shell registers the default before the frontend exists).
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== QUICK_HANDOFF_KEY || !e.newValue) return;
+      try {
+        const { id } = JSON.parse(e.newValue);
+        window.dispatchEvent(new CustomEvent(chats.CHATS_CHANGED_EVENT));
+        setView('chat');
+        setTimeout(() => window.dispatchEvent(new CustomEvent(OPEN_CHAT_EVENT, { detail: id })), 50);
+      } catch { /* a malformed hand-off is ignored */ }
+    };
+    window.addEventListener('storage', onStorage);
+    if (hasShell()) {
+      let stored = '';
+      try { stored = localStorage.getItem(QUICK_HOTKEY_KEY) || ''; } catch { /* default */ }
+      if (stored) quickHotkeySet(stored).catch(() => pushToast('warn', `The Quick hotkey ${stored} is taken by another app; change it in Settings -> Shortcuts.`));
+    }
+    return () => window.removeEventListener('storage', onStorage);
   }, []);
 
   useEffect(() => {

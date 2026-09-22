@@ -27,6 +27,7 @@ mod local;
 mod models;
 mod net;
 mod ollama;
+mod quick;
 mod save;
 mod secrets;
 mod webview2;
@@ -102,13 +103,21 @@ fn main() {
             models::local_model_download_cancel,
             models::local_models_list,
             models::local_model_delete,
-            models::local_models_scan
+            models::local_models_scan,
+            quick::quick_hotkey_set,
+            quick::quick_hide,
+            quick::main_show,
+            quick::notify
         ])
         // neuraos:// links: "Use this model" on Hugging Face, once NeuraOS is
         // listed there, and the app's own bookmarklet until then. The URL is
         // handed to the frontend as an event; nothing is acted on here.
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
+        // Phase 5: the Quick window's global hotkey, and system notifications
+        // (both driven from Rust, so the frontend needs no plugin permissions).
+        .plugin(quick::plugin())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         // Registered for the frontend's future use; today the app stores its
         // settings in localStorage. It must NOT be given a config map here:
@@ -132,6 +141,12 @@ fn main() {
             #[cfg(debug_assertions)]
             {
                 let _ = app.deep_link().register_all();
+            }
+
+            // The Quick window hotkey. The frontend re-sends a remapped one at
+            // start; a chord another app owns is logged, not fatal.
+            if let Err(e) = quick::register(app.handle(), quick::DEFAULT_HOTKEY) {
+                crash::log(&format!("quick hotkey: {}", e));
             }
 
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
