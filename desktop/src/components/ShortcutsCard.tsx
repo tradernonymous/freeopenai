@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NAV_ITEMS } from '../Sidebar';
 import { pushToast } from './Toasts';
-import { hasShell, quickHotkeySet } from '../bridge';
+import { hasShell, quickHotkeySet, selectionHotkeySet } from '../bridge';
 import '../keymap.js';
 
 const keymap: typeof import('../keymap.js') = (globalThis as any).FreeAI4UKeymap;
@@ -9,6 +9,9 @@ const keymap: typeof import('../keymap.js') = (globalThis as any).FreeAI4UKeymap
 /** The Quick window's global hotkey, as the person set it (the shell's default otherwise). */
 export const QUICK_HOTKEY_KEY = 'freeai4u.quick_hotkey';
 const QUICK_DEFAULT = 'Alt+Space';
+/** The selection hotkey: copies what is selected in any app into Quick. */
+export const SELECTION_HOTKEY_KEY = 'freeai4u.selection_hotkey';
+const SELECTION_DEFAULT = 'Alt+Shift+Space';
 
 // Shortcuts, in Settings: the one table App.tsx resolves keys from, shown as a
 // list you can change. "Change" records the next combo pressed; a clash with
@@ -28,6 +31,7 @@ export default function ShortcutsCard() {
   const [on, setOn] = useState(() => keymap.enabled());
   const [recording, setRecording] = useState('');
   const [quickKey, setQuickKey] = useState(() => { try { return localStorage.getItem(QUICK_HOTKEY_KEY) || QUICK_DEFAULT; } catch { return QUICK_DEFAULT; } });
+  const [selectionKey, setSelectionKey] = useState(() => { try { return localStorage.getItem(SELECTION_HOTKEY_KEY) || SELECTION_DEFAULT; } catch { return SELECTION_DEFAULT; } });
 
   // A global hotkey belongs to the whole desktop, so it is taken by the shell
   // and can fail when another app owns the chord -- which is said, not hidden.
@@ -41,6 +45,20 @@ export default function ShortcutsCard() {
         try { localStorage.setItem(QUICK_HOTKEY_KEY, combo); } catch { /* this session has it */ }
         setQuickKey(combo);
         pushToast('ok', `The Quick window now opens with ${combo}, from any app.`);
+      })
+      .catch((err: unknown) => pushToast('error', ((err as Error).message || String(err)).split('\n')[0]))
+      .finally(() => setRecording(''));
+  };
+  const recordSelection = (e: React.KeyboardEvent) => {
+    e.preventDefault();
+    if (e.key === 'Escape') { setRecording(''); return; }
+    const combo = keymap.comboOf(e);
+    if (!combo || !/^(Ctrl|Alt)\+/.test(combo)) return;
+    selectionHotkeySet(combo.toLowerCase())
+      .then(() => {
+        try { localStorage.setItem(SELECTION_HOTKEY_KEY, combo); } catch { /* this session has it */ }
+        setSelectionKey(combo);
+        pushToast('ok', `Select text in any app and press ${combo} to ask about it.`);
       })
       .catch((err: unknown) => pushToast('error', ((err as Error).message || String(err)).split('\n')[0]))
       .finally(() => setRecording(''));
@@ -87,6 +105,13 @@ export default function ShortcutsCard() {
           {hasShell() && (recording === 'quick'
             ? <button className="primary" autoFocus onKeyDown={recordQuick} onBlur={() => setRecording('')}>Press a combo…</button>
             : <button onClick={() => setRecording('quick')}>Change</button>)}
+        </div>
+        <div className="shortcut-row">
+          <span className="shortcut-label">Ask about selected text, in any app</span>
+          <kbd className={selectionKey !== SELECTION_DEFAULT ? 'is-custom' : ''}>{selectionKey}</kbd>
+          {hasShell() && (recording === 'selection'
+            ? <button className="primary" autoFocus onKeyDown={recordSelection} onBlur={() => setRecording('')}>Press a combo…</button>
+            : <button onClick={() => setRecording('selection')}>Change</button>)}
         </div>
         {NAV_ITEMS.map((n) => (
           <div key={n.id} className="shortcut-row">

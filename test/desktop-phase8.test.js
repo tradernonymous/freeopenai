@@ -57,6 +57,79 @@ test('dictation records the mic and asks Whisper with the Hugging Face token', a
   assert.match(box, /aria-pressed=\{dictation === 'recording'\}/);
 });
 
+// ---- thread sidebar (2.7) ----------------------------------------------------
+
+const threads = require('../desktop/src/threads.js');
+
+test('auto-titles are 2-4 words, filler and code dropped', () => {
+  assert.equal(threads.autoTitle('Can you please write a poem about the ocean at night'), 'Poem ocean night');
+  assert.equal(threads.autoTitle('fix ```js\nconst a = 1\n``` this bug in my parser'), 'Fix bug parser');
+  assert.equal(threads.autoTitle('hi'), 'Hi');
+  assert.equal(threads.autoTitle(''), 'New chat');
+  assert.equal(threads.autoTitle('Summarise\n--- attached ---\nhuge document text'), 'Summarise');
+  const words = threads.autoTitle('Explain Kubernetes pods deployments services ingress controllers').split(' ');
+  assert.ok(words.length >= 2 && words.length <= 4);
+});
+
+test('sections: pinned first in pin order, folders A-Z, then the rest newest first', () => {
+  const s = (id, t) => ({ id, title: id, updatedAt: t, messages: [{ role: 'user', content: 'about ' + id }] });
+  const list = [s('a', 1), s('b', 5), s('c', 3), s('d', 4), s('e', 2)];
+  let meta = threads.cleanMeta(null);
+  meta = threads.togglePin(meta, 'c');
+  meta = threads.togglePin(meta, 'e');
+  meta = threads.setFolder(meta, 'a', 'Work');
+  meta = threads.setFolder(meta, 'd', 'Alpha');
+  const groups = threads.sections(list, meta, '');
+  assert.deepEqual(groups.map((g) => g.title), ['Pinned', 'Alpha', 'Work', 'Recent']);
+  assert.deepEqual(groups[0].items.map((x) => x.id), ['e', 'c'], 'latest pin on top');
+  assert.deepEqual(groups[3].items.map((x) => x.id), ['b']);
+  assert.deepEqual(threads.sections(list, meta, 'about d').map((g) => g.title), ['Alpha'], 'search spans messages');
+  assert.deepEqual(threads.togglePin(meta, 'e').pinned, ['c'], 'a second toggle unpins');
+  assert.equal(threads.setFolder(meta, 'a', '  ').folders.a, undefined, 'an empty name unfiles');
+});
+
+test('the hover card shows the last real message, without reasoning', () => {
+  const session = { messages: [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: '<think>hmm</think>The answer is 42.' },
+    { role: 'assistant', content: 'note', note: true },
+  ] };
+  assert.equal(threads.preview(session), 'The answer is 42.');
+  assert.equal(threads.preview({ messages: [] }), 'No messages yet.');
+});
+
+test('the History panel is live: it redraws on save and spins on busy chats', () => {
+  const panel = read('desktop', 'src', 'components', 'SessionManager.tsx');
+  assert.match(panel, /threads\.CHANGED_EVENT, load/);
+  assert.match(panel, /thread-spinner/);
+  assert.match(panel, /role="tooltip"/);
+  const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
+  assert.match(chat, /window\.dispatchEvent\(new Event\(threads\.CHANGED_EVENT\)\)/);
+  assert.match(chat, /threads\.ACTIVITY_EVENT, \{ detail: \{ id: busyChat\.current, busy: false \} \}/);
+  assert.match(chat, /threads\.autoTitle\(text\)/);
+});
+
+// ---- selection toolbar (5.8) --------------------------------------------------
+
+test('the selection hotkey copies from the app in front and opens Quick with actions', () => {
+  const rs = read('desktop', 'src-tauri', 'src', 'selection.rs');
+  assert.match(rs, /DEFAULT_HOTKEY: &str = "alt\+shift\+space"/);
+  assert.match(rs, /keybd_event\(VK_C, 0, 0, 0\)/, 'sends Ctrl+C');
+  assert.match(rs, /GetClipboardSequenceNumber/, 'waits for the copy to land');
+  assert.match(rs, /CF_UNICODETEXT/);
+  const quick = read('desktop', 'src-tauri', 'src', 'quick.rs');
+  assert.match(quick, /crate::selection::capture\(app\)/);
+  assert.match(quick, /is already the Quick window hotkey/, 'the two hotkeys cannot collide');
+  const main = read('desktop', 'src-tauri', 'src', 'main.rs');
+  assert.match(main, /selection::quick_take_selection/);
+  assert.match(main, /quick::register_selection\(app\.handle\(\), selection::DEFAULT_HOTKEY\)/);
+  const ask = read('desktop', 'src', 'screens', 'QuickAsk.tsx');
+  for (const label of ['Explain', 'Summarise', 'Translate', 'Rewrite']) assert.ok(ask.includes(`label: '${label}'`), label);
+  assert.match(ask, /quickTakeSelection\(\)/);
+  const card = read('desktop', 'src', 'components', 'ShortcutsCard.tsx');
+  assert.match(card, /Ask about selected text, in any app/);
+});
+
 test('Ollama think follows /reasoning, and its thinking is folded into <think>', () => {
   const run = read('desktop', 'src', 'run-model.ts');
   assert.match(run, /if \(reasoning === 'off'\) return false;/);

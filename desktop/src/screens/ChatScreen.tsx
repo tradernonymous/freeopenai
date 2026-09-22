@@ -33,6 +33,7 @@ import '../fallback.js';
 import '../local-models.js';
 import '../hf-auth.js';
 import '../hf-inference.js';
+import '../threads.js';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
@@ -44,6 +45,7 @@ const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
 const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
 const pdf: typeof import('../files/pdf.js') = (globalThis as any).FreePdf;
+const threads: typeof import('../threads.js') = (globalThis as any).FreeAI4UThreads;
 
 type ModeId = import('../composer.js').ModeId;
 type SlashCommand = import('../composer.js').SlashCommand;
@@ -111,6 +113,8 @@ function saveSessions(sessions: ChatSession[]) {
     messages: s.messages.map((m, i) => (m.images && i < s.messages.length - KEEP_IMAGES_LAST ? { ...m, images: undefined } : m)),
   } : s));
   const report = chats.writeStoreReport(null, slim);
+  // The thread sidebar redraws from the store; tell it the store moved.
+  window.dispatchEvent(new Event(threads.CHANGED_EVENT));
   if (report.quota && !warnedQuota) {
     warnedQuota = true;
     pushToast('warn', report.ok
@@ -282,6 +286,9 @@ export default function ChatScreen() {
     ...providerRows,
   ];
   const [sending, setSending] = useState(false);
+  // The sidebar's spinner follows the chat that STARTED the reply, even if the
+  // person switches to another chat while it streams.
+  const busyChat = useRef<string | null>(null);
   const [attached, setAttached] = useState<string>('');
   const [images, setImages] = useState<string[]>([]);
   const [dictation, setDictation] = useState<'idle' | 'recording' | 'working'>('idle');
@@ -516,7 +523,7 @@ export default function ChatScreen() {
     patchSession(active.id, {
       messages: [...history, assistantMsg],
       draft: '',
-      title: active.messages.length === 0 ? text.slice(0, 48) : active.title,
+      title: active.messages.length === 0 ? threads.autoTitle(text) : active.title,
     });
     setSending(true);
     stickToBottom.current = true;
@@ -764,7 +771,7 @@ export default function ChatScreen() {
       patchSession(active.id, {
         messages: [...active.messages, { role: 'user', content: fullPlan, ts: Date.now() } as Msg, note],
         draft: '',
-        title: active.messages.length === 0 ? plan.slice(0, 48) : active.title,
+        title: active.messages.length === 0 ? threads.autoTitle(plan) : active.title,
       });
     } catch (err) {
       // A build that could not start says so where the request was made, with
@@ -894,6 +901,16 @@ export default function ChatScreen() {
       if (!/denied|abort|cancel/i.test(msg)) pushToast('error', `Screen capture: ${msg}`);
     }
   };
+
+  useEffect(() => {
+    if (sending && !busyChat.current) {
+      busyChat.current = active.id;
+      window.dispatchEvent(new CustomEvent(threads.ACTIVITY_EVENT, { detail: { id: active.id, busy: true } }));
+    } else if (!sending && busyChat.current) {
+      window.dispatchEvent(new CustomEvent(threads.ACTIVITY_EVENT, { detail: { id: busyChat.current, busy: false } }));
+      busyChat.current = null;
+    }
+  }, [sending]);
 
   // Ctrl+V with a picture on the clipboard attaches it; text pastes normally.
   useEffect(() => {

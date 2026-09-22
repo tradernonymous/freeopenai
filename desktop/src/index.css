@@ -1995,6 +1995,23 @@ button.primary:hover:not(:disabled) {
   border-color: var(--border);
 }
 
+/* Thread sidebar: groups, a spinner on answering chats, a hover card. */
+.thread-group + .thread-group { margin-top: 10px; }
+.thread-group-title { padding: 2px 4px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+.thread-item { position: relative; display: flex; flex-direction: column; margin-bottom: 6px; }
+.thread-open { display: flex; flex-direction: column; align-items: stretch; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.thread-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.thread-spinner { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: thread-spin 0.8s linear infinite; }
+@keyframes thread-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .thread-spinner { animation: none; border-right-color: var(--accent); } }
+.thread-actions { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; }
+.thread-item:hover .thread-actions, .thread-item:focus-within .thread-actions { display: flex; }
+.thread-actions button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-1); color: var(--text-2); cursor: pointer; }
+.thread-preview { position: absolute; right: 100%; top: 0; z-index: 30; width: 240px; margin-right: 8px; padding: 8px 10px; border: 1px solid var(--glass-border); border-radius: 8px; background: var(--glass-bg-strong); box-shadow: var(--shadow-2); font-size: 12px; line-height: 1.4; color: var(--text-2); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.12s 0.35s; }
+.thread-open:hover + .thread-preview, .thread-open:focus-visible + .thread-preview { opacity: 1; visibility: visible; }
+.thread-filing { display: flex; gap: 4px; margin-top: 6px; }
+.thread-filing input { flex: 1; min-width: 0; }
+
 .session-title {
   font-size: 13px;
   font-weight: 600;
@@ -4583,6 +4600,9 @@ body.quick-body { background: var(--bg-1); }
 .quick-q { color: var(--text-2); font-weight: 600; margin-bottom: 8px; }
 .quick-box { display: flex; gap: 8px; align-items: flex-end; border: 1px solid var(--accent-mid); border-radius: var(--radius-lg); padding: 8px 8px 8px 12px; background: var(--bg-2); }
 .quick-box textarea { flex: 1; background: transparent; border: 0; resize: none; outline: none; min-height: 40px; }
+.quick-selection { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.quick-selection-text { max-height: 72px; overflow: hidden; font-size: 12px; line-height: 1.45; color: var(--text-2); white-space: pre-wrap; border-left: 2px solid var(--accent-mid); padding-left: 8px; }
+.quick-selection-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .quick-continue { align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .hf-signin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .hf-token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }

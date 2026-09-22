@@ -30,6 +30,7 @@ mod models;
 mod net;
 mod ollama;
 mod quick;
+mod selection;
 mod save;
 mod secrets;
 mod webview2;
@@ -113,7 +114,9 @@ fn main() {
             quick::quick_hotkey_set,
             quick::quick_hide,
             quick::main_show,
-            quick::notify
+            quick::notify,
+            selection::quick_take_selection,
+            selection::selection_hotkey_set
         ])
         // neuraos:// links: "Use this model" on Hugging Face, once NeuraOS is
         // listed there, and the app's own bookmarklet until then. The URL is
@@ -153,6 +156,9 @@ fn main() {
             // start; a chord another app owns is logged, not fatal.
             if let Err(e) = quick::register(app.handle(), quick::DEFAULT_HOTKEY) {
                 crash::log(&format!("quick hotkey: {}", e));
+            }
+            if let Err(e) = quick::register_selection(app.handle(), selection::DEFAULT_HOTKEY) {
+                crash::log(&format!("selection hotkey: {}", e));
             }
 
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

@@ -16,9 +16,9 @@ import EvalsScreen from './screens/EvalsScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { hasShell, onDeepLink, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet } from './bridge';
+import { hasShell, onDeepLink, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
 import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
-import { QUICK_HOTKEY_KEY } from './components/ShortcutsCard';
+import { QUICK_HOTKEY_KEY, SELECTION_HOTKEY_KEY } from './components/ShortcutsCard';
 import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
 import './hf-auth.js';
 import './local-models.js';
@@ -176,6 +176,9 @@ export default function App() {
       let stored = '';
       try { stored = localStorage.getItem(QUICK_HOTKEY_KEY) || ''; } catch { /* default */ }
       if (stored) quickHotkeySet(stored).catch(() => pushToast('warn', `The Quick hotkey ${stored} is taken by another app; change it in Settings -> Shortcuts.`));
+      let selection = '';
+      try { selection = localStorage.getItem(SELECTION_HOTKEY_KEY) || ''; } catch { /* default */ }
+      if (selection) selectionHotkeySet(selection.toLowerCase()).catch(() => pushToast('warn', `The selection hotkey ${selection} is taken by another app; change it in Settings -> Shortcuts.`));
     }
     return () => window.removeEventListener('storage', onStorage);
   }, []);

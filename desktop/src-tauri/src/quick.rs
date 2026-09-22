@@ -17,12 +17,20 @@ use tauri_plugin_notification::NotificationExt;
 pub const DEFAULT_HOTKEY: &str = "alt+space";
 
 static CURRENT: Mutex<Option<Shortcut>> = Mutex::new(None);
+/// The selection hotkey (selection.rs): same plugin, different action.
+static SELECTION: Mutex<Option<Shortcut>> = Mutex::new(None);
 
 /// The global-shortcut plugin, with the one handler this app needs.
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(|app, _shortcut, event| {
-            if event.state() == ShortcutState::Pressed {
+        .with_handler(|app, shortcut, event| {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            let is_selection = SELECTION.lock().ok().map(|s| *s == Some(*shortcut)).unwrap_or(false);
+            if is_selection {
+                crate::selection::capture(app);
+            } else {
                 toggle(app);
             }
         })
@@ -45,14 +53,39 @@ pub fn register(app: &AppHandle, combo: &str) -> Result<String, String> {
     Ok(combo.trim().to_string())
 }
 
+/// Take `combo` as the selection hotkey, the same way as the Quick one.
+pub fn register_selection(app: &AppHandle, combo: &str) -> Result<String, String> {
+    let shortcut = Shortcut::from_str(combo.trim()).map_err(|e| format!("\"{}\" is not a shortcut: {}", combo, e))?;
+    if CURRENT.lock().ok().map(|c| *c == Some(shortcut)).unwrap_or(false) {
+        return Err(format!("{} is already the Quick window hotkey", combo));
+    }
+    let shortcuts = app.global_shortcut();
+    let mut current = SELECTION.lock().map_err(|_| "the hotkey is being changed".to_string())?;
+    if let Some(old) = current.take() {
+        let _ = shortcuts.unregister(old);
+    }
+    shortcuts
+        .register(shortcut)
+        .map_err(|e| format!("could not take {} (another app may own it): {}", combo, e))?;
+    *current = Some(shortcut);
+    Ok(combo.trim().to_string())
+}
+
 fn toggle(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("quick") {
         if window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false) {
             let _ = window.hide();
-        } else {
-            let _ = window.show();
-            let _ = window.set_focus();
+            return;
         }
+    }
+    open(app);
+}
+
+/// Show the Quick window (building it the first time) and give it focus.
+pub fn open(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("quick") {
+        let _ = window.show();
+        let _ = window.set_focus();
         return;
     }
     let built = WebviewWindowBuilder::new(app, "quick", WebviewUrl::App("index.html".into()))

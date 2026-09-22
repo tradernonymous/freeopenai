@@ -566,6 +566,22 @@ export async function quickHide(): Promise<void> {
   if (hasShell()) await call('quick_hide');
 }
 
+/** Remap the selection hotkey (select text anywhere, press it, ask about it). */
+export async function selectionHotkeySet(combo: string): Promise<string> {
+  return call<string>('selection_hotkey_set', { combo });
+}
+
+/** The text the selection hotkey captured, once; '' when nothing was selected. */
+export async function quickTakeSelection(): Promise<string | null> {
+  if (!hasShell()) return null;
+  return call<string | null>('quick_take_selection');
+}
+
+/** The selection hotkey fired while the Quick window was already open. */
+export function onQuickSelection(handler: () => void): Promise<() => void> {
+  return subscribe<unknown>('quick-selection', () => handler());
+}
+
 export async function mainShow(): Promise<void> {
   if (hasShell()) await call('main_show');
 }
