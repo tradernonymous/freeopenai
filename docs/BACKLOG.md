@@ -1,6 +1,6 @@
 # NeuraOS backlog
 
-The single list of what is still open across **web** (`index.html`, `app.js`, `chatlib.js`), **engine** (`server.js`), **desktop** (`desktop/`) and **Android** (`android/`). Last reviewed 2026-09-22, after the backlog round `66ac1c3`…`aa9e6bf` (Desktop build green)
+The single list of what is still open across **web** (`index.html`, `app.js`, `chatlib.js`), **engine** (`server.js`), **desktop** (`desktop/`) and **Android** (`android/`). Last reviewed 2026-09-23, after the premium-plan gap review (NEURA-049..059) and the backlog round `66ac1c3`…`aa9e6bf` (Desktop build green)
 and the Android master plan ([`android-master-plan.md`](android-master-plan.md)), whose
 phases own the Android rows from here on.
 
@@ -54,6 +54,17 @@ phases own the Android rows from here on.
 | NEURA-039 | android | upgrade | M | Android parity with the desktop: MCP Apps, scheduled recipes, Evals history, research mode. Decide which fit a phone. | android |
 | NEURA-047 | desktop | upgrade | S | Cold start: make SettingsScreen, ConnectScreen, LocalScreen and CodeScreen lazy too (the entry is ~490 kB of Chat's own code after this round). | desktop |
 | NEURA-048 | desktop | upgrade | S | Warn in Settings → Diagnostics when the startup marks miss 2 s on this machine, with the biggest chunk named. | desktop |
+| NEURA-049 | desktop | upgrade | S | **`cargo test` in the Desktop CI job**: the Rust side has unit tests but nothing runs them; a red test must fail the build before the installer is made. | desktop |
+| NEURA-050 | desktop | upgrade | S | **Mica on Windows 11**: the real system material behind the shell (`windowEffects`), with the flat background kept for Windows 10 and for Reduce transparency. | desktop |
+| NEURA-051 | desktop | upgrade | S | **Local-model status chip**: `/health` and `/slots` from the local runtime, so the status bar says loaded/ctx/slots instead of only "connected". | desktop |
+| NEURA-052 | desktop | upgrade | S | **`.freeai4u.json` per-project config**: a project's own model, approval mode, allowed commands and prompt, read when a folder is opened. | desktop |
+| NEURA-053 | desktop | upgrade | S | **One-click skill install** from the Hugging Face catalogue in Library, instead of copying files by hand. | desktop |
+| NEURA-054 | desktop | upgrade | M | **BYOK endpoints** in the model picker: an OpenAI-shaped base URL plus a key held in the OS credential store, sent per call, never cached in the page and never logged. | desktop |
+| NEURA-055 | desktop | upgrade | M | **Chat templates** for local models through `@huggingface/jinja`, so a GGUF's own template shapes the prompt instead of a generic one. | desktop |
+| NEURA-056 | desktop | upgrade | M | **`project-scout` index**: a subagent that maps a repository once and answers "where is X" from the index, so the coding agent stops re-reading the tree. | desktop |
+| NEURA-057 | desktop | upgrade | M | **Eval harness in CI**: the eval suite runs on every push and reports a score, so a regression in the agent's own prompts is visible. | desktop |
+| NEURA-058 | desktop | upgrade | M | **Real terminal**: a PTY on the Rust side with `xterm.js` in the page, so interactive programs (REPLs, `git rebase`, installers) work instead of one-shot commands. | desktop |
+| NEURA-059 | desktop | upgrade | M | **Local image generation** through a user-supplied `sd-server`, so Images works with no account and no network. | desktop |
 
 ## Done recently (android)
 
