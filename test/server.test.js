@@ -101,3 +101,19 @@ test('static responses are never cached', async () => {
   assert.equal(headers['cache-control'], 'no-cache');
   assert.equal(jsHeaders['cache-control'], 'no-cache');
 });
+
+// NEURA-027: the engine's own sources, config, docs, tests, other surfaces,
+// the command workspace and dotfiles are never served as static files.
+test('isPrivatePath keeps server-only and repo-internal files private', () => {
+  const { isPrivatePath } = require('../server.js');
+  for (const p of ['/server.js', '/auth.js', '/github.js', '/agent-sessions.js', '/fcm-push.js', '/package.json',
+    '/.env', '/.git/config', '/.github/workflows/ci.yml', '/docs/desktop.md', '/README.md', '/CLAUDE.md',
+    '/desktop/src/App.tsx', '/android/app/build.gradle.kts', '/test/server.test.js', '/workspace/notes.txt',
+    '/%2Eenv', '/SERVER.JS']) {
+    assert.equal(isPrivatePath(p), true, p);
+  }
+  for (const p of ['/', '/index.html', '/login.html', '/share.html', '/app.js', '/chatlib.js', '/hub.css',
+    '/manifest.json', '/sw.js', '/shared/keymap.js', '/app.js?v=2']) {
+    assert.equal(isPrivatePath(p), false, p);
+  }
+});

@@ -4999,6 +4999,28 @@ function sendStatic(req, res, file, data, stat, contentType) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+// Files under the repo root that are never served, even to a signed-in user
+// (NEURA-027): the engine's own modules and config, the other surfaces'
+// sources, docs and tests, the command workspace, and anything dotted
+// (.env, .git, .github). chatlib.js stays public: share.html runs it too.
+const PRIVATE_FILES = new Set([
+  'server.js', 'auth.js', 'github.js', 'agent-sessions.js', 'fcm-push.js',
+  'package.json', 'package-lock.json', 'eslint.config.js', 'docker-compose.yml',
+]);
+const PRIVATE_DIRS = new Set([
+  'android', 'desktop', 'docs', 'test', 'scripts', 'deploy', 'tools', 'node_modules', 'workspace',
+]);
+
+function isPrivatePath(urlPath) {
+  let clean = String(urlPath || '').split('?')[0].split('#')[0];
+  try { clean = decodeURIComponent(clean); } catch { return true; }
+  const parts = path.posix.normalize(clean.replace(/\\/g, '/')).split('/').filter(Boolean);
+  if (!parts.length) return false;
+  if (parts.some((p) => p.startsWith('.'))) return true;
+  if (parts.length === 1) return PRIVATE_FILES.has(parts[0].toLowerCase()) || /\.md$/i.test(parts[0]);
+  return PRIVATE_DIRS.has(parts[0].toLowerCase());
+}
+
 function resolveSafePath(root, urlPath) {
   let clean = urlPath.split('?')[0].split('#')[0];
   if (clean === '/') clean = '/index.html';
@@ -6245,6 +6267,11 @@ function createRequestHandler(root) {
       return;
     }
 
+    if (isPrivatePath(req.url)) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
     const file = resolveSafePath(root, req.url);
     if (!file) {
       res.writeHead(403);
@@ -6299,6 +6326,7 @@ module.exports = {
   isForeignOrigin,
   githubApiHeaders,
   resolveSafePath,
+  isPrivatePath,
   isAssetPath,
   workspaceRunRoot,
   workspaceRunRefusal,
