@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icon from './Icon';
 import { pushToast } from './Toasts';
 import {
@@ -77,11 +77,38 @@ function rememberSource(file: string, repo: string) {
   } catch { /* best effort */ }
 }
 
+// And where in the repo it lives (split sets usually sit in a quant folder),
+// so a resume from the Downloaded list asks the Hub for the right path.
+const SOURCE_PATHS_KEY = 'freeai4u.model_source_paths';
+
+function readSourcePaths(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(SOURCE_PATHS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberSourcePath(file: string, hubPath: string) {
+  try {
+    const next = { ...readSourcePaths(), [file]: hubPath };
+    localStorage.setItem(SOURCE_PATHS_KEY, JSON.stringify(next));
+  } catch { /* best effort */ }
+}
+
+const baseName = (name: string) => name.split('/').pop() || name;
+
+/** A repo file, or a whole split set folded into one row (name = part 1). */
 interface HubFile {
   name: string;
   size: number;
   quant: string;
   url: string;
+  parts: string[];
+  partSizes: number[];
+  complete: boolean;
 }
 
 export default function LocalModelsCard() {
@@ -97,6 +124,11 @@ export default function LocalModelsCard() {
   const [modelsDir, setModelsDir] = useState('');
   // One download at a time (the shell enforces it too).
   const [progress, setProgress] = useState<LocalDownloadProgress | null>(null);
+  // A split set is fetched one part at a time; while it is, this says which
+  // part is in flight so each part's events read as progress through the set.
+  const splitRef = useRef<import('../local-models.js').SplitDownloadState | null>(null);
+  // Pause stops the whole set, not just the part in flight.
+  const pausedRef = useRef(false);
 
   // "Add from Hugging Face".
   const [query, setQuery] = useState('');
@@ -123,7 +155,8 @@ export default function LocalModelsCard() {
   useEffect(() => {
     if (!hasShell()) return;
     let stop = () => {};
-    onLocalDownload((p) => {
+    onLocalDownload((event) => {
+      const p = splitRef.current ? localModels.setProgress(splitRef.current, event) : event;
       setProgress(p);
       if (p.done || p.cancelled || p.error) refresh();
     }).then((unsubscribe) => { stop = unsubscribe; });
@@ -141,19 +174,21 @@ export default function LocalModelsCard() {
     setHubError('');
     hfModels.getModel(ref.repo, { authHeaders: hfAuth.authHeaders() })
       .then((card: any) => {
-        const files: HubFile[] = hfModels.ggufFiles(card).map((f: any) => ({
-          name: f.name,
-          size: f.size,
+        // A split set is one row: part 1's name, every part's size summed.
+        const files: HubFile[] = localModels.groupHubFiles(hfModels.ggufFiles(card).map((f: any) => ({
+          name: f.name as string,
+          size: f.size as number,
           quant: localModels.parseQuant(f.name),
-          url: f.url,
-        }));
+          url: f.url as string,
+        })));
         if (!files.length) {
           setHubError(`${ref.repo} has no GGUF files. Try the -GGUF repo of the same model (unsloth publishes one for most).`);
           setHub(null);
           return;
         }
-        // A pasted file link names one file; a pasted quant narrows to it.
-        const wanted = ref.file ? files.filter((f) => f.name === ref.file || f.name.endsWith('/' + ref.file)) : [];
+        // A pasted file link names one file (any part of a set picks the set);
+        // a pasted quant narrows to it.
+        const wanted = ref.file ? files.filter((f) => f.parts.some((p) => p === ref.file || p.endsWith('/' + ref.file))) : [];
         const narrowed = !wanted.length && ref.quant ? files.filter((f) => f.quant === ref.quant) : [];
         setHub({
           repo: ref.repo,
@@ -248,45 +283,97 @@ export default function LocalModelsCard() {
       });
   };
 
-  const download = (repo: string, file: string) => {
+  /**
+   * Download a file, or every part of a split set (`name` is any part; the
+   * rest are worked out from it). Parts go one after another through the
+   * shell's single-file download, so each keeps its own .part and resume;
+   * `sizes` (from the repo listing) lets the bar measure the whole set.
+   */
+  const download = async (repo: string, name: string, sizes: number[] = []) => {
     if (!hasShell()) {
       pushToast('warn', 'Downloading needs the installed desktop app.');
       return;
     }
-    rememberSource(file.split('/').pop() || file, repo);
+    const parts = localModels.splitParts(name);
+    const label = baseName(parts[0]);
+    for (const part of parts) {
+      rememberSource(baseName(part), repo);
+      rememberSourcePath(baseName(part), part);
+    }
     setError('');
-    setProgress({ repo, file, received: 0, total: 0, done: false, cancelled: false, error: '', path: '' });
+    pausedRef.current = false;
+    const setTotal = sizes.length === parts.length && sizes.every((s) => s > 0) ? sizes.reduce((a, b) => a + b, 0) : 0;
+    setProgress({ repo, file: parts[0], received: 0, total: setTotal, done: false, cancelled: false, error: '', path: '' });
     const token = hfAuth.accessToken()?.access_token;
-    localModelDownload({ repo, file, ...(token ? { token } : {}) })
-      .then((result) => {
-        if (result.cancelled) pushToast('info', 'Download paused. Start it again to resume.');
-        else if (result.already) pushToast('info', 'That file was already here.');
-        else {
-          // A finished download is one of the person's models: it goes
-          // straight into the pickers under Unsloth Local.
-          savedModels.add({ kind: 'unsloth', path: result.path, bytes: result.bytes, detail: localModels.parseQuant(file) });
-          pushToast('ok', `${file.split('/').pop()} downloaded and added to your models.`);
+    let firstPath = '';
+    let bytes = 0;
+    let already = true;
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        // A pause between two parts: the shell had nothing to cancel.
+        if (pausedRef.current) {
+          setProgress((p) => (p ? { ...p, cancelled: true } : p));
+          pushToast('info', 'Download paused. Start it again to resume.');
+          return;
         }
-      })
-      .catch((e: unknown) => {
-        const message = (e as Error).message || String(e);
-        setError(message);
-        setProgress((p) => (p ? { ...p, error: message } : p));
-        pushToast('error', message.split('\n')[0]);
-      })
-      .finally(refresh);
+        splitRef.current = parts.length > 1
+          ? { file: parts[0], index: i, count: parts.length, before: bytes, total: setTotal }
+          : null;
+        const file = parts[i];
+        const result = await localModelDownload({ repo, file, ...(token ? { token } : {}) });
+        if (result.cancelled) {
+          pushToast('info', 'Download paused. Start it again to resume.');
+          return;
+        }
+        if (i === 0) firstPath = result.path;
+        bytes += result.bytes;
+        already = already && !!result.already;
+      }
+      if (already) pushToast('info', parts.length > 1 ? 'Every part was already here.' : 'That file was already here.');
+      else {
+        // A finished download is one of the person's models: it goes
+        // straight into the pickers under Unsloth Local. A split set is
+        // saved as part 1; llama-server finds the rest beside it.
+        savedModels.add({
+          kind: 'unsloth',
+          path: firstPath,
+          bytes,
+          detail: localModels.parseQuant(parts[0]),
+          ...(parts.length > 1 ? { name: localModels.modelName(parts[0]) } : {}),
+        });
+        pushToast('ok', parts.length > 1
+          ? `${localModels.modelName(parts[0])} (${parts.length} parts) downloaded and added to your models.`
+          : `${label} downloaded and added to your models.`);
+      }
+    } catch (e: unknown) {
+      const message = (e as Error).message || String(e);
+      setError(message);
+      setProgress((p) => (p ? { ...p, error: message } : p));
+      pushToast('error', message.split('\n')[0]);
+    } finally {
+      // splitRef is left as it is: the last part's closing event can land
+      // after the command returns, and must still read as the whole set.
+      refresh();
+    }
   };
 
   const cancelDownload = () => {
+    pausedRef.current = true;
     localModelDownloadCancel().catch(() => { /* the event says what happened */ });
   };
 
-  const remove = (file: string) => {
+  /** Delete a file, or every part of a split set, from the models folder. */
+  const remove = async (file: string) => {
     setBusy('delete' + file);
-    localModelDelete(file)
-      .then(() => pushToast('info', `${file} deleted.`))
-      .catch((e: unknown) => setError((e as Error).message || String(e)))
-      .finally(() => { setBusy(''); refresh(); });
+    try {
+      for (const part of localModels.splitParts(file)) await localModelDelete(part);
+      pushToast('info', `${file} deleted.`);
+    } catch (e: unknown) {
+      setError((e as Error).message || String(e));
+    } finally {
+      setBusy('');
+      refresh();
+    }
   };
 
   const running = localModels.stateOf(status);
@@ -310,6 +397,9 @@ export default function LocalModelsCard() {
   const downloadedNames = useMemo(() => new Set(downloaded.filter((f) => !f.partial).map((f) => f.file)), [downloaded]);
   const partialNames = useMemo(() => new Set(downloaded.filter((f) => f.partial).map((f) => f.file)), [downloaded]);
   const sources = useMemo(() => readSources(), [downloaded]);
+  const sourcePaths = useMemo(() => readSourcePaths(), [downloaded]);
+  // The Downloaded list shows a split set as one model (size = every part).
+  const downloadedSets = useMemo(() => localModels.groupLocalFiles(downloaded), [downloaded]);
   const defaultHubFile = useMemo(() => (hub ? localModels.pickDefaultFile(hub.files, facts) : null), [hub, facts.ramGb]);
   const downloading = !!progress && !progress.done && !progress.cancelled && !progress.error;
   const fitOf = (bytes: number, context = 16384) => localModels.fit({ sizeGb: bytes / GB, context }, facts);
@@ -427,11 +517,14 @@ export default function LocalModelsCard() {
             <div className="local-catalogue">
               {hub.files.map((f) => {
                 const report = fitOf(f.size);
+                // A split set is one row named by part 1; it is here only
+                // when every part is.
                 const split = localModels.isSplit(f.name);
                 const risk = localModels.toolRisk(f.quant);
-                const base = f.name.split('/').pop() || f.name;
-                const have = downloadedNames.has(base);
-                const partial = partialNames.has(base);
+                const base = baseName(f.name);
+                const partBases = f.parts.map(baseName);
+                const have = partBases.every((b) => downloadedNames.has(b));
+                const partial = !have && partBases.some((b) => partialNames.has(b) || downloadedNames.has(b));
                 const isDefault = defaultHubFile?.name === f.name;
                 return (
                   <div key={f.name} className={`local-row ${report.fits ? '' : 'cannot'} ${isDefault ? 'is-default' : ''}`}>
@@ -440,9 +533,10 @@ export default function LocalModelsCard() {
                         <span className="mono">{f.quant || base}</span>
                         {isDefault && <span className="chip chip-ok">recommended</span>}
                         {risk && <span className="chip chip-warn">{risk}</span>}
-                        {split && <span className="chip chip-warn">multi-part: not supported yet</span>}
+                        {split && <span className="chip">{f.parts.length} parts</span>}
+                        {!f.complete && <span className="chip chip-warn">parts missing from the repo</span>}
                       </span>
-                      <span className="local-row-note">{base}</span>
+                      <span className="local-row-note">{split ? `${localModels.modelName(base)} · ${f.parts.length} files` : base}</span>
                     </div>
                     <span className="local-row-size" title="Weights plus the cache for a 16k context">
                       {(f.size / GB).toFixed(1)} GB · needs ~{report.neededGb.toFixed(1)} GB
@@ -457,9 +551,11 @@ export default function LocalModelsCard() {
                       </button>
                     ) : (
                       <button
-                        onClick={() => download(hub.repo, f.name)}
-                        disabled={downloading || split}
-                        title={split ? 'Multi-part files need every part; pick a single-file quant' : partial ? 'Resume the download' : 'Download to this PC'}
+                        onClick={() => download(hub.repo, f.name, f.partSizes)}
+                        disabled={downloading || !f.complete}
+                        title={!f.complete
+                          ? 'The repo does not list every part of this set'
+                          : partial ? 'Resume the download' : split ? `Download all ${f.parts.length} parts to this PC` : 'Download to this PC'}
                       >
                         {partial ? 'Resume' : 'Download'}
                       </button>
@@ -538,7 +634,7 @@ export default function LocalModelsCard() {
             <h3 className="local-heading">Downloaded</h3>
             <p className="settings-hint">In <span className="mono">{modelsDir}</span></p>
             <div className="local-catalogue">
-              {downloaded.map((f) => {
+              {downloadedSets.map((f) => {
                 const report = fitOf(f.bytes);
                 const repo = sources[f.file] || '';
                 return (
@@ -546,6 +642,7 @@ export default function LocalModelsCard() {
                     <div className="local-row-main">
                       <span className="local-row-name">
                         <span className="mono">{f.file}</span>
+                        {f.parts.length > 1 && <span className="chip">{f.parts.length} parts</span>}
                         {f.partial && <span className="chip chip-warn">incomplete</span>}
                       </span>
                       <span className="local-row-note">{repo || 'added by hand'}</span>
@@ -553,7 +650,7 @@ export default function LocalModelsCard() {
                     <span className="local-row-size">{(f.bytes / GB).toFixed(1)} GB</span>
                     {f.partial ? (
                       <button
-                        onClick={() => (repo ? download(repo, f.file) : setError(`Nothing remembers where ${f.file} came from. Look it up above and download again.`))}
+                        onClick={() => (repo ? download(repo, sourcePaths[f.file] || f.file) : setError(`Nothing remembers where ${f.file} came from. Look it up above and download again.`))}
                         disabled={downloading}
                       >
                         Resume
@@ -570,7 +667,13 @@ export default function LocalModelsCard() {
                     {!f.partial && (
                       <button
                         onClick={() => {
-                          const r = savedModels.add({ kind: 'unsloth', path: f.path, bytes: f.bytes, detail: localModels.parseQuant(f.file) });
+                          const r = savedModels.add({
+                            kind: 'unsloth',
+                            path: f.path,
+                            bytes: f.bytes,
+                            detail: localModels.parseQuant(f.file),
+                            ...(f.parts.length > 1 ? { name: localModels.modelName(f.file) } : {}),
+                          });
                           pushToast(r.added ? 'ok' : 'info', r.added ? `${f.file} added to your models.` : r.reason);
                         }}
                         title="Keep this model in the Chat, Design and Code pickers"
@@ -581,7 +684,7 @@ export default function LocalModelsCard() {
                     <button
                       onClick={() => remove(f.file)}
                       disabled={!!busy || downloading || isThisFile(f.file)}
-                      title="Delete this file from the models folder"
+                      title={f.parts.length > 1 ? `Delete all ${f.parts.length} parts from the models folder` : 'Delete this file from the models folder'}
                     >
                       Delete
                     </button>

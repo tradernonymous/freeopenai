@@ -28,6 +28,10 @@ interface Found {
   bytes: number;
   detail: string;
   path: string;
+  /** How many files: a split GGUF set is one model (path = part 1). */
+  parts: number;
+  /** False when a split set is missing a part: it cannot load. */
+  complete: boolean;
 }
 
 export default function MyModels() {
@@ -57,7 +61,7 @@ export default function MyModels() {
       .then((body) => {
         savedModels.setFolder('ollama', base);
         const rows = savedModels.fromOllamaTags(body);
-        setFound(rows.map((m) => ({ key: m.name, name: m.name, bytes: m.bytes, detail: m.detail, path: '' })));
+        setFound(rows.map((m) => ({ key: m.name, name: m.name, bytes: m.bytes, detail: m.detail, path: '', parts: 1, complete: true })));
         if (!rows.length) setNote('Ollama is running but has no models yet. Pull one with “ollama pull <name>”.');
       })
       .catch((e: unknown) => {
@@ -86,13 +90,17 @@ export default function MyModels() {
       .then((result) => {
         // With a folder chosen, only what is under it; without one, the usual places.
         const under = (f: LocalModelFile) => !dir || f.path.toLowerCase().startsWith(dir.toLowerCase());
-        const rows = result.files.filter(under);
+        // A split set (…-00001-of-00003.gguf and its siblings) is one model:
+        // part 1's path, every part's bytes.
+        const rows = localModels.groupLocalFiles(result.files.filter(under)).sort((a, b) => b.bytes - a.bytes);
         setFound(rows.map((f) => ({
           key: f.path,
-          name: savedModels.nameFromPath(f.path),
+          name: f.parts.length > 1 ? localModels.modelName(f.path) : savedModels.nameFromPath(f.path),
           bytes: f.bytes,
           detail: localModels.parseQuant(f.file),
           path: f.path,
+          parts: f.parts.length,
+          complete: f.complete,
         })));
         if (!rows.length) {
           setNote(dir
@@ -203,6 +211,8 @@ export default function MyModels() {
                   <span className="local-row-name">
                     <span className="mono">{row.name}</span>
                     {row.detail && <span className="chip">{row.detail}</span>}
+                    {row.parts > 1 && <span className="chip">{row.parts} parts</span>}
+                    {!row.complete && <span className="chip chip-warn">parts missing</span>}
                   </span>
                   {row.path && <span className="local-row-note mono">{row.path}</span>}
                 </div>
@@ -210,7 +220,13 @@ export default function MyModels() {
                   {row.bytes ? `${(row.bytes / GB).toFixed(1)} GB` : ''}
                   {report ? ` · needs ~${report.neededGb.toFixed(1)} GB` : ''}
                 </span>
-                <button onClick={() => add(row)} disabled={have} title={report && !report.fits ? report.reason : 'Keep this model in the pickers'}>
+                <button
+                  onClick={() => add(row)}
+                  disabled={have || !row.complete}
+                  title={!row.complete
+                    ? 'Some parts of this split model are not in the folder, so it cannot load'
+                    : report && !report.fits ? report.reason : 'Keep this model in the pickers'}
+                >
                   {have ? 'Added' : 'Add'}
                 </button>
               </div>

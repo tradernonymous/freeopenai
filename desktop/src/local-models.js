@@ -163,10 +163,181 @@
     return m ? m[1].toUpperCase() : '';
   }
 
-  /** Multi-part files (…-00001-of-00003.gguf) need every part; the app fetches
-   *  one file at a time, so they are shown but not offered. */
+  // ---- multi-part (split) GGUFs ---------------------------------------------
+  //
+  // A big quant is published as …-00001-of-00003.gguf, …-00002-of-00003.gguf,
+  // and so on. llama.cpp loads the whole set when it is handed part 1 with the
+  // others beside it, so the app treats a set as ONE model: every part is
+  // downloaded (one after another, each with the shell's own resume), the
+  // saved model points at part 1, the size is the sum, and delete takes all.
+
+  var SPLIT_RE = /-(\d{5})-of-(\d{5})(\.gguf)$/i;
+
+  /** { index, count, stem } for one part of a set, else null. The stem is
+   *  everything before the part suffix, folder included. */
+  function splitInfo(name) {
+    var text = String(name || '');
+    var m = text.match(SPLIT_RE);
+    if (!m) return null;
+    var index = Number(m[1]);
+    var count = Number(m[2]);
+    if (index < 1 || count < 1 || index > count) return null;
+    return { index: index, count: count, stem: text.slice(0, m.index) };
+  }
+
+  /** Multi-part files (…-00001-of-00003.gguf): one part of a set. */
   function isSplit(name) {
-    return /-\d{5}-of-\d{5}\.gguf$/i.test(String(name || ''));
+    return !!splitInfo(name);
+  }
+
+  /**
+   * Every part name of the set `name` belongs to, part 1 first, from any one
+   * part (the folder and the digit widths are kept). A single file is a set of
+   * one.
+   */
+  function splitParts(name) {
+    var text = String(name || '');
+    var info = splitInfo(text);
+    if (!info) return [text];
+    var m = text.match(SPLIT_RE);
+    var width = m[1].length;
+    var parts = [];
+    for (var i = 1; i <= info.count; i++) {
+      var digits = String(i);
+      while (digits.length < width) digits = '0' + digits;
+      parts.push(info.stem + '-' + digits + '-of-' + m[2] + m[3]);
+    }
+    return parts;
+  }
+
+  /** What to call a model file: the base name without .gguf or a part suffix. */
+  function modelName(fileOrPath) {
+    var base = String(fileOrPath || '').split(/[\\/]/).pop() || '';
+    var info = splitInfo(base);
+    return (info ? info.stem : base).replace(/\.gguf$/i, '');
+  }
+
+  /**
+   * groupHubFiles(files)
+   *
+   * A repo's file list ({ name, size, ... }) with each split set folded into
+   * one row: `name` is part 1, `size` the sum, `parts` / `partSizes` every
+   * part in order, and `complete` false when the listing is missing a part
+   * (such a set is shown, never offered). A single file is a set of one. Rows
+   * that were already grouped pass through, so grouping twice is harmless.
+   */
+  function groupHubFiles(files) {
+    var out = [];
+    var sets = {};
+    (Array.isArray(files) ? files : []).forEach(function (f) {
+      if (!f) return;
+      if (Array.isArray(f.parts)) {
+        out.push(f);
+        return;
+      }
+      var info = splitInfo(f.name);
+      if (!info) {
+        out.push(Object.assign({}, f, { parts: [f.name], partSizes: [Number(f.size || 0)], complete: true }));
+        return;
+      }
+      var parts = splitParts(f.name);
+      var key = parts[0].toLowerCase();
+      var row = sets[key];
+      if (!row) {
+        row = Object.assign({}, f, { name: parts[0], size: 0, parts: parts, partSizes: parts.map(function () { return 0; }), complete: false, seen: {} });
+        sets[key] = row;
+        out.push(row);
+      }
+      if (info.index === 1) Object.assign(row, f, { name: parts[0], parts: parts, partSizes: row.partSizes, seen: row.seen });
+      row.partSizes[info.index - 1] = Number(f.size || 0);
+      row.seen[info.index] = true;
+    });
+    return out.map(function (row) {
+      if (!row.seen) return row;
+      var done = Object.assign({}, row);
+      done.size = row.partSizes.reduce(function (a, b) { return a + b; }, 0);
+      done.complete = row.parts.every(function (_, i) { return row.seen[i + 1]; });
+      delete done.seen;
+      return done;
+    });
+  }
+
+  /**
+   * groupLocalFiles(files)
+   *
+   * The shell's file rows ({ file, path, bytes, partial }) with each split set
+   * in one folder folded into one row: `file` and `path` name part 1, `bytes`
+   * is the sum, `parts` every part's file name, `missing` the parts not there,
+   * and `partial` true when any part is a .part or missing (resumable, not
+   * runnable). A single file keeps its own fields plus parts: [file].
+   */
+  function groupLocalFiles(files) {
+    var out = [];
+    var sets = {};
+    (Array.isArray(files) ? files : []).forEach(function (f) {
+      if (!f) return;
+      var info = splitInfo(f.file);
+      if (!info) {
+        out.push(Object.assign({}, f, { parts: [f.file], missing: [], complete: true }));
+        return;
+      }
+      var dir = String(f.path || '').replace(/[^\\/]*$/, '');
+      var parts = splitParts(f.file);
+      var key = (dir + parts[0]).toLowerCase();
+      var row = sets[key];
+      if (!row) {
+        row = { file: parts[0], path: dir + parts[0], bytes: 0, partial: false, parts: parts, have: {} };
+        sets[key] = row;
+        out.push(row);
+      }
+      row.bytes += Number(f.bytes || 0);
+      if (f.partial) row.partial = true;
+      else row.have[info.index] = true;
+    });
+    return out.map(function (row) {
+      if (!row.have) return row;
+      var missing = row.parts.filter(function (_, i) { return !row.have[i + 1]; });
+      return {
+        file: row.file,
+        path: row.path,
+        bytes: row.bytes,
+        partial: row.partial || missing.length > 0,
+        parts: row.parts,
+        missing: missing,
+        complete: missing.length === 0,
+      };
+    });
+  }
+
+  /**
+   * setProgress(set, progress)
+   *
+   * One part's `local-download` event restated as progress through the whole
+   * set. `set` is { file, index, count, before, total }: part 1's name, the
+   * 0-based part in flight, how many parts, the bytes the earlier parts
+   * already have, and the set's size from the listing (0 when unknown, in
+   * which case the part's own total stands in). Done only when the last part
+   * is.
+   */
+  function setProgress(set, progress) {
+    var s = set || {};
+    var p = progress || {};
+    var before = Number(s.before || 0);
+    var count = Number(s.count || 1);
+    var index = Number(s.index || 0);
+    var partTotal = Number(p.total || 0);
+    return {
+      repo: String(p.repo || ''),
+      file: String(s.file || p.file || ''),
+      received: before + Number(p.received || 0),
+      total: Number(s.total || 0) > 0 ? Number(s.total) : (partTotal ? before + partTotal : 0),
+      done: !!p.done && index === count - 1,
+      cancelled: !!p.cancelled,
+      error: String(p.error || ''),
+      path: String(p.path || ''),
+      part: index + 1,
+      parts: count,
+    };
   }
 
   /**
@@ -207,14 +378,16 @@
   }
 
   /**
-   * The file to offer first from a repo's GGUF list: split files and
-   * tool-breaking quants are skipped, then the best-ranked quant that fits
-   * this machine, then the best-ranked quant at all.
+   * The file to offer first from a repo's GGUF list: a split set counts as
+   * one file the size of all its parts (named by part 1), and a set the
+   * listing is missing a part of is skipped, as are tool-breaking quants; then
+   * the best-ranked quant that fits this machine, then the best-ranked quant
+   * at all.
    */
   function pickDefaultFile(files, machineInfo) {
     var spec = machineInfo || machine();
-    var rows = (Array.isArray(files) ? files : [])
-      .filter(function (f) { return f && /\.gguf$/i.test(f.name || '') && !isSplit(f.name); })
+    var rows = groupHubFiles(files)
+      .filter(function (f) { return f && /\.gguf$/i.test(f.name || '') && f.complete !== false; })
       .map(function (f) {
         var quant = parseQuant(f.name);
         return {
@@ -231,16 +404,18 @@
     return (fitting[0] || rows[0]).file;
   }
 
-  /** "1.2 of 4.8 GB · 25%" for a download in flight. */
+  /** "1.2 of 4.8 GB · 25%" for a download in flight; a split set adds
+   *  "· part 2 of 3" while it is still going. */
   function downloadLabel(progress) {
     var p = progress || {};
     var got = Number(p.received || 0) / GB;
     var total = Number(p.total || 0) / GB;
+    var part = Number(p.parts || 0) > 1 ? ' · part ' + p.part + ' of ' + p.parts : '';
     if (p.error) return 'Stopped: ' + p.error;
-    if (p.cancelled) return 'Paused at ' + got.toFixed(1) + ' GB';
+    if (p.cancelled) return 'Paused at ' + got.toFixed(1) + ' GB' + part;
     if (p.done) return total.toFixed(1) + ' GB, done';
-    if (!total) return got.toFixed(2) + ' GB so far';
-    return got.toFixed(1) + ' of ' + total.toFixed(1) + ' GB · ' + Math.floor((got / total) * 100) + '%';
+    if (!total) return got.toFixed(2) + ' GB so far' + part;
+    return got.toFixed(1) + ' of ' + total.toFixed(1) + ' GB · ' + Math.floor((got / total) * 100) + '%' + part;
   }
 
   /** What the machine can hold. `deviceMemory` is in GB, rounded down by the
@@ -417,6 +592,12 @@
     parseHfRef: parseHfRef,
     parseQuant: parseQuant,
     isSplit: isSplit,
+    splitInfo: splitInfo,
+    splitParts: splitParts,
+    modelName: modelName,
+    groupHubFiles: groupHubFiles,
+    groupLocalFiles: groupLocalFiles,
+    setProgress: setProgress,
     toolRisk: toolRisk,
     quantRank: quantRank,
     pickDefaultFile: pickDefaultFile,

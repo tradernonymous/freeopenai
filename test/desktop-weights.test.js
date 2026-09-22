@@ -68,7 +68,7 @@ test('quant tags, split files and the tool-calling floor are read from the file 
   assert.equal(local.toolRisk('Q8_0'), '');
 });
 
-test('the default file skips split parts and 1-bit quants, and prefers what fits', () => {
+test('the default file skips incomplete split sets and 1-bit quants, and prefers what fits', () => {
   const files = [
     { name: 'm-UD-IQ1_S.gguf', size: 1 * GB },
     { name: 'm-UD-Q2_K_XL.gguf', size: 2 * GB },
@@ -174,7 +174,7 @@ test('Settings lets a person paste a model, download it, resume it, and run what
   assert.match(mine, /pickFolder\(\)/);
   assert.match(card, /<MyModels \/>/);
   assert.match(card, /PENDING_MODEL_KEY/);
-  // A split file is shown but not offered; a 1-bit quant is labelled.
+  // A split set is one row (downloaded part by part); a 1-bit quant is labelled.
   assert.match(card, /localModels\.isSplit\(f\.name\)/);
   assert.match(card, /localModels\.toolRisk\(f\.quant\)/);
   // The deep link lands in Settings with the model pre-filled.

@@ -883,6 +883,20 @@ pub fn known_model_dirs() -> Vec<PathBuf> {
     out.into_iter().filter(|p| p.is_dir()).collect()
 }
 
+/// One part of a split set: a name ending `-00002-of-00003.gguf`. Byte-wise,
+/// so a non-ASCII name can never split a char.
+fn is_split_part(name: &str) -> bool {
+    let b = name.as_bytes();
+    if b.len() < 20 || !b[b.len() - 5..].eq_ignore_ascii_case(b".gguf") {
+        return false;
+    }
+    let t = &b[b.len() - 20..b.len() - 5];
+    t[0] == b'-'
+        && t[1..6].iter().all(|c| c.is_ascii_digit())
+        && t[6..10].eq_ignore_ascii_case(b"-of-")
+        && t[10..15].iter().all(|c| c.is_ascii_digit())
+}
+
 /// GGUF files already on this machine: in the folders other tools use, plus
 /// any folder the caller names (one the user picked). Depth-limited, so a
 /// mistaken pick of a drive root does not walk it.
@@ -900,8 +914,13 @@ pub fn local_models_scan(dirs: Option<Vec<String>>) -> serde_json::Value {
         gguf_entries(root, 5, &mut files, false);
     }
     // llama.cpp ships tiny vocab-only .gguf files (ggml-vocab-*.gguf); they
-    // are not models. Anything under 64 MB is not one either.
-    files.retain(|f| f.bytes >= SCAN_MIN_BYTES && !f.file.to_ascii_lowercase().starts_with("ggml-vocab-"));
+    // are not models. Anything under 64 MB is not one either -- except a part
+    // of a split set, whose last part can be small; the frontend folds the
+    // parts into one model.
+    files.retain(|f| {
+        (f.bytes >= SCAN_MIN_BYTES || is_split_part(&f.file))
+            && !f.file.to_ascii_lowercase().starts_with("ggml-vocab-")
+    });
     files.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     serde_json::json!({
         "dirs": roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -985,6 +1004,16 @@ mod tests {
         assert_eq!(a.len(), 48);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn split_parts_are_recognised_by_their_suffix() {
+        assert!(is_split_part("x-UD-Q4_K_XL-00003-of-00003.gguf"));
+        assert!(is_split_part("X-00001-OF-00002.GGUF"));
+        assert!(!is_split_part("x-UD-Q4_K_XL.gguf"));
+        assert!(!is_split_part("x-0001-of-00003.gguf"));
+        assert!(!is_split_part("-of-.gguf"));
+        assert!(!is_split_part("ñ-00001-of-00002.gguf.part"));
     }
 
     #[test]
