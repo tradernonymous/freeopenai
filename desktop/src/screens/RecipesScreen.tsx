@@ -33,10 +33,12 @@ type RunEntry = import('../recipes.js').RunEntry;
 //     first time a recipe's servers would start, and gives it their tools.
 //   * "Run now" and the scheduler run it in the background, each into a new
 //     chat titled "<recipe> · <time>", with a notification. They use Chat's
-//     tool loop (runTurn + executeTool) but only with tools that never ask:
-//     read-only built-ins and the recipe's "always allow" MCP tools. A call
-//     that would ask is refused inside the run (recipes.js
-//     backgroundRefusal), and a local server starts only if this recipe
+//     tool loop (runTurn + executeTool). A call that would ask pauses the
+//     run (recipes.js backgroundGate): a notification, an approval card at
+//     the top of this screen (Allow once / Deny / Always for this recipe),
+//     and the answer resumes it; 30 minutes unanswered is the refusal it
+//     always was (NEURA-036). Sub-agents and servers the recipe does not list
+//     are still refused, and a local server starts only if this recipe
 //     already has consent for it.
 
 const RUN_TIMEOUT_MS = 180000;
@@ -102,33 +104,70 @@ export async function runRecipeInBackground(recipe: Recipe, values: Record<strin
   if (!target) return done({ ok: false, error: 'No model: set one on the recipe, or chat once so there is a model to use.' });
   const agent = recipesLib.asAgent(recipe);
   const controller = new AbortController();
-  const clock = setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
+  // The run's own clock stops while it waits for a person (NEURA-036); the
+  // approval has its own, longer deadline (recipes.js APPROVAL_TIMEOUT_MS).
+  let remaining = RUN_TIMEOUT_MS;
+  let armedAt = Date.now();
+  let clock: ReturnType<typeof setTimeout> | undefined = setTimeout(() => controller.abort(), remaining);
+  const pauseClock = () => {
+    if (clock === undefined) return;
+    clearTimeout(clock);
+    clock = undefined;
+    remaining -= Date.now() - armedAt;
+  };
+  const resumeClock = () => {
+    if (clock !== undefined) return;
+    armedAt = Date.now();
+    clock = setTimeout(() => controller.abort(), Math.max(remaining, 5000));
+  };
   try {
     const toolsOn = toolsLib.enabled();
     const { usable, notes } = toolsOn ? await prepareServers(recipe) : { usable: [] as string[], notes: [] as string[] };
     // No folder is open for a background run, so the local file tools are
-    // not offered; GitHub's reads are, and its writes are filtered out.
+    // not offered. GitHub's reads are; its writes are too, and ask first.
     const offered = toolsOn
       ? recipesLib.backgroundOffer(recipe, toolsLib.catalogue({ github: true, localRoot: '', shell: false }), (n) => toolsLib.needsApproval(n), usable)
       : [];
+    const usableFor = (name: string) => usable.some((s) => name.startsWith(`mcp__${toolsLib.slug(s)}__`));
+    const gateFor = (name: string) => recipesLib.backgroundGate(recipe, { name, asks: toolsLib.needsApproval(name), usable: usableFor(name) });
+    // What approve() decided for a call that asked: '' runs it, text is its
+    // result instead (the refusal, when nobody answered in time).
+    const verdicts = new Map<string, string>();
     const events: ToolEvent[] = [];
     let last = '';
     await runTurn({
       messages: agentsLib.messagesFor(agent, filled.text, []),
       tools: offered,
       stream: streamFor(target),
-      // The one gate: a call that may not run here gets the refusal as its
-      // result instead of running. approve() below is only reached for calls
-      // that would ask, and those are all refused here -- nothing is prompted.
+      // The one gate (recipes.js backgroundGate): 'refuse' gets the refusal as
+      // its result, 'run' runs, and 'ask' runs only once approve() said yes.
       execute: (call, args) => {
-        const refusal = recipesLib.backgroundRefusal(recipe, {
-          name: call.name,
-          asks: toolsLib.needsApproval(call.name),
-          usable: usable.some((s) => call.name.startsWith(`mcp__${toolsLib.slug(s)}__`)),
-        });
-        return refusal ? Promise.resolve(refusal) : executeTool(call, args, { localRoot: '' });
+        const verdict = verdicts.get(call.id);
+        if (verdict !== undefined) return verdict ? Promise.resolve(verdict) : executeTool(call, args, { localRoot: '' });
+        const gate = gateFor(call.name);
+        return gate.action === 'run' ? executeTool(call, args, { localRoot: '' }) : Promise.resolve(gate.text);
       },
-      approve: async () => true,
+      // A call that would ask pauses the run: a notification, a card under
+      // Library → Recipes, and the answer (or the timeout) resumes it.
+      approve: async (event) => {
+        const gate = gateFor(event.name);
+        if (gate.action !== 'ask') return true; // execute() runs or refuses it
+        pauseClock();
+        const line = recipesLib.approvalText(recipe.name, event.summary || event.name);
+        notifyUser(`${recipe.name} needs your approval`, line);
+        pushToast('warn', `${line}. See Library → Recipes.`);
+        const decision = await recipesLib.approvals.request({
+          recipeId: recipe.id,
+          recipeName: recipe.name,
+          tool: event.name,
+          summary: event.summary || event.name,
+          asks: event.asks,
+        });
+        resumeClock();
+        if (decision === 'deny') return false;
+        verdicts.set(event.id, decision === 'timeout' ? gate.text : '');
+        return true;
+      },
       onText: (piece) => { last += piece; },
       onTool: (event) => {
         last = '';
@@ -167,8 +206,38 @@ export async function runRecipeInBackground(recipe: Recipe, values: Record<strin
     notifyUser(`${recipe.name} failed`, message);
     return done({ ok: false, error: message });
   } finally {
-    clearTimeout(clock);
+    if (clock !== undefined) clearTimeout(clock);
   }
+}
+
+/**
+ * The paused background runs' questions (NEURA-036), from recipes.js
+ * approvals: one card each, Allow once / Deny / Always for this recipe.
+ */
+function RecipeApprovals() {
+  const [pending, setPending] = useState(() => recipesLib.approvals.pending());
+  useEffect(() => recipesLib.approvals.subscribe(setPending), []);
+  if (!pending.length) return null;
+  const minutesLeft = (at: number) => Math.max(1, Math.ceil((at - Date.now()) / 60000));
+  return (
+    <section className="recipe-approvals" aria-label="Recipes waiting for approval">
+      {pending.map((p) => (
+        <div key={p.id} className="recipe-approval" role="group" aria-label={`${p.recipeName} wants approval`}>
+          <div className="recipe-approval-text">
+            <span><strong>{p.recipeName}</strong> wants to {p.summary.charAt(0).toLowerCase() + p.summary.slice(1)}</span>
+            <span className="recipe-approval-meta">
+              {p.asks ? `It ${p.asks}. ` : ''}Denied automatically in {minutesLeft(p.expiresAt)} min.
+            </span>
+          </div>
+          <div className="recipe-approval-actions">
+            <button type="button" className="primary" onClick={() => recipesLib.approvals.answer(p.id, 'once')}>Allow once</button>
+            <button type="button" onClick={() => recipesLib.approvals.answer(p.id, 'deny')}>Deny</button>
+            <button type="button" onClick={() => recipesLib.approvals.answer(p.id, 'always')} title={`Always allow ${p.tool} for ${p.recipeName}`}>Always for this recipe</button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 // The scheduler that calls runRecipeInBackground lives in ../schedulers.ts, so
@@ -366,6 +435,7 @@ export default function RecipesScreen() {
           <button onClick={() => download('neuraos-recipes.json', recipesLib.exportJson(recipes))} disabled={!recipes.length}>Export all</button>
         </div>
       </header>
+      <RecipeApprovals />
       <input
         ref={fileRef}
         type="file"

@@ -94,3 +94,58 @@ test('the shell gathers the facts and the frontend owns the wording', () => {
   assert.match(card, /buildReport/);
   assert.match(card, /clipboard\.writeText/);
 });
+
+// ---- NEURA-035: cold-start marks ------------------------------------------------
+
+function fakePerf() {
+  const marks = [];
+  let t = 0;
+  return {
+    tick(ms) { t += ms; },
+    mark(name) { marks.push({ name, startTime: t }); },
+    getEntriesByName(name, type) { return type === 'mark' ? marks.filter((m) => m.name === name) : []; },
+    marks,
+  };
+}
+
+test('startup marks are set once each and read back in ms since the load began', () => {
+  const perf = fakePerf();
+  assert.deepEqual(diagnostics.startupTimings(perf), { scriptStart: null, firstCommit: null, chatReady: null });
+  perf.tick(120.4);
+  assert.equal(diagnostics.markStartup('script-start', perf), true);
+  assert.equal(diagnostics.markStartup('script-start', perf), false, 'once only');
+  perf.tick(300);
+  diagnostics.markStartup('first-commit', perf);
+  perf.tick(200);
+  diagnostics.markStartup('chat-ready', perf);
+  assert.equal(diagnostics.markStartup('nonsense', perf), false);
+  assert.deepEqual(diagnostics.startupTimings(perf), { scriptStart: 120, firstCommit: 420, chatReady: 620 });
+  assert.deepEqual(perf.marks.map((m) => m.name), ['neura:script-start', 'neura:first-commit', 'neura:chat-ready']);
+});
+
+test('startupLabel says whether chat was ready under the 2 s target', () => {
+  assert.equal(diagnostics.STARTUP_TARGET_MS, 2000);
+  assert.equal(
+    diagnostics.startupLabel({ scriptStart: 120, firstCommit: 420, chatReady: 620 }),
+    'script 120 ms · first commit 420 ms · chat ready 620 ms (target under 2000 ms: met)',
+  );
+  assert.match(diagnostics.startupLabel({ scriptStart: 900, firstCommit: 1800, chatReady: 2400 }), /target under 2000 ms: missed\)$/);
+  assert.match(diagnostics.startupLabel({ scriptStart: 90, firstCommit: 300, chatReady: null }), /\(chat not opened yet\)$/);
+  assert.equal(diagnostics.startupLabel({ scriptStart: null, firstCommit: null, chatReady: null }), '');
+  assert.equal(diagnostics.startupLabel(null), '');
+});
+
+test('Copy diagnostics carries the start-up line; the app sets the marks', () => {
+  const report = diagnostics.buildReport({ shell: {}, client: { startup: { scriptStart: 100, firstCommit: 400, chatReady: 700 } } });
+  assert.match(report, /^startup {4}script 100 ms · first commit 400 ms · chat ready 700 ms \(target under 2000 ms: met\)$/m);
+  assert.doesNotMatch(diagnostics.buildReport({ shell: {}, client: {} }), /startup/);
+  const main = read('desktop', 'src', 'main.tsx');
+  const firstImport = main.split(/\r?\n/).find((l) => l.startsWith('import '));
+  assert.equal(firstImport, "import './diagnostics.js';", 'diagnostics.js loads first, so script-start is early');
+  const app = read('desktop', 'src', 'App.tsx');
+  assert.match(app, /useLayoutEffect\(\(\) => \{ diagnostics\.markStartup\('first-commit'\); \}, \[\]\)/);
+  assert.match(app, /diagnostics\.markStartup\('chat-ready'\)/);
+  const card = read('desktop', 'src', 'components', 'DiagnosticsCard.tsx');
+  assert.match(card, /diagnostics\.startupTimings\(\)/);
+  assert.match(card, /hasShell: hasShell\(\), startup \}/);
+});

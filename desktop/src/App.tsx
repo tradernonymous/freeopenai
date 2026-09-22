@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { api } from './api';
 import Sidebar, { destinationOf, navForKey, navKeys, tabsOf, NAVIGATE_EVENT, type NavId, type ViewId } from './Sidebar';
 import TitleBar from './TitleBar';
@@ -13,7 +13,7 @@ import { useRecipeScheduler, useEvalScheduler } from './schedulers';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { chatStoreBackend, hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
+import { chatStoreBackend, chatStoreSetAside, onAppQuitting, quitReady, hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
 import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
 import { QUICK_HOTKEY_KEY, SELECTION_HOTKEY_KEY } from './components/ShortcutsCard';
 import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
@@ -37,12 +37,14 @@ import './connection.js';
 import './onboarding.js';
 import './commands.js';
 import '../../shared/keymap.js';
+import './diagnostics.js';
 
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
 const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
 const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
 const keymap: typeof import('../../shared/keymap.js') = (globalThis as any).FreeAI4UKeymap;
+const diagnostics: typeof import('./diagnostics.js') = (globalThis as any).FreeAI4UDiagnostics;
 
 // Chat is the default view and stays in the first bundle. The heavy screens
 // are fetched the first time they are opened, so the window paints sooner.
@@ -111,6 +113,7 @@ export default function App() {
   const [outcome, setOutcome] = useState<import('./connection.js').ConnectionOutcome | null>(null);
   const [signedIn, setSignedIn] = useState<boolean>(false);
   const [importMsg, setImportMsg] = useState('');
+  const [chatRecovery, setChatRecovery] = useState<import('./chats.js').ChatRecovery | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Zen is a mode, not a setting: it is deliberately not written to disk,
   // because the app should open looking the same way every time. Ctrl+Shift+Z
@@ -123,6 +126,21 @@ export default function App() {
   useEvalScheduler();
   // The ambient layer's <=6px drift toward the pointer; off under reduced motion.
   useParallax();
+  // Cold-start marks (NEURA-035, reported in Settings → Diagnostics). Layout
+  // effects run right after React's first commit; "chat ready" is the first
+  // frame after paint with Chat's composer in the DOM. Both are set once.
+  useLayoutEffect(() => { diagnostics.markStartup('first-commit'); }, []);
+  useEffect(() => {
+    if (view !== 'chat') return undefined;
+    let frame = 0;
+    let tries = 0;
+    const probe = () => {
+      if (document.querySelector('.composer-box textarea')) { diagnostics.markStartup('chat-ready'); return; }
+      if (++tries < 300) frame = requestAnimationFrame(probe);
+    };
+    frame = requestAnimationFrame(() => { frame = requestAnimationFrame(probe); });
+    return () => cancelAnimationFrame(frame);
+  }, [view]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -162,9 +180,37 @@ export default function App() {
       remove: (key: string) => secretDelete(key),
     });
     hfAuth.hydrate().catch(() => { /* not signed in is a normal state */ });
-    // Chat history: the encrypted SQLite store (chats.js, chat_store.rs).
-    chats.hydrate(chatStoreBackend, { onNotice: (text: string) => pushToast('warn', text) });
+    // Chat history: the encrypted SQLite store (chats.js, chat_store.rs). A key
+    // that cannot open the stored chats asks what to do (NEURA-022).
+    chats.hydrate(chatStoreBackend, {
+      onNotice: (text: string) => pushToast('warn', text),
+      onRecovery: (plan) => setChatRecovery(plan),
+    });
+    // The tray Quit waits (up to ~800 ms) for this: send the edits the 400 ms
+    // debounce still holds, then let the shell exit (NEURA-021).
+    let stopQuit = () => {};
+    onAppQuitting(() => {
+      chats.flush().catch(() => false).finally(() => { quitReady().catch(() => {}); });
+    }).then((unsubscribe) => { stopQuit = unsubscribe; });
+    return () => stopQuit();
   }, []);
+
+  const answerChatRecovery = (choice: import('./chats.js').ChatRecoveryChoice) => {
+    setChatRecovery(null);
+    chats.recover(choice, { setAside: chatStoreSetAside, backend: chatStoreBackend })
+      .then((result) => {
+        if (choice !== 'start-fresh') return;
+        if (result.mode === 'shell') {
+          pushToast('ok', `Started a new encrypted chat history. The old file is kept as ${result.movedTo || 'chats.unreadable-<time>.sqlite3'}.`);
+        } else {
+          pushToast('warn', `The old file was set aside, but the new store did not open (${result.error || 'unknown'}); chats stay in browser storage.`);
+        }
+      })
+      .catch((err: unknown) => {
+        setChatRecovery(chats.recovery());
+        pushToast('error', `Could not set the old chat file aside: ${(err as Error)?.message || String(err)}. Nothing was changed.`);
+      });
+  };
 
   // neuraos://model?repo=...&file=... -- from a Hugging Face "Use this model"
   // entry once NeuraOS is listed there, or the app's own bookmarklet. Nothing
@@ -501,6 +547,16 @@ export default function App() {
           )}
           {banner && (
             <div className="server-banner">{banner}</div>
+          )}
+          {chatRecovery && (
+            <div className="server-banner chat-recovery" role="alert">
+              <span>{chatRecovery.text}</span>
+              {chatRecovery.actions.map((action) => (
+                <button key={action.id} type="button" onClick={() => answerChatRecovery(action.id)}>
+                  {action.label}
+                </button>
+              ))}
+            </div>
           )}
           {installState === 'error' && installError && (
             <div className="server-banner">Update failed: {installError}</div>

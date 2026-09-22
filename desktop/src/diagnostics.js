@@ -15,6 +15,75 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.FreeAI4UDiagnostics = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  // ---- cold start (NEURA-035) -------------------------------------------------
+  //
+  // Three performance marks against the "under 2 s" target, each in ms since
+  // the window started loading (a mark's startTime is relative to timeOrigin):
+  //   script-start  the entry bundle began running (main.tsx imports this
+  //                 file first, and loading it sets the mark)
+  //   first-commit  React committed the app for the first time (App)
+  //   chat-ready    the first frame after that with Chat's composer on screen
+  var STARTUP_MARKS = {
+    'script-start': 'neura:script-start',
+    'first-commit': 'neura:first-commit',
+    'chat-ready': 'neura:chat-ready',
+  };
+  var STARTUP_TARGET_MS = 2000;
+
+  function perfOf(given) {
+    if (given) return given;
+    var scope = typeof globalThis !== 'undefined' ? globalThis : null;
+    return scope && scope.performance && typeof scope.performance.mark === 'function' ? scope.performance : null;
+  }
+
+  function markedAt(perf, stage) {
+    var name = STARTUP_MARKS[stage];
+    if (!perf || !name || typeof perf.getEntriesByName !== 'function') return null;
+    var entries = perf.getEntriesByName(name, 'mark') || [];
+    return entries.length ? Math.round(Number(entries[0].startTime) || 0) : null;
+  }
+
+  /** Sets a startup mark once; a later call for the same stage is ignored. */
+  function markStartup(stage, given) {
+    var perf = perfOf(given);
+    var name = STARTUP_MARKS[stage];
+    if (!perf || !name || markedAt(perf, stage) != null) return false;
+    try {
+      perf.mark(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** { scriptStart, firstCommit, chatReady } in ms since the load began; null = not reached. */
+  function startupTimings(given) {
+    var perf = perfOf(given);
+    return {
+      scriptStart: markedAt(perf, 'script-start'),
+      firstCommit: markedAt(perf, 'first-commit'),
+      chatReady: markedAt(perf, 'chat-ready'),
+    };
+  }
+
+  /** One line: "script 180 ms · first commit 420 ms · chat ready 610 ms (target under 2000 ms: met)". */
+  function startupLabel(timings, targetMs) {
+    var t = timings || {};
+    var target = Number(targetMs) > 0 ? Number(targetMs) : STARTUP_TARGET_MS;
+    var parts = [];
+    if (t.scriptStart != null) parts.push('script ' + t.scriptStart + ' ms');
+    if (t.firstCommit != null) parts.push('first commit ' + t.firstCommit + ' ms');
+    if (t.chatReady != null) parts.push('chat ready ' + t.chatReady + ' ms');
+    if (!parts.length) return '';
+    var verdict = t.chatReady == null
+      ? 'chat not opened yet'
+      : 'target under ' + target + ' ms: ' + (t.chatReady < target ? 'met' : 'missed');
+    return parts.join(' · ') + ' (' + verdict + ')';
+  }
+
+  // Loading this file is the entry bundle starting (see above).
+  markStartup('script-start');
+
   // Anything shaped like a Hub token, an OpenAI key or an Authorization header.
   function redact(text) {
     return String(text == null ? '' : text)
@@ -65,6 +134,7 @@
       line('os        ', [shell.os, shell.arch].filter(Boolean).join(' / ')),
       line('webview2  ', shell.webview2 || 'unknown'),
       line('backends  ', (client.backends || []).join(', ')),
+      line('startup   ', client.startup ? startupLabel(client.startup) : ''),
       line('data      ', shell.data_dir),
       line('cache     ', shell.cache_dir),
       line('crash log ', shell.log_path
@@ -89,5 +159,10 @@
     redact: redact,
     redactUrl: redactUrl,
     bytesLabel: bytesLabel,
+    STARTUP_MARKS: STARTUP_MARKS,
+    STARTUP_TARGET_MS: STARTUP_TARGET_MS,
+    markStartup: markStartup,
+    startupTimings: startupTimings,
+    startupLabel: startupLabel,
   };
 });

@@ -88,5 +88,49 @@ export declare function backgroundOffer<T extends { function: { name: string } }
   asks: (name: string) => string,
   usableServers: string[],
 ): T[];
+/** NEURA-036: what a background run does with a call. */
+export interface BackgroundGate {
+  action: 'run' | 'ask' | 'refuse';
+  /** 'refuse': the tool result; 'ask': the refusal used if nobody answers in time. */
+  text: string;
+}
+export declare function backgroundGate(
+  recipe: Recipe | null,
+  call: { name: string; asks?: string; usable?: boolean },
+  storage?: any,
+): BackgroundGate;
+export declare const ALWAYS_KEY: string;
+export declare const APPROVAL_TIMEOUT_MS: number;
+export declare function recipeAllows(recipeId: string, tool: string, storage?: any): boolean;
+export declare function allowForRecipe(recipeId: string, tool: string, storage?: any): boolean;
+export declare function approvalText(recipeName: string, summary: string): string;
+export type ApprovalDecision = 'once' | 'always' | 'deny' | 'timeout';
+export interface PendingApproval {
+  id: string;
+  recipeId: string;
+  recipeName: string;
+  tool: string;
+  summary: string;
+  asks: string;
+  at: number;
+  expiresAt: number;
+}
+export interface ApprovalQueue {
+  request(item: { recipeId: string; recipeName?: string; tool: string; summary?: string; asks?: string }): Promise<ApprovalDecision>;
+  answer(id: string, decision: 'once' | 'always' | 'deny'): boolean;
+  sweep(at?: number): number;
+  pending(): PendingApproval[];
+  subscribe(fn: (pending: PendingApproval[]) => void): () => void;
+  timeoutMs: number;
+}
+export declare function approvalQueue(options?: {
+  now?: () => number;
+  timeoutMs?: number;
+  setTimer?: ((fn: () => void, ms: number) => any) | null;
+  clearTimer?: (handle: any) => void;
+  storage?: any;
+}): ApprovalQueue;
+/** The app's one queue of paused background-run approvals. */
+export declare const approvals: ApprovalQueue;
 export declare function asAgent(recipe: Recipe): import('./agents.js').Agent;
 export declare function template(): Partial<Recipe>;

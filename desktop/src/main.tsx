@@ -8,6 +8,10 @@
 //
 // The listeners only paint while #root is still EMPTY: an ordinary error in a
 // working app must not replace a running UI.
+//
+// First import, on purpose: loading diagnostics.js sets the "script-start"
+// performance mark (NEURA-035), before React and the app's modules evaluate.
+import './diagnostics.js';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';

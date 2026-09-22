@@ -193,7 +193,9 @@ test('ui/message fills the draft via an event and never sends; height is clamped
 
 test('ToolCards draws the app under a finished call with a show/hide toggle', () => {
   const src = read('desktop', 'src', 'components', 'ToolCards.tsx');
-  assert.match(src, /import McpAppFrame from '\.\/McpAppFrame'/);
+  // Lazy (NEURA-035): the frame's code loads the first time an app shows.
+  assert.match(src, /const McpAppFrame = lazy\(\(\) => import\('\.\/McpAppFrame'\)\)/);
+  assert.match(src, /<Suspense fallback=\{null\}>\s*<McpAppFrame /);
   assert.match(src, /mcpAppFor\(event\.name\)/);
   assert.match(src, /event\.status === 'done'/);
   assert.match(src, /mcp-app-toggle/);

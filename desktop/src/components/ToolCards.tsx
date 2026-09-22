@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import Icon from './Icon';
-import McpAppFrame from './McpAppFrame';
 import type { ToolEvent } from '../agent-turn';
 import { mcpAppFor } from '../tool-run';
+
+// Only an MCP App result shows a frame, so its code loads the first time one
+// does (NEURA-035: kept out of the first bundle).
+const McpAppFrame = lazy(() => import('./McpAppFrame'));
 
 // What a model did, under the reply it did it for.
 //
@@ -107,7 +110,9 @@ export default function ToolCards({ events, onDecide, expandAll }: Props) {
               </div>
             )}
             {app && appShown && (
-              <McpAppFrame toolName={event.name} callId={event.id} args={event.args} result={event.result} />
+              <Suspense fallback={null}>
+                <McpAppFrame toolName={event.name} callId={event.id} args={event.args} result={event.result} />
+              </Suspense>
             )}
             {asking && (
               <div className="tool-card-ask">

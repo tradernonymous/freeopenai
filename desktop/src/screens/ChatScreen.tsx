@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, lazy, Suspense, type ComponentType } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
 import { hasShell, listLocalDir, localModelStatus, mcpStdioList, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import { renderMermaid } from '../diagram';
-import { startRecording, transcribe, type Recording } from '../dictate';
+import { localSetup, startRecording, transcribeAuto, type Recording } from '../dictate';
 import { captureScreen, imageFileToDataUrl, imagesIn, withImages, MAX_IMAGES } from '../attach-image';
 import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
@@ -12,14 +12,11 @@ import { NAVIGATE_EVENT } from '../Sidebar';
 // UMD modules: loaded for their side effect, read off globalThis.
 import RadialMenu, { type RadialItem } from '../components/RadialMenu';
 import { pushToast } from '../components/Toasts';
-import RunSettings from '../components/RunSettings';
 import ToolCards from '../components/ToolCards';
+// Eager on purpose: Settings (ConnectorsCard) imports it too, so a lazy import
+// here would not move it out of the first bundle.
 import HfSignIn from '../components/HfSignIn';
-import CompareDrawer from '../components/CompareDrawer';
 import { modelTargets } from '../stream-any';
-import '../files/zip.js';
-import '../files/office.js';
-import '../files/pdf.js';
 import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
 import { executeTool, startStdio, stdioId } from '../tool-run';
@@ -36,8 +33,21 @@ import '../local-models.js';
 import '../hf-auth.js';
 import '../hf-inference.js';
 import '../threads.js';
+import '../research.js';
+import { saveFile } from '../files/save';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
+// /research: the pure parts (plan, sources, citations, graph, export).
+const research: typeof import('../research.js') = (globalThis as any).FreeAI4UResearch;
+type ResearchSource = import('../research.js').ResearchSource;
+type ResearchGraph = import('../research.js').ResearchGraph;
+// The graph layout is only needed once someone asks for a graph, so it loads then.
+let diagramLoad: Promise<typeof import('../design/diagram-layout.js')> | null = null;
+const loadDiagram = () => {
+  if (!diagramLoad) diagramLoad = import('../design/diagram-layout.js').then(() => (globalThis as any).FreeAI4UDiagramLayout);
+  return diagramLoad;
+};
+const hostOf = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
 const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFallback;
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
@@ -45,8 +55,48 @@ const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAut
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
-const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
-const pdf: typeof import('../files/pdf.js') = (globalThis as any).FreePdf;
+// ---- lazy parts (NEURA-035: a smaller first bundle, same behaviour) ----
+//
+// The attachment readers (zip, then office and pdf, which read FreeZip as they
+// load) are fetched the first time a document is attached. `office` and `pdf`
+// keep their shape: a call before the load waits for it; afterwards (e.g.
+// office.sheetToText after extractXlsxSheets) it is the module's own function.
+let fileReadersLoad: Promise<unknown> | null = null;
+const loadFileReaders = () => {
+  if (!fileReadersLoad) {
+    fileReadersLoad = import('../files/zip.js')
+      .then(() => Promise.all([import('../files/office.js'), import('../files/pdf.js')]))
+      .catch((e) => { fileReadersLoad = null; throw e; });
+  }
+  return fileReadersLoad;
+};
+function lazyUmd<T extends object>(global: string): T {
+  return new Proxy({} as T, {
+    get: (_target, key) => {
+      const loaded = (globalThis as any)[global];
+      if (loaded) return loaded[key];
+      return async (...args: unknown[]) => {
+        await loadFileReaders();
+        return (globalThis as any)[global][key](...args);
+      };
+    },
+  });
+}
+const office = lazyUmd<typeof import('../files/office.js')>('FreeOffice');
+const pdf = lazyUmd<typeof import('../files/pdf.js')>('FreePdf');
+
+// Parts not needed for the first paint: their own chunks, fetched right after
+// it. Both drawers render nothing while closed, so they look exactly as
+// before once their chunk is in (a few ms after the first paint).
+function afterPaint<P extends object>(load: () => Promise<{ default: ComponentType<P> }>) {
+  const Lazy = lazy(load) as unknown as ComponentType<P>;
+  return function AfterPaint(props: P) {
+    return <Suspense fallback={null}><Lazy {...props} /></Suspense>;
+  };
+}
+const RunSettings = afterPaint(() => import('../components/RunSettings'));
+const CompareDrawer = afterPaint(() => import('../components/CompareDrawer'));
+
 const threads: typeof import('../threads.js') = (globalThis as any).FreeAI4UThreads;
 const agentsLib: typeof import('../agents.js') = (globalThis as any).FreeAI4UAgents;
 const recipesLib: typeof import('../recipes.js') = (globalThis as any).FreeAI4URecipes;
@@ -85,6 +135,10 @@ export interface Msg {
   images?: string[];
   /** The agent (or recipe) that wrote this reply, for its label. */
   agent?: string;
+  /** /research: the numbered sources this reply cites as [n]. */
+  sources?: ResearchSource[];
+  /** /research: what was asked and when, what the citation check found, and the graph once drawn. */
+  research?: { question: string; date: number; noSources?: boolean; uncited?: number; graph?: ResearchGraph };
 }
 
 export interface ChatSession {
@@ -696,6 +750,235 @@ export default function ChatScreen() {
     await runAgentInChat(recipesLib.asAgent(recipe), filled.text, filled.text);
   };
 
+  // ---- research (/research) ---------------------------------------------------
+  //
+  // Plan -> search -> read -> write, through the SAME web_search / web_fetch
+  // tools the model can call (executeTool; both are read-only, so neither is
+  // in tools.ASKS and neither asks). The thread gets the question, a progress
+  // note that is never sent, and the reply with its numbered sources on it.
+  // No search (no provider, offline, an older engine): the model answers
+  // alone, labelled as having no sources -- never with invented citations.
+
+  /** One model call on this chat's streamer, collected; `onText` sees it as it streams. */
+  const askModel = async (provider: string, model: string, messages: Array<{ role: string; content: string }>, signal?: AbortSignal, onText?: (piece: string) => void) => {
+    let out = '';
+    await streamer(provider, model)(messages, undefined, (frame) => {
+      if (!frame.content) return;
+      out += frame.content;
+      onText?.(frame.content);
+    }, signal);
+    return out;
+  };
+
+  const patchMsgAt = (sid: string, index: number, patch: (m: Msg) => Partial<Msg>) => setSessions((prev) => prev.map((s) => {
+    if (s.id !== sid || !s.messages[index]) return s;
+    const msgs = s.messages.slice();
+    msgs[index] = { ...msgs[index], ...patch(msgs[index]) };
+    return { ...s, messages: msgs, updatedAt: Date.now() };
+  }));
+
+  const runResearch = async (question: string, base?: Msg[]) => {
+    if (!active || sending) return;
+    if (!question) {
+      addNote('**Research** — `/research <question>`: plans searches, reads the top pages, and answers with numbered citations. Under the reply: a knowledge graph, and Markdown or PDF export.');
+      return;
+    }
+    if (!active.model) { pushToast('warn', 'Pick a model first (Ctrl+M).'); return; }
+    const sid = active.id;
+    const { provider, model } = active;
+    const label = choices.find((c) => c.id === provider)?.label || provider;
+    const date = Date.now();
+    const history = base || active.messages;
+    const noteAt = history.length + 1;
+    const replyAt = history.length + 2;
+    patchSession(sid, {
+      messages: [
+        ...history,
+        { role: 'user', content: question, ts: date },
+        { role: 'assistant', content: research.progressText('plan'), note: true, model: 'NeuraOS', ts: date },
+        { role: 'assistant', content: '', model, provider, providerLabel: label, ts: date, sources: [], research: { question, date } },
+      ],
+      draft: '',
+      title: history.length === 0 ? threads.autoTitle(question) : active.title,
+    });
+    setSending(true);
+    stickToBottom.current = true;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signal = controller.signal;
+    const aborted = (err: unknown) => (err as Error)?.name === 'AbortError' || signal.aborted;
+    const note = (content: string) => patchMsgAt(sid, noteAt, () => ({ content }));
+    const upsert = upsertToolIn(sid);
+    // A search card is the same card a model's own web_search makes.
+    const runTool = async (id: string, name: 'web_search' | 'web_fetch', args: Record<string, string>) => {
+      const event: ToolEvent = { id, name, args, summary: toolsLib.summarise(name, args), asks: '', status: 'running' };
+      upsert(event);
+      try {
+        const out = await executeTool({ id, name, arguments: JSON.stringify(args) }, args, { localRoot: '' });
+        const failed = /^\s*Error:/.test(out);
+        upsert({ ...event, status: failed ? 'error' : 'done', result: toolsLib.clip(out) });
+        return { out: failed ? '' : out, error: failed ? out.replace(/^\s*Error:\s*/, '') : '' };
+      } catch (err) {
+        if (aborted(err)) throw err;
+        const message = ((err as Error).message || String(err)).split('\n')[0];
+        upsert({ ...event, status: 'error', result: `Error: ${message}` });
+        return { out: '', error: message };
+      }
+    };
+    try {
+      // 1. Plan. A model that cannot plan still gets the question searched as asked.
+      let queries: string[];
+      try {
+        queries = research.parseQueries(await askModel(provider, model, research.planMessages(question, date), signal), question);
+      } catch (err) {
+        if (aborted(err)) throw err;
+        queries = [question];
+      }
+      // 2. Search, all queries at once; sources deduped by URL and numbered.
+      note(research.progressText('search', { queries: queries.length }));
+      const found = await Promise.all(queries.map(async (query, k) => {
+        const got = await runTool(`research-search-${k}`, 'web_search', { query });
+        return { rows: research.parseSearchResults(got.out).slice(0, research.RESULTS_PER_QUERY), error: got.error };
+      }));
+      let sources: ResearchSource[] = [];
+      found.forEach((f, k) => { sources = research.addSources(sources, f.rows, k); });
+      let turns;
+      if (sources.length) {
+        // 3. Read the top pages, capped per page and in total.
+        const pages = research.pickPages(sources);
+        note(research.progressText('read', { queries: queries.length, sources: sources.length, pages: pages.length }));
+        patchMsgAt(sid, replyAt, () => ({ sources }));
+        const texts: Record<number, string> = {};
+        await Promise.all(pages.map(async (src) => {
+          const got = await runTool(`research-read-${src.n}`, 'web_fetch', { url: src.url });
+          const page = research.clipPage(got.out);
+          if (page) texts[src.n] = page;
+        }));
+        note(research.progressText('write', { queries: queries.length, sources: sources.length, pages: pages.length }));
+        turns = research.synthesisMessages(question, sources, texts, date);
+      } else {
+        // NEURA-041: search is unavailable or found nothing -- say so, and answer without sources.
+        const why = found.map((f) => f.error).find(Boolean) || 'no results for any query';
+        note(`**Research** · Web search is unavailable (${why.slice(0, 160)}). This answer is from the model alone, with no sources.`);
+        pushToast('warn', 'Web search is unavailable — answering from the model alone, without sources.');
+        patchMsgAt(sid, replyAt, (m) => ({ research: { ...m.research!, noSources: true } }));
+        turns = research.noSourcesMessages(question, date);
+      }
+      // 4. Write, streamed into the reply.
+      const answer = await askModel(provider, model, turns, signal, (piece) => {
+        patchMsgAt(sid, replyAt, (m) => ({ content: m.content + piece }));
+        if (stickToBottom.current) scrollToBottom(false);
+      });
+      // Citations to sources that do not exist are removed; uncited paragraphs are counted.
+      const check = research.checkCitations(answer, sources.length);
+      patchMsgAt(sid, replyAt, (m) => ({ content: check.text, research: { ...m.research!, uncited: sources.length ? check.uncited.length : 0 } }));
+      if (sources.length) {
+        const pagesRead = research.pickPages(sources).length;
+        note(`${research.progressText('done', { queries: queries.length, sources: sources.length, pages: pagesRead })}${check.unknown.length ? ` · removed citations to missing sources ${check.unknown.map((n) => `[${n}]`).join(' ')}` : ''}`);
+      }
+    } catch (err) {
+      if (aborted(err)) {
+        note('**Research** · Stopped.');
+      } else {
+        const told = failure.attribute({ provider, providerLabel: label, model, message: (err as Error).message });
+        patchMsgAt(sid, replyAt, () => ({ error: true, failure: told }));
+      }
+    } finally {
+      setSending(false);
+      abortRef.current = null;
+      setTimeout(() => setSessions((prev) => { saveSessions(prev); return prev; }), 0);
+    }
+  };
+
+  /** A failed research reply runs again from its question, not as a plain chat turn. */
+  const rerunResearch = (index: number) => {
+    const msg = active?.messages[index];
+    if (!active || !msg?.research) return;
+    let u = index - 1;
+    while (u >= 0 && active.messages[u].role !== 'user') u -= 1;
+    runResearch(msg.research.question, active.messages.slice(0, Math.max(0, u)));
+  };
+
+  const [graphBusy, setGraphBusy] = useState<number | null>(null);
+  // Only the graph's JSON is kept on the message; the SVG is drawn from it on
+  // screen, so a chat file brought in from elsewhere cannot carry markup.
+  const [diagramLib, setDiagramLib] = useState<typeof import('../design/diagram-layout.js') | null>(null);
+  const needsDiagram = !!active?.messages.some((m) => m.research?.graph);
+  useEffect(() => {
+    if (needsDiagram && !diagramLib) loadDiagram().then((lib) => setDiagramLib(lib), () => {});
+  }, [needsDiagram, diagramLib]);
+  const graphSvg = (graph: ResearchGraph, title: string, onScreen: boolean, lib = diagramLib) => {
+    if (!lib) return '';
+    try {
+      const clean = lib.normalize(graph);
+      if (!clean.nodes.length) return '';
+      // On screen the app's own tokens, so it follows the theme; on paper the defaults.
+      return lib.toSvg(clean, onScreen
+        ? { title, paper: 'var(--bg-2)', ink: 'var(--text-1)', muted: 'var(--text-3)', line: 'var(--border)', accent: 'var(--accent)' }
+        : { title });
+    } catch {
+      return '';
+    }
+  };
+  const knowledgeGraph = async (index: number) => {
+    const msg = active?.messages[index];
+    if (!active || !msg?.research || graphBusy !== null) return;
+    const sid = active.id;
+    setGraphBusy(index);
+    try {
+      const reply = await askModel(msg.provider || active.provider, msg.model || active.model, research.graphMessages(msg.research.question, msg.content));
+      const graph = research.parseGraph(reply);
+      if (!graph.nodes.length) { pushToast('warn', graph.message); return; }
+      if (graph.message) pushToast('info', graph.message);
+      setDiagramLib(await loadDiagram());
+      setSessions((prev) => {
+        const next = prev.map((s) => {
+          if (s.id !== sid || !s.messages[index]?.research) return s;
+          const msgs = s.messages.slice();
+          msgs[index] = { ...msgs[index], research: { ...msgs[index].research!, graph } };
+          return { ...s, messages: msgs, updatedAt: Date.now() };
+        });
+        saveSessions(next);
+        return next;
+      });
+    } catch (err) {
+      pushToast('error', `Knowledge graph: ${((err as Error).message || String(err)).split('\n')[0]}`);
+    } finally {
+      setGraphBusy(null);
+    }
+  };
+
+  const researchSlug = (msg: Msg) => (msg.research?.question || 'research').replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'research';
+
+  const exportResearchMarkdown = (msg: Msg) => {
+    if (!msg.research) return;
+    const md = research.exportMarkdown({ question: msg.research.question, answer: msg.content, sources: msg.sources || [], date: msg.research.date, model: msg.model });
+    saveFile({ name: `${researchSlug(msg)}.md`, bytes: new TextEncoder().encode(md), mime: 'text/markdown' })
+      .then((said) => pushToast('ok', said || 'Saved.'))
+      .catch((e: unknown) => pushToast('error', ((e as Error).message || String(e)).split('\n')[0]));
+  };
+
+  // PDF: there is no PDF writer in the app (files/pdf.js only reads), so the
+  // WebView2 print engine is the PDF pipeline, as in Design: a clean page is
+  // printed from a throwaway frame (no same-origin, allowed only to open the
+  // print dialog) and "Microsoft Print to PDF" / "Save as PDF" writes the file.
+  const exportResearchPdf = async (msg: Msg) => {
+    if (!msg.research) return;
+    const sources = msg.sources || [];
+    const bodyHtml = research.superscriptCitations(renderMarkdown(research.linkCitations(msg.content, sources)));
+    let paperGraph = '';
+    if (msg.research.graph) {
+      try { paperGraph = graphSvg(msg.research.graph, 'Knowledge graph', false, await loadDiagram()); } catch { paperGraph = ''; }
+    }
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts allow-modals');
+    frame.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;';
+    frame.srcdoc = research.printHtml({ question: msg.research.question, bodyHtml, sources, date: msg.research.date, model: msg.model, graphSvg: paperGraph, autoPrint: true });
+    document.body.appendChild(frame);
+    setTimeout(() => frame.remove(), 120000);
+    pushToast('info', 'In the print dialog, choose “Microsoft Print to PDF” (or Save as PDF).');
+  };
+
   const send = async () => {
     if (!active || sending) return;
     const text = (active.draft || '').trim();
@@ -1047,7 +1330,7 @@ export default function ChatScreen() {
       recording.current = null;
       setDictation('working');
       try {
-        const words = await transcribe(await rec.stop(), hfToken || '');
+        const words = await transcribeAuto(await rec.stop(), hfToken || '');
         if (words) patchSession(active.id, { draft: active.draft ? `${active.draft.replace(/\s+$/, '')} ${words}` : words });
         else pushToast('info', 'Nothing was heard.');
       } catch (e) {
@@ -1058,8 +1341,9 @@ export default function ChatScreen() {
       }
       return;
     }
-    if (!hfToken) {
-      pushToast('info', 'Dictation uses Whisper on Hugging Face: sign in under Settings → Connectors. Windows can also type what you say — press Win+H.');
+    // A local whisper.cpp set up in Settings → Dictation is enough on its own.
+    if (!hfToken && !(await localSetup()).ready) {
+      pushToast('info', 'Dictation needs whisper.cpp set up in Settings → Dictation, or a Hugging Face sign-in (Settings → Connectors). Windows can also type what you say — press Win+H.');
       inputRef.current?.focus();
       return;
     }
@@ -1239,6 +1523,7 @@ export default function ChatScreen() {
         runAgentInChat(agent, task, task ? `Ask the ${agent.name} agent: ${task}` : `Run the ${agent.name} agent.`);
         return;
       }
+      case 'research': clear(); runResearch(arg); return;
       case 'recipe': {
         clear();
         const id = agentsLib.parseCommand(arg).id;
@@ -1517,13 +1802,59 @@ export default function ChatScreen() {
             )}
             {msg.role === 'assistant'
               ? (msg.content
-                ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                ? <div
+                    className="message-content"
+                    // A research reply's [n] become superscript links to its sources.
+                    dangerouslySetInnerHTML={{ __html: msg.sources?.length
+                      ? research.superscriptCitations(renderMarkdown(research.linkCitations(msg.content, msg.sources)))
+                      : renderMarkdown(msg.content) }}
+                  />
                 : null)
               : msg.shell
                 ? <pre className="message-content shell-output">{msg.shell}</pre>
                 : <div className="message-content">{msg.content}</div>}
             {msg.role === 'assistant' && msg.tools && msg.tools.length > 0 && (
               <ToolCards events={msg.tools} expandAll={cardsOpen} onDecide={sending && i === active.messages.length - 1 ? decide : undefined} />
+            )}
+            {msg.research && msg.content && !msg.error && !(sending && i === active.messages.length - 1) && (
+              <div className="research-footer">
+                {msg.research.noSources && <div className="research-nosources">{research.NO_SOURCES_LABEL}</div>}
+                {msg.sources && msg.sources.length > 0 && (
+                  <details className="research-sources" open>
+                    <summary>Sources ({msg.sources.length})</summary>
+                    <ol>
+                      {msg.sources.map((src) => (
+                        <li key={src.n} value={src.n}>
+                          {/^https?:\/\//i.test(src.url)
+                            ? <a href={src.url} target="_blank" rel="noreferrer">{src.title}</a>
+                            : <span>{src.title}</span>}
+                          <span className="research-host">{hostOf(src.url)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                )}
+                {!!msg.research.uncited && (
+                  <div className="research-warn">
+                    {msg.research.uncited} paragraph{msg.research.uncited === 1 ? '' : 's'} carr{msg.research.uncited === 1 ? 'ies' : 'y'} no citation — check {msg.research.uncited === 1 ? 'it' : 'them'} before relying on {msg.research.uncited === 1 ? 'it' : 'them'}.
+                  </div>
+                )}
+                {msg.research.graph && (
+                  <details className="research-graph" open>
+                    <summary>Knowledge graph</summary>
+                    {msg.research.graph.message && <div className="research-warn">{msg.research.graph.message}</div>}
+                    {/* Drawn here from the JSON by diagram-layout, which escapes every label. */}
+                    <div className="research-graph-view" dangerouslySetInnerHTML={{ __html: graphSvg(msg.research.graph, `Knowledge graph: ${msg.research.question}`, true) || 'Drawing…' }} />
+                  </details>
+                )}
+                <div className="research-actions">
+                  <button onClick={() => knowledgeGraph(i)} disabled={graphBusy !== null || sending}>
+                    {graphBusy === i ? 'Drawing…' : msg.research.graph ? 'Redraw graph' : 'Knowledge graph'}
+                  </button>
+                  <button onClick={() => exportResearchMarkdown(msg)}>Export Markdown</button>
+                  <button onClick={() => { exportResearchPdf(msg); }}>Export PDF</button>
+                </div>
+              </div>
             )}
             {/* What failed, what it was asked of (which the label above already
                 names), the provider's own words, and what to do next -- instead
@@ -1537,8 +1868,10 @@ export default function ChatScreen() {
                 {msg.failure.upstream && <div className="failure-upstream">{msg.failure.upstream}</div>}
                 <div className="failure-advice">{msg.failure.advice}</div>
                 <div className="failure-actions">
-                  <button onClick={() => retry()} disabled={sending}>Retry {msg.model}</button>
-                  {models.length > 1 && (
+                  {msg.research
+                    ? <button onClick={() => rerunResearch(i)} disabled={sending}>Retry research</button>
+                    : <button onClick={() => retry()} disabled={sending}>Retry {msg.model}</button>}
+                  {models.length > 1 && !msg.research && (
                     <button
                       onClick={() => retry(failure.nextModel(msg.model || '', models))}
                       disabled={sending}

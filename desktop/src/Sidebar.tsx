@@ -12,8 +12,20 @@
 // server). Folder and Terminal are now the local ones -- real files on this
 // machine, which is what a desktop app should answer for -- and the engine's
 // two live under Settings → Advanced, labelled for what they are.
+import { useEffect, useState } from 'react';
 import Icon, { type IconName } from './components/Icon';
 import { APP_VERSION } from './version';
+// Paused background recipe runs waiting for an answer (NEURA-036): a badge on
+// Library, whose Recipes tab holds the approval cards.
+import './recipes.js';
+
+const recipesLib: typeof import('./recipes.js') = (globalThis as any).FreeAI4URecipes;
+
+function usePendingApprovals(): number {
+  const [count, setCount] = useState(() => recipesLib.approvals.pending().length);
+  useEffect(() => recipesLib.approvals.subscribe((rows) => setCount(rows.length)), []);
+  return count;
+}
 
 // The ONE list of destinations and their keys. App.tsx resolves Alt+N from it,
 // the command palette shows its keys, and test/desktop-shortcuts.test.js holds
@@ -111,6 +123,7 @@ interface SidebarProps {
 // an existing install updates in place and existing chats and settings survive
 // the rename.
 export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels }: SidebarProps) {
+  const approvals = usePendingApprovals();
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -129,12 +142,17 @@ export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePan
           <button
             key={item.id}
             className={`sidebar-btn ${destinationOf(active) === item.id ? 'active' : ''}`}
-            onClick={() => onNavigate(item.id)}
-            title={`${item.label} — ${item.keys}`}
+            onClick={() => onNavigate(item.id === 'library' && approvals ? 'recipes' : item.id)}
+            title={item.id === 'library' && approvals
+              ? `${item.label} — ${approvals} recipe approval${approvals > 1 ? 's' : ''} waiting`
+              : `${item.label} — ${item.keys}`}
             aria-current={destinationOf(active) === item.id ? 'page' : undefined}
           >
             <Icon name={item.icon} />
             <span className="sidebar-label">{item.label}</span>
+            {item.id === 'library' && approvals > 0 && (
+              <span className="sidebar-badge" aria-label={`${approvals} waiting for approval`}>{approvals}</span>
+            )}
             <span className="sidebar-keys">{item.keys}</span>
           </button>
         ))}

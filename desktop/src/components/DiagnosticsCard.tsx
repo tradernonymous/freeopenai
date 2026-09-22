@@ -25,9 +25,13 @@ export default function DiagnosticsCard({ state }: { state?: string }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Cold start (NEURA-035): the marks main.tsx and App set on this launch.
+  const startup = diagnostics.startupTimings();
+  const startupLine = diagnostics.startupLabel(startup);
+
   const report = diagnostics.buildReport({
     shell: facts || {},
-    client: { engine: api.getServer(), state, hasShell: hasShell() },
+    client: { engine: api.getServer(), state, hasShell: hasShell(), startup },
   });
 
   const copy = () => {
@@ -54,6 +58,11 @@ export default function DiagnosticsCard({ state }: { state?: string }) {
           What this build is, where it points, and how it last answered. Safe to paste:
           addresses have their query strings removed, and anything shaped like a key is redacted.
         </p>
+        {startupLine && (
+          <p className="settings-hint" title="Milliseconds since the window started loading, on this launch">
+            Start-up: {startupLine}
+          </p>
+        )}
         <div className="setting-row">
           <button type="button" onClick={copy}>Copy diagnostics</button>
           <button type="button" onClick={() => setOpen((v) => !v)}>

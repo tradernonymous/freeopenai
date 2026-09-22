@@ -704,6 +704,74 @@ export async function chatStoreKeySet(value: string): Promise<void> {
 export async function chatStoreBackend(): Promise<import('./chats.js').ChatBackend | null> {
   if (!hasShell()) return null;
   const crypto: typeof import('./chat-crypto.js') = (globalThis as any).FreeAI4UChatCrypto;
-  const key = await crypto.loadOrCreateKey({ get: chatStoreKeyGet, set: chatStoreKeySet });
-  return crypto.backend({ call: (command, args) => call(command, args), key });
+  // openBackend never makes a new key over chats the old one sealed: that case
+  // is an UNREADABLE error, which chats.js turns into the recovery notice.
+  return crypto.openBackend({
+    call: (command, args) => call(command, args),
+    store: { get: chatStoreKeyGet, set: chatStoreKeySet },
+  });
+}
+
+/**
+ * "Start fresh" (NEURA-022): the shell renames chats.sqlite3 to
+ * chats.unreadable-<time>.sqlite3 and sets the old key aside; nothing is
+ * deleted. Resolves with the old file's new name ('' when there was none).
+ */
+export async function chatStoreSetAside(): Promise<string> {
+  return (await call<string>('chat_store_set_aside')) ?? '';
+}
+
+/** The tray Quit is about to exit: flush, then say quitReady() (NEURA-021). */
+export function onAppQuitting(handler: () => void): Promise<() => void> {
+  return subscribe<unknown>('app-quitting', () => handler());
+}
+
+/** Tell the shell the page has flushed; it exits at once instead of after its wait. */
+export async function quitReady(): Promise<void> {
+  if (hasShell()) await call('quit_ready');
+}
+
+// ---- local dictation (whisper.rs) ---------------------------------------------
+//
+// The user's own whisper.cpp build: found on PATH or at the path they picked,
+// run directly by the shell with a 120 s limit. Weights are ggml .bin files in
+// <app data>/whisper-models or beside the binary.
+
+export interface WhisperModel {
+  name: string;
+  path: string;
+  bytes: number;
+}
+
+export interface WhisperFacts {
+  found: boolean;
+  binary: string;
+  source: string;
+  models: WhisperModel[];
+  models_dir: string;
+  expected_name: string;
+  releases_url: string;
+  models_url: string;
+}
+
+export async function whisperFind(): Promise<WhisperFacts> {
+  return call<WhisperFacts>('whisper_find');
+}
+
+export async function whisperUse(path: string): Promise<{ path: string }> {
+  return call('whisper_use', { path });
+}
+
+/** The native picker; null when it was cancelled. */
+export async function whisperPickBinary(): Promise<string | null> {
+  return (await call<string | null>('whisper_pick_binary')) ?? null;
+}
+
+/** 16 kHz mono WAV (base64) -> the words, through the local binary. */
+export async function whisperTranscribe(args: { audioWavBase64: string; modelPath: string; language?: string }): Promise<string> {
+  return call<string>('whisper_transcribe', {
+    audioWavBase64: args.audioWavBase64,
+    modelPath: args.modelPath,
+    language: args.language || null,
+  });
 }

@@ -38,6 +38,7 @@ mod selection;
 mod save;
 mod secrets;
 mod webview2;
+mod whisper;
 use tauri::generate_handler;
 use tauri::Emitter;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -45,6 +46,31 @@ use tauri_plugin_deep_link::DeepLinkExt;
 // Set only by the tray Quit: the close handler hides the window (tray-style),
 // so it has to be able to tell a close from a quit.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+
+// NEURA-021: the page holds chat edits for 400 ms before they reach the chat
+// store. The tray Quit emits "app-quitting", and the page flushes and calls
+// quit_ready; the exit waits for that, or for QUIT_FLUSH_WAIT, whichever is
+// first. The wait runs on its own thread: the event loop must stay free to
+// deliver the event and answer the command.
+const QUIT_FLUSH_WAIT: std::time::Duration = std::time::Duration::from_millis(800);
+
+fn quit_ready_slot() -> &'static std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// The page has flushed its chats: the pending tray Quit may exit now.
+#[tauri::command]
+fn quit_ready() {
+    let mut slot = match quit_ready_slot().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(tx) = slot.take() {
+        let _ = tx.send(());
+    }
+}
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -104,6 +130,8 @@ fn main() {
             chat_store::chat_store_clear,
             chat_store::chat_store_key_get,
             chat_store::chat_store_key_set,
+            chat_store::chat_store_set_aside,
+            quit_ready,
             hf_oauth::hf_oauth_config,
             hf_oauth::hf_oauth_listen,
             hf_oauth::hf_oauth_cancel,
@@ -132,6 +160,10 @@ fn main() {
             models::local_models_list,
             models::local_model_delete,
             models::local_models_scan,
+            whisper::whisper_find,
+            whisper::whisper_use,
+            whisper::whisper_pick_binary,
+            whisper::whisper_transcribe,
             gguf::gguf_info,
             quick::quick_hotkey_set,
             quick::quick_hide,
@@ -233,11 +265,32 @@ fn main() {
                         // A local model server is a child process of this app.
                         // Leaving one running after the window is gone would be
                         // a process the user cannot see and did not ask for.
+                        //
+                        // A second Quit while the first is waiting is ignored.
+                        if QUITTING.swap(true, Ordering::SeqCst) {
+                            return;
+                        }
                         models::shutdown();
                         // The same for local MCP servers (mcp.rs).
                         mcp::shutdown();
-                        QUITTING.store(true, Ordering::SeqCst);
-                        app.exit(0);
+                        // Ask the page to flush its chats (NEURA-021), then
+                        // exit when it says quit_ready or after the wait.
+                        let (tx, rx) = std::sync::mpsc::channel::<()>();
+                        {
+                            let mut slot = match quit_ready_slot().lock() {
+                                Ok(g) => g,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            *slot = Some(tx);
+                        }
+                        let asked = app.emit("app-quitting", ()).is_ok();
+                        let handle = app.clone();
+                        std::thread::spawn(move || {
+                            if asked {
+                                let _ = rx.recv_timeout(QUIT_FLUSH_WAIT);
+                            }
+                            handle.exit(0);
+                        });
                     }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {

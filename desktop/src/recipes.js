@@ -462,9 +462,11 @@
 
   /**
    * backgroundOffer(recipe, defs, asks, usableServers) -> the tool defs a
-   * background run is offered: built-ins (never spawn_agent) that need no
-   * approval, and the no-approval tools of the recipe's ready servers.
-   * `asks(name)` is tools.needsApproval; usableServers are server names.
+   * background run is offered: built-ins (never spawn_agent) and the tools of
+   * the recipe's ready servers. Tools that ask are offered too (NEURA-036):
+   * calling one pauses the run for an approval (backgroundGate) instead of
+   * being refused. `asks(name)` is tools.needsApproval; usableServers are
+   * server names.
    */
   function backgroundOffer(recipe, defs, asks, usableServers) {
     var usable = (Array.isArray(usableServers) ? usableServers : []).map(slug);
@@ -472,9 +474,174 @@
       var name = d && d.function && d.function.name;
       if (!name) return false;
       var server = mcpServerSlugOf(name);
-      return !backgroundRefusal(recipe, { name: name, asks: asks(name), usable: !server || usable.indexOf(server) >= 0 });
+      return backgroundGate(recipe, { name: name, asks: asks(name), usable: !server || usable.indexOf(server) >= 0 }).action !== 'refuse';
     });
   }
+
+  // ---- approvals for background runs (NEURA-036) ------------------------------------
+  //
+  // A call that would ask in chat no longer fails a scheduled run outright: the
+  // run pauses, the person gets a notification and an approval card under
+  // Library → Recipes (Allow once / Deny / Always for this recipe), and the run
+  // resumes with the answer. Nobody answering within APPROVAL_TIMEOUT_MS is a
+  // "no", with the same refusal text a background run always gave.
+
+  var ALWAYS_KEY = 'freeai4u.recipes.always';
+  var APPROVAL_TIMEOUT_MS = 30 * MINUTE;
+
+  function alwaysKey(recipeId, tool) {
+    return String(recipeId || '') + '\n' + String(tool || '');
+  }
+
+  /** Whether the person chose "Always for this recipe" for this tool. */
+  function recipeAllows(recipeId, tool, given) {
+    var map = readJson(ALWAYS_KEY, {}, given);
+    return !!(isPlainObject(map) && map[alwaysKey(recipeId, tool)]);
+  }
+
+  function allowForRecipe(recipeId, tool, given) {
+    if (!recipeId || !tool) return false;
+    var map = readJson(ALWAYS_KEY, {}, given);
+    var next = isPlainObject(map) ? map : {};
+    next[alwaysKey(recipeId, tool)] = Date.now();
+    return writeJson(ALWAYS_KEY, next, given);
+  }
+
+  /**
+   * backgroundGate(recipe, call, given) -> { action, text }
+   *
+   *   'refuse'  never in a background run (spawn_agent, a server the recipe
+   *             does not list or cannot start); `text` is the tool result.
+   *   'ask'     would ask in chat and this recipe has no "always" for it:
+   *             pause for an approval; `text` is the refusal on a timeout.
+   *   'run'     runs as it is.
+   */
+  function backgroundGate(recipe, call, given) {
+    var c = call || {};
+    var structural = backgroundRefusal(recipe, { name: c.name, asks: '', usable: c.usable });
+    if (structural) return { action: 'refuse', text: structural };
+    if (!c.asks) return { action: 'run', text: '' };
+    if (recipe && recipeAllows(recipe.id, c.name, given)) return { action: 'run', text: '' };
+    return { action: 'ask', text: backgroundRefusal(recipe, c) };
+  }
+
+  /** The notification line: "Recipe <name> wants to <summary> — open NeuraOS to allow". */
+  function approvalText(recipeName, summary) {
+    var what = String(summary || 'use a tool').trim();
+    if (what) what = what.charAt(0).toLowerCase() + what.slice(1);
+    return 'Recipe ' + String(recipeName || 'untitled') + ' wants to ' + what + ' — open NeuraOS to allow';
+  }
+
+  /**
+   * approvalQueue(options) -> the pending approvals of paused background runs.
+   *
+   *   request(item) -> Promise<'once'|'always'|'deny'|'timeout'>
+   *       item: { recipeId, recipeName, tool, summary, asks }
+   *   answer(id, decision) -> boolean   'always' also remembers the tool for
+   *       the recipe (allowForRecipe) and settles its other pending asks.
+   *   sweep(at) -> number               expires what is past its deadline
+   *   pending() -> entries, oldest first
+   *   subscribe(fn) -> unsubscribe      fn(pending()) on every change
+   *
+   * options: { now, timeoutMs, setTimer, clearTimer, storage } -- all optional,
+   * so node:test drives the clock and the timers itself. setTimer: null turns
+   * the timers off (sweep only).
+   */
+  function approvalQueue(options) {
+    var o = options || {};
+    var now = typeof o.now === 'function' ? o.now : function () { return Date.now(); };
+    var timeoutMs = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : APPROVAL_TIMEOUT_MS;
+    var setTimer = o.setTimer === null ? null : (o.setTimer || (typeof setTimeout === 'function' ? setTimeout : null));
+    var clearTimer = o.clearTimer || (typeof clearTimeout === 'function' ? clearTimeout : function () {});
+    var entries = [];
+    var listeners = [];
+    var seq = 0;
+
+    function snapshot() {
+      return entries.map(function (e) {
+        return { id: e.id, recipeId: e.recipeId, recipeName: e.recipeName, tool: e.tool, summary: e.summary, asks: e.asks, at: e.at, expiresAt: e.expiresAt };
+      });
+    }
+
+    function emit() {
+      var rows = snapshot();
+      listeners.slice().forEach(function (fn) {
+        try { fn(rows); } catch { /* a broken listener must not stop the others */ }
+      });
+    }
+
+    function settle(entry, decision) {
+      var at = entries.indexOf(entry);
+      if (at < 0) return false;
+      entries.splice(at, 1);
+      if (entry.timer != null) clearTimer(entry.timer);
+      entry.resolve(decision);
+      return true;
+    }
+
+    function sweep(at) {
+      var when = at == null ? now() : Number(at);
+      var due = entries.filter(function (e) { return e.expiresAt <= when; });
+      due.forEach(function (e) { settle(e, 'timeout'); });
+      if (due.length) emit();
+      return due.length;
+    }
+
+    function request(item) {
+      var i = item || {};
+      var at = now();
+      var entry = {
+        id: 'ap' + (++seq) + '-' + at.toString(36),
+        recipeId: String(i.recipeId || ''),
+        recipeName: String(i.recipeName || i.recipeId || ''),
+        tool: String(i.tool || ''),
+        summary: String(i.summary || i.tool || ''),
+        asks: String(i.asks || ''),
+        at: at,
+        expiresAt: at + timeoutMs,
+        timer: null,
+        resolve: null,
+      };
+      var promise = new Promise(function (resolve) { entry.resolve = resolve; });
+      entries.push(entry);
+      if (setTimer) {
+        entry.timer = setTimer(function () { sweep(now()); }, timeoutMs);
+        // Never keep node (or a test) alive for a half-hour timer.
+        if (entry.timer && typeof entry.timer.unref === 'function') entry.timer.unref();
+      }
+      emit();
+      return promise;
+    }
+
+    function answer(id, decision) {
+      if (decision !== 'once' && decision !== 'always' && decision !== 'deny') return false;
+      var entry = entries.find(function (e) { return e.id === id; });
+      if (!entry) return false;
+      settle(entry, decision);
+      if (decision === 'always') {
+        allowForRecipe(entry.recipeId, entry.tool, o.storage);
+        entries.filter(function (e) { return e.recipeId === entry.recipeId && e.tool === entry.tool; })
+          .forEach(function (e) { settle(e, 'always'); });
+      }
+      emit();
+      return true;
+    }
+
+    function subscribe(fn) {
+      if (typeof fn !== 'function') return function () {};
+      listeners.push(fn);
+      return function () {
+        var at = listeners.indexOf(fn);
+        if (at >= 0) listeners.splice(at, 1);
+      };
+    }
+
+    return { request: request, answer: answer, sweep: sweep, pending: snapshot, subscribe: subscribe, timeoutMs: timeoutMs };
+  }
+
+  // The one queue the app uses: RecipesScreen's background runs add to it, the
+  // sidebar badge and the Recipes screen's approval cards read it.
+  var approvals = approvalQueue();
 
   /**
    * A recipe as an agent definition (agents.js shape), so chat runs both with
@@ -535,6 +702,14 @@
     backgroundServers: backgroundServers,
     backgroundRefusal: backgroundRefusal,
     backgroundOffer: backgroundOffer,
+    backgroundGate: backgroundGate,
+    ALWAYS_KEY: ALWAYS_KEY,
+    APPROVAL_TIMEOUT_MS: APPROVAL_TIMEOUT_MS,
+    recipeAllows: recipeAllows,
+    allowForRecipe: allowForRecipe,
+    approvalText: approvalText,
+    approvalQueue: approvalQueue,
+    approvals: approvals,
     asAgent: asAgent,
     template: template,
   };

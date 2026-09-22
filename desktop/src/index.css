@@ -253,7 +253,7 @@
   cursor: pointer;
 }
 .update-install:disabled {
-  opacity: 0.6;
+  /* The global disabled look (NEURA-024); an opacity here would undo its contrast. */
   cursor: default;
 }
 
@@ -286,6 +286,9 @@
   /* Was #6a7a64: 3.88:1 -- fine for large text, short of AA for the 11-13px
      hints and status text it is actually used for. */
   --text-3: #83917c;
+  /* Disabled controls (NEURA-024): >= 3.9:1 on --bg-0..--bg-3, and visibly
+     dimmer than --text-1 / --text-2. */
+  --disabled-fg: #7d8a77;
   /* The accent is one hue the person picks (Settings > Appearance, painted on
      <html> at boot); lightness and chroma are fixed per theme. OKLCH keeps
      lightness perceptual, so every hue clears AA the way the default does:
@@ -362,6 +365,8 @@
      surfaces they measured 3.6-4.3:1, i.e. short of AA at the sizes they are
      used at. */
   --text-3: #586653;
+  /* >= 3.5:1 on --bg-0..--bg-3 (the old opacity-0.5 look fell well under 3:1). */
+  --disabled-fg: #65735f;
   --accent: oklch(0.45 0.11 var(--accent-h));
   --accent-dim: oklch(0.45 0.11 var(--accent-h) / 0.08);
   --accent-mid: oklch(0.45 0.11 var(--accent-h) / 0.25);
@@ -1069,8 +1074,23 @@ button:hover:not(:disabled) {
   border-color: var(--text-3);
 }
 
-button:disabled {
-  opacity: 0.5;
+/* NEURA-024: a disabled button used to be `opacity: 0.5`, which in the light
+   theme left the Reset button in Settings > Appearance near invisible (its
+   border fell well under 3:1 against the card). Now it is legible but plainly off: no
+   fill, a DASHED border and muted text, both --disabled-fg, which is >= 3:1
+   (WCAG 1.4.11 non-text contrast) on every surface --bg-0..--bg-3 in both
+   themes (test/desktop-backlog-021-026.test.js). No opacity, no hover change.
+   Longhands, not `border:`, so a borderless button (a menu row, a dock icon)
+   stays borderless and only its text dims. */
+button:disabled,
+button.primary:disabled {
+  opacity: 1;
+  background: transparent;
+  color: var(--disabled-fg);
+  border-color: var(--disabled-fg);
+  border-style: dashed;
+  box-shadow: none;
+  filter: none;
   cursor: not-allowed;
 }
 
@@ -5069,3 +5089,227 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
 .skeleton-short {
   width: 40%;
 }
+
+/* ---- Recipe approvals ---- */
+/* NEURA-036: a paused background recipe run waiting for an answer. The badge
+   sits on the Library row's icon so it reads in the collapsed rail too; the
+   cards head the Recipes screen. */
+.sidebar-btn:has(> .sidebar-badge) {
+  position: relative;
+}
+
+.sidebar-badge {
+  position: absolute;
+  top: 3px;
+  left: 10px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--warn);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.recipe-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.recipe-approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.recipe-approval-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 240px;
+  font-size: 13px;
+  color: var(--text-1, inherit);
+  overflow-wrap: anywhere;
+}
+
+.recipe-approval-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.recipe-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ---- Research ---- */
+
+.message-content sup.cite {
+  font-size: 0.72em;
+  line-height: 0;
+  margin-left: 1px;
+}
+
+.message-content sup.cite a {
+  padding: 0 2px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.message-content sup.cite a:hover { background: var(--accent-mid); }
+
+.research-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.research-nosources,
+.research-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--bg-2);
+  border-radius: 4px;
+}
+
+.research-sources summary,
+.research-graph summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.research-sources ol {
+  margin: 6px 0 0;
+  padding-left: 22px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.research-sources li { overflow-wrap: anywhere; }
+
+.research-sources a { color: var(--text-1); }
+
+.research-host {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.research-graph-view {
+  margin-top: 6px;
+  overflow-x: auto;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.research-graph-view svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.research-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ---- Dictation and components ---- */
+.dictation-engines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.dictation-engine {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.dictation-engine.active { border-color: var(--accent-mid); background: var(--accent-dim); }
+.dictation-engine input { grid-row: span 2; margin: 0; }
+.dictation-engine-label { color: var(--text-1); font-weight: 600; }
+.dictation-engine-note { color: var(--text-3); font-size: 12px; }
+.dictation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.dictation-row .chip.ok { color: var(--ok); border-color: var(--ok); }
+.dictation-path {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.dictation-field {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 360px);
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--text-2);
+}
+.dictation-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.dictation-links .link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.components-tab { display: grid; gap: 12px; }
+.component-palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.component-tile {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-1);
+  cursor: pointer;
+}
+.component-tile:hover:not(:disabled) { border-color: var(--accent-mid); background: var(--accent-dim); }
+.component-tile:disabled { opacity: 0.5; cursor: not-allowed; }
+.component-name { font-weight: 600; }
+.component-note { color: var(--text-3); font-size: 12px; line-height: 1.35; }
