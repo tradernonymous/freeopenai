@@ -255,6 +255,37 @@ Recipes have no built-ins. To get recipe versions of the helpers, paste this int
 
 **Language servers via MCP.** In Settings → Connectors, **Language server (LSP) MCP** fills in the "On this PC" form with the name `lsp`, the command `npx`, and the arguments `-y <package> <args>`. This app does not name an LSP-over-MCP npm package, because no such package could be confirmed. Pick a maintained server yourself, replace the placeholders, and choose Add and start. The form refuses to save while a placeholder is still in it. The server's tools reach agents as `lsp/*`.
 
+### Per-project config: `.freeai4u.json` (NEURA-052)
+
+A project can carry its own settings for the coding agent in a `.freeai4u.json` file at the root of the folder you open. It is read once, when the folder is opened, by [`src/project-config.js`](../desktop/src/project-config.js). Every field is optional and unknown keys are ignored:
+
+```json
+{
+  "model": { "provider": "openai", "model": "gpt-4o-mini" },
+  "approvalMode": "always",
+  "allowedCommands": ["npm test", "npm run lint"],
+  "systemPrompt": "This project uses tabs and ships from the release branch."
+}
+```
+
+| Field | Type | Means |
+| :-- | :-- | :-- |
+| `model` | `{ "provider": string, "model": string }` | The model the Code screen selects for this folder. A preference, not a permission, so the project's choice stands. |
+| `approvalMode` | `"never"` \| `"commands"` \| `"always"` | How much the agent asks. `always` gates every write, edit and command; `commands` gates commands only; `never` gates nothing. |
+| `allowedCommands` | `string[]` | Commands that may run without a card. Matched from the start of the command, whole words (`npm test` also covers `npm test --watch`, never `npm testament`). |
+| `systemPrompt` | `string` | A paragraph about the project, up to 4000 characters. |
+
+**A project file can only narrow what you allow.** The file arrives with a repository, and cloning a repository is not consent to what its author wrote in it, so it is read as a request and never as an authority:
+
+- `approvalMode` is merged as *the stricter of the two*. Your own setting is the ceiling: a project can ask to be approved more often, never less, and it can never turn approval off.
+- `allowedCommands` is merged as the **intersection** with your own list, never the union. A command you never allowed stays gated no matter what the file says; a project file can only *remove* commands from the list. Your own list lives in `localStorage["freeai4u.code_approval"]` and defaults to *ask about everything, allow nothing* — which is why, out of the box, a project's `approvalMode` and `allowedCommands` can only leave things as strict as they already are.
+- A command that contains shell chaining, redirection or substitution (`;`, `&&`, `|`, `>`, `` ` ``, `$(…)`, a newline, a backslash) is never auto-allowed, so an allowance for `npm test` cannot leak into `npm test; rm -rf .`.
+- `systemPrompt` is appended to the agent's prompt **after** its own rules, wrapped and labelled as coming from `.freeai4u.json`, and introduced as information about the project rather than as instructions. It never replaces the app's instructions.
+
+**When the file is broken** nothing breaks. Each field's type is checked on its own: a field that does not typecheck is ignored, which means your own setting applies, and the Code screen shows one quiet line per ignored field under the request bar (`.freeai4u.json: "approvalMode" has to be one of never, commands, always. Ignored.`). Invalid JSON, or a file that is not an object, ignores the whole file the same way and says so. Nothing is swallowed in silence and nothing throws. A folder with no file at all is the common case and says nothing.
+
+The Code screen also shows, in the same quiet line, what the folder actually overrides once the merge is done — so "this repo asked for `never`" never looks like it was granted.
+
 ### Local dictation and design exports (Phase 12f)
 
 **Local Whisper.** Settings → Dictation sets up dictation that runs on this PC through your own [whisper.cpp release](https://github.com/ggml-org/whisper.cpp/releases/latest). The app bundles and downloads nothing. **Choose whisper-cli…** remembers the path in `<app data>/whisper/binary.txt`. `whisper-cli.exe` or `main.exe` on PATH are also found, but a `main.exe` only counts when `whisper.dll` is beside it. Put ggml models ([downloads](https://huggingface.co/ggerganov/whisper.cpp/tree/main), e.g. `ggml-base.en.bin`) in `<app data>/whisper-models` or next to the binary. The mic records as usual. [`src/dictate.ts`](../desktop/src/dictate.ts) decodes the recording and [`src/wav.js`](../desktop/src/wav.js) turns it into 16 kHz mono 16-bit WAV. [`whisper.rs`](../desktop/src-tauri/src/whisper.rs) then runs `whisper-cli -m <model> -f <wav> -otxt -of <tmp> -nt [-l <lang>]` directly, with no shell. The run gets a 120 s limit and is killed if it goes over. Temp files are removed whatever happens. `localStorage["freeai4u.dictation_engine"]` picks the engine: `auto` (the default) uses this PC when a binary and a model are found, then Hugging Face when you are signed in, then the Win+H hint. `local` and `hf` force one engine.
@@ -347,6 +378,7 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/components/LocalTerminal.tsx` | The local dock: a live cwd, streamed output, the inline approval for a destructive command |
 | `src/components/LocalTree.tsx` | The open folder, one level at a time, labelled by what each file is |
 | `src/screens/LocalScreen.tsx` | The LOCAL screen: the empty state that invites picking a folder, the tree, the read-only viewer |
+| `src/project-config.js` | The opened folder's own `.freeai4u.json`: parsing it, validating every field, and merging it with your settings so it can only ever narrow them |
 | `src/screens/CodeScreen.tsx` | The CODE screen: the local coding agent with approval UX, diff view, and step timeline |
 | `src/useLocalRun.ts` | The React binding for `local-run` events |
 | `src-tauri/src/local.rs` | The real filesystem and command runner, confined to the open folder, with the engine's wording |

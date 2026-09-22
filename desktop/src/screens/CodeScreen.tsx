@@ -4,6 +4,7 @@ import { escapeHtml } from '../markdown';
 import Icon from '../components/Icon';
 import SelectPill from '../components/SelectPill';
 import { isSavedProvider, streamSaved } from '../run-model';
+import type { EffectiveConfig, GlobalSettings } from '../project-config';
 import '../saved-models.js';
 import { hasShell, pickFolder, listLocalDir, readLocalFile, writeLocalFile, editLocalFile, runLocal } from '../bridge';
 // UMD modules: loaded for their side effect, read off globalThis.
@@ -11,8 +12,12 @@ import '../coding-agent.js';
 import '../hf-auth.js';
 import '../chats.js';
 import '../docker-sandbox.js';
+// Loaded before the agent ever runs: the agent reads the folder's rules off the
+// global, and without them it approval-gates every mutation.
+import '../project-config.js';
 
 const agent: typeof import('../coding-agent.js') = (globalThis as any).FreeAI4UCodingAgent;
+const projectConfig: typeof import('../project-config.js') = (globalThis as any).FreeAI4UProjectConfig;
 const dockerSandbox: typeof import('../docker-sandbox.js') = (globalThis as any).FreeAI4UDockerSandbox;
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 
@@ -66,6 +71,26 @@ interface Approval {
  */
 export const CODE_HANDOFF_KEY = 'freeai4u.codeHandoff';
 
+/**
+ * The person's own coding-agent settings: the ceiling a project's
+ * `.freeai4u.json` can never rise above. There is no screen for these yet, so
+ * what almost everyone has is the default -- ask about every mutation, allow no
+ * command without asking -- and a project file can only keep it there or make
+ * it stricter.
+ */
+export const CODE_APPROVAL_KEY = 'freeai4u.code_approval';
+
+function myApprovalSettings(): GlobalSettings {
+  try {
+    const raw = localStorage.getItem(CODE_APPROVAL_KEY);
+    return projectConfig.globalSettings(raw ? JSON.parse(raw) : null);
+  } catch {
+    // Unreadable or nonsense: the default is the strict one, so falling back
+    // to it can only ask more often.
+    return projectConfig.globalSettings(null);
+  }
+}
+
 export default function CodeScreen({ localRoot }: { localRoot: string }) {
   const [request, setRequest] = useState('');
   useEffect(() => {
@@ -116,6 +141,36 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
     setDocker(next);
     dockerSandbox.saveSettings(next);
   };
+
+  // The opened folder's own .freeai4u.json, re-read whenever the folder changes.
+  // Absent or unreadable leaves `configRef` null, which is exactly today's
+  // behaviour: the agent asks before every mutation.
+  const configRef = useRef<EffectiveConfig | null>(null);
+  const [overrides, setOverrides] = useState<string[]>([]);
+  const [configProblems, setConfigProblems] = useState<string[]>([]);
+  useEffect(() => {
+    configRef.current = null;
+    setOverrides([]);
+    setConfigProblems([]);
+    if (!localRoot || !hasShell()) return;
+    let live = true;
+    const mine = myApprovalSettings();
+    projectConfig.read((path) => readLocalFile(localRoot, path), mine)
+      .then((loaded) => {
+        if (!live) return;
+        configRef.current = loaded.effective;
+        setConfigProblems(loaded.problems);
+        setOverrides(loaded.present ? projectConfig.describe(loaded.effective, mine) : []);
+        // A model is a preference, not a permission, so the project's choice
+        // stands; everything else was already narrowed by the merge.
+        if (loaded.effective.model) {
+          setProvider(loaded.effective.model.provider);
+          setModel(loaded.effective.model.model);
+        }
+      })
+      .catch(() => { /* no readable file: the folder has no say, which is the default */ });
+    return () => { live = false; };
+  }, [localRoot]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<any>(null);
@@ -171,7 +226,9 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
           runLocal({ root, runId: 'agent-' + Date.now(), command: line, cwd: at, timeoutMs: timeoutMs ?? 120_000 }));
       },
       onEvent: (event: any) => {
-        if (event.type === 'step') {
+        // 'auto' is a mutation the folder's settings let through without an
+        // approval card; it still gets a row, so nothing happens unseen.
+        if (event.type === 'step' || event.type === 'auto') {
           setSteps(prev => {
             const idx = prev.findIndex(s => s.id === event.step?.id);
             if (idx >= 0) {
@@ -215,6 +272,7 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
     setStatus('planning');
 
     const session = agent.createSession(localRoot, model, provider);
+    session.config = configRef.current;
     session.plan = [{ id: 0, title: text, status: 'running', tool: 'user_request', args: {}, result: null, diff: null }];
     sessionRef.current = session;
 
@@ -318,6 +376,21 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
             </span>
           )}
         </div>
+
+        {(overrides.length > 0 || configProblems.length > 0) && (
+          <div className="code-project-config" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {overrides.length > 0 && (
+              <span className="settings-hint">
+                This folder's {projectConfig.FILENAME} sets {overrides.join('; ')}.
+              </span>
+            )}
+            {/* Quiet, never fatal, never silent: each line names a field that was
+                ignored, and an ignored field means your own setting applies. */}
+            {configProblems.map((problem, i) => (
+              <span key={i} className="settings-hint">{problem}</span>
+            ))}
+          </div>
+        )}
 
         {error && <div className="stream-error">{error}</div>}
 

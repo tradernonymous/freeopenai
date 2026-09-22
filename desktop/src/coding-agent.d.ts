@@ -2,6 +2,8 @@
  * Local coding agent: plan-approve-edit-run loop.
  */
 
+import type { EffectiveConfig } from './project-config';
+
 export interface ToolParam {
   name: string;
   type: string;
@@ -39,6 +41,8 @@ export interface AgentSession {
   root: string;
   model: string;
   provider: string;
+  /** The folder's effective settings; null means every mutation is approval-gated. */
+  config: EffectiveConfig | null;
   status: 'idle' | 'planning' | 'running' | 'awaiting' | 'done' | 'error' | 'stopped';
   plan: AgentStep[];
   messages: Array<{ role: string; content: string }>;
@@ -64,7 +68,8 @@ export interface AgentCallbacks {
 export declare const TOOLS: ToolDef[];
 export declare const MAX_ROUNDS: number;
 export declare const MAX_TOOL_CALLS: number;
-export declare function systemPrompt(projectNotes?: string): string;
+/** `projectPrompt` is the already-labelled block from project-config.promptBlock. */
+export declare function systemPrompt(projectNotes?: string, projectPrompt?: string): string;
 export declare function parseToolCall(text: string): { name: string; args: Record<string, unknown> } | null;
 export declare function createSession(root: string, model?: string, provider?: string): AgentSession;
 export declare function readProjectNotes(readFile: (path: string) => Promise<string>): Promise<string>;

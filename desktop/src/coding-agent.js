@@ -76,7 +76,22 @@
 
   // --- system prompt ------------------------------------------------------
 
-  function systemPrompt(projectNotes) {
+  // The per-project file's rules live in project-config.js, which the Code
+  // screen loads for its side effect. It is read off the global rather than
+  // imported, because these UMD modules are loaded as scripts and one must not
+  // have to know another's path. When it is absent -- any caller that never
+  // loads it, such as Parallel -- every mutating tool stays approval-gated,
+  // which is the behaviour this agent has always had.
+  function projectConfig() {
+    try {
+      var scope = typeof globalThis !== 'undefined' ? globalThis : null;
+      return (scope && scope.FreeAI4UProjectConfig) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function systemPrompt(projectNotes, projectPrompt) {
     var notes = projectNotes || '';
     var header = [
       'You are a coding assistant that helps the user edit files on their machine.',
@@ -97,6 +112,12 @@
     ];
     if (notes) {
       header.push('', 'Project notes:', notes);
+    }
+    // `projectPrompt` arrives already labelled as the project's own words
+    // (project-config.promptBlock). It goes *after* the rules, never instead of
+    // them: a folder can add context about itself, not re-brief the agent.
+    if (projectPrompt) {
+      header.push('', String(projectPrompt));
     }
     header.push('', 'Available tools:');
     for (var i = 0; i < TOOLS.length; i++) {
@@ -156,6 +177,9 @@
       root: root,
       model: model || '',
       provider: provider || '',
+      // The folder's effective settings (project-config.merge), or null when
+      // the caller read no project file -- null means "ask about everything".
+      config: null,
       status: 'idle',       // idle | planning | running | awaiting | done | error | stopped
       plan: [],             // step objects: { id, title, status, tool, args, result, diff }
       messages: [],         // the conversation sent to the model
@@ -235,7 +259,9 @@
       } catch { /* ignore */ }
     }
 
-    var sysPrompt = systemPrompt(notes);
+    var config = session.config || null;
+    var pc = projectConfig();
+    var sysPrompt = systemPrompt(notes, pc && config ? pc.promptBlock(config.systemPrompt) : '');
     session.messages = [
       { role: 'system', content: sysPrompt },
       { role: 'user', content: session.plan[0]?.title || 'Help me with this project.' },
@@ -325,7 +351,12 @@
         continue;
       }
 
-      // Mutating tools need approval.
+      // Mutating tools need approval, unless the folder's effective settings
+      // say this one does not. Those settings are the person's own narrowed by
+      // the project file, never widened by it (project-config.js), so with no
+      // settings -- or a module that never loaded -- the answer is "ask".
+      var gated = !pc || !config ? true : pc.needsApproval(config, call.name, args);
+
       var diff = null;
       if (call.name === 'edit_file' && args.old_text != null && args.new_text != null) {
         diff = computeDiff(args.old_text, args.new_text);
@@ -334,41 +365,48 @@
         diff = '+ ' + (args.content || '').split('\n').join('\n+ ');
       }
 
-      var approvalId = 'approval-' + stepId;
-      session.pendingApproval = {
-        id: approvalId,
-        stepId: stepId,
-        tool: call.name,
-        args: args,
-        diff: diff,
-        command: call.name === 'run_command' ? args.command : null,
-      };
-      session.status = 'awaiting';
-      emit(c.onEvent, {
-        type: 'approval',
-        approval: session.pendingApproval,
-      });
-
-      // Wait for the user's decision. The caller invokes approve() or reject().
-      var decision = await waitForDecision(c, approvalId);
-      session.pendingApproval = null;
-
-      if (decision.cancelled || session.status === 'stopped') {
-        session.status = 'stopped';
-        step.status = 'skipped';
-        emit(c.onEvent, { type: 'step', step: step });
-        break;
-      }
-
-      if (!decision.approved) {
-        step.status = 'skipped';
-        step.result = 'Rejected by user.';
-        emit(c.onEvent, { type: 'step', step: step });
-        session.messages.push({
-          role: 'user',
-          content: 'The user rejected this action. ' + (decision.reason || 'Try a different approach.'),
+      if (gated) {
+        var approvalId = 'approval-' + stepId;
+        session.pendingApproval = {
+          id: approvalId,
+          stepId: stepId,
+          tool: call.name,
+          args: args,
+          diff: diff,
+          command: call.name === 'run_command' ? args.command : null,
+        };
+        session.status = 'awaiting';
+        emit(c.onEvent, {
+          type: 'approval',
+          approval: session.pendingApproval,
         });
-        continue;
+
+        // Wait for the user's decision. The caller invokes approve() or reject().
+        var decision = await waitForDecision(c, approvalId);
+        session.pendingApproval = null;
+
+        if (decision.cancelled || session.status === 'stopped') {
+          session.status = 'stopped';
+          step.status = 'skipped';
+          emit(c.onEvent, { type: 'step', step: step });
+          break;
+        }
+
+        if (!decision.approved) {
+          step.status = 'skipped';
+          step.result = 'Rejected by user.';
+          emit(c.onEvent, { type: 'step', step: step });
+          session.messages.push({
+            role: 'user',
+            content: 'The user rejected this action. ' + (decision.reason || 'Try a different approach.'),
+          });
+          continue;
+        }
+      } else {
+        // Not gated: still say so, so an unattended action is never invisible.
+        session.status = 'running';
+        step.diff = diff;
+        emit(c.onEvent, { type: 'auto', tool: call.name, step: step });
       }
 
       // Execute the mutation.
