@@ -1,6 +1,8 @@
 # NeuraOS backlog
 
-The single list of what is still open across **web** (`index.html`, `app.js`, `chatlib.js`), **engine** (`server.js`), **desktop** (`desktop/`) and **Android** (`android/`). Last reviewed 2026-09-22, after the desktop Phase 12 wave 1 (`d16be72`, Desktop build green).
+The single list of what is still open across **web** (`index.html`, `app.js`, `chatlib.js`), **engine** (`server.js`), **desktop** (`desktop/`) and **Android** (`android/`). Last reviewed 2026-09-22, after the desktop Phase 12 wave 1 (`d16be72`, Desktop build green)
+and the Android master plan ([`android-master-plan.md`](android-master-plan.md)), whose
+phases own the Android rows from here on.
 
 ## How to use this file
 
@@ -17,7 +19,7 @@ The single list of what is still open across **web** (`index.html`, `app.js`, `c
 | NEURA-001 | desktop | user | S | **Code signing** so SmartScreen stops warning: a `.pfx` (secrets `WINDOWS_CERTIFICATE` + password) or **Azure Trusted Signing** (~US$10/month; secrets `AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET`, variables `TRUSTED_SIGNING_ACCOUNT/PROFILE/ENDPOINT`). CI is ready for both -- see `docs/desktop.md` → Signing. | you |
 | NEURA-002 | desktop | user | S | **Hugging Face OAuth app** for one-click sign-in: register at huggingface.co/settings/applications/new, redirect `http://127.0.0.1:47823/hf/callback`, scopes `openid profile read-repos inference-api`; then `gh variable set NEURAOS_HF_CLIENT_ID --body <id>` (or paste the id in Settings → Connectors). | you |
 | NEURA-003 | desktop | user | S | **Update-signing key**: run the four commands in `docs/desktop.md` → Update signing, and back up the key and password. Until then updates are checked by sha256 only. | you |
-| NEURA-004 | all | user | S | **New logo file** at `assets/branding/neuraos-logo.png` (emblem only, no text, no background), so icons can be cut for web, APK, desktop and tray. | you |
+| NEURA-004 | all | user | S | **New logo file** at `assets/branding/neuraos-logo.png` (emblem only, no text, no background, square, 512px or larger), so icons can be cut for web, APK, desktop and tray. The APK's adaptive icon is now wired and shipping the old chat-bubble mark; dropping this file in replaces the foreground layer alone (`ic_launcher_foreground.xml`, `ic_launcher_monochrome.xml`) and touches nothing else. | you |
 
 ## Verify in the installed app
 
@@ -35,7 +37,6 @@ The single list of what is still open across **web** (`index.html`, `app.js`, `c
 
 | ID | Surface | Type | Size | Item | Owner |
 |---|---|---|---|---|---|
-| NEURA-020 | android | fix | M | **Maestro**: 2 of 5 flows pass (sign-in, chat, navigation) since the LeakCanary fix. `image-progress`, `build-progress` and `file-progress` expect real image generation, remote builds and an approval, which the throwaway CI engine has no providers for. Either give the CI engine a free provider, or mark those flows as needing one and skip them in CI. | android |
 | NEURA-021 | desktop | fix | S | A chat edit made less than 400 ms before quitting from the tray can be lost: flush the chat store on quit (Phase 12b). | desktop |
 | NEURA-022 | desktop | fix | S | If the `chat_key` credential is lost, stored chats cannot be opened; add a clear recovery path (export reminder, start fresh without deleting the old file). | desktop |
 | NEURA-023 | desktop | fix | S | The Docker sandbox refuses commands containing `" $ % \` ` rather than escaping them; document common workarounds or add a safe script-file mode. | desktop |
@@ -60,6 +61,12 @@ The single list of what is still open across **web** (`index.html`, `app.js`, `c
 | NEURA-039 | android | upgrade | M | Android parity items the desktop now has: MCP Apps, recipes on a schedule, Evals history. Decide which fit a phone. | android |
 | NEURA-040 | all | upgrade | S | **TODO markers**: add `TODO(NEURA-xxx)` at the code sites for open fix items, plus a test that every marker names an open ID here and closed IDs leave no markers. | desktop |
 | NEURA-041 | desktop | upgrade | M | Web search inside research and chat currently goes through the engine's search tool; add a fallback when the engine has no search provider configured. | desktop |
+
+## Done recently (android)
+
+| Commit | What |
+| --- | --- |
+| `fbbe32a` | NEURA-020: the three provider-dependent Maestro flows carry `needs-provider`, and `maestro-smoke.sh` runs `maestro test --exclude-tags=needs-provider flows/`. CI gates on the 2 flows it can actually run; the other 3 run against a configured engine. |
 
 ## Done recently (desktop)
 

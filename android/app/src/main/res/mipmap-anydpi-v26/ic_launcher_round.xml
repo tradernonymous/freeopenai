@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Same layers as ic_launcher.xml. Launchers that ask for android:roundIcon
+  get this; an adaptive icon is masked by the launcher either way, so the two
+  files are identical on purpose rather than by oversight; the entry exists
+  so a launcher that looks for roundIcon finds an adaptive icon instead of
+  falling back to the unmasked drawable.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

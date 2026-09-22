@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon. Before this existed the manifest pointed straight at
+  drawable/ic_app.xml, so every launcher since Android 8 drew the mark
+  unmasked (no shape, no parallax), and Android 13+ themed icons had no
+  layer to tint at all.
+
+  No density-specific PNG fallback is needed: adaptive icons landed in API 26
+  and this app's minSdk is 29, so there is no device that can install it and
+  cannot read this file.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>
