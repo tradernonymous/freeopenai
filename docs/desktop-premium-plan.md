@@ -1,5 +1,20 @@
 # FreeAI4U Desktop — master upgrade plan (premium, reliable, freebuff-parity)
 
+> [!NOTE]
+> **Superseded as a status source.** Written against `1436bf4` (v2.3.0) when
+> nothing below was built. Phases P1–P8 and most of P9 have since shipped
+> (Phases 11a–e and 12a–e — Rust network edge + signed updater, premium shell
+> with tokens/`Ctrl+K`/icons, local workspace + terminal, local llama.cpp
+> models, Hugging Face sign-in + Hub browser, HF inference route + BYOK,
+> the local coding agent with approvals, parallel agent sessions, Monaco +
+> LSP). **`docs/BACKLOG.md` is the live list of what's actually still open**
+> (`NEURA-xxx` IDs) and `docs/desktop.md` is the current feature doc; treat
+> this file as the historical design rationale for *why* those phases were
+> built the way they were, not as a task list. A 2026 competitive-landscape
+> review (Open WebUI, ComfyUI, OpenHands, GPT4All, LocalAI) turned up a
+> handful of gaps this plan didn't cover — those were folded into
+> `docs/BACKLOG.md` as NEURA-042–045 rather than added here.
+
 Status of this document: **plan only.** Written against `1436bf4` (v2.3.0) on
 `task/desktop-tauri-core-q1a2w3`. Nothing in it is built yet.
 
