@@ -13,8 +13,11 @@
     session, or the chats the page keeps in its own storage.
   - Exported: the native launcher activity, which also accepts shared text,
     shared images and selected text (all treated as untrusted input that only
-    ever lands in a chat composer), and the Quick Settings tile, which only
-    the system can bind. The FileProvider is not exported.
+    ever lands in a chat composer), a neuraos://github-connected deep link
+    (a one-time pickup code from the server's own GitHub OAuth callback,
+    never a session -- see server.js and data/NativeApi.kt), and the Quick
+    Settings tile, which only the system can bind. The FileProvider is not
+    exported.
   - Chats, pictures, personas and prompts are sealed with a Keystore
     AES-256-GCM key in app-private storage (data/Storage.kt).
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
@@ -103,6 +106,15 @@
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!-- Where the server's GitHub OAuth callback lands the app after a
+                 Custom Tab round trip (see server.js's githubCallback): a
+                 one-time pickup code, never a session, in the query. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="neuraos" android:host="github-connected" />
             </intent-filter>
         </activity>
         <!-- Share / PDF exports: private cache files handed out one at a time

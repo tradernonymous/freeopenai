@@ -1,22 +1,24 @@
 // Android has no browser cookie jar its own network layer can read (Custom
 // Tabs are isolated from the app by design -- that isolation is exactly why
-// they replace a WebView here). So /api/github/authorize?client=android and
-// the pickup-code handoff exist to bridge a completed browser OAuth round
-// trip back into the app's own session, without ever putting a long-lived
-// secret in the URI the app's manifest catches. These tests boot the real
-// request handler and stub only the outbound calls to github.com.
+// they replace a WebView here). Neither direction of the OAuth round trip can
+// ride a cookie the way desktop's does, so both cross through a short-lived,
+// single-use, opaque code instead of the session token itself -- one code to
+// prove identity going in (/api/github/handoff), one to carry the result back
+// out (/api/github/pickup), each bound to the app user it was minted for.
+// These tests boot the real request handler and stub only the calls to
+// github.com.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { createRequestHandler } = require('../server.js');
 
-const VARS = ['AUTH_USER_1', 'AUTH_PASS_1', 'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'SESSION_SECRET'];
+const VARS = ['AUTH_USER_1', 'AUTH_PASS_1', 'AUTH_USER_2', 'AUTH_PASS_2', 'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'];
 
 // server.js freezes its module-level session secret the moment it is
-// required, so a test cannot hand it a secret after the fact -- the app's
-// own /api/login is what actually mints a session, and using it here is also
-// the more honest test: it is exactly how NativeApi.SessionManager gets one.
+// required, so a test cannot hand it one after the fact -- the app's own
+// /api/login is what actually mints a session, and using it here is also the
+// more honest test: it is exactly how NativeApi.SessionManager gets one.
 async function login(base, username, password) {
   const res = await fetch(base + '/api/login', {
     method: 'POST',
@@ -27,6 +29,12 @@ async function login(base, username, password) {
   const setCookie = res.headers.getSetCookie ? res.headers.getSetCookie()[0] : res.headers.get('set-cookie');
   const cut = setCookie.indexOf(';');
   return (cut < 0 ? setCookie : setCookie.slice(0, cut)).split('=').slice(1).join('=');
+}
+
+async function handoff(base, session) {
+  const res = await fetch(base + '/api/github/handoff', { method: 'POST', headers: { Cookie: `fo_auth=${session}` } });
+  assert.equal(res.status, 200, 'test setup: handoff must succeed');
+  return (await res.json()).handoff;
 }
 
 async function withApp(env, fn) {
@@ -76,25 +84,39 @@ test('an unauthenticated request to /api/github/authorize is refused without ?cl
   });
 });
 
-test('client=android without a valid session is refused when the login gate is on', async () => {
-  await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw', GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }, async ({ base }) => {
-    const res = await fetch(base + '/api/github/authorize?client=android&session=garbage', { redirect: 'manual' });
+test('/api/github/handoff itself needs a real session, same as any other API route', async () => {
+  await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw' }, async ({ base }) => {
+    const res = await fetch(base + '/api/github/handoff', { method: 'POST' });
     assert.equal(res.status, 401);
   });
 });
 
-test('client=android with a valid session reaches GitHub and the callback hands back a pickup code the app can redeem', async () => {
+test('client=android with an unknown or expired handoff code is refused when the login gate is on', async () => {
+  await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw', GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }, async ({ base }) => {
+    const res = await fetch(base + '/api/github/authorize?client=android&handoff=garbage', { redirect: 'manual' });
+    assert.equal(res.status, 401);
+  });
+});
+
+test('the full android round trip: handoff proves identity, authorize never sees a session, the callback hands back a single-use pickup code', async () => {
   await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw', GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }, async ({ base }) => {
     const session = await login(base, 'alice', 'pw');
+    const code = await handoff(base, session);
 
-    const authRes = await fetch(base + `/api/github/authorize?client=android&session=${encodeURIComponent(session)}`, { redirect: 'manual' });
+    const authRes = await fetch(base + `/api/github/authorize?client=android&handoff=${code}`, { redirect: 'manual' });
     assert.equal(authRes.status, 302);
     assert.match(authRes.headers.get('location'), /^https:\/\/github\.com\/login\/oauth\/authorize\?/);
     const authCookies = cookieMap(authRes.headers.getSetCookie ? authRes.headers.getSetCookie() : [authRes.headers.get('set-cookie')]);
     assert.ok(authCookies.fo_gh_state, 'state cookie set');
     assert.equal(authCookies.fo_gh_client, 'android');
-    assert.ok(authCookies.fo_auth, 'the app\'s own session was forwarded into this browsing context');
+    assert.equal('fo_auth' in authCookies, false, 'the session token never crosses into a cookie or this URL');
 
+    // A used-up handoff code does not work a second time.
+    const reused = await fetch(base + `/api/github/authorize?client=android&handoff=${code}`, { redirect: 'manual' });
+    assert.equal(reused.status, 401);
+
+    // The callback is hit by the same Custom Tab -- it carries the state
+    // cookie authorize just set, but still no fo_auth cookie of its own.
     const cookieHeader = Object.entries(authCookies).map(([k, v]) => `${k}=${v}`).join('; ');
     const cbRes = await fetch(base + `/api/github/callback?code=abc&state=${authCookies.fo_gh_state}`, {
       headers: { Cookie: cookieHeader },
@@ -103,23 +125,45 @@ test('client=android with a valid session reaches GitHub and the callback hands 
     assert.equal(cbRes.status, 302);
     const location = cbRes.headers.get('location');
     assert.match(location, /^neuraos:\/\/github-connected\?code=[0-9a-f]{48}&login=octo$/, 'a deep link, not a cookie, carries the result back to the app');
-    const code = new URL(location).searchParams.get('code');
+    const pickupCode = new URL(location).searchParams.get('code');
 
-    const pickupRes = await fetch(base + `/api/github/pickup?code=${code}`, { headers: { Cookie: `fo_auth=${session}` } });
+    const pickupRes = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${session}` } });
     assert.equal(pickupRes.status, 200);
     const { session: sealed } = await pickupRes.json();
     assert.ok(sealed && sealed.split('.').length === 3, 'a sealed session, opaque to the app');
 
-    const again = await fetch(base + `/api/github/pickup?code=${code}`, { headers: { Cookie: `fo_auth=${session}` } });
+    const again = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${session}` } });
     assert.equal(again.status, 404, 'single-use: the code is gone after the first redemption');
 
-    const statusRes = await fetch(base + '/api/github/status', {
-      headers: { Cookie: `fo_auth=${session}; fo_gh=${sealed}` },
-    });
+    const statusRes = await fetch(base + '/api/github/status', { headers: { Cookie: `fo_auth=${session}; fo_gh=${sealed}` } });
     assert.equal(statusRes.status, 200);
     const status = await statusRes.json();
     assert.equal(status.connected, true);
     assert.deepEqual(status.accounts, [{ login: 'octo', avatarUrl: 'https://x/o.png' }]);
+  });
+});
+
+test('a pickup code cannot be redeemed by a different signed-in user', async () => {
+  await withApp({ AUTH_USER_1: 'alice', AUTH_PASS_1: 'pw1', AUTH_USER_2: 'mallory', AUTH_PASS_2: 'pw2', GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }, async ({ base }) => {
+    const aliceSession = await login(base, 'alice', 'pw1');
+    const mallorySession = await login(base, 'mallory', 'pw2');
+    const code = await handoff(base, aliceSession);
+
+    const authRes = await fetch(base + `/api/github/authorize?client=android&handoff=${code}`, { redirect: 'manual' });
+    const authCookies = cookieMap(authRes.headers.getSetCookie ? authRes.headers.getSetCookie() : [authRes.headers.get('set-cookie')]);
+    const cbRes = await fetch(base + `/api/github/callback?code=abc&state=${authCookies.fo_gh_state}`, {
+      headers: { Cookie: Object.entries(authCookies).map(([k, v]) => `${k}=${v}`).join('; ') },
+      redirect: 'manual',
+    });
+    const pickupCode = new URL(cbRes.headers.get('location')).searchParams.get('code');
+
+    // Mallory intercepts (or simply guesses) Alice's pickup code and tries to
+    // redeem it as herself.
+    const stolen = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${mallorySession}` } });
+    assert.equal(stolen.status, 404, 'wrong identity: refused, and the code is now gone even for Alice');
+
+    const legitimate = await fetch(base + `/api/github/pickup?code=${pickupCode}`, { headers: { Cookie: `fo_auth=${aliceSession}` } });
+    assert.equal(legitimate.status, 404, 'a mismatched attempt still consumes the single use');
   });
 });
 
@@ -140,7 +184,6 @@ test('the desktop and web flows are unchanged: no client param still goes throug
     assert.equal(authRes.status, 302);
     const authCookies = cookieMap(authRes.headers.getSetCookie ? authRes.headers.getSetCookie() : [authRes.headers.get('set-cookie')]);
     assert.equal(authCookies.fo_gh_client, '', 'no client flag for a plain web/desktop request');
-    assert.equal('fo_auth' in authCookies, false, 'nothing forwarded when there is no android session to forward');
 
     const cookieHeader = `fo_auth=${session}; ${Object.entries(authCookies).map(([k, v]) => `${k}=${v}`).join('; ')}`;
     const cbRes = await fetch(base + `/api/github/callback?code=abc&state=${authCookies.fo_gh_state}`, {

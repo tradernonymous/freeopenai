@@ -17,6 +17,13 @@ class SessionManager(
 ) {
     val server: String get() = store.server ?: ""
 
+    /** The connected GitHub session (server's fo_gh cookie value), or null.
+     * Picked up once via NativeApi.githubPickup, sent back as a second
+     * Cookie on every call -- see NativeApi.open. */
+    var githubCookie: String?
+        get() = store.githubSession
+        set(value) { store.githubSession = value }
+
     @Synchronized
     fun cookie(): String {
         store.session?.let { return it }
@@ -61,7 +68,8 @@ class NativeApi(
         conn.readTimeout = readTimeoutMs
         conn.instanceFollowRedirects = false
         conn.requestMethod = method
-        conn.setRequestProperty("Cookie", "fo_auth=$cookie")
+        val github = session.githubCookie
+        conn.setRequestProperty("Cookie", "fo_auth=$cookie" + (if (github != null) "; fo_gh=$github" else ""))
         conn.setRequestProperty("Accept", "application/json")
         return conn
     }
@@ -120,6 +128,37 @@ class NativeApi(
     fun skillContent(name: String): Skill =
         parseSkill(getJson("/api/skills/content?name=" + java.net.URLEncoder.encode(name, "UTF-8")))
             ?: throw ApiException("No installed skill named \"$name\".")
+
+    /** Proves this session's identity over the app's own connection, in
+     * exchange for a short-lived, single-use code -- never the session
+     * itself -- to carry into the Custom Tab. See server.js's
+     * githubHandoffRoute for why the raw session never rides a URL. */
+    fun githubHandoff(): String {
+        val body = postJson("/api/github/handoff", "")
+        return try {
+            org.json.JSONObject(body).getString("handoff")
+        } catch (e: Exception) {
+            throw ApiException("Could not start the GitHub connect.")
+        }
+    }
+
+    /** The Custom Tab URL that starts a GitHub connect, carrying [handoffCode]
+     * from [githubHandoff] instead of any session material; see server.js's
+     * githubAuthorize. */
+    fun githubAuthorizeUrl(handoffCode: String): String =
+        session.server + "/api/github/authorize?client=android&handoff=" + java.net.URLEncoder.encode(handoffCode, "UTF-8")
+
+    /** Redeems the one-time code the github-connected deep link carried,
+     * over this app's own authenticated connection -- never the Custom
+     * Tab's. Single-use: a second call with the same code fails. */
+    fun githubPickup(code: String): String {
+        val body = getJson("/api/github/pickup?code=" + java.net.URLEncoder.encode(code, "UTF-8"))
+        return try {
+            org.json.JSONObject(body).getString("session")
+        } catch (e: Exception) {
+            throw ApiException("That connect link expired -- try connecting GitHub again.")
+        }
+    }
 
     private fun postJson(path: String, body: String): String = withSession { cookie ->
         val conn = open(path, cookie, "POST", 30000)

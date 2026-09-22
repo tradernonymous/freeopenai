@@ -2,6 +2,7 @@
 agp = "8.7.3"
 kotlin = "2.1.0"
 activity = "1.10.1"
+browser = "1.8.0"
 core = "1.15.0"
 composeBom = "2025.01.01"
 orgJson = "20240303"
@@ -16,6 +17,7 @@ serialization = "1.7.3"
 androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }

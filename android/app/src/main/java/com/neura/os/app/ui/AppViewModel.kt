@@ -1218,6 +1218,42 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
     }
 
+    // --- GitHub connect (Custom Tab + pickup code) ------------------------------
+
+    val githubConnected: Boolean get() = store.githubSession != null
+    var githubConnecting by mutableStateOf(false)
+
+    /** Proves this session's identity over its own connection (a handoff
+     * code, never the session itself -- see NativeApi.githubHandoff), builds
+     * the Custom Tab URL from it, and hands that to [launch] on the main
+     * thread. The Settings row opens a Custom Tab with it. */
+    fun startGithubConnect(launch: (String) -> Unit) {
+        githubConnecting = true
+        io.execute {
+            val url = try {
+                api.githubAuthorizeUrl(api.githubHandoff())
+            } catch (e: Exception) {
+                main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
+                return@execute
+            }
+            main.post { launch(url) }
+        }
+    }
+
+    /** Redeems the pickup code the neuraos://github-connected deep link
+     * carried. Called from NativeActivity's intent handling, not from any
+     * UI action directly -- the tap already happened, in the Custom Tab. */
+    fun connectGithub(code: String, login: String) {
+        io.execute {
+            try {
+                store.githubSession = api.githubPickup(code)
+                main.post { githubConnecting = false; notice = "Connected to GitHub as " + login.ifEmpty { "your account" } + "." }
+            } catch (e: Exception) {
+                main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
+            }
+        }
+    }
+
     /** Hands a device's FCM token to the server, once per app launch after a
      * session is confirmed -- see NativeActivity.registerForPush and
      * FcmService.onNewToken, the two callers. Silent either way: a push is a

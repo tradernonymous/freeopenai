@@ -132,6 +132,9 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    // Custom Tabs for GitHub connect: a real, isolated browser process, not a
+    // WebView -- that isolation from the app is exactly why it is safe here.
+    implementation(libs.androidx.browser)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     // Firebase Messaging pulls in an old transitive androidx.fragment that

@@ -384,6 +384,13 @@ class NativeActivity : ComponentActivity(), Platform {
                 val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()?.take(MAX_SHARED_TEXT_CHARS)
                 if (!text.isNullOrBlank()) vm.newChat(draft = "\"$text\"\n\nExplain this: ")
             }
+            Intent.ACTION_VIEW -> {
+                val uri = intent.data
+                if (uri?.scheme == "neuraos" && uri.host == "github-connected") {
+                    val code = uri.getQueryParameter("code")
+                    if (!code.isNullOrBlank()) vm.connectGithub(code, uri.getQueryParameter("login") ?: "")
+                }
+            }
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
                 val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                 val text = intent.getStringExtra(Intent.EXTRA_TEXT)

@@ -38,6 +38,14 @@ class SecureStore(context: Context) {
         get() = open(prefs.getString(KEY_SESSION, null))
         set(value) = put(KEY_SESSION, value?.let { seal(it) })
 
+    /** The sealed GitHub connect session (the server's fo_gh cookie value),
+     * picked up once through /api/github/pickup after a Custom Tab round
+     * trip -- see NativeApi.githubPickup. Sent back as a second Cookie on
+     * every call, exactly like [session] already is for fo_auth. */
+    var githubSession: String?
+        get() = open(prefs.getString(KEY_GITHUB_SESSION, null))
+        set(value) = put(KEY_GITHUB_SESSION, value?.let { seal(it) })
+
     /** Plain settings: neither is a secret. */
     var appLock: Boolean
         get() = prefs.getBoolean(KEY_APP_LOCK, false)
@@ -55,10 +63,12 @@ class SecureStore(context: Context) {
         prefs.edit().remove(KEY_SESSION).apply()
     }
 
-    /** What sign-out forgets: the password and the session. The server and
-     * the username stay, so the next sign-in is one field. */
+    /** What sign-out forgets: the password, the session, and any connected
+     * GitHub account -- the next person to sign in on this phone must not
+     * inherit it. The server and the username stay, so the next sign-in is
+     * one field. */
     fun clearSecrets() {
-        prefs.edit().remove(KEY_PASSWORD).remove(KEY_SESSION).apply()
+        prefs.edit().remove(KEY_PASSWORD).remove(KEY_SESSION).remove(KEY_GITHUB_SESSION).apply()
     }
 
     private fun put(key: String, value: String?) {
@@ -119,6 +129,7 @@ class SecureStore(context: Context) {
         const val KEY_USERNAME = "username"
         const val KEY_PASSWORD = "password_sealed"
         const val KEY_SESSION = "session_sealed"
+        const val KEY_GITHUB_SESSION = "github_session_sealed"
         const val KEY_APP_LOCK = "app_lock"
         const val KEY_UPDATE_CHECK = "last_update_check"
         const val KEY_ASKED_NOTIFY = "asked_notifications"

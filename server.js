@@ -56,17 +56,30 @@ const GITHUB_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GITHUB_SCOPE = 'public_repo';
 // Android has no browser cookie jar the app's own network layer can read (by
 // design -- that isolation is what makes Custom Tabs safe to use instead of a
-// WebView here). So the callback hands the connected session to the app
-// through a one-time pickup code instead of a cookie: short-lived, single-use,
-// deleted the moment it is redeemed or expires. A leaked code is worthless
-// once either happens, and it is worthless from the start to anyone who is
-// not also the phone racing to redeem it inside the TTL.
+// WebView here), so neither the app's session nor the connected result can
+// ride a cookie the way desktop's does. Both directions instead cross through
+// a short-lived, single-use, opaque code -- never the session token itself,
+// which would otherwise sit in a URL: server access logs, and (via Referer)
+// github.com's own. Each map is one direction, bound to the resolved app
+// user at mint time so a leaked code is useless to anyone else who happens to
+// also be signed in on this deployment within the TTL:
+//   1. githubHandoff  -- app proves who it is over its OWN connection
+//                         (POST, normal fo_auth cookie) and gets a code back.
+//   2. githubAndroidState -- authorize resolves that code once, then carries
+//                         the identity forward keyed by the OAuth `state` it
+//                         already generates, so the callback (same Custom
+//                         Tab, no cookie either) can resolve it again.
+//   3. githubPickup   -- callback hands the connected session to the app
+//                         through a code the app trades in over its own
+//                         connection, checked against the same identity.
+const githubHandoff = new Map();
+const githubAndroidState = new Map();
 const githubPickup = new Map();
 const GITHUB_PICKUP_TTL_MS = 2 * 60 * 1000;
 
-function githubPickupSweep(now = Date.now()) {
-  for (const [code, entry] of githubPickup) {
-    if (entry.expiresAt < now) githubPickup.delete(code);
+function sweepExpired(map, now = Date.now()) {
+  for (const [key, entry] of map) {
+    if (entry.expiresAt < now) map.delete(key);
   }
 }
 let sessionSecret = process.env.SESSION_SECRET;
@@ -609,33 +622,43 @@ function githubAuthorize(req, res) {
   const query = new URL(req.url, 'http://x').searchParams;
   // The Android app has no browser cookie jar of its own, so a Custom Tab
   // hitting this route never carries the app's fo_auth session -- it is let
-  // through the auth gate for this one path (see the dispatcher) only when it
-  // also presents that session as a query param, verified here exactly the
-  // way the cookie itself would be. A gate that is actually configured (real
-  // accounts exist) must see a valid one; an open deployment has no identity
-  // to bind the connection to either way.
+  // through the auth gate for this one path (see the dispatcher), and proves
+  // who it is with a handoff code instead: minted a moment earlier by
+  // /api/github/handoff over the app's OWN authenticated connection, so the
+  // session token itself never appears in this URL. A gate that is actually
+  // configured (real accounts exist) must see a valid, unexpired code; an
+  // open deployment has no identity to bind the connection to either way.
   const android = query.get('client') === 'android';
   let androidUser = null;
+  let androidUserResolved = false;
   if (android) {
-    androidUser = verifySession(sessionSecret, query.get('session'));
-    if (getConfiguredAccounts(process.env).length > 0 && !androidUser) {
+    const handoff = query.get('handoff') || '';
+    const entry = githubHandoff.get(handoff);
+    githubHandoff.delete(handoff);
+    if (getConfiguredAccounts(process.env).length > 0 && (!entry || entry.expiresAt < Date.now())) {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       res.end('Sign in to the app first, then try connecting GitHub again.');
       return;
     }
+    androidUser = entry ? entry.appUser : null;
+    androidUserResolved = true;
   }
   const state = crypto.randomBytes(16).toString('hex');
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
   const adding = query.get('add') === '1';
   const desktop = query.get('client') === 'desktop';
+  if (android && androidUserResolved) {
+    sweepExpired(githubAndroidState);
+    // Carries the resolved identity forward, keyed by the same `state` the
+    // callback already verifies against its cookie -- so the callback (hit
+    // by the same Custom Tab, still no fo_auth cookie of its own) can
+    // recover it without a session ever crossing into a cookie or a URL.
+    githubAndroidState.set(state, { appUser: androidUser, expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
+  }
   res.setHeader('Set-Cookie', [
     `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`,
     `${GITHUB_ADD_COOKIE}=${adding ? '1' : ''}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${adding ? 600 : 0}${secure}`,
     `${GITHUB_CLIENT_COOKIE}=${android ? 'android' : (desktop ? 'desktop' : '')}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${android || desktop ? 600 : 0}${secure}`,
-    // Carries the app's own session into this browsing context so the
-    // callback -- hit by the same Custom Tab a moment later -- resolves the
-    // right currentAppUser instead of an anonymous one.
-    ...(android && androidUser ? [`${SESSION_COOKIE_NAME}=${query.get('session')}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`] : []),
   ]);
   const params = new URLSearchParams({
     client_id: clientId,
@@ -664,6 +687,21 @@ async function githubCallback(req, res) {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
     res.end('GitHub sign-in failed (state mismatch) — please try connecting again from Settings.');
     return;
+  }
+
+  // Android has no fo_auth cookie here either (same reason as the authorize
+  // hop): its identity rode forward keyed by this same `state` instead.
+  // Known simplification: because of that, "add another account" from
+  // Android does not see accounts connected from the web/desktop side in the
+  // same round trip -- accountsOf(null) below is empty, so a second connect
+  // from the phone replaces rather than merges. Single-account is the
+  // primary path this ships for.
+  const isAndroid = cookies[GITHUB_CLIENT_COOKIE] === 'android';
+  let androidAppUser;
+  if (isAndroid) {
+    const entry = githubAndroidState.get(state);
+    githubAndroidState.delete(state);
+    androidAppUser = entry ? entry.appUser : null;
   }
 
   try {
@@ -696,8 +734,9 @@ async function githubCallback(req, res) {
       { token: tokenData.access_token, login: user && user.login, avatarUrl: user && user.avatar_url },
     ].slice(-MAX_GITHUB_ACCOUNTS);
 
+    const resolvedAppUser = isAndroid ? androidAppUser : currentAppUser(req);
     const sealed = encryptJson(sessionSecret, {
-      appUser: currentAppUser(req),
+      appUser: resolvedAppUser,
       accounts,
       exp: Date.now() + GITHUB_TOKEN_TTL_MS,
     });
@@ -706,13 +745,15 @@ async function githubCallback(req, res) {
       `${GITHUB_ADD_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
       `${GITHUB_CLIENT_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
     ];
-    if (cookies[GITHUB_CLIENT_COOKIE] === 'android') {
+    if (isAndroid) {
       // No cookie the app's own network layer will ever see (see the comment
       // on githubPickup above): a one-time code the app trades in for the
-      // sealed session itself, over its own authenticated connection.
-      githubPickupSweep();
+      // sealed session itself, over its own authenticated connection. Bound
+      // to resolvedAppUser so redeeming it still requires being that same
+      // signed-in user, not just holding the code.
+      sweepExpired(githubPickup);
       const code = crypto.randomBytes(24).toString('hex');
-      githubPickup.set(code, { sealed, expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
+      githubPickup.set(code, { sealed, appUser: resolvedAppUser, expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
       res.setHeader('Set-Cookie', clearing);
       res.writeHead(302, { Location: `neuraos://github-connected?code=${code}&login=${encodeURIComponent(user.login || '')}` });
       res.end();
@@ -736,16 +777,30 @@ async function githubCallback(req, res) {
   }
 }
 
+// POST /api/github/handoff -- gated by the normal auth check, so this is the
+// app proving who it is over its OWN connection (the one that actually
+// carries fo_auth) before opening a Custom Tab that cannot. Returns a code
+// that stands in for that identity at /api/github/authorize, so the session
+// token itself never has to cross into a URL.
+function githubHandoffRoute(req, res) {
+  sweepExpired(githubHandoff);
+  const code = crypto.randomBytes(24).toString('hex');
+  githubHandoff.set(code, { appUser: currentAppUser(req), expiresAt: Date.now() + GITHUB_PICKUP_TTL_MS });
+  sendJson(res, 200, { handoff: code });
+}
+
 // GET /api/github/pickup?code= -- redeems the one-time code githubCallback
 // minted for an Android connect. Gated by the normal auth check (the app's
 // own fo_auth cookie, which this call -- unlike the Custom Tab round trip --
-// actually carries), so this never needs its own identity check. Single-use:
-// the code is deleted whether it is found, expired, or missing.
+// actually carries) and, on top of that, the redeeming identity must match
+// the one the code was minted for: a code intercepted in transit is useless
+// to anyone who is not also that signed-in user. Single-use: the code is
+// deleted whether it is found, expired, mismatched, or missing.
 function githubPickupRoute(req, res) {
   const code = new URL(req.url, 'http://x').searchParams.get('code') || '';
   const entry = githubPickup.get(code);
   githubPickup.delete(code);
-  if (!entry || entry.expiresAt < Date.now()) {
+  if (!entry || entry.expiresAt < Date.now() || entry.appUser !== currentAppUser(req)) {
     return sendJson(res, 404, { error: 'That connect link expired -- try connecting GitHub again.' });
   }
   sendJson(res, 200, { session: entry.sealed });
@@ -5963,13 +6018,17 @@ function createRequestHandler(root) {
     // transcript the way the app wrote it. It carries no secrets -- it ships to
     // every signed-in browser anyway.
     const isShareAsset = urlPath === '/chatlib.js';
-    // The Android app's Custom Tab hits this one route with no cookie at all
-    // (see the comment on githubPickup): githubAuthorize itself checks the
-    // session it carries as a query param instead, so it is let through the
-    // gate rather than 401ing before that check ever runs. Nothing else about
-    // the gate changes -- this is one path, one method, one query value.
-    const isAndroidGithubHandoff = urlPath === '/api/github/authorize' && req.method === 'GET'
+    // The Android app's Custom Tab hits both of these routes with no cookie
+    // the gate recognizes (see the comment on githubHandoff/githubPickup
+    // above githubAuthorize): each checks its own opaque, single-use code
+    // instead, so both are let through the gate rather than 401ing before
+    // that check ever runs. Nothing else about the gate changes -- this is
+    // two paths, identified narrowly, never a blanket exemption.
+    const isAndroidGithubAuthorize = urlPath === '/api/github/authorize' && req.method === 'GET'
       && new URL(req.url, 'http://x').searchParams.get('client') === 'android';
+    const isAndroidGithubCallback = urlPath === '/api/github/callback' && req.method === 'GET'
+      && parseCookieHeader(req.headers.cookie)[GITHUB_CLIENT_COOKIE] === 'android';
+    const isAndroidGithubHandoff = isAndroidGithubAuthorize || isAndroidGithubCallback;
     if (!PUBLIC_PATHS.has(urlPath) && !isShareRead && !isShareAsset && !isAndroidGithubHandoff && !isAuthenticated(req)) {
       if (urlPath.startsWith('/api/')) {
         sendJson(res, 401, { error: 'Not signed in' });
@@ -6005,6 +6064,7 @@ function createRequestHandler(root) {
     }
     if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
+    if (urlPath === '/api/github/handoff' && req.method === 'POST') return githubHandoffRoute(req, res);
     if (urlPath === '/api/github/pickup' && req.method === 'GET') return githubPickupRoute(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
     if (urlPath === '/api/github/disconnect' && req.method === 'POST') return githubDisconnect(req, res);

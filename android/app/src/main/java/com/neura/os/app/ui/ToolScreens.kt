@@ -1,6 +1,8 @@
 package com.neura.os.app.ui
 
 import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -73,6 +75,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -428,6 +431,24 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
             }
         }
         SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
+        SectionTitle("Connectors")
+        val context = LocalContext.current
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("GitHub", style = MaterialTheme.typography.bodyMedium)
+                Text(if (vm.githubConnected) "Connected" else "Lets a chat read and edit repos you approve.", color = Palette.muted, fontSize = 12.sp)
+            }
+            TextButton(
+                {
+                    vm.startGithubConnect { url ->
+                        CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(url))
+                    }
+                },
+                enabled = !vm.githubConnecting,
+            ) {
+                Text(if (vm.githubConnecting) "Connecting…" else if (vm.githubConnected) "Reconnect" else "Connect")
+            }
+        }
         SectionTitle("Server")
         LaunchedEffect(Unit) { if (vm.limits == null) vm.loadLimits() }
         SettingRow("Timeouts", vm.limits?.detail() ?: "Tap to load") { vm.loadLimits() }
