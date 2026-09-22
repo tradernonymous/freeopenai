@@ -33,7 +33,7 @@ class ChatLogicMoreTest {
                 "data: {\"error\":\"rate limited\"}\n" +
                 "data: {\"choices\":[{\"delta\":{\"content\":\"should not arrive\"}}]}\n",
         )
-        assertEquals(2, events.size, "the loop must stop at the first terminator, not read past it")
+        assertEquals("the loop must stop at the first terminator, not read past it", 2, events.size)
         assertEquals("rate limited", (events[1] as ChatEvent.Failure).message)
     }
 
