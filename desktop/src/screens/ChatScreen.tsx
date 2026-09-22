@@ -113,11 +113,13 @@ function loadSessions(): ChatSession[] {
 // fit (src/chats.js). That is a loss the user should hear about once, not a
 // history that quietly shrinks.
 let warnedQuota = false;
-// Pictures are data URLs, hundreds of KB each: the saved copy keeps them only
-// on a chat's last few messages, or four screenshots would evict whole chats.
+// Pictures are data URLs, hundreds of KB each: in localStorage the saved copy
+// keeps them only on a chat's last few messages, or four screenshots would
+// evict whole chats. The shell's SQLite store (chats.persistent()) has no such
+// quota, so there every picture is kept.
 const KEEP_IMAGES_LAST = 6;
 function saveSessions(sessions: ChatSession[]) {
-  const slim = sessions.map((s) => (s.messages.some((m) => m.images) ? {
+  const slim = chats.persistent() ? sessions : sessions.map((s) => (s.messages.some((m) => m.images) ? {
     ...s,
     messages: s.messages.map((m, i) => (m.images && i < s.messages.length - KEEP_IMAGES_LAST ? { ...m, images: undefined } : m)),
   } : s));

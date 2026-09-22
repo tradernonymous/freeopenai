@@ -36,6 +36,8 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 # Update manifests signed with `tauri signer` (minisign), checked against a key
 # compiled in at build time (net.rs update_manifest). Pure Rust, no deps.
 minisign-verify = "0.2"
+# Chat history (chat_store.rs): SQLite compiled in, so no system library.
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [features]
 default = ["custom-protocol"]

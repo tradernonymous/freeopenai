@@ -41,7 +41,9 @@ test('the Quick window: a global hotkey, a small window, remappable', () => {
 
 test('a Quick answer continues in the main window as a real chat', () => {
   const quick = read('desktop', 'src', 'screens', 'QuickAsk.tsx');
-  assert.match(quick, /chats\.writeStore\(null, \[session/);
+  // Through the store's hand-off: saved, and left for the main window's copy
+  // of the store to take in (the Quick window is its own webview).
+  assert.match(quick, /chats\.handOff\(session\)/);
   assert.match(quick, /QUICK_HANDOFF_KEY/);
   assert.match(quick, /mainShow\(\)/);
   const app = read('desktop', 'src', 'App.tsx');

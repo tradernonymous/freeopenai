@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { streamChat } from '../api';
-import { mainShow, onQuickSelection, quickHide, quickTakeSelection } from '../bridge';
+import { chatStoreBackend, hasShell, mainShow, onQuickSelection, quickHide, quickTakeSelection } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import Icon from '../components/Icon';
 import { isSavedProvider, streamSaved } from '../run-model';
@@ -41,6 +41,20 @@ export default function QuickAsk() {
   const box = useRef<HTMLTextAreaElement>(null);
   // Text the selection hotkey copied out of another app, awaiting an action.
   const [selection, setSelection] = useState('');
+  // This window has its own copy of the chat store: read the shell's store in,
+  // redraw when it lands, and re-read it on focus (the main window writes it).
+  const [, setStoreTick] = useState(0);
+  useEffect(() => {
+    const redraw = () => setStoreTick((n) => n + 1);
+    window.addEventListener(chats.CHATS_CHANGED_EVENT, redraw);
+    if (hasShell()) chats.hydrate(chatStoreBackend);
+    const onFocus = () => { chats.refresh(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener(chats.CHATS_CHANGED_EVENT, redraw);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
 
   useEffect(() => {
     document.body.classList.add('quick-body');
@@ -121,7 +135,9 @@ export default function QuickAsk() {
       draft: '',
       updatedAt: now,
     };
-    chats.writeStore(null, [session, ...chats.readStore()].slice(0, chats.MAX_SESSIONS));
+    // Saved here and left in localStorage for the main window, which takes it
+    // in on the 'storage' event before it reads the hand-off key below.
+    chats.handOff(session);
     try { localStorage.setItem(QUICK_HANDOFF_KEY, JSON.stringify({ id: session.id, ts: now })); } catch { /* the chat is saved either way */ }
     mainShow().then(() => quickHide());
     setAsked('');
