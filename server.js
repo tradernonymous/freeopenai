@@ -4580,6 +4580,9 @@ function llmChat(req, res) {
       messages: body.messages,
       ...(body.tools ? { tools: body.tools } : {}),
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+      // Only when the person set it (desktop /reasoning): a provider that does
+      // not know the field is never sent it unasked.
+      ...(['low', 'medium', 'high'].includes(body.reasoning_effort) ? { reasoning_effort: body.reasoning_effort } : {}),
       ...(maxTokens ? { max_tokens: maxTokens } : {}),
       ...(body.stream ? { stream: true } : {}),
     });

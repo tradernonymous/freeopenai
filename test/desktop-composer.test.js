@@ -214,7 +214,7 @@ test('five destinations, and every view lives in exactly one', () => {
   const sidebar = read('desktop', 'src', 'Sidebar.tsx');
   const block = sidebar.slice(sidebar.indexOf('export const SUB_VIEWS'), sidebar.indexOf('];', sidebar.indexOf('export const SUB_VIEWS')));
   const rows = [...block.matchAll(/\{ id: '([a-z]+)', label: '[^']+', parent: '([a-z]+)' \}/g)].map((m) => ({ id: m[1], parent: m[2] }));
-  const views = ['chat', 'code', 'design', 'library', 'settings', 'build', 'local', 'files', 'images'];
+  const views = ['chat', 'code', 'design', 'library', 'settings', 'build', 'local', 'files', 'images', 'evals'];
   assert.deepEqual(rows.map((r) => r.id).sort(), views.slice().sort(), 'every former screen is still reachable');
   const parents = new Set(rows.map((r) => r.parent));
   assert.deepEqual([...parents].sort(), ['chat', 'code', 'design', 'library', 'settings']);

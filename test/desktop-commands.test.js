@@ -13,7 +13,7 @@ const commands = require('../desktop/src/commands.js');
 const ROOT = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 
-const SCREENS = ['chat', 'code', 'images', 'build', 'local', 'design', 'library', 'files', 'settings'];
+const SCREENS = ['chat', 'code', 'images', 'build', 'local', 'design', 'library', 'files', 'evals', 'settings'];
 
 test('the registry is well formed', () => {
   assert.ok(commands.COMMANDS.length >= 10, 'the palette covers more than the sidebar');

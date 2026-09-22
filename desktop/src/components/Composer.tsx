@@ -38,12 +38,14 @@ interface Props {
   above?: ReactNode;
   /** The last thing sent, for Up in an empty box. */
   recall: () => string;
+  /** The paperclip: attach a file (PDF, Word, Excel, PowerPoint, text). */
+  onAttach?: () => void;
   inputRef: RefObject<HTMLTextAreaElement>;
   placeholder?: string;
 }
 
 export default function Composer(props: Props) {
-  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, inputRef } = props;
+  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, onAttach, inputRef } = props;
   const [cursor, setCursor] = useState(0);
   const [caret, setCaret] = useState(0);
   const [dismissed, setDismissed] = useState('');
@@ -183,6 +185,11 @@ export default function Composer(props: Props) {
         </button>
       </div>
       <div className="composer-foot">
+        {onAttach && (
+          <button className="composer-icon" onClick={onAttach} title="Attach a file (PDF, Word, Excel, PowerPoint, text)" aria-label="Attach a file">
+            <Icon name="paperclip" size={14} />
+          </button>
+        )}
         {modelChip}
         <span
           className={`tools-dot${toolsOn ? ' is-on' : ''}`}

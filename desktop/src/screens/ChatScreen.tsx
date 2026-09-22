@@ -12,6 +12,11 @@ import { pushToast } from '../components/Toasts';
 import RunSettings from '../components/RunSettings';
 import ToolCards from '../components/ToolCards';
 import HfSignIn from '../components/HfSignIn';
+import CompareDrawer from '../components/CompareDrawer';
+import { modelTargets } from '../stream-any';
+import '../files/zip.js';
+import '../files/office.js';
+import '../files/pdf.js';
 import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
 import { executeTool } from '../tool-run';
@@ -34,6 +39,8 @@ const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAut
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
+const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
+const pdf: typeof import('../files/pdf.js') = (globalThis as any).FreePdf;
 
 type ModeId = import('../composer.js').ModeId;
 type SlashCommand = import('../composer.js').SlashCommand;
@@ -71,6 +78,8 @@ export interface ChatSession {
   provider: string;
   model: string;
   mode: 'chat' | 'plan' | 'build';
+  /** /reasoning: sent as reasoning_effort to providers that take it. */
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
   draft: string;
   updatedAt: number;
 }
@@ -137,7 +146,8 @@ export function turnsFor(messages: Msg[]): Array<{ role: string; content: string
       out.push({ role: 'user', content: `Command output from the open folder:\n${pending}---\n${m.content}` });
       pending = '';
     } else {
-      out.push({ role: m.role, content: m.content });
+      // A model's shown reasoning is not part of what it said.
+      out.push({ role: m.role, content: m.role === 'assistant' ? String(m.content || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim() : m.content });
     }
   }
   return out;
@@ -206,6 +216,8 @@ export default function ChatScreen() {
   const [cardsOpen, setCardsOpen] = useState<boolean | undefined>(undefined);
   const [skillRows, setSkillRows] = useState<SlashCommand[]>([]);
   const [folderFiles, setFolderFiles] = useState<string[]>([]);
+  const [compare, setCompare] = useState<{ open: boolean; prompt: string }>({ open: false, prompt: '' });
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     api.skills()
       .then((rows: any) => setSkillRows((Array.isArray(rows) ? rows : []).slice(0, 40).map((row: any) => grammar.skillRow(row))))
@@ -529,10 +541,11 @@ export default function ChatScreen() {
         if (isSavedProvider(provider)) {
           return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered);
         }
+        const effort = active.reasoning && active.reasoning !== 'off' ? { reasoning_effort: active.reasoning } : {};
         if (provider === 'local') {
-          return streamLocalChat(localRow?.baseUrl || '', model, messages, onFrame, signal, localRow?.apiKey || undefined, offered ? { tools: offered } : undefined);
+          return streamLocalChat(localRow?.baseUrl || '', model, messages, onFrame, signal, localRow?.apiKey || undefined, { ...(offered ? { tools: offered } : {}), ...effort });
         }
-        return streamChat(provider, { model, messages, ...(offered ? { tools: offered } : {}) }, onFrame, signal);
+        return streamChat(provider, { model, messages, ...(offered ? { tools: offered } : {}), ...effort } as any, onFrame, signal);
       };
       const upsertTool = (event: ToolEvent) => {
         setSessions((prev) => prev.map((s) => {
@@ -811,6 +824,36 @@ export default function ChatScreen() {
     synth.speak(utterance);
   };
 
+  // Attach a document as text: PDF, Word, Excel and PowerPoint through the
+  // in-app extractors FilesScreen uses; anything else is read as text. The
+  // chip shows a rough token cost, since a big PDF can fill a small context.
+  const attachFile = async (file: File) => {
+    const name = file.name;
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    try {
+      let text = '';
+      if (ext === 'pdf') text = await pdf.extractPdfText(new Uint8Array(await file.arrayBuffer()));
+      else if (ext === 'docx') text = await office.extractDocxText(new Uint8Array(await file.arrayBuffer()));
+      else if (ext === 'pptx') text = await office.extractPptxText(new Uint8Array(await file.arrayBuffer()));
+      else if (ext === 'xlsx') {
+        const sheets = await office.extractXlsxSheets(new Uint8Array(await file.arrayBuffer()));
+        text = sheets.map((sh) => `# ${sh.name}\n${office.sheetToText(sh.rows)}`).join('\n\n');
+      } else if (/^(png|jpe?g|gif|webp|bmp)$/.test(ext)) {
+        pushToast('warn', 'Images need a vision model; attaching images is not supported in chat yet.');
+        return;
+      } else {
+        if (file.size > 2 * 1024 * 1024) { pushToast('warn', `${name} is over 2 MB; attach a smaller part of it.`); return; }
+        text = await file.text();
+      }
+      if (!text.trim()) { pushToast('warn', `${name} has no text to attach.`); return; }
+      const capped = text.length > 200000 ? `${text.slice(0, 200000)}\n[truncated]` : text;
+      setAttached((prev) => `${prev ? prev + '\n\n' : ''}--- ${name} ---\n${capped}`);
+      pushToast('ok', `Attached ${name} (~${Math.round(capped.length / 4).toLocaleString()} tokens).`);
+    } catch (e) {
+      pushToast('error', `${name}: ${((e as Error).message || String(e)).split('\n')[0]}`);
+    }
+  };
+
   const addNote = (content: string) => {
     if (!active) return;
     patchSession(active.id, { messages: [...active.messages, { role: 'assistant', content, note: true, model: 'NeuraOS', ts: Date.now() }], draft: '' });
@@ -843,6 +886,37 @@ export default function ChatScreen() {
       case 'settings': case 'tools': case 'mcp': clear(); go({ view: 'settings' }); return;
       case 'model': clear(); window.dispatchEvent(new CustomEvent(MODEL_PICK_EVENT)); return;
       case 'help': addNote(HELP); return;
+      case 'compare':
+        clear();
+        setCompare({ open: true, prompt: arg || active.draft || grammar.lastUserText(active.messages) });
+        return;
+      case 'attach': clear(); fileRef.current?.click(); return;
+      case 'reasoning': {
+        const level = (['off', 'low', 'medium', 'high'].find((l) => l === arg.toLowerCase()) || '') as ChatSession['reasoning'] | '';
+        if (!level) { pushToast('info', `Reasoning is ${active.reasoning || 'the model default'}. Use /reasoning off, low, medium or high.`); clear(); return; }
+        patchSession(active.id, { reasoning: level, draft: '' });
+        pushToast('ok', level === 'off' ? 'Reasoning effort: model default.' : `Reasoning effort: ${level} (for models that support it).`);
+        return;
+      }
+      case 'memory': {
+        clear();
+        if (!arg) { go({ view: 'settings' }); return; }
+        api.raw('/api/memory', { method: 'PUT', body: JSON.stringify({ text: arg }) })
+          .then(() => pushToast('ok', 'Remembered.'))
+          .catch((e: unknown) => pushToast('error', ((e as Error).message || String(e)).split('\n')[0]));
+        return;
+      }
+      case 'share': {
+        clear();
+        const messages = active.messages.filter((m) => !m.note).map((m) => ({ role: m.role, content: m.content }));
+        api.raw('/api/share', { method: 'PUT', body: JSON.stringify({ title: active.title, messages }) })
+          .then((data: any) => {
+            const link = `${api.getServer().replace(/\/+$/, '')}${data?.url || ''}`;
+            return navigator.clipboard.writeText(link).then(() => pushToast('ok', `Read-only link copied: ${link}`), () => pushToast('ok', link));
+          })
+          .catch((e: unknown) => pushToast('error', ((e as Error).message || String(e)).split('\n')[0]));
+        return;
+      }
       case 'copy': {
         clear();
         navigator.clipboard.writeText(grammar.threadMarkdown(active))
@@ -941,6 +1015,7 @@ export default function ChatScreen() {
       { id: 'explain', label: 'Explain', icon: 'chat', run: () => ask(`Explain this:\n\n${fenced}`) },
       { id: 'rework', label: 'Rework', icon: 'build', run: () => ask(`Rework this and show the improved version:\n\n${fenced}`) },
       { id: 'design', label: 'To Design', icon: 'design', run: () => sendToDesign(snippet) },
+      { id: 'compare', label: 'Compare', icon: 'compass', run: () => setCompare({ open: true, prompt: grammar.lastUserText(active.messages) }) },
       {
         id: 'speak',
         label: speaking ? 'Stop' : 'Read aloud',
@@ -977,6 +1052,23 @@ export default function ChatScreen() {
   // Copy buttons inside rendered code blocks.
   const onMessagesClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
+    // An HTML block: look at it in place (sandboxed, no same-origin) or send it
+    // to the Design studio.
+    if (target.classList?.contains('code-preview') || target.classList?.contains('code-design')) {
+      const block = target.closest('.code-block');
+      const source = block?.querySelector('pre')?.textContent || '';
+      if (target.classList.contains('code-design')) { sendToDesign(source); return; }
+      const shown = block?.querySelector('iframe.code-preview-frame');
+      if (shown) { shown.remove(); target.textContent = 'Preview'; return; }
+      const frame = document.createElement('iframe');
+      frame.className = 'code-preview-frame';
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('title', 'HTML preview');
+      frame.srcdoc = source;
+      block?.appendChild(frame);
+      target.textContent = 'Hide preview';
+      return;
+    }
     if (!target.classList?.contains('code-copy')) return;
     const block = target.closest('.code-block');
     const pre = block?.querySelector('pre');
@@ -1114,6 +1206,29 @@ export default function ChatScreen() {
           onClose={() => setRadial(null)}
         />
       )}
+      <input
+        ref={fileRef}
+        type="file"
+        hidden
+        accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.html,.css,.js,.ts,.tsx,.py,.rs,.go,.java,.xml,.yaml,.yml,.log"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) attachFile(f); e.target.value = ''; }}
+      />
+      <CompareDrawer
+        open={compare.open}
+        prompt={compare.prompt}
+        targets={modelTargets((id) => choices.find((c) => c.id === id)?.label || id, active.provider, models)}
+        onClose={() => setCompare({ open: false, prompt: '' })}
+        onUse={(text, target) => {
+          patchSession(active.id, {
+            messages: [
+              ...active.messages,
+              { role: 'user', content: compare.prompt, ts: Date.now() },
+              { role: 'assistant', content: text, model: target.model, provider: target.provider, providerLabel: target.label.split(' · ')[0], ts: Date.now() },
+            ],
+          });
+          setCompare({ open: false, prompt: '' });
+        }}
+      />
       <Composer
         value={active.draft}
         onChange={(text) => patchSession(active.id, { draft: text })}
@@ -1128,6 +1243,7 @@ export default function ChatScreen() {
         onMention={onMention}
         toolsOn={toolsOn}
         recall={() => grammar.lastUserText(active.messages)}
+        onAttach={() => fileRef.current?.click()}
         inputRef={inputRef}
         modelChip={(
           <>
@@ -1168,7 +1284,7 @@ export default function ChatScreen() {
             {attached && (
               <div className="attach-chip">
                 <span className="attach-label">
-                  <Icon name="paperclip" size={13} /> Attached text · {attached.length.toLocaleString()} chars
+                  <Icon name="paperclip" size={13} /> Attached · {attached.length.toLocaleString()} chars · ~{Math.round(attached.length / 4).toLocaleString()} tokens
                 </span>
                 <button onClick={() => setAttached('')} title="Remove attachment" aria-label="Remove attachment">
                   <Icon name="close" size={13} />

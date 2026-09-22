@@ -41,6 +41,7 @@ export const SUB_VIEWS: Array<{ id: ViewId; label: string; parent: NavId }> = [
   { id: 'design', label: 'Design', parent: 'design' },
   { id: 'library', label: 'Library', parent: 'library' },
   { id: 'images', label: 'Images', parent: 'library' },
+  { id: 'evals', label: 'Evals', parent: 'library' },
   { id: 'settings', label: 'Settings', parent: 'settings' },
 ];
 
@@ -81,7 +82,7 @@ export function navForKey(key: string): NavId | null {
 
 export type NavId = 'chat' | 'code' | 'design' | 'library' | 'settings';
 /** A view: a destination, or one of the tabs inside one. */
-export type ViewId = NavId | 'build' | 'local' | 'files' | 'images';
+export type ViewId = NavId | 'build' | 'local' | 'files' | 'images' | 'evals';
 
 export interface PanelKeyMap {
   folder: boolean;

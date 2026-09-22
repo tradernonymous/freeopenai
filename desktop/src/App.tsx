@@ -12,6 +12,7 @@ import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
 import CodeScreen from './screens/CodeScreen';
+import EvalsScreen from './screens/EvalsScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
@@ -497,6 +498,7 @@ export default function App() {
                     />
                   )}
                   {view === 'files' && <FilesScreen />}
+                  {view === 'evals' && <EvalsScreen />}
                   {view === 'settings' && (
                     <SettingsScreen
                       onConnectionChanged={checkAuth}

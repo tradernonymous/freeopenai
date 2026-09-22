@@ -34,14 +34,35 @@ function codeBlock(lang: string, body: string): string {
   const langLabel = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
   return (
     `<div class="code-block">` +
-    `<div class="code-block-bar">${langLabel}<button class="code-copy" type="button">Copy</button></div>` +
+    `<div class="code-block-bar">${langLabel}` +
+    // An HTML page can be looked at (sandboxed, in place) or sent to Design.
+    (/^(html|svg|xml)$/i.test(lang) ? `<button class="code-preview" type="button">Preview</button><button class="code-design" type="button">To Design</button>` : '') +
+    `<button class="code-copy" type="button">Copy</button></div>` +
     `<pre><code>${escapeHtml(body)}</code></pre>` +
     `</div>`
   );
 }
 
-/** Markdown -> HTML for a chat reply. Throws on nothing; bad input renders as text. */
+/**
+ * Markdown -> HTML for a chat reply. Throws on nothing; bad input renders as
+ * text. A model's reasoning (<think>...</think>, or an unfinished one while it
+ * streams) is folded into a "Thought" block rather than mixed into the answer.
+ */
 export function renderMarkdown(source: string): string {
+  const text = String(source || '');
+  const think = /<think>([\s\S]*?)(<\/think>|$)/.exec(text);
+  if (think) {
+    const finished = !!think[2];
+    const before = text.slice(0, think.index);
+    const after = finished ? text.slice(think.index + think[0].length) : '';
+    return renderPlain(before)
+      + `<details class="thinking"${finished ? '' : ' open'}><summary>${finished ? 'Thought' : 'Thinking…'}</summary>${renderPlain(think[1])}</details>`
+      + renderMarkdown(after);
+  }
+  return renderPlain(text);
+}
+
+function renderPlain(source: string): string {
   const text = String(source || '');
   const lines = text.split('\n');
   const html: string[] = [];

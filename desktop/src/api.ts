@@ -199,6 +199,13 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
   const decoder = new TextDecoder();
   let buffer = '';
   let failure: string | null = null;
+  // Reasoning a provider streams apart from the answer (reasoning_content /
+  // reasoning: DeepSeek, Qwen, llama-server's default) is kept, wrapped in
+  // <think> so the chat shows it folded (markdown.ts); it used to be dropped.
+  let thinking = false;
+  const closeThinking = () => {
+    if (thinking) { thinking = false; onFrame({ content: '</think>\n\n' }); }
+  };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -211,6 +218,7 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
       const payload = line.slice(5).trim();
       if (!payload) continue;
       if (payload === '[DONE]') {
+        closeThinking();
         onFrame({ done: true });
         continue;
       }
@@ -221,12 +229,20 @@ async function readStream(res: Response, onFrame: (frame: StreamFrame) => void):
           continue;
         }
         const delta = frame?.choices?.[0]?.delta;
+        const reasoning = delta && typeof delta.reasoning_content === 'string' ? delta.reasoning_content
+          : delta && typeof delta.reasoning === 'string' ? delta.reasoning : '';
+        if (reasoning) {
+          onFrame({ content: (thinking ? '' : '<think>') + reasoning, model: frame?.model });
+          thinking = true;
+        }
         const content = delta && typeof delta.content === 'string' ? delta.content : undefined;
         const called = delta && Array.isArray(delta.tool_calls) && delta.tool_calls.length ? delta.tool_calls : undefined;
+        if (content || called) closeThinking();
         if (content || called) onFrame({ content, toolCalls: called, model: frame?.model });
       } catch { /* a frame that is not JSON says nothing */ }
     }
   }
+  closeThinking();
   if (failure) throw new ApiError(502, failure);
 }
 
