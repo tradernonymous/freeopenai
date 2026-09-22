@@ -38,6 +38,9 @@ export function landingNote(landed: string): { same: boolean; login: string } {
 
 export const GITHUB_CHANGED_EVENT = 'freeai4u:github-changed';
 
+/** Placeholder the language-server preset leaves for the person to replace; never a real package name. */
+const LSP_PLACEHOLDER = '<package>';
+
 function without<T>(map: Record<string, T>, key: string): Record<string, T> {
   const next = { ...map };
   delete next[key];
@@ -63,6 +66,7 @@ export default function ConnectorsCard() {
   const [pasteText, setPasteText] = useState('');
   const [running, setRunning] = useState<string[]>([]);
   const [failures, setFailures] = useState<Record<string, { message: string; stderr: string }>>({});
+  const [lspHint, setLspHint] = useState(false);
 
   const refreshRunning = useCallback(() => {
     mcpStdioList().then(setRunning).catch(() => setRunning([]));
@@ -187,6 +191,11 @@ export default function ConnectorsCard() {
   };
 
   const addLocal = () => {
+    if (argsLine.includes(LSP_PLACEHOLDER) || argsLine.includes('<args>')) {
+      pushToast('error', `Replace ${LSP_PLACEHOLDER} (and <args>) with the language-server MCP package you chose.`);
+      return;
+    }
+    setLspHint(false);
     const parsedEnv = tools.parseEnvLines(envText);
     if (parsedEnv.bad.length) {
       pushToast('error', `Not a KEY=VALUE line: ${parsedEnv.bad[0]}`);
@@ -217,6 +226,18 @@ export default function ConnectorsCard() {
     const saved = tools.mcpServers().find((s) => tools.slug(s.name) === tools.slug(row.name));
     if (saved && hasShell()) startLocal(saved);
     else pushToast('info', `${row.name} saved. Local servers run in the installed desktop app (Node.js needed for npx).`);
+  };
+
+  // Language servers over MCP (phase 12e). There is no LSP-over-MCP npm
+  // package this app can name with certainty, so this does not add one: it
+  // fills the local form with placeholders the person replaces (see
+  // docs/desktop.md), and addLocal refuses while a placeholder is left in.
+  const prefillLanguageServer = () => {
+    setMode('local');
+    setName('lsp');
+    setCommand('npx');
+    setArgsLine(`-y ${LSP_PLACEHOLDER} <args>`);
+    setLspHint(true);
   };
 
   // A pasted config is saved, not run: each local server starts on its own
@@ -343,7 +364,22 @@ export default function ConnectorsCard() {
           >
             Browser (Chrome DevTools MCP)
           </button>
+          <button
+            type="button"
+            onClick={prefillLanguageServer}
+            disabled={!!busy}
+            title="Fills in the 'On this PC' form for a language-server (LSP) MCP server. Replace <package> with the npm package you chose — no package is picked for you."
+          >
+            Language server (LSP) MCP
+          </button>
         </div>
+        {lspHint && mode === 'local' && (
+          <p className="settings-hint">
+            Replace <span className="mono">{LSP_PLACEHOLDER}</span> (and <span className="mono">{'<args>'}</span>) with the LSP-over-MCP
+            package you want and its options, then Add and start. Its tools reach agents as <span className="mono">lsp/*</span>.
+            See docs/desktop.md, "Language servers via MCP".
+          </p>
+        )}
         {pasteOpen && (
           <div className="mcp-paste">
             <textarea

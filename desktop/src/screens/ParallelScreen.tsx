@@ -17,8 +17,10 @@ import { editLocalFile, hasShell, listLocalDir, readLocalFile, runLocal, writeLo
 import '../coding-agent.js';
 import '../saved-models.js';
 import '../worktrees.js';
+import '../docker-sandbox.js';
 
 const agent: typeof import('../coding-agent.js') = (globalThis as any).FreeAI4UCodingAgent;
+const dockerSandbox: typeof import('../docker-sandbox.js') = (globalThis as any).FreeAI4UDockerSandbox;
 const worktrees: typeof import('../worktrees.js') = (globalThis as any).FreeAI4UWorktrees;
 
 type Row = import('../worktrees.js').WorktreeRow;
@@ -101,7 +103,9 @@ export default function ParallelScreen({ localRoot }: Props) {
         readFile: (r, p) => readLocalFile(r, p),
         writeFile: (r, p, c) => writeLocalFile(r, p, c),
         editFile: (r, p, o, n) => editLocalFile({ root: r, path: p, oldText: o, newText: n }),
-        runCmd: (r, command, cwd) => runLocal({ root: r, runId: 'pa-' + Date.now(), command, cwd, timeoutMs: 120_000 }),
+        // The Code screen's "Run agent commands in Docker" setting applies here too (docker-sandbox.js).
+        runCmd: (r, command, cwd) => dockerSandbox.run({ root: r, command, cwd }, (line, at, timeoutMs) =>
+          runLocal({ root: r, runId: 'pa-' + Date.now(), command: line, cwd: at, timeoutMs: timeoutMs ?? 120_000 })),
         onEvent: (event: any) => {
           if (event.type === 'step' && event.step) {
             patch(row.slug, (c) => {

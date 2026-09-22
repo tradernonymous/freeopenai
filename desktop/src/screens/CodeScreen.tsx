@@ -10,8 +10,10 @@ import { hasShell, pickFolder, listLocalDir, readLocalFile, writeLocalFile, edit
 import '../coding-agent.js';
 import '../hf-auth.js';
 import '../chats.js';
+import '../docker-sandbox.js';
 
 const agent: typeof import('../coding-agent.js') = (globalThis as any).FreeAI4UCodingAgent;
+const dockerSandbox: typeof import('../docker-sandbox.js') = (globalThis as any).FreeAI4UDockerSandbox;
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
 
 // ---- diff rendering (escape-safe, same pattern as BuildScreen) -----------
@@ -108,6 +110,12 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
       .catch(() => { /* no engine: my models are still there */ });
   }, []);
   const [rejectReason, setRejectReason] = useState('');
+  // Opt-in Docker sandbox for run_command (docker-sandbox.js); ParallelScreen reads the same setting.
+  const [docker, setDocker] = useState(() => dockerSandbox.settings());
+  const updateDocker = (next: { enabled: boolean; image: string }) => {
+    setDocker(next);
+    dockerSandbox.saveSettings(next);
+  };
 
   const listRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<any>(null);
@@ -156,8 +164,9 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
         return editLocalFile({ root, path, oldText, newText });
       },
       runCmd: async (root: string, command: string, cwd?: string) => {
-        const runId = 'agent-' + Date.now();
-        return runLocal({ root, runId, command, cwd, timeoutMs: 120_000 });
+        // docker-sandbox.run is a straight call when the Docker setting is off.
+        return dockerSandbox.run({ root, command, cwd }, (line, at, timeoutMs) =>
+          runLocal({ root, runId: 'agent-' + Date.now(), command: line, cwd: at, timeoutMs: timeoutMs ?? 120_000 }));
       },
       onEvent: (event: any) => {
         if (event.type === 'step') {
@@ -281,6 +290,33 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
           )}
         </div>
 
+        <div className="code-docker" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={docker.enabled}
+              onChange={(e) => updateDocker({ ...docker, enabled: e.target.checked })}
+            />
+            Run agent commands in Docker
+          </label>
+          {docker.enabled && (
+            <input
+              value={docker.image}
+              onChange={(e) => updateDocker({ ...docker, image: e.target.value })}
+              placeholder={dockerSandbox.DEFAULT_IMAGE}
+              spellCheck={false}
+              aria-label="Docker image"
+              style={{ maxWidth: 220 }}
+            />
+          )}
+          {docker.enabled && (
+            <span className="settings-hint">
+              Commands run in a throwaway container with this folder mounted read-write at /work. The rest of
+              your disk is out of reach; the project's own files are not protected. Needs Docker Desktop running.
+            </span>
+          )}
+        </div>
+
         {error && <div className="stream-error">{error}</div>}
 
         {approval && (
@@ -295,6 +331,9 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
             )}
             {approval.tool === 'run_command' && typeof approval.args.cwd === 'string' && (
               <div className="approval-cwd">cwd: {approval.args.cwd}</div>
+            )}
+            {approval.tool === 'run_command' && docker.enabled && (
+              <div className="approval-cwd">runs in Docker ({docker.image}), this folder mounted at /work</div>
             )}
             <div className="approval-actions">
               <button className="primary" onClick={() => decide(true)}>Approve</button>

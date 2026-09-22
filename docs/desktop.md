@@ -232,6 +232,29 @@ Tools: `list_files`, `read_file` (read-only, immediate), `write_file`, `edit_fil
 
 The agent reads `AGENTS.md` and `CLAUDE.md` project notes at the start, and the model source is the same `streamChat` / `streamLocalChat` in `api.ts` — the user picks the provider.
 
+### Code helpers, editor, Docker sandbox, language servers (Phase 12e)
+
+**Helper agents.** Three more built-ins in [`src/agents.js`](../desktop/src/agents.js), run with `/agent <id> …` in Chat or through `spawn_agent`. Each write, edit, command and push still shows its own Allow card.
+- `test-writer` reads a file and finds the project's own test framework. It writes tests next to the file and runs them with `run_command`. It then fixes the *tests* at most twice.
+- `doc-writer` adds docstrings or JSDoc using `edit_file` only. It changes comments and nothing else.
+- `pr-opener` reads `git status` and `git diff`, then switches to a new branch. It commits the named files (never `git add -A`) and runs `git push -u origin <branch>`. It opens the PR with `github/create_pull_request` when the official GitHub MCP server is added as `github`. Otherwise it uses `gh pr create`, or as a last resort gives the compare URL. The built-in GitHub connector has no tool for creating a PR.
+
+Recipes have no built-ins. To get recipe versions of the helpers, paste this into Library → Recipes → Import:
+
+```json
+{"recipes": [
+  {"id": "write-tests", "name": "Write tests", "prompt": "Use the test-writer agent (spawn_agent) to write and run tests for {{file}}.", "params": [{"name": "file", "label": "File"}]},
+  {"id": "add-docs", "name": "Add doc comments", "prompt": "Use the doc-writer agent (spawn_agent) to document {{file}} without changing behaviour.", "params": [{"name": "file", "label": "File"}]},
+  {"id": "open-pr", "name": "Open a PR", "prompt": "Use the pr-opener agent (spawn_agent) to open a pull request for my uncommitted changes. {{notes}}", "params": [{"name": "notes", "label": "Notes", "default": " "}]}
+]}
+```
+
+**Editor.** On the Local screen, **Edit** opens the file in Monaco. `monaco-editor` is loaded as a dynamic import the first time you use Edit, so it is never part of the main chunk. Its workers are Vite `?worker` bundles, and nothing comes from a CDN because the CSP forbids remote scripts. The language is picked from the file extension. Ctrl+S saves through `local_write_file`, so the shell's confinement rules apply. A dot shows unsaved changes, and **Discard** drops them. The read-only viewer is still the default. A file that was only partly read (over 1 MB) or is binary cannot be edited.
+
+**Docker sandbox (opt-in).** To turn it on, go to the Code screen and tick **Run agent commands in Docker**. The image defaults to `node:22-bookworm`, and the setting is saved in `localStorage["freeai4u.docker_sandbox"]`. Once it is on, every approved `run_command` from the Code and Parallel screens runs as `docker run --rm -v "<root>:/work" -w /work <image> sh -lc "<command>"`. The wrapper lives in [`src/docker-sandbox.js`](../desktop/src/docker-sandbox.js). The first run checks `docker version` once. If Docker Desktop isn't running, it says so and runs nothing. What it isolates: everything outside the project, meaning the rest of the disk and your programs and home folder. **The project folder itself is mounted read-write, so a command can still change or delete project files.** A command containing `"`, `` ` ``, `$`, `%`, `\` or a line break is refused, because the host shell would rewrite it; it is never guessed at or escaped. Use single quotes instead. Git worktrees (Parallel) mount only the worktree, so `git` commands inside the container cannot reach the main `.git`.
+
+**Language servers via MCP.** In Settings → Connectors, **Language server (LSP) MCP** fills in the "On this PC" form with the name `lsp`, the command `npx`, and the arguments `-y <package> <args>`. This app does not name an LSP-over-MCP npm package, because no such package could be confirmed. Pick a maintained server yourself, replace the placeholders, and choose Add and start. The form refuses to save while a placeholder is still in it. The server's tools reach agents as `lsp/*`.
+
 ## Remote handoff
 
 The build screen can now hand off a local workspace to the engine: the Rust shell packages the folder, uploads it, creates a build session, and streams the build events back via SSE. The user approves and rejects diffs exactly like a local build, but the heavy lifting runs on the engine. Orchestrated by [`src/remote-handoff.js`](../desktop/src/remote-handoff.js).
@@ -277,6 +300,12 @@ gh variable set NEURAOS_UPDATER_PUBKEY < %USERPROFILE%\freeai4u-keys\neuraos-upd
 
 Keep the key file and its password backed up: losing them means installed copies can only be updated by hand. The job fails if the public key is set without the private one, because that build would refuse its own updates.
 
+## Where chats are stored
+
+In the installed app, chat history lives in `chats.sqlite3` in the app data folder (`%APPDATA%\<bundle id>` on Windows), not in localStorage, so there is no quota and pictures stay in every chat. Each chat is encrypted in the page before it reaches the shell: AES-GCM-256 via WebCrypto, a fresh 12-byte IV per write, stored as `base64(iv || ciphertext)` (`src/chat-crypto.js`). The key is random, made on first run, and kept in the OS credential store (service "NeuraOS Desktop", entry `chat_key`); the database never sees a message or the key. `src-tauri/src/chat_store.rs` is a plain row store (`chats(id, updated_at, blob)`, WAL, one transaction per batch).
+
+`src/chats.js` still owns the logic: an in-memory cache answers every screen's synchronous reads and writes, and a debounced flush sends only the chats that changed. On the first run the old localStorage history is copied in, read back, and only then removed. If the shell, the key or the database fails, the app says so once and keeps using localStorage exactly as before; the browser build always uses localStorage. Export/import in History works from the cache either way. Losing the credential entry makes the stored chats unreadable (the app then falls back rather than showing an empty history), so export chats you care about.
+
 ## Opening files and folders
 
 Double-clicking a `.gguf` opens NeuraOS and adds it to **My models**; right-click a folder (or the empty space inside one) → **Open in NeuraOS** makes it the working folder. The association is the bundle's (`fileAssociations`); the folder verb is written per user by the NSIS hook `src-tauri/windows/hooks.nsh` and removed on uninstall (the MSI does not add it). `DESIGN.md` is a file name, not an extension, so it is not associated — open its folder instead.
@@ -292,7 +321,7 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/onboarding.js` | Which surface the shell shows (`connect` or `app`), why (`checking` / `first-run` / `unreachable` / `signed-out` / `ready` / `degraded`), and which failures deserve a banner |
 | `src/components/ConnectionCard.tsx` | The engine address, the probe and the sign-in form — one owner, used by the connect screen and by Settings |
 | `src/screens/ConnectScreen.tsx` | The way in: the headline, the advice, the card |
-| `src/chats.js` | The chat store: its key, the 60-session cap, validation, merge, recency order, export/import. Chat, History, Library and the shell all read it here — no one else spells `freeai4u.chats` |
+| `src/chats.js` | The chat store: its key, the 500-session cap, the shell-store cache and flush (see "Where chats are stored"), validation, merge, recency order, export/import. Chat, History, Library and the shell all read it here — no one else spells `freeai4u.chats` |
 | `src/update.js` | Release policy: version parsing/comparison, the payload, retry with backoff |
 | `src/useUpdateCheck.ts` | The React binding for it: polling, the dismissed version, the installer |
 | `src/theme.ts` | The theme value, its key, and applying it |

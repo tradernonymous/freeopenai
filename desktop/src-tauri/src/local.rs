@@ -640,8 +640,12 @@ fn shell_command(command: &str) -> std::process::Command {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut cmd = std::process::Command::new("cmd");
     // /d skips AutoRun scripts, /s keeps the quoting rules predictable, /c runs
-    // the command line as given.
-    cmd.args(["/d", "/s", "/c", command]);
+    // the command line as given. The command goes RAW inside one pair of
+    // quotes, which /s strips: through .args() Rust would escape every inner
+    // `"` as `\"`, a form cmd does not understand, so `git commit -m "msg"`
+    // reached git with stray backslashes.
+    cmd.args(["/d", "/s", "/c"]);
+    cmd.raw_arg(format!("\"{}\"", command));
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
 }

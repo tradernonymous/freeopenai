@@ -22,6 +22,7 @@ use tauri::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod chat_store;
 mod crash;
 mod diag;
 mod gguf;
@@ -97,6 +98,12 @@ fn main() {
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
+            chat_store::chat_store_list,
+            chat_store::chat_store_put,
+            chat_store::chat_store_delete,
+            chat_store::chat_store_clear,
+            chat_store::chat_store_key_get,
+            chat_store::chat_store_key_set,
             hf_oauth::hf_oauth_config,
             hf_oauth::hf_oauth_listen,
             hf_oauth::hf_oauth_cancel,

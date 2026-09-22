@@ -5,6 +5,8 @@
 // hasShell() first, so a screen degrades to a browser behaviour instead of
 // throwing — and no other file has to know how the bridge is spelled.
 
+import './chat-crypto.js';
+
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 function bridge(): Invoke | null {
@@ -656,4 +658,52 @@ export async function hfOAuthExchange(code: string, verifier: string, clientId: 
 
 export async function hfOAuthRefresh(refreshToken: string, clientId: string): Promise<any> {
   return call<any>('hf_oauth_refresh', { refreshToken, clientId });
+}
+
+// ---- chat history store (chat_store.rs) -------------------------------------
+//
+// Rows are { id, updated_at, blob }; blob is ciphertext made in the page
+// (chat-crypto.js), so the shell never sees a message.
+
+export interface ChatStoreRow {
+  id: string;
+  updated_at: number;
+  blob: string;
+}
+
+export async function chatStoreList(): Promise<ChatStoreRow[]> {
+  return (await call<ChatStoreRow[]>('chat_store_list')) ?? [];
+}
+
+export async function chatStorePut(rows: ChatStoreRow[]): Promise<number> {
+  return call<number>('chat_store_put', { rows });
+}
+
+export async function chatStoreDelete(ids: string[]): Promise<number> {
+  return call<number>('chat_store_delete', { ids });
+}
+
+export async function chatStoreClear(): Promise<number> {
+  return call<number>('chat_store_clear');
+}
+
+/** The chat key (base64 AES-256) from the OS credential store, or null. */
+export async function chatStoreKeyGet(): Promise<string | null> {
+  return (await call<string | null>('chat_store_key_get')) ?? null;
+}
+
+export async function chatStoreKeySet(value: string): Promise<void> {
+  await call('chat_store_key_set', { value });
+}
+
+/**
+ * The encrypted chat backend for chats.hydrate(), or null without a shell.
+ * The key is read (or made and stored) first, so a credential-store failure
+ * surfaces inside hydrate and the history stays in localStorage.
+ */
+export async function chatStoreBackend(): Promise<import('./chats.js').ChatBackend | null> {
+  if (!hasShell()) return null;
+  const crypto: typeof import('./chat-crypto.js') = (globalThis as any).FreeAI4UChatCrypto;
+  const key = await crypto.loadOrCreateKey({ get: chatStoreKeyGet, set: chatStoreKeySet });
+  return crypto.backend({ call: (command, args) => call(command, args), key });
 }

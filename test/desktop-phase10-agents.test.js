@@ -72,9 +72,10 @@ test('required fields and types are checked strictly', () => {
   assert.equal(agents.validate({ ...good, model: { provider: 'groq', model: 'llama' } }).agent.model.model, 'llama');
 });
 
-test('the three built-ins validate, and the browser agent keeps credentials away from the model', () => {
+test('the built-ins validate, and the browser agent keeps credentials away from the model', () => {
   const ids = agents.BUILTINS.map((b) => b.id);
-  assert.deepEqual(ids, ['file-picker', 'reviewer', 'browser']);
+  // Phase 12e added the code helpers after the original three.
+  assert.deepEqual(ids, ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener']);
   for (const b of agents.BUILTINS) assert.equal(agents.validate(b).ok, true, b.id);
   const browser = agents.BUILTINS.find((b) => b.id === 'browser');
   assert.deepEqual(browser.toolNames, ['browser/*']);
@@ -120,7 +121,7 @@ test('spawn_agent asks first unless always-allowed, and routes through tool-run'
 
 test('spawn targets: a spawner starts only its spawnableAgents; chat may start any', () => {
   const all = agents.list(memory());
-  assert.deepEqual(agents.spawnTargets(null, all), ['file-picker', 'reviewer', 'browser']);
+  assert.deepEqual(agents.spawnTargets(null, all), ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener']);
   assert.deepEqual(agents.spawnTargets({ id: 'x', spawnableAgents: ['reviewer', 'ghost', 'x'] }, all), ['reviewer']);
   assert.deepEqual(agents.spawnTargets({ id: 'x' }, all), []);
   assert.match(agents.spawnDescription(all), /file-picker/);
@@ -294,8 +295,11 @@ test('Agents and Recipes are Library tabs, rendered, and on the palette', () => 
   assert.ok(commands.COMMANDS.some((c) => c.palette === 'agents'));
   assert.ok(commands.COMMANDS.some((c) => c.palette === 'recipes'));
   const screen = read('desktop', 'src', 'screens', 'RecipesScreen.tsx');
-  assert.match(screen, /recipesLib\.dueRecipes\(recipesLib\.list\(\), recipesLib\.lastRuns\(\), now\)/);
-  assert.match(screen, /collectReply\(/);
+  // The scheduler lives in schedulers.ts, so App runs it without this screen's bundle.
+  const schedulers = fs.existsSync(path.join(__dirname, '..', 'desktop', 'src', 'schedulers.ts')) ? read('desktop', 'src', 'schedulers.ts') : screen;
+  assert.match(schedulers, /recipesLib\.dueRecipes\(recipesLib\.list\(\), recipesLib\.lastRuns\(\), now\)/);
+  // Background runs use Chat's tool loop, gated by recipes.backgroundRefusal.
+  assert.match(screen, /runTurn\(/);
   assert.match(screen, /recipesLib\.runTitle\(recipe, startedAt\)/);
   assert.match(screen, /notifyUser\(/);
   assert.doesNotMatch(screen + read('desktop', 'src', 'screens', 'AgentsScreen.tsx'), /<select/, 'no native select');

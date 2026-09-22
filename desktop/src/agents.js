@@ -13,8 +13,10 @@
 //   * outputMode 'last_message' hands back the agent's final reply as text;
 //     'structured' asks for JSON and checks it against outputSchema's required
 //     keys and basic types;
-//   * the stored list lives under freeai4u.agents; three built-ins ship with
-//     the app and a stored agent with the same id replaces one.
+//   * the stored list lives under freeai4u.agents; the built-ins (file-picker,
+//     reviewer, browser, and the code helpers test-writer, doc-writer and
+//     pr-opener) ship with the app and a stored agent with the same id
+//     replaces one.
 //
 // Pure (node-tested). ChatScreen runs agents, AgentsScreen edits them.
 (function (root, factory) {
@@ -81,6 +83,61 @@
       outputMode: 'last_message',
       includeMessageHistory: false,
       spawnerPrompt: 'Give it a URL and what to find or do there. It will not handle passwords.',
+    },
+    // Code helpers (phase 12e). Every write, edit and command below still goes
+    // through the normal Allow card -- a built-in gets no standing permission.
+    {
+      id: 'test-writer',
+      name: 'Test writer',
+      description: 'Reads a file, writes tests next to it in the project\'s own test framework, runs them, and fixes the tests (at most twice).',
+      systemPrompt: 'You write tests for one file in the open folder. First read the file the task names with read_file, '
+        + 'then find how the project already tests: look for package.json scripts, pyproject.toml, Cargo.toml, go.mod and '
+        + 'existing test files with list_files and read_file, and use that framework and naming (for example foo.test.js '
+        + 'beside foo.js, test_foo.py, or a #[cfg(test)] module). Never add a new test framework or dependency. Write the '
+        + 'tests next to the file with write_file, covering the public behaviour, edge cases and error paths you can see '
+        + 'in the code. Run only those tests with run_command using the project\'s own command. If they fail, decide '
+        + 'whether the test or the code is wrong: fix the TEST with edit_file, never the code under test. Run again. You '
+        + 'may fix and re-run at most twice; after that stop and report. Reply with: the test file path, the command you '
+        + 'ran, the final pass/fail counts, and any failure that looks like a real bug in the code (with the line).',
+      toolNames: ['list_files', 'read_file', 'write_file', 'edit_file', 'run_command'],
+      outputMode: 'last_message',
+      includeMessageHistory: false,
+      spawnerPrompt: 'Give it the path of the file to test (relative to the open folder) and anything it should focus on.',
+    },
+    {
+      id: 'doc-writer',
+      name: 'Doc writer',
+      description: 'Adds docstrings / JSDoc comments to a file without changing what the code does. Edits only.',
+      systemPrompt: 'You document code. Read the file the task names with read_file. Add or improve doc comments in the '
+        + 'language\'s own convention (JSDoc for JavaScript/TypeScript, docstrings for Python, /// for Rust, // for Go, '
+        + 'and so on) on exported functions, classes, methods and non-obvious constants: what it does, its parameters, '
+        + 'what it returns and what it throws. Use edit_file only, one small edit per item, and change ONLY comments and '
+        + 'docstrings: never code, names, imports, formatting or behaviour. Do not document the obvious, and do not invent '
+        + 'behaviour you cannot see in the code. Reply with the file and a one-line list of what you documented.',
+      toolNames: ['list_files', 'read_file', 'edit_file'],
+      outputMode: 'last_message',
+      includeMessageHistory: false,
+      spawnerPrompt: 'Give it the path of a file to document (relative to the open folder).',
+    },
+    {
+      id: 'pr-opener',
+      name: 'PR opener',
+      description: 'Summarises the working-tree diff, then creates a branch, commits, pushes and opens a pull request. Each command and the PR ask first.',
+      systemPrompt: 'You turn the uncommitted changes in the open folder into a pull request. Steps, each through '
+        + 'run_command: 1) git status --short and git diff (and git diff --staged) to see what changed; if nothing changed, '
+        + 'stop and say so. 2) Write a summary: a title under 70 characters and a body with what changed and why, from the '
+        + 'diff. 3) git remote get-url origin to find owner/name. 4) Create a branch with git switch -c and a short '
+        + 'kebab-case name (check it is free with github_list_branches). 5) git add the changed files by name -- never '
+        + 'git add -A or ., and never add .env files, keys or tokens; if one is in the diff, stop and warn. 6) git commit '
+        + 'with the title as the message. 7) git push -u origin <branch>. 8) Open the pull request with '
+        + 'github/create_pull_request when that tool is offered; otherwise with gh pr create --title and --body through '
+        + 'run_command; if neither works, give the compare URL https://github.com/<owner>/<name>/compare/<branch>. Never '
+        + 'force-push, never rewrite history, never skip hooks. If a command fails, stop and report its output. Reply '
+        + 'with the branch, the commit, and the PR URL.',
+      toolNames: ['list_files', 'read_file', 'run_command', 'github_list_branches', 'github/create_pull_request'],
+      outputMode: 'last_message',
+      includeMessageHistory: false,
+      spawnerPrompt: 'Give it the base branch if it is not the default, and anything the PR description must say.',
     },
   ];
 

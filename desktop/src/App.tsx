@@ -1,25 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { api } from './api';
 import Sidebar, { destinationOf, navForKey, navKeys, tabsOf, NAVIGATE_EVENT, type NavId, type ViewId } from './Sidebar';
 import TitleBar from './TitleBar';
 import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT, MODEL_PICK_EVENT, TOOL_CARDS_EVENT } from './screens/ChatScreen';
-import DesignScreen from './screens/DesignScreen';
-import ImagesScreen from './screens/ImagesScreen';
-import BuildScreen from './screens/BuildScreen';
-import LibraryScreen from './screens/LibraryScreen';
-import FilesScreen from './screens/FilesScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
 import CodeScreen from './screens/CodeScreen';
-import EvalsScreen, { useEvalScheduler } from './screens/EvalsScreen';
-import AgentsScreen from './screens/AgentsScreen';
-import RecipesScreen, { useRecipeScheduler } from './screens/RecipesScreen';
-import ParallelScreen from './screens/ParallelScreen';
+// The schedulers run on every start, so they are eager; the screens they
+// belong to are not (schedulers.ts fetches them only when something is due).
+import { useRecipeScheduler, useEvalScheduler } from './schedulers';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
+import { chatStoreBackend, hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
 import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
 import { QUICK_HOTKEY_KEY, SELECTION_HOTKEY_KEY } from './components/ShortcutsCard';
 import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
@@ -35,7 +29,7 @@ import Icon from './components/Icon';
 import Toasts, { pushToast } from './components/Toasts';
 import './index.css';
 import { APP_VERSION } from './version';
-import { applyTheme, readTheme, toggleTheme, type Theme } from './theme';
+import { applyTheme, readTheme, toggleTheme, useParallax, type Theme } from './theme';
 import { useUpdateCheck } from './useUpdateCheck';
 // UMD modules load for their side effect and are picked up off globalThis.
 import './chats.js';
@@ -49,6 +43,29 @@ const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4
 const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
 const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
 const keymap: typeof import('../../shared/keymap.js') = (globalThis as any).FreeAI4UKeymap;
+
+// Chat is the default view and stays in the first bundle. The heavy screens
+// are fetched the first time they are opened, so the window paints sooner.
+const DesignScreen = lazy(() => import('./screens/DesignScreen'));
+const ImagesScreen = lazy(() => import('./screens/ImagesScreen'));
+const BuildScreen = lazy(() => import('./screens/BuildScreen'));
+const LibraryScreen = lazy(() => import('./screens/LibraryScreen'));
+const FilesScreen = lazy(() => import('./screens/FilesScreen'));
+const EvalsScreen = lazy(() => import('./screens/EvalsScreen'));
+const AgentsScreen = lazy(() => import('./screens/AgentsScreen'));
+const RecipesScreen = lazy(() => import('./screens/RecipesScreen'));
+const ParallelScreen = lazy(() => import('./screens/ParallelScreen'));
+
+/** What a lazy screen shows for the moment its chunk is on its way. */
+function ScreenSkeleton() {
+  return (
+    <div className="screen screen-skeleton" aria-busy="true" aria-label="Loading">
+      <div className="skeleton-bar skeleton-title" />
+      <div className="skeleton-bar" />
+      <div className="skeleton-bar skeleton-short" />
+    </div>
+  );
+}
 
 type View = ViewId;
 type RightPanel = 'builds' | 'knowledge' | 'none';
@@ -104,6 +121,8 @@ export default function App() {
   // Scheduled recipes run while the app is open, whatever screen is showing.
   useRecipeScheduler();
   useEvalScheduler();
+  // The ambient layer's <=6px drift toward the pointer; off under reduced motion.
+  useParallax();
 
   useEffect(() => {
     applyTheme(theme);
@@ -143,6 +162,8 @@ export default function App() {
       remove: (key: string) => secretDelete(key),
     });
     hfAuth.hydrate().catch(() => { /* not signed in is a normal state */ });
+    // Chat history: the encrypted SQLite store (chats.js, chat_store.rs).
+    chats.hydrate(chatStoreBackend, { onNotice: (text: string) => pushToast('warn', text) });
   }, []);
 
   // neuraos://model?repo=...&file=... -- from a Hugging Face "Use this model"
@@ -516,7 +537,7 @@ export default function App() {
                   onOpenSettings={() => setView('settings')}
                 />
               ) : (
-                <>
+                <Suspense fallback={<ScreenSkeleton />}>
                   {view === 'chat' && <ChatScreen />}
                   {view === 'code' && <CodeScreen localRoot={localRoot} />}
                   {view === 'design' && <DesignScreen />}
@@ -543,7 +564,7 @@ export default function App() {
                       diagnosticsState={shell.reason + (signedIn ? ' · signed in' : ' · signed out')}
                     />
                   )}
-                </>
+                </Suspense>
               )}
             </div>
             {rightPanel !== 'none' && (
