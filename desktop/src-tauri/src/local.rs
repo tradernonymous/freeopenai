@@ -661,8 +661,15 @@ fn shell_command(command: &str) -> std::process::Command {
 mod tests {
     use super::*;
 
+    // resolve_inside canonicalises the root, which is a real filesystem call:
+    // on a machine where this folder happened to exist the tests passed, and on
+    // a clean runner every one of them failed at the first assertion. The
+    // folder is made here so the test states its own precondition instead of
+    // inheriting one.
     fn root() -> PathBuf {
-        std::env::temp_dir().join("freeai4u-local-test")
+        let dir = std::env::temp_dir().join("freeai4u-local-test");
+        std::fs::create_dir_all(&dir).expect("the test's own temp folder");
+        dir
     }
 
     #[test]
