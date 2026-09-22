@@ -17,20 +17,8 @@ do anything.**
 | **OVHcloud images** | Free image generation, no key | Set `OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10` |
 | **Pollinations.ai** | Free image generation, no key, no signup, no card | **Nothing.** On in every deployment (`POLLINATIONS_DISABLED=1` to turn it off). |
 | **Gemini "Nano Banana"** | Free image generation on the same key the Gemini chat provider already uses | Set `GEMINI_API_KEY` (aistudio.google.com, no card) |
-| **gpt4free** | Free image generation + a second chat pool | Deploy the service — see below |
 
-## 1 · The custom gateway slot
-
-The app has one generic OpenAI-compatible slot for a self-hosted gateway:
-
-| Slot | Variable | First choice for |
-| --- | --- | --- |
-| Custom endpoint | `CUSTOM_BASE_URL` (+ `CUSTOM_API_KEY`) | FreeGPT4-WEB-API, Ollama, llama.cpp, vLLM, or any OpenAI-shaped service |
-
-It activates on its URL alone; the key is optional and only sent when set,
-and `CUSTOM_MODELS` pins the picker to a comma-separated subset.
-
-## 2 · The two providers that need nothing
+## 1 · The two providers that need nothing
 
 Kilo Code and OVHcloud are free tiers that answer on **your server's IP address**
 rather than on an API key. They are configured the moment the app ships:
@@ -83,7 +71,7 @@ KILO_DISABLED=1
 OVHCLOUD_DISABLED=1
 ```
 
-## 3 · Free image generation
+## 2 · Free image generation
 
 Pictures are where a free key runs out first, so this is worth reading if you
 want to draw things.
@@ -109,24 +97,14 @@ OmniRoute's image endpoint fronts mostly paid or one-off-credit providers.
 ### The draw order
 
 ```
-cloudflare → nara → openrouter → nvidia → gemini (if GEMINI_API_KEY is set) → pollinations → omniroute → (ovhcloud, if opted in) → g4f → puter (opt-in)
+cloudflare → nara → openrouter → nvidia → gemini (if GEMINI_API_KEY is set) → pollinations → omniroute → (ovhcloud, if opted in) → puter (opt-in)
 ```
 
 The first service that answers with a picture wins. `IMAGE_PROVIDER=<id>` pins
 **one** service for the whole deployment, honoured exactly, if you would rather
 decide than fall through.
 
-## 4 · gpt4free (a service you deploy)
-
-`deploy/g4f-railway/` runs
-[gpt4free](https://github.com/xtekky/gpt4free) as a Railway service. It is the
-**last** service in the draw order and the only deployable free image generator.
-
-It is last for a reason: it reaches models by reading third-party web endpoints
-rather than through documented APIs, so individual adapters break without notice.
-A rescue, not a first choice. Full steps and caveats are in that folder's README.
-
-## 5 · If OmniRoute says `502: Application failed to respond`
+## 3 · If OmniRoute says `502: Application failed to respond`
 
 That message is not OmniRoute's — it is your host's own router saying it could
 not reach the gateway's container. The three causes, in order:
@@ -148,7 +126,7 @@ not reach the gateway's container. The three causes, in order:
 railway logs --service omniroute
 ```
 
-## 6 · Verification: two URLs that tell you the truth
+## 4 · Verification: two URLs that tell you the truth
 
 Both need no login and are never cached.
 
@@ -184,7 +162,7 @@ another provider answer until the cooldown expires. `callsToday` is this app
 counting its own calls — it resets on every deploy, and for a provider that sends
 no rate-limit headers (Kilo) it is the only count there is.
 
-## 7 · About the two services you may not need
+## 5 · About the two services you may not need
 
 This app was researched against a set of "free coding agent" projects. Two are
 worth a specific note, because both look like they would plug straight in and

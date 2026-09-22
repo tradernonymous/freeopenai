@@ -17,8 +17,9 @@ own source rather than assumed:
 | `/v1/responses` (OpenAI **Responses**) | |
 | `/v1/models`, `/health`, `/stop` | `/v1/chat/completions` (OpenAI **Chat Completions**) |
 
-There is no `/v1/chat/completions` route. Setting `CUSTOM_BASE_URL` at this
-service would give you a provider that lists models and fails on every message.
+There is no `/v1/chat/completions` route. Pointing freeopenai's generic
+self-hosted slot (`FREEBUFF_BASE_URL`) at this service would give you a
+provider that lists models and fails on every message.
 
 ## So what is it good for?
 
@@ -36,8 +37,9 @@ much work they are:
 1. **LiteLLM in front of it.** LiteLLM is a maintained OpenAI-compatible proxy
    that can call an Anthropic-shaped upstream and re-serve it as Chat
    Completions. Run it in the same service container or as a second service, set
-   `CUSTOM_BASE_URL` at LiteLLM, and freeopenai gets FCC's 53 providers through
-   its existing Custom endpoint slot. No change to freeopenai.
+   `FREEBUFF_BASE_URL` at LiteLLM, and freeopenai gets FCC's 53 providers through
+   its generic self-hosted slot (labelled "Freebuff" in the picker regardless of
+   what is actually behind it — cosmetic only). No change to freeopenai's code.
 2. **Teach freeopenai the Responses API.** The provider layer already supports a
    second chat shape (`chatShape: 'text-query'`, used by FreeGPT4), so a
    `chatShape: 'responses'` is a natural addition — and it would unlock not just
@@ -90,12 +92,13 @@ much work they are:
    ```
    A `404` means the bridge is needed, exactly as described above. A `200` or
    `400` means a route exists and the note in this README is out of date —
-   re-check and then set `CUSTOM_BASE_URL`.
+   re-check and then set `FREEBUFF_BASE_URL`.
 
 ## The recommendation
 
 If the goal is free models **in freeopenai's picker**, do not spend a slot here.
 The keyless Kilo and OVHcloud providers need no service and no key at all, and
-`deploy/g4f-railway/` covers free image generation. Spend this slot on FCC only
+`OVHCLOUD_IMAGE_MODEL=stable-diffusion-xl-base-v10` (see [free-services.md](../../docs/free-services.md))
+covers free image generation with no extra service either. Spend this slot on FCC only
 if you want free models in your **coding CLIs** — which is what it is genuinely
 good at — or if you intend to build the Responses-API support it would need.

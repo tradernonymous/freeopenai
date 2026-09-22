@@ -12,7 +12,6 @@ const KEYLESS = ['kilocode', 'ovhcloud'];
 const TOUCHED = [
   'KILO_API_KEY', 'KILO_BASE_URL', 'KILO_MODELS', 'KILO_DISABLED', 'KILO_IMAGE_MODEL',
   'OVHCLOUD_API_KEY', 'OVHCLOUD_BASE_URL', 'OVHCLOUD_MODELS', 'OVHCLOUD_DISABLED', 'OVHCLOUD_IMAGE_MODEL',
-  'G4F_API_KEY', 'G4F_BASE_URL', 'G4F_IMAGE_MODEL',
   'FREEGPT4_API_KEY', 'FREEGPT4_BASE_URL', 'FREEGPT4_MODELS',
 ];
 
@@ -127,24 +126,6 @@ test('naming a model is the whole opt-in, and it makes a keyless provider draw',
   });
 });
 
-// gpt4free is the one place a free picture can come from when nothing else
-// answers, and it is the flakiest thing in the file: an aggregator that reads
-// third-party sites rather than a documented API. So its position is the
-// promise -- last, behind every service that was configured on purpose.
-test('gpt4free sits last in the draw order, behind every named service', async () => {
-  await withCleanEnv(async () => {
-    await routes(async ({ base }) => {
-      const listed = await get(base, '/api/llm/images/providers');
-      const ids = listed.providers.map((p) => p.id);
-      assert.equal(ids[ids.length - 1], 'g4f', 'g4f is the last service tried, not a middle one');
-      for (const id of ['cloudflare', 'nara', 'openrouter', 'nvidia']) {
-        assert.ok(ids.indexOf(id) < ids.indexOf('g4f'), `${id} must be tried before g4f`);
-      }
-      assert.equal(ids.includes('kilocode'), false, 'a keyless chat provider is not in this list at all');
-    });
-  });
-});
-
 // The paste that started this: a Railway domain copied without its scheme and
 // with the /models endpoint still attached -- exactly what a browser's address
 // bar offers. The app used to hand that string to fetch and die as
@@ -211,10 +192,10 @@ test('an unusable base URL is reported with its variable, not as a fetch failure
   });
 });
 
-test('the gpt4free base URL is completed to /v1 rather than left to the operator to remember', () => {
-  assert.equal(normalizeProviderBaseUrl('g4f', 'http://g4f.railway.internal:8080'), 'http://g4f.railway.internal:8080/v1');
-  assert.equal(normalizeProviderBaseUrl('g4f', 'http://g4f.railway.internal:8080/'), 'http://g4f.railway.internal:8080/v1');
-  assert.equal(normalizeProviderBaseUrl('g4f', 'http://g4f.railway.internal:8080/v1'), 'http://g4f.railway.internal:8080/v1');
+test('the freebuff base URL is completed to /v1 rather than left to the operator to remember', () => {
+  assert.equal(normalizeProviderBaseUrl('freebuff', 'http://freebuff.railway.internal:8080'), 'http://freebuff.railway.internal:8080/v1');
+  assert.equal(normalizeProviderBaseUrl('freebuff', 'http://freebuff.railway.internal:8080/'), 'http://freebuff.railway.internal:8080/v1');
+  assert.equal(normalizeProviderBaseUrl('freebuff', 'http://freebuff.railway.internal:8080/v1'), 'http://freebuff.railway.internal:8080/v1');
   // And a provider with a documented path of its own is left alone.
   assert.equal(normalizeProviderBaseUrl('nara', 'https://router.bynara.id/v1'), 'https://router.bynara.id/v1');
 });

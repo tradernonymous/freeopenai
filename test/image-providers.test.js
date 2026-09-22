@@ -19,7 +19,6 @@ const PROVIDER_VARS = [
   'NARA_API_KEY', 'NARA_BASE_URL', 'NARA_MODELS', 'NARA_IMAGE_MODEL', 'NARA_IMAGES_BASE_URL', 'NARA_IMAGE_SIZE',
   'OPENROUTER_API_KEY', 'OPENROUTER_IMAGE_MODEL', 'OPENROUTER_IMAGES_BASE_URL',
   'NVIDIA_API_KEY', 'NVIDIA_IMAGE_MODEL', 'NVIDIA_IMAGES_BASE_URL',
-  'DEEPGRAM_API_KEY', 'DEEPGRAM_IMAGE_MODEL',
   'GEMINI_API_KEY',
   'IMAGE_PROVIDER',
   'OPENROUTER_FREE_ONLY',
@@ -1051,25 +1050,6 @@ test('a discovered model never leaks into the picker’s list', async () => {
   } finally {
     app.close();
     await new Promise((r) => up.server.close(r));
-  }
-});
-
-test('a speech service is not made into a drawing key by naming one', async () => {
-  // Deepgram's models are transcription engines. A key for it is not a drawing
-  // key however the variable is spelled, and the exclusion is what keeps this
-  // rule from turning every configured service into a candidate that can only
-  // fail on every draw.
-  process.env.DEEPGRAM_API_KEY = 'dg-key';
-  process.env.DEEPGRAM_IMAGE_MODEL = 'a-model';
-  const app = await startApp();
-  try {
-    const res = await post(app, '/api/llm/images/generations', { prompt: 'a fox', provider: 'deepgram' });
-    assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /No image service is wired up as "deepgram"/);
-    const listed = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/images/providers`)).json();
-    assert.equal(listed.providers.some((p) => p.id === 'deepgram'), false, 'and it is not reported as a way to draw');
-  } finally {
-    app.close();
   }
 });
 

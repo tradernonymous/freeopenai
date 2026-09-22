@@ -300,52 +300,6 @@ test('a standard provider gets Bearer auth', async () => {
   assert.equal(seen.authorization, 'Bearer KEY123');
 });
 
-test('Deepgram gets its "Token" scheme, not Bearer', async () => {
-  const seen = await withStubProvider('DEEPGRAM_API_KEY', 'DEEPGRAM_BASE_URL', 'Token', async (base) => {
-    await fetch(base + '/api/llm/models?provider=deepgram');
-  });
-  assert.equal(seen.authorization, 'Token KEY123');
-});
-
-test('AssemblyAI gets the bare key with no scheme', async () => {
-  const seen = await withStubProvider('ASSEMBLYAI_API_KEY', 'ASSEMBLYAI_BASE_URL', '', async (base) => {
-    await fetch(base + '/api/llm/models?provider=assemblyai');
-  });
-  assert.equal(seen.authorization, 'KEY123');
-});
-
-test('You.com gets its own header instead of Authorization', async () => {
-  const seen = await withStubProvider('YOUCOM_API_KEY', 'YOUCOM_BASE_URL', '', async (base) => {
-    await fetch(base + '/api/llm/models?provider=youcom');
-  });
-  assert.equal(seen.apiKeyHeader, 'KEY123');
-  assert.equal(seen.authorization, undefined);
-});
-
-test('non-LLM services are labelled by kind, with a reason', async () => {
-  // Deepgram, AssemblyAI and You.com sit in the picker at the user's request.
-  // Each must explain itself, since an empty dropdown reads as a bug.
-  process.env.DEEPGRAM_API_KEY = 'k';
-  const app = http.createServer(createRequestHandler(__dirname + '/..'));
-  await new Promise((r) => app.listen(0, r));
-  const base = `http://127.0.0.1:${app.address().port}`;
-  const providers = await (await fetch(base + '/api/llm/providers')).json();
-  app.close();
-  delete process.env.DEEPGRAM_API_KEY;
-
-  const byId = Object.fromEntries(providers.map((p) => [p.id, p]));
-  assert.equal(byId.deepgram.kind, 'speech');
-  assert.equal(byId.assemblyai.kind, 'speech');
-  assert.equal(byId.youcom.kind, 'search');
-  assert.equal(byId.nara.kind, 'chat');
-  assert.equal(byId.openrouter.kind, 'chat');
-  assert.equal(byId.nvidia.kind, 'chat');
-
-  assert.match(byId.deepgram.note, /transcription models/);
-  assert.match(byId.youcom.note, /search and research/);
-  assert.equal(byId.nara.note, undefined, 'a real chat provider needs no excuse');
-});
-
 test('a provider that never answers fails with our own deadline, not silence', async () => {
   clearModelCache();
   // The reported symptom was a bare "504: request failed" with no indication
@@ -513,71 +467,71 @@ test('an allowlist pins the picker to exactly those models, in order', async () 
   }
 });
 
-test('the custom endpoint stays off until it has somewhere to send', async () => {
+test('the freebuff slot stays off until it has somewhere to send', async () => {
   // A key with no URL would only fail at use, so unlike the keyed providers
-  // the custom slot activates on CUSTOM_BASE_URL, with the key optional.
-  delete process.env.CUSTOM_API_KEY;
-  delete process.env.CUSTOM_BASE_URL;
-  delete process.env.CUSTOM_MODELS;
+  // the freebuff slot activates on FREEBUFF_BASE_URL, with the key optional.
+  delete process.env.FREEBUFF_API_KEY;
+  delete process.env.FREEBUFF_BASE_URL;
+  delete process.env.FREEBUFF_MODELS;
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
   const plain = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
   app.close();
-  assert.equal(plain.find((p) => p.id === 'custom').configured, false, 'an unconfigured slot reports itself off');
+  assert.equal(plain.find((p) => p.id === 'freebuff').configured, false, 'an unconfigured slot reports itself off');
 
-  process.env.CUSTOM_API_KEY = 'k';
+  process.env.FREEBUFF_API_KEY = 'k';
   const keyed = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => keyed.listen(0, r));
   const keyedBody = await (await fetch(`http://127.0.0.1:${keyed.address().port}/api/llm/providers`)).json();
   keyed.close();
-  assert.equal(keyedBody.find((p) => p.id === 'custom').configured, false, 'a key alone still configures nothing');
-  delete process.env.CUSTOM_API_KEY;
+  assert.equal(keyedBody.find((p) => p.id === 'freebuff').configured, false, 'a key alone still configures nothing');
+  delete process.env.FREEBUFF_API_KEY;
 });
 
-test('the custom endpoint serves a self-hosted gateway catalogue whole', async () => {
+test('the freebuff slot serves a self-hosted gateway catalogue whole', async () => {
   clearModelCache();
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'gateway-gpt' }, { id: 'gateway-claude' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.CUSTOM_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.FREEBUFF_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
     const offered = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
-    assert.equal(offered.find((p) => p.id === 'custom').configured, true, 'a URL alone activates the slot, key or no key');
-    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=custom`)).json();
+    assert.equal(offered.find((p) => p.id === 'freebuff').configured, true, 'a URL alone activates the slot, key or no key');
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=freebuff`)).json();
     assert.deepEqual(body.map((m) => m.id), ['gateway-gpt', 'gateway-claude']);
   } finally {
     if (app) app.close();
     upstream.close();
-    delete process.env.CUSTOM_BASE_URL;
+    delete process.env.FREEBUFF_BASE_URL;
     clearModelCache();
   }
 });
 
-test('CUSTOM_MODELS pins the custom picker to a subset', async () => {
+test('FREEBUFF_MODELS pins the freebuff picker to a subset', async () => {
   clearModelCache();
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ object: 'list', data: [{ id: 'gateway-gpt' }, { id: 'gateway-claude' }] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.CUSTOM_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
-  process.env.CUSTOM_MODELS = 'gateway-claude';
+  process.env.FREEBUFF_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
+  process.env.FREEBUFF_MODELS = 'gateway-claude';
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=custom`)).json();
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=freebuff`)).json();
     assert.deepEqual(body.map((m) => m.id), ['gateway-claude']);
   } finally {
     if (app) app.close();
     upstream.close();
-    delete process.env.CUSTOM_BASE_URL;
-    delete process.env.CUSTOM_MODELS;
+    delete process.env.FREEBUFF_BASE_URL;
+    delete process.env.FREEBUFF_MODELS;
     clearModelCache();
   }
 });

@@ -86,10 +86,10 @@ function closedPort() {
 
 test('a refused connection says so, and says it is your own endpoint', async () => {
   const port = await closedPort();
-  const { status, body } = await chatWith('custom', { CUSTOM_BASE_URL: `http://127.0.0.1:${port}` });
+  const { status, body } = await chatWith('freebuff', { FREEBUFF_BASE_URL: `http://127.0.0.1:${port}` });
 
   assert.equal(status, 502);
-  assert.match(body.error, /Could not reach Custom endpoint/, 'still names the provider');
+  assert.match(body.error, /Could not reach Freebuff/, 'still names the provider');
   assert.match(
     body.error,
     /the host resolved but nothing is listening on that port|the connection was closed as soon as it opened|the connection timed out/,

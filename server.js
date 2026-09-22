@@ -1695,26 +1695,6 @@ const LLM_PROVIDERS = {
   // into `429` for every model, including ones nothing had asked for. Cloudflare
   // Workers AI is the roomier free drawer (10,000 Neurons a day) and already
   // leads the order; this is what to reach for once Cloudflare's day is spent.
-  custom: {
-    label: 'Custom endpoint',
-    // The sentence the reports show while the slot is still dark. An
-    // unconfigured slot with no note reads as a bug; the same slot with the
-    // variable named reads as a starting state.
-    note: 'Points at any self-hosted OpenAI-compatible gateway — FreeGPT4-WEB-API, Ollama, llama.cpp, vLLM — via CUSTOM_BASE_URL (https://…/v1). Its models load into the picker once the URL answers.',
-    // No default address: a self-hosted OpenAI-compatible gateway -- free-one-api,
-    // Free-GPT4-WEB-API/g4f, Ollama, llama.cpp, vLLM, or anything serving
-    // /models and /chat/completions -- is reached through CUSTOM_BASE_URL,
-    // including the /v1 segment when the gateway serves it there. With no
-    // pinned list the whole live catalogue goes through in its own order, and
-    // CUSTOM_MODELS narrows it the way NARA_MODELS does for Nara.
-    baseUrl: '',
-    envVar: 'CUSTOM_API_KEY',
-    // A key alone means nothing without somewhere to send it, so unlike the
-    // keyed providers this one activates on the URL, with the key optional --
-    // keyless gateways simply get no auth header rather than a bare "Bearer ".
-    needsKey: false,
-    needsBaseUrl: true,
-  },
   freegpt4: {
     label: 'FreeGPT4',
     // A self-hosted Free-GPT4-WEB-API gateway: plain-text answers over
@@ -1729,47 +1709,11 @@ const LLM_PROVIDERS = {
     needsBaseUrl: true,
     chatShape: 'text-query',
   },
-  // The three below are speech and search services. Probing them directly:
-  //
-  //   api.deepgram.com/v1/chat/completions   -> 404
-  //   api.assemblyai.com/v1/chat/completions -> 404
-  //   api.you.com/*                          -> 401 on every path, including
-  //                                             ones that don't exist
-  //
-  // So the first two have no chat endpoint to reach and you.com's is unproven.
-  // They're wired up anyway at the user's request so a key can settle it, and
-  // each stays hidden until its key is set. They use their own auth schemes --
-  // sending Bearer would make a test fail for the wrong reason.
-  deepgram: {
-    label: 'Deepgram',
-    baseUrl: 'https://api.deepgram.com/v1',
-    envVar: 'DEEPGRAM_API_KEY',
-    authScheme: 'Token',
-    kind: 'speech',
-    note: 'Deepgram is a speech service. Its /v1/models returns transcription models — nova, whisper and the like, each with a language list — and its /v1/chat/completions answers 404. There are no chat models to list, whatever key is set.',
-  },
-  assemblyai: {
-    label: 'AssemblyAI',
-    baseUrl: 'https://api.assemblyai.com/v1',
-    envVar: 'ASSEMBLYAI_API_KEY',
-    authScheme: '',
-    kind: 'speech',
-    note: 'AssemblyAI is a speech-to-text service. It has no /v1/models and no chat completions endpoint; transcription lives at /v2/transcript.',
-  },
-  youcom: {
-    label: 'You.com',
-    baseUrl: 'https://api.you.com/v1',
-    envVar: 'YOUCOM_API_KEY',
-    authHeader: 'X-API-Key',
-    authScheme: '',
-    kind: 'search',
-    note: 'You.com sells web search and research, not model inference. It has no model catalogue to list.',
-  },
   // Freebuff (github.com/Quorinex/Freebuff2API) is an OpenAI-compatible proxy
   // in front of Freebuff free coding models. The model list is read live from
   // its /v1/models -- it tracks the upstream free-agent roster, so pinning ids
-  // here would rot -- and FREEBUFF_MODELS narrows it the way G4F_MODELS does
-  // for gpt4free. It runs as its own Railway service, see
+  // here would rot -- and FREEBUFF_MODELS narrows it the same way. It runs as
+  // its own Railway service, see
   // deploy/freebuff-railway, and this slot activates on FREEBUFF_BASE_URL,
   // with the /v1 segment added when it is missing. FREEBUFF_API_KEY is only
   // sent when set, matching a proxy deployed with API_KEYS; an open proxy gets
@@ -1781,50 +1725,6 @@ const LLM_PROVIDERS = {
     envVar: 'FREEBUFF_API_KEY',
     needsKey: false,
     needsBaseUrl: true,
-  },
-  // gpt4free (github.com/xtekky/gpt4free) runs as the "Interference API": one
-  // OpenAI-compatible endpoint in front of a large set of community provider
-  // adapters, including media generation. It is declared here because of the
-  // half of this app that has no free answer anywhere else -- see the image
-  // block below.
-  //
-  // Declared last on purpose. imageOrderIds walks the named order first and
-  // then every other provider that declares an image store, in declaration
-  // order -- so this block being the final entry is what puts g4f at the end of
-  // the draw order rather than in the middle of it.
-  //
-  // The honest description of what this is: an aggregator of adapters that talk
-  // to services by scraping their web endpoints rather than through a documented
-  // API. It is free and keyless, and individual adapters break without notice
-  // when the site they read changes. That is exactly why it is last: a service
-  // this shape is a better rescue than a first choice, and a failure here costs
-  // a round trip rather than a turn.
-  g4f: {
-    label: 'gpt4free',
-    // No default address, like the custom slot: a self-hosted gateway is reached
-    // through G4F_BASE_URL, with the /v1 segment added when it is missing.
-    baseUrl: '',
-    envVar: 'G4F_API_KEY',
-    needsKey: false,
-    needsBaseUrl: true,
-    // A short pinned list rather than the whole live catalogue, which is
-    // hundreds of aliases and would fill the picker with names that answer
-    // differently every day. An intersection that comes out empty falls back to
-    // the service's own catalogue, so a renamed alias degrades to "wrong order"
-    // rather than "nothing to pick".
-    models: ['gpt-4o-mini', 'gpt-4o', 'deepseek-v3', 'llama-3.3-70b'],
-    image: {
-      shape: 'openai-images',
-      // The model gpt4free routes text-to-image through. `flux` is its own
-      // alias, kept stable across releases where the vendor id behind it moves.
-      defaultModel: 'flux',
-      modelEnv: 'G4F_IMAGE_MODEL',
-      // No `edit` is declared, and that is a decision rather than an omission.
-      // A service that declares no edit shape is stepped past for an edit, which
-      // is the honest answer here: gpt4free's media adapters can edit on some
-      // backends and not others, and a declared edit that silently drew something
-      // new instead would be a fresh picture presented as a change to yours.
-    },
   },
 };
 
@@ -1884,11 +1784,11 @@ function providerIsConfigured(provider) {
 // Providers whose documented base URL stops short of the OpenAI path. The
 // OmniRoute gateway accepts "http://host:port" and serves
 // /v1/... underneath it, so the version segment is added when it is missing
-// rather than making every operator remember to type it. gpt4free is the same
-// shape for the same reason: its Interference API is served under /v1 on a
-// server that boots on a bare host and port, and "add the version segment" is a
+// rather than making every operator remember to type it. Freebuff's proxy is
+// the same shape for the same reason: it is served under /v1 on a server
+// that boots on a bare host and port, and "add the version segment" is a
 // step nobody remembers on the deploy where it matters.
-const V1_APPENDED_PROVIDERS = new Set(['g4f', 'freebuff']);
+const V1_APPENDED_PROVIDERS = new Set(['freebuff']);
 
 function normalizeProviderBaseUrl(id, raw) {
   let base = String(raw || '').trim().replace(/\/+$/, '');
@@ -3890,10 +3790,11 @@ function providerTimeoutMs() {
   };
 }
 
-// Most use "Authorization: Bearer <key>", but not all: Deepgram wants
-// "Token", AssemblyAI wants the bare key, You.com wants its own header,
-// and a keyless self-hosted gateway (OmniRoute) sends no auth header at all rather
-// than a bare "Bearer ".
+// Most use "Authorization: Bearer <key>", but not all -- authScheme and
+// authHeader exist for a provider that wants a different scheme ("Token"),
+// a bare key with no scheme, or its own header name entirely. A keyless
+// self-hosted gateway (OmniRoute) sends no auth header at all rather than a
+// bare "Bearer ".
 function providerAuthHeaders(provider, req) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
   const headerName = provider.authHeader || 'Authorization';
@@ -5403,7 +5304,6 @@ const BUILD_MODEL_PREFERENCE = [
   ['cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast'],
   ['openrouter', ''],
   ['nara', ''],
-  ['custom', ''],
 ];
 
 function providerModelIds(models) {

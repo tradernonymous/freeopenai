@@ -220,25 +220,25 @@ test('FREE_MODELS_ONLY=1 applies the same rule at the API, and never down to not
     }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  const savedBase = process.env.CUSTOM_BASE_URL;
-  process.env.CUSTOM_BASE_URL = 'http://127.0.0.1:' + upstream.address().port + '/v1';
+  const savedBase = process.env.FREEBUFF_BASE_URL;
+  process.env.FREEBUFF_BASE_URL = 'http://127.0.0.1:' + upstream.address().port + '/v1';
   const app = http.createServer(createRequestHandler(__dirname + '/..'));
   await new Promise((r) => app.listen(0, r));
   const base = 'http://127.0.0.1:' + app.address().port;
   try {
     clearModelCache();
-    const all = await (await fetch(base + '/api/llm/models?provider=custom')).json();
+    const all = await (await fetch(base + '/api/llm/models?provider=freebuff')).json();
     assert.deepEqual(all.map((m) => m.id).sort(), ['free-model:free', 'paid-model'], 'both rows by default');
 
     process.env.FREE_MODELS_ONLY = '1';
     clearModelCache();
-    const gated = await (await fetch(base + '/api/llm/models?provider=custom')).json();
+    const gated = await (await fetch(base + '/api/llm/models?provider=freebuff')).json();
     assert.deepEqual(gated.map((m) => m.id), ['free-model:free'], 'the paid row is filtered at the source');
     assert.equal(gated[0].free, true);
   } finally {
     delete process.env.FREE_MODELS_ONLY;
-    if (savedBase === undefined) delete process.env.CUSTOM_BASE_URL;
-    else process.env.CUSTOM_BASE_URL = savedBase;
+    if (savedBase === undefined) delete process.env.FREEBUFF_BASE_URL;
+    else process.env.FREEBUFF_BASE_URL = savedBase;
     app.close();
     upstream.close();
     clearModelCache();
