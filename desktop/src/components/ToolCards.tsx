@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import Icon from './Icon';
+import McpAppFrame from './McpAppFrame';
 import type { ToolEvent } from '../agent-turn';
+import { mcpAppFor } from '../tool-run';
 
 // What a model did, under the reply it did it for.
 //
@@ -44,6 +46,8 @@ const WORD: Record<ToolEvent['status'], string> = {
 
 export default function ToolCards({ events, onDecide, expandAll }: Props) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // An MCP App under its call is shown unless the person hides it.
+  const [appHidden, setAppHidden] = useState<Record<string, boolean>>({});
   // A running tool's timer ticks; nothing re-renders once they are all done.
   const live = events.some((e) => e.status === 'running');
   const [, setTick] = useState(0);
@@ -60,6 +64,8 @@ export default function ToolCards({ events, onDecide, expandAll }: Props) {
         const asking = event.status === 'asking' && !!onDecide;
         const shown = (open[event.id] ?? !!expandAll) || asking;
         const canAlways = event.name.startsWith('mcp__');
+        const app = canAlways && event.status === 'done' ? mcpAppFor(event.name) : null;
+        const appShown = !!app && !appHidden[event.id];
         return (
           <div key={event.id} className={`tool-card is-${event.status}`}>
             <button
@@ -86,6 +92,22 @@ export default function ToolCards({ events, onDecide, expandAll }: Props) {
                   </>
                 )}
               </div>
+            )}
+            {app && (
+              <div className="mcp-app-bar">
+                <Icon name="activity" size={12} />
+                <span>App</span>
+                <button
+                  className="mcp-app-toggle"
+                  onClick={() => setAppHidden((h) => ({ ...h, [event.id]: !h[event.id] }))}
+                  aria-expanded={appShown}
+                >
+                  {appShown ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            )}
+            {app && appShown && (
+              <McpAppFrame toolName={event.name} callId={event.id} args={event.args} result={event.result} />
             )}
             {asking && (
               <div className="tool-card-ask">

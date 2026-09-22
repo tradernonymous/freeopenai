@@ -73,6 +73,14 @@
     fn('run_command', 'Run a shell command in the project folder. Asks the user first.', { command: STR, cwd: STR }, ['command']),
   ];
 
+  // Delegation to a sub-agent (agents.js). Not in the catalogue: Chat offers it
+  // with the list of agents in its description. The agent's own tools still
+  // ask one by one; this asks before the agent starts at all.
+  var SPAWN_AGENT = fn('spawn_agent', 'Delegate a task to a named sub-agent and get its answer back. Asks the user first.',
+    { agent: { type: 'string', description: 'The agent id' }, task: { type: 'string', description: 'What the agent should do, with everything it needs to know' } },
+    ['agent', 'task']);
+  var SPAWN_REASON = 'starts a sub-agent that can use its own tools';
+
   // Everything that changes something. Reading never asks.
   var ASKS = {
     write_file: 'writes a file on this PC',
@@ -331,6 +339,77 @@
     return JSON.stringify(result || {});
   }
 
+  // ---- MCP Apps (the ext-apps extension) ----------------------------------------
+  //
+  // A tool may name a UI resource -- `_meta.ui.resourceUri` (older drafts:
+  // `_meta["ui/resourceUri"]`) -- that the host reads with `resources/read` and
+  // draws in a sandboxed frame under the call. Only `ui://` URIs count: an app
+  // is something the server hands over, never a page fetched from somewhere.
+
+  /** An app's HTML is capped at this many bytes. */
+  var MAX_APP_HTML_BYTES = 2 * 1024 * 1024;
+
+  /** The tool's `ui://` resource URI, or ''. */
+  function uiResourceOf(tool) {
+    var meta = tool && tool._meta && typeof tool._meta === 'object' ? tool._meta : null;
+    if (!meta) return '';
+    var uri = meta.ui && typeof meta.ui === 'object' && typeof meta.ui.resourceUri === 'string'
+      ? meta.ui.resourceUri
+      : (typeof meta['ui/resourceUri'] === 'string' ? meta['ui/resourceUri'] : '');
+    uri = uri.trim();
+    return /^ui:\/\/[^\s]+$/i.test(uri) ? uri : '';
+  }
+
+  /** Whether one `resources/read` content entry is an app's HTML. */
+  function isAppHtml(content) {
+    if (!content || typeof content !== 'object') return false;
+    var type = String(content.mimeType || '').toLowerCase().replace(/\s+/g, '');
+    return type === 'text/html' || type.indexOf('text/html;') === 0;
+  }
+
+  function decodeBase64(blob) {
+    var scope = typeof globalThis !== 'undefined' ? globalThis : {};
+    if (typeof scope.atob === 'function' && typeof TextDecoder === 'function') {
+      var bin = scope.atob(blob);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+    if (typeof Buffer === 'function') return Buffer.from(blob, 'base64').toString('utf8');
+    throw new Error('no base64 decoder');
+  }
+
+  /**
+   * appHtmlFrom(readResult) -> { html, reason }
+   *
+   * The app's HTML out of a `resources/read` result: the first HTML content,
+   * as `text` or a base64 `blob`. `html` is '' (and `reason` says why) when
+   * there is none, it will not decode, or it is over MAX_APP_HTML_BYTES.
+   */
+  function appHtmlFrom(readResult) {
+    var contents = readResult && Array.isArray(readResult.contents) ? readResult.contents : [];
+    var entry = null;
+    for (var i = 0; i < contents.length; i += 1) {
+      if (isAppHtml(contents[i])) { entry = contents[i]; break; }
+    }
+    if (!entry) return { html: '', reason: 'The server did not return an HTML app for this tool.' };
+    var html = '';
+    if (typeof entry.text === 'string') html = entry.text;
+    else if (typeof entry.blob === 'string') {
+      // Base64 is 4 characters per 3 bytes: refuse before decoding something huge.
+      if (entry.blob.length > Math.ceil(MAX_APP_HTML_BYTES / 3) * 4 + 4) return { html: '', reason: 'The app is larger than 2 MB.' };
+      try {
+        html = decodeBase64(entry.blob.replace(/\s+/g, ''));
+      } catch {
+        return { html: '', reason: 'The app could not be decoded.' };
+      }
+    }
+    if (!html) return { html: '', reason: 'The app is empty.' };
+    var size = typeof TextEncoder === 'function' ? new TextEncoder().encode(html).length : html.length;
+    if (size > MAX_APP_HTML_BYTES) return { html: '', reason: 'The app is larger than 2 MB.' };
+    return { html: html, reason: '' };
+  }
+
   /** A shell error split into its message and the server's stderr tail (mcp.rs STDERR_MARK). */
   function splitStderr(message) {
     var s = String(message == null ? '' : message);
@@ -434,9 +513,11 @@
 
   /** The key "always allow" is remembered under, or '' when it never may be. */
   function alwaysKey(name) {
+    if (name === 'spawn_agent') return 'agent:spawn';
     var m = /^mcp__([a-z0-9_]+?)__/.exec(String(name || ''));
-    // Only an MCP server can be trusted wholesale. Writes, commands and
-    // commits ask every time -- that is the rule, not a default.
+    // Only an MCP server (or delegation, whose agents' tools still ask) can be
+    // trusted wholesale. Writes, commands and commits ask every time -- that
+    // is the rule, not a default.
     return m ? 'mcp:' + m[1] : '';
   }
 
@@ -458,6 +539,7 @@
   function needsApproval(name, given) {
     var n = String(name || '');
     if (ASKS[n]) return ASKS[n];
+    if (n === 'spawn_agent') return alwaysMap(given)[alwaysKey(n)] ? '' : SPAWN_REASON;
     if (/^mcp__/.test(n)) {
       return alwaysMap(given)[alwaysKey(n)] ? '' : 'calls a tool on an MCP server you added';
     }
@@ -570,6 +652,7 @@
     GITHUB: GITHUB,
     LOCAL: LOCAL,
     ASKS: ASKS,
+    SPAWN_AGENT: SPAWN_AGENT,
     slug: slug,
     mcpServers: mcpServers,
     saveMcpServers: saveMcpServers,
@@ -584,6 +667,10 @@
     parseEnvLines: parseEnvLines,
     parseMcpConfig: parseMcpConfig,
     mcpResultText: mcpResultText,
+    MAX_APP_HTML_BYTES: MAX_APP_HTML_BYTES,
+    uiResourceOf: uiResourceOf,
+    isAppHtml: isAppHtml,
+    appHtmlFrom: appHtmlFrom,
     splitStderr: splitStderr,
     mcpToolName: mcpToolName,
     mcpTarget: mcpTarget,

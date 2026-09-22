@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
-import { hasShell, listLocalDir, localModelStatus, notifyUser, openUrl, readLocalFile } from '../bridge';
+import { hasShell, listLocalDir, localModelStatus, mcpStdioList, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import { renderMermaid } from '../diagram';
 import { startRecording, transcribe, type Recording } from '../dictate';
@@ -22,9 +22,11 @@ import '../files/office.js';
 import '../files/pdf.js';
 import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
-import { executeTool } from '../tool-run';
+import { executeTool, startStdio, stdioId } from '../tool-run';
 import '../tools.js';
 import '../composer.js';
+import '../agents.js';
+import '../recipes.js';
 import { isSavedProvider, streamSaved } from '../run-model';
 import '../saved-models.js';
 import '../chats.js';
@@ -46,7 +48,12 @@ const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UCom
 const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
 const pdf: typeof import('../files/pdf.js') = (globalThis as any).FreePdf;
 const threads: typeof import('../threads.js') = (globalThis as any).FreeAI4UThreads;
+const agentsLib: typeof import('../agents.js') = (globalThis as any).FreeAI4UAgents;
+const recipesLib: typeof import('../recipes.js') = (globalThis as any).FreeAI4URecipes;
 
+type Agent = import('../agents.js').Agent;
+type Recipe = import('../recipes.js').Recipe;
+type McpServer = import('../tools.js').McpServer;
 type ModeId = import('../composer.js').ModeId;
 type SlashCommand = import('../composer.js').SlashCommand;
 type MentionSource = import('../composer.js').MentionSource;
@@ -76,6 +83,8 @@ export interface Msg {
   shell?: string;
   /** Pictures sent with a user turn, as data URLs (vision models only). */
   images?: string[];
+  /** The agent (or recipe) that wrote this reply, for its label. */
+  agent?: string;
 }
 
 export interface ChatSession {
@@ -148,6 +157,9 @@ export const MODEL_PICK_EVENT = 'freeai4u:pick-model';
 export const TOOL_CARDS_EVENT = 'freeai4u:tool-cards';
 /** A brief for the Design studio, handed over through sessionStorage. */
 export const DESIGN_BRIEF_KEY = 'freeai4u.designBrief';
+/** A slash command for Chat to run once it is on screen (Agents / Recipes "Run in chat"). */
+export const PENDING_COMMAND_KEY = 'freeai4u.pendingCommand';
+export const RUN_COMMAND_EVENT = 'freeai4u:run-command';
 
 /** The turns a model is shown: notes are for the person, shell output rides along. */
 export function turnsFor(messages: Msg[]): Array<{ role: string; content: any }> {
@@ -483,6 +495,205 @@ export default function ChatScreen() {
     return () => window.removeEventListener(NEW_CHAT_EVENT, onNew);
   }, []);
 
+  // One request to a provider, in the shape runTurn calls again after every
+  // round of tool results. Chat, agents and recipes all stream through it,
+  // with this chat's /reasoning setting.
+  const streamer = (provider: string, model: string): TurnOptions['stream'] => (messages, offered, onFrame, signal) => {
+    if (provider === 'hf') {
+      return hfInference.streamChat(model, messages, onFrame, signal, hfToken || undefined, offered);
+    }
+    if (isSavedProvider(provider)) {
+      return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered, active.reasoning);
+    }
+    const effort = active.reasoning && active.reasoning !== 'off' ? { reasoning_effort: active.reasoning } : {};
+    if (provider === 'local') {
+      return streamLocalChat(localRow?.baseUrl || '', model, messages, onFrame, signal, localRow?.apiKey || undefined, { ...(offered ? { tools: offered } : {}), ...effort });
+    }
+    return streamChat(provider, { model, messages, ...(offered ? { tools: offered } : {}), ...effort } as any, onFrame, signal);
+  };
+
+  // A tool card on the last reply of chat `sid`: added, or updated in place.
+  const upsertToolIn = (sid: string) => (event: ToolEvent) => {
+    setSessions((prev) => prev.map((s) => {
+      if (s.id !== sid) return s;
+      const msgs = s.messages.slice();
+      const last = msgs[msgs.length - 1];
+      if (!last || last.role !== 'assistant') return s;
+      const list = (last.tools || []).slice();
+      const at = list.findIndex((t) => t.id === event.id);
+      // Stamped here, for the elapsed timer on the card.
+      const was = at >= 0 ? list[at] : null;
+      const stamped: ToolEvent = {
+        ...event,
+        startedAt: was?.startedAt || Date.now(),
+        endedAt: event.status === 'running' || event.status === 'asking' ? undefined : (was?.endedAt || Date.now()),
+      };
+      if (at >= 0) list[at] = stamped; else list.push(stamped);
+      msgs[msgs.length - 1] = { ...last, tools: list };
+      return { ...s, messages: msgs, updatedAt: Date.now() };
+    }));
+    if (stickToBottom.current) scrollToBottom(false);
+  };
+
+  // Stopping the turn is a Deny for whatever was waiting.
+  const askApproval = (signal: AbortSignal) => (event: ToolEvent) => new Promise<boolean>((resolve) => {
+    approvals.current[event.id] = resolve;
+    notifyUser('NeuraOS needs your OK', event.summary || event.name);
+    signal.addEventListener('abort', () => { delete approvals.current[event.id]; resolve(false); }, { once: true });
+  });
+
+  // ---- agents (roadmap 6.7) ---------------------------------------------------
+  //
+  // A sub-turn is the same runTurn with the agent's system prompt, ONLY its
+  // tools, and its model (or this chat's). Its tool cards land on the reply
+  // being written, labelled with the agent, and ask exactly as chat's do.
+
+  /** spawn_agent, described with the agents this spawner may start; [] when there are none. */
+  const spawnDefFor = (spawner: Agent | null): import('../tools.js').ToolDef[] => {
+    const all = agentsLib.list();
+    const ids = agentsLib.spawnTargets(spawner, all);
+    const targets = all.filter((a) => ids.includes(a.id));
+    if (!targets.length) return [];
+    return [{ ...toolsLib.SPAWN_AGENT, function: { ...toolsLib.SPAWN_AGENT.function, description: agentsLib.spawnDescription(targets) } }];
+  };
+
+  interface AgentRun { sid: string; signal: AbortSignal; history: Msg[]; depth: number; onText?: (piece: string) => void }
+
+  const runAgent = async (agent: Agent, task: string, run: AgentRun): Promise<{ text: string; ok: boolean }> => {
+    const target = agent.model || { provider: active.provider, model: active.model };
+    const root = openFolder();
+    const canSpawn = run.depth < agentsLib.MAX_DEPTH;
+    const offered = toolsOn ? agentsLib.pickTools(agent, toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() })) : [];
+    if (toolsOn && canSpawn && agent.spawnableAgents?.length) offered.push(...spawnDefFor(agent));
+    // Tool-call ids repeat across providers; the prefix keeps each card its own.
+    const prefix = `${agent.id}-${Math.random().toString(36).slice(2, 6)}:`;
+    const upsert = upsertToolIn(run.sid);
+    const ask = askApproval(run.signal);
+    // 'last_message' is the final round's words: text before a tool call is
+    // the agent thinking aloud, not its answer.
+    let last = '';
+    await runTurn({
+      messages: agentsLib.messagesFor(agent, task, agent.includeMessageHistory ? turnsFor(run.history) : []),
+      tools: offered,
+      stream: streamer(target.provider, target.model),
+      execute: (call, args) => executeTool(call, args, {
+        localRoot: root,
+        spawnAgent: canSpawn ? (a) => spawnFrom(agent, a, { ...run, depth: run.depth + 1, onText: undefined }) : undefined,
+      }),
+      approve: (event) => ask({ ...event, id: prefix + event.id }),
+      onText: (piece) => { last += piece; run.onText?.(piece); },
+      onTool: (event) => { last = ''; upsert({ ...event, id: prefix + event.id, summary: `${agent.name}: ${event.summary}` }); },
+      onNote: (note) => pushToast('info', `${agent.name}: ${note}`),
+      signal: run.signal,
+    });
+    return agentsLib.formatResult(agent, last);
+  };
+
+  /** What spawn_agent does: check the agent may be started here, run it, hand its answer back. */
+  const spawnFrom = async (spawner: Agent | null, args: Record<string, any>, run: AgentRun): Promise<string> => {
+    const all = agentsLib.list();
+    const id = String(args.agent || '').trim().toLowerCase();
+    const allowed = agentsLib.spawnTargets(spawner, all);
+    const agent = all.find((a) => a.id === id);
+    if (!agent || !allowed.includes(id)) return `Error: "${id}" is not an agent that may be spawned here. Available: ${allowed.join(', ') || 'none'}.`;
+    try {
+      return (await runAgent(agent, String(args.task || ''), run)).text;
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') throw err;
+      return `Error: ${agent.name} failed: ${((err as Error).message || String(err)).split('\n')[0]}`;
+    }
+  };
+
+  /** /agent and /recipe: the request and the agent's answer, as two turns of this chat. */
+  const runAgentInChat = async (agent: Agent, task: string, shown: string) => {
+    if (!active || sending) return;
+    const sid = active.id;
+    const history = active.messages;
+    const target = agent.model || { provider: active.provider, model: active.model };
+    const label = choices.find((c) => c.id === target.provider)?.label || target.provider;
+    patchSession(sid, {
+      messages: [
+        ...history,
+        { role: 'user', content: shown, ts: Date.now() },
+        { role: 'assistant', content: '', agent: agent.name, model: target.model, provider: target.provider, providerLabel: label, ts: Date.now() },
+      ],
+      draft: '',
+      title: history.length === 0 ? threads.autoTitle(shown) : active.title,
+    });
+    setSending(true);
+    stickToBottom.current = true;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const patchLast = (patch: (last: Msg) => Partial<Msg>) => setSessions((prev) => prev.map((s) => {
+      if (s.id !== sid) return s;
+      const msgs = s.messages.slice();
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') msgs[msgs.length - 1] = { ...last, ...patch(last) };
+      return { ...s, messages: msgs, updatedAt: Date.now() };
+    }));
+    try {
+      const result = await runAgent(agent, task, {
+        sid, signal: controller.signal, history, depth: 1,
+        onText: (piece) => { patchLast((last) => ({ content: last.content + piece })); if (stickToBottom.current) scrollToBottom(false); },
+      });
+      patchLast(() => ({ content: result.text }));
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        const told = failure.attribute({ provider: target.provider, providerLabel: label, model: target.model, message: (err as Error).message });
+        patchLast(() => ({ error: true, failure: told }));
+      }
+    } finally {
+      setSending(false);
+      abortRef.current = null;
+      setTimeout(() => setSessions((prev) => { saveSessions(prev); return prev; }), 0);
+    }
+  };
+
+  // ---- recipes (roadmap 6.8) ----------------------------------------------------
+  //
+  // The first time a recipe would use an MCP server, the person says yes in an
+  // in-app dialog -- a local server is a program started on this PC -- and the
+  // answer is kept per recipe and server (recipes.js).
+  const [consent, setConsent] = useState<{ recipe: Recipe; servers: McpServer[]; resolve: (ok: boolean) => void } | null>(null);
+
+  const runRecipeInChat = async (recipe: Recipe, values: Record<string, string>) => {
+    const filled = recipesLib.fillTemplate(recipe.prompt, recipe.params, values);
+    if (filled.missing.length) {
+      pushToast('warn', `${recipe.name} needs ${filled.missing.join(', ')}: /recipe ${recipe.id} ${filled.missing[0]}=…`);
+      return;
+    }
+    const servers = toolsLib.mcpServers();
+    const find = (name: string) => servers.find((s) => toolsLib.slug(s.name) === toolsLib.slug(name));
+    const absent = recipe.extensions.filter((name) => !find(name));
+    if (absent.length) {
+      pushToast('warn', `${recipe.name} needs the MCP server${absent.length > 1 ? 's' : ''} ${absent.join(', ')}. Add ${absent.length > 1 ? 'them' : 'it'} in Settings → Connectors.`);
+      return;
+    }
+    const pending = recipesLib.needsConsent(recipe);
+    if (pending.length) {
+      const ok = await new Promise<boolean>((resolve) => setConsent({ recipe, servers: pending.map((n) => find(n)!), resolve }));
+      setConsent(null);
+      if (!ok) { pushToast('info', `${recipe.name} was not run.`); return; }
+      recipesLib.grantConsent(recipe.id, pending);
+    }
+    // Local servers it needs that are not running yet are started now, so
+    // their tools are known before the turn is offered them.
+    if (hasShell()) {
+      const up = await mcpStdioList().catch(() => [] as string[]);
+      for (const name of recipe.extensions) {
+        const server = find(name);
+        if (!server || !toolsLib.isStdio(server) || up.includes(stdioId(server))) continue;
+        try {
+          await startStdio(server);
+        } catch (e) {
+          pushToast('error', `${server.name} did not start: ${toolsLib.splitStderr((e as Error).message || String(e)).message.split('\n')[0]}`);
+          return;
+        }
+      }
+    }
+    await runAgentInChat(recipesLib.asAgent(recipe), filled.text, filled.text);
+  };
+
   const send = async () => {
     if (!active || sending) return;
     const text = (active.draft || '').trim();
@@ -554,44 +765,10 @@ export default function ChatScreen() {
           content: 'Plan mode: reply with a short numbered plan (files, steps, risks) and change nothing. Read-only tools are available for looking around.',
         });
       }
-      const provider = active.provider;
-      const model = active.model;
       // One request, to whichever provider the session is on. The turn calls
       // it again after every round of tool results.
-      const streamOnce: TurnOptions['stream'] = (messages, offered, onFrame, signal) => {
-        if (provider === 'hf') {
-          return hfInference.streamChat(model, messages, onFrame, signal, hfToken || undefined, offered);
-        }
-        if (isSavedProvider(provider)) {
-          return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered, active.reasoning);
-        }
-        const effort = active.reasoning && active.reasoning !== 'off' ? { reasoning_effort: active.reasoning } : {};
-        if (provider === 'local') {
-          return streamLocalChat(localRow?.baseUrl || '', model, messages, onFrame, signal, localRow?.apiKey || undefined, { ...(offered ? { tools: offered } : {}), ...effort });
-        }
-        return streamChat(provider, { model, messages, ...(offered ? { tools: offered } : {}), ...effort } as any, onFrame, signal);
-      };
-      const upsertTool = (event: ToolEvent) => {
-        setSessions((prev) => prev.map((s) => {
-          if (s.id !== sid) return s;
-          const msgs = s.messages.slice();
-          const last = msgs[msgs.length - 1];
-          if (!last || last.role !== 'assistant') return s;
-          const list = (last.tools || []).slice();
-          const at = list.findIndex((t) => t.id === event.id);
-          // Stamped here, for the elapsed timer on the card.
-          const was = at >= 0 ? list[at] : null;
-          const stamped: ToolEvent = {
-            ...event,
-            startedAt: was?.startedAt || Date.now(),
-            endedAt: event.status === 'running' || event.status === 'asking' ? undefined : (was?.endedAt || Date.now()),
-          };
-          if (at >= 0) list[at] = stamped; else list.push(stamped);
-          msgs[msgs.length - 1] = { ...last, tools: list };
-          return { ...s, messages: msgs, updatedAt: Date.now() };
-        }));
-        if (stickToBottom.current) scrollToBottom(false);
-      };
+      const streamOnce = streamer(active.provider, active.model);
+      const upsertTool = upsertToolIn(sid);
       const root = openFolder();
       await runTurn({
         messages: turns,
@@ -599,15 +776,15 @@ export default function ChatScreen() {
           ? toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() })
             // Plan changes nothing, so it is offered nothing that could.
             .filter((t) => active.mode !== 'plan' || (!toolsLib.ASKS[t.function.name] && !t.function.name.startsWith('mcp__')))
+            // Delegation too: a sub-agent can have tools that change things.
+            .concat(active.mode !== 'plan' ? spawnDefFor(null) : [])
           : [],
         stream: streamOnce,
-        execute: (call, args) => executeTool(call, args, { localRoot: root }),
-        // Stopping the turn is a Deny for whatever was waiting.
-        approve: (event) => new Promise<boolean>((resolve) => {
-          approvals.current[event.id] = resolve;
-          notifyUser('NeuraOS needs your OK', event.summary || event.name);
-          controller.signal.addEventListener('abort', () => { delete approvals.current[event.id]; resolve(false); }, { once: true });
+        execute: (call, args) => executeTool(call, args, {
+          localRoot: root,
+          spawnAgent: (a) => spawnFrom(null, a, { sid, signal: controller.signal, history, depth: 1 }),
         }),
+        approve: askApproval(controller.signal),
         onText: append,
         onTool: upsertTool,
         onNote: (note) => pushToast('info', note),
@@ -912,6 +1089,20 @@ export default function ChatScreen() {
     }
   }, [sending]);
 
+  // An MCP App's ui/message (McpAppFrame) is text for the person to review:
+  // it joins the draft and is never sent on its own.
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const text = String((e as CustomEvent).detail?.text || '').trim();
+      if (!text) return;
+      e.preventDefault();
+      patchSession(active.id, { draft: active.draft ? `${active.draft.replace(/\s+$/, '')}\n${text}` : text });
+      inputRef.current?.focus();
+    };
+    window.addEventListener('freeai4u:composer-insert', onInsert);
+    return () => window.removeEventListener('freeai4u:composer-insert', onInsert);
+  }, [active.id, active.draft]);
+
   // Ctrl+V with a picture on the clipboard attaches it; text pastes normally.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -1029,6 +1220,34 @@ export default function ChatScreen() {
         else download(`${slug}.md`, grammar.threadMarkdown(active));
         return;
       }
+      case 'agent': {
+        clear();
+        const { id, task } = agentsLib.parseCommand(arg);
+        const all = agentsLib.list();
+        if (!id) {
+          addNote(['**Agents** — `/agent <id> <task>`', '', ...all.map((a) => `- \`${a.id}\` — ${a.description || a.name}`), '', 'Edit them under Library → Agents.'].join('\n'));
+          return;
+        }
+        const agent = agentsLib.get(id);
+        if (!agent) { pushToast('warn', `No agent "${id}". Agents: ${all.map((a) => a.id).join(', ')}.`); return; }
+        runAgentInChat(agent, task, task ? `Ask the ${agent.name} agent: ${task}` : `Run the ${agent.name} agent.`);
+        return;
+      }
+      case 'recipe': {
+        clear();
+        const id = agentsLib.parseCommand(arg).id;
+        const all = recipesLib.list();
+        if (!id) {
+          addNote(all.length
+            ? ['**Recipes** — `/recipe <id> key=value ...`', '', ...all.map((r) => `- \`${r.id}\` — ${r.name}${r.params.length ? ` (${r.params.map((p) => p.name).join(', ')})` : ''}`)].join('\n')
+            : 'No recipes yet. Make one under Library → Recipes.');
+          return;
+        }
+        const recipe = recipesLib.get(id);
+        if (!recipe) { pushToast('warn', `No recipe "${id}".${all.length ? ` Recipes: ${all.map((r) => r.id).join(', ')}.` : ''}`); return; }
+        runRecipeInChat(recipe, recipesLib.parseCommand(arg, recipe.params).values);
+        return;
+      }
       default: break;
     }
     if (command.mode) setMode(command.mode);
@@ -1038,6 +1257,25 @@ export default function ChatScreen() {
     patchSession(active.id, { draft: text, ...sessionMode });
     requestAnimationFrame(() => inputRef.current?.focus());
   };
+
+  // Library -> Agents / Recipes "Run in chat": the command waits in
+  // sessionStorage and runs once this screen is mounted (or hears the event).
+  const onCommandRef = useRef(onCommand);
+  onCommandRef.current = onCommand;
+  useEffect(() => {
+    const runPending = () => {
+      let text = '';
+      try {
+        text = sessionStorage.getItem(PENDING_COMMAND_KEY) || '';
+        if (text) sessionStorage.removeItem(PENDING_COMMAND_KEY);
+      } catch { return; }
+      const parsed = text ? grammar.parseSlash(text) : null;
+      if (parsed) onCommandRef.current(parsed.command, parsed.arg);
+    };
+    window.addEventListener(RUN_COMMAND_EVENT, runPending);
+    const timer = setTimeout(runPending, 0);
+    return () => { window.removeEventListener(RUN_COMMAND_EVENT, runPending); clearTimeout(timer); };
+  }, []);
 
   // What `@` can reach: this provider's models, the other services, files at
   // the top of the open folder, and MCP servers.
@@ -1262,7 +1500,9 @@ export default function ChatScreen() {
             <div className="message-role">
               {msg.shell ? 'You · command' : msg.role === 'user'
                 ? 'You'
-                : (msg.providerLabel && msg.model ? `${msg.providerLabel} · ${msg.model}` : (msg.model || 'Assistant'))}
+                : msg.agent
+                  ? `${msg.agent} · agent${msg.model ? ` · ${msg.model}` : ''}`
+                  : (msg.providerLabel && msg.model ? `${msg.providerLabel} · ${msg.model}` : (msg.model || 'Assistant'))}
             </div>
             {msg.images && msg.images.length > 0 && (
               <div className="message-images">
@@ -1316,6 +1556,27 @@ export default function ChatScreen() {
           belongs in that turn -- the card above names what was asked of which
           service and what to do, with its own Retry. A second red strip at the
           bottom said the same thing twice and read as a permanent fault. */}
+      {consent && (
+        <div className="consent-backdrop" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+          <div className="consent-dialog">
+            <h3 id="consent-title">Start {consent.servers.length === 1 ? 'this server' : 'these servers'} for “{consent.recipe.name}”?</h3>
+            <p>The recipe uses {consent.servers.length === 1 ? 'this MCP server' : 'these MCP servers'}. A local one runs a program on this PC; its tools still ask before they act.</p>
+            <ul className="consent-list">
+              {consent.servers.map((s) => (
+                <li key={s.name}>
+                  <span className="mono">{s.name}</span>
+                  <span className="consent-cmd mono">{toolsLib.isStdio(s) ? `${s.command} ${toolsLib.joinArgs(s.args || [])}`.trim() : s.url}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="settings-hint">Your answer is remembered for this recipe.</p>
+            <div className="consent-actions">
+              <button onClick={() => consent.resolve(false)}>Cancel</button>
+              <button className="primary" onClick={() => consent.resolve(true)} autoFocus>Allow and run</button>
+            </div>
+          </div>
+        </div>
+      )}
       {radial && (
         <RadialMenu
           x={radial.x}

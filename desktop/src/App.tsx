@@ -13,6 +13,9 @@ import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
 import CodeScreen from './screens/CodeScreen';
 import EvalsScreen from './screens/EvalsScreen';
+import AgentsScreen from './screens/AgentsScreen';
+import RecipesScreen, { useRecipeScheduler } from './screens/RecipesScreen';
+import ParallelScreen from './screens/ParallelScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
@@ -98,6 +101,8 @@ export default function App() {
   const [zen, setZen] = useState(false);
   const [paletteExtra, setPaletteExtra] = useState<PaletteEntry[]>([]);
   const [skillEntries, setSkillEntries] = useState<PaletteEntry[]>([]);
+  // Scheduled recipes run while the app is open, whatever screen is showing.
+  useRecipeScheduler();
 
   useEffect(() => {
     applyTheme(theme);
@@ -528,6 +533,9 @@ export default function App() {
                   )}
                   {view === 'files' && <FilesScreen />}
                   {view === 'evals' && <EvalsScreen />}
+                  {view === 'agents' && <AgentsScreen />}
+                  {view === 'recipes' && <RecipesScreen />}
+                  {view === 'parallel' && <ParallelScreen localRoot={localRoot} />}
                   {view === 'settings' && (
                     <SettingsScreen
                       onConnectionChanged={checkAuth}

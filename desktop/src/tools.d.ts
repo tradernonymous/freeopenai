@@ -12,7 +12,8 @@ export interface ToolCall {
   arguments: string;
 }
 
-export type McpTool = { name: string; description?: string; inputSchema?: Record<string, any> };
+/** `_meta` is kept from tools/list so an MCP App's `ui://` resource is known. */
+export type McpTool = { name: string; description?: string; inputSchema?: Record<string, any>; _meta?: Record<string, any> };
 
 /** Remote: `{ name, url }` (https, through the engine). Local: `{ name, transport: 'stdio', command, args, env, cwd? }`. */
 export interface McpServer {
@@ -45,6 +46,7 @@ export declare const WEB: ToolDef[];
 export declare const GITHUB: ToolDef[];
 export declare const LOCAL: ToolDef[];
 export declare const ASKS: Record<string, string>;
+export declare const SPAWN_AGENT: ToolDef;
 export declare function slug(name: string): string;
 export declare function mcpServers(storage?: any): McpServer[];
 export declare function saveMcpServers(list: McpServer[], storage?: any): boolean;
@@ -59,6 +61,10 @@ export declare function joinArgs(list: string[]): string;
 export declare function parseEnvLines(text: string): { env: Record<string, string>; bad: string[] };
 export declare function parseMcpConfig(text: string): { servers: McpServer[]; errors: string[] };
 export declare function mcpResultText(result: any): string;
+export declare const MAX_APP_HTML_BYTES: number;
+export declare function uiResourceOf(tool: McpTool | null | undefined): string;
+export declare function isAppHtml(content: any): boolean;
+export declare function appHtmlFrom(readResult: any): { html: string; reason: string };
 export declare function splitStderr(message: string): { message: string; stderr: string };
 export declare function mcpToolName(server: string, tool: string): string;
 export declare function mcpTarget(name: string, storage?: any): { server: McpServer; tool: string } | null;

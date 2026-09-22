@@ -28,6 +28,8 @@ type Args = Record<string, any>;
 export interface ToolContext {
   /** The folder open in the app, or '' when none is. */
   localRoot: string;
+  /** Runs a sub-agent for `spawn_agent` (ChatScreen owns the runner); absent means none may be spawned. */
+  spawnAgent?: (args: Args) => Promise<string>;
 }
 
 const q = (value: unknown) => encodeURIComponent(String(value ?? ''));
@@ -178,7 +180,11 @@ export async function startStdio(server: McpServer): Promise<McpTool[]> {
   for (let page = 0; page < 20; page += 1) {
     const result: any = await mcpStdioRequest(id, 'tools/list', cursor ? { cursor } : {});
     for (const t of Array.isArray(result?.tools) ? result.tools : []) {
-      if (t && t.name) list.push({ name: String(t.name), description: String(t.description || ''), inputSchema: t.inputSchema || {} });
+      if (!t || !t.name) continue;
+      const row: McpTool = { name: String(t.name), description: String(t.description || ''), inputSchema: t.inputSchema || {} };
+      // `_meta` carries an MCP App's ui:// resource (tools.uiResourceOf).
+      if (t._meta && typeof t._meta === 'object' && !Array.isArray(t._meta)) row._meta = t._meta;
+      list.push(row);
     }
     cursor = result?.nextCursor ? String(result.nextCursor) : undefined;
     if (!cursor) break;
@@ -187,20 +193,77 @@ export async function startStdio(server: McpServer): Promise<McpTool[]> {
   return list;
 }
 
-/** `tools/call` over the shell; the server is started first if it is not running. */
-async function mcpStdio(server: McpServer, tool: string, a: Args): Promise<string> {
-  if (!hasShell()) return 'Error: a local MCP server needs the installed desktop app.';
+// The last few raw `tools/call` results by call id, for an MCP App's
+// `ui/notifications/tool-result` (the model only ever sees the text). Session
+// memory only; a card from an earlier session falls back to that text.
+const rawResults = new Map<string, any>();
+
+/** The raw result of an MCP call this session, or undefined. */
+export function mcpCallResult(callId: string): any {
+  return rawResults.get(callId);
+}
+
+async function ensureStdio(server: McpServer): Promise<string> {
   const id = stdioId(server);
   if (!(await mcpStdioList()).includes(id)) await startStdio(server);
+  return id;
+}
+
+/** `tools/call` over the shell; the server is started first if it is not running. */
+async function mcpStdio(server: McpServer, tool: string, a: Args, callId: string): Promise<string> {
+  if (!hasShell()) return 'Error: a local MCP server needs the installed desktop app.';
+  const id = await ensureStdio(server);
   const result: any = await mcpStdioRequest(id, 'tools/call', { name: tool, arguments: a }, 120_000);
+  if (callId) {
+    rawResults.set(callId, result);
+    if (rawResults.size > 50) rawResults.delete(rawResults.keys().next().value as string);
+  }
   const text = tools.mcpResultText(result);
   return result?.isError ? `Error: ${text}` : text;
 }
 
-async function mcp(name: string, a: Args): Promise<string> {
+/**
+ * The MCP App behind an mcp__ tool: its `ui://` resource, and whether this app
+ * can draw it. Only local (stdio) servers: the engine's remote MCP routes
+ * list and call tools but have no `resources/read` (and drop `_meta`).
+ */
+export function mcpAppFor(name: string): { uri: string; stdio: boolean; server: McpServer } | null {
+  const target = tools.mcpTarget(name);
+  if (!target) return null;
+  const tool = (target.server.tools || []).find((t) => t.name === target.tool);
+  const uri = tools.uiResourceOf(tool);
+  return uri ? { uri, stdio: tools.isStdio(target.server), server: target.server } : null;
+}
+
+const appCache = new Map<string, Promise<string>>();
+
+/** An MCP App's HTML via `resources/read`, cached per server + uri for the session. Throws with a reason. */
+export function readMcpApp(name: string): Promise<string> {
+  const app = mcpAppFor(name);
+  if (!app) return Promise.reject(new Error('This tool has no app.'));
+  if (!app.stdio) return Promise.reject(new Error('MCP Apps work with local (stdio) servers for now.'));
+  if (!hasShell()) return Promise.reject(new Error('A local MCP server needs the installed desktop app.'));
+  const key = `${stdioId(app.server)} ${app.uri}`;
+  let pending = appCache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const id = await ensureStdio(app.server);
+      const result: any = await mcpStdioRequest(id, 'resources/read', { uri: app.uri }, 30_000);
+      const out = tools.appHtmlFrom(result);
+      if (!out.html) throw new Error(out.reason);
+      return out.html;
+    })();
+    // A failure is not remembered: the next look tries again.
+    pending.catch(() => appCache.delete(key));
+    appCache.set(key, pending);
+  }
+  return pending;
+}
+
+async function mcp(name: string, a: Args, callId = ''): Promise<string> {
   const target = tools.mcpTarget(name);
   if (!target) return `Error: no registered MCP server offers ${name}. It may have been removed in Settings → Connectors.`;
-  if (tools.isStdio(target.server)) return mcpStdio(target.server, target.tool, a);
+  if (tools.isStdio(target.server)) return mcpStdio(target.server, target.tool, a, callId);
   const data: any = await api.raw('/api/mcp/call', {
     method: 'POST',
     body: JSON.stringify({ url: target.server.url, tool: target.tool, arguments: a }),
@@ -213,8 +276,9 @@ async function mcp(name: string, a: Args): Promise<string> {
 export async function executeTool(call: ToolCall, args: Args, context: ToolContext): Promise<string> {
   const name = call.name;
   if (name === 'web_search' || name === 'web_fetch') return web(name, args);
+  if (name === 'spawn_agent') return context.spawnAgent ? context.spawnAgent(args) : 'Error: no sub-agent may be spawned here.';
   if (name.startsWith('github_')) return github(name, args);
-  if (name.startsWith('mcp__')) return mcp(name, args);
+  if (name.startsWith('mcp__')) return mcp(name, args, call.id);
   if (tools.LOCAL.some((t) => t.function.name === name)) return local(name, args, context.localRoot);
   return `Error: ${name} is not a tool this app has.`;
 }

@@ -207,6 +207,18 @@ export default function ConnectorsCard() {
     else pushToast('info', `${row.name} saved. Local servers run in the installed desktop app.`);
   };
 
+  // Presets (roadmap 5.6): one click for a server the built-in agents use. The
+  // browser one is Google's Chrome DevTools MCP, run through npx -- the
+  // "browser" agent (Library -> Agents) is offered its tools as browser/*.
+  // Stagehand is out of scope: it needs its own model key and runtime.
+  const addPreset = (row: { name: string; command: string; args: string[] }) => {
+    const result = tools.addStdioServer(row);
+    if (!result.ok) { pushToast('error', result.reason || 'That server could not be saved.'); return; }
+    const saved = tools.mcpServers().find((s) => tools.slug(s.name) === tools.slug(row.name));
+    if (saved && hasShell()) startLocal(saved);
+    else pushToast('info', `${row.name} saved. Local servers run in the installed desktop app (Node.js needed for npx).`);
+  };
+
   // A pasted config is saved, not run: each local server starts on its own
   // Start, so nothing from a clipboard runs without a second look.
   const importConfig = () => {
@@ -323,6 +335,14 @@ export default function ConnectorsCard() {
           <button type="button" aria-pressed={mode === 'remote'} onClick={() => setMode('remote')}>Remote (https)</button>
           <button type="button" aria-pressed={mode === 'local'} onClick={() => setMode('local')}>On this PC (stdio)</button>
           <button type="button" aria-pressed={pasteOpen} onClick={() => setPasteOpen((o) => !o)}>Paste config JSON</button>
+          <button
+            type="button"
+            onClick={() => addPreset({ name: 'browser', command: 'npx', args: ['-y', 'chrome-devtools-mcp@latest'] })}
+            disabled={!!busy || servers.some((s) => tools.slug(s.name) === 'browser')}
+            title="Adds npx -y chrome-devtools-mcp@latest as the local server “browser”, for the Browser agent. Passwords are typed by you in the browser, never sent to the model."
+          >
+            Browser (Chrome DevTools MCP)
+          </button>
         </div>
         {pasteOpen && (
           <div className="mcp-paste">
