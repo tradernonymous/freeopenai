@@ -23,6 +23,7 @@ appId: com.neura.os
       - hideKeyboard
       - tapOn:
           id: "login_submit"
+      - takeScreenshot: after-sign-in
 - extendedWaitUntil:
     visible:
       id: "chat_input"

@@ -159,4 +159,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: maestro-reports
-          path: .maestro/build/reports/
+          # The engine's log and Maestro's own debug output (screenshots, UI
+          # hierarchy) say why a flow failed; the junit report alone did not.
+          path: |
+            .maestro/build/reports/
+            .maestro/*.png
+            engine.log
+            ~/.maestro/tests/
