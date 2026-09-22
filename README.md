@@ -16,7 +16,7 @@
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml"><img src="https://github.com/tradernonymous/freeopenai/actions/workflows/desktop.yml/badge.svg?branch=main" alt="Desktop build"></a>
   <a href="https://github.com/tradernonymous/freeopenai/releases/tag/apk-latest"><img src="https://img.shields.io/github/release-date/tradernonymous/freeopenai?label=APK&logo=android&color=3fb950" alt="APK"></a>
   <a href="https://github.com/tradernonymous/freeopenai/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/tradernonymous/freeopenai/ci.yml?branch=main&label=tests&logo=githubactions&logoColor=white" alt="Tests on main"></a>
-  <img src="https://img.shields.io/badge/node-22%2B-3fb950?logo=node.js&logoColor=white" alt="Node 22+">
+  <img src="https://img.shields.io/badge/node-24%2B-3fb950?logo=node.js&logoColor=white" alt="Node 24+">
   <img src="https://img.shields.io/badge/license-MIT-3fb950" alt="MIT">
 </p>
 
@@ -74,7 +74,7 @@ cd freeopenai && npm install && npm start   # → http://localhost:3000
 ```bash
 npm test        # node --test
 npm run lint    # eslint
-npm run smoke   # clean-profile Chrome check (Node 22+)
+npm run smoke   # clean-profile Chrome check
 ```
 
 </details>

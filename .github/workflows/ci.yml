@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - run: npm install
       - run: npm run lint
       - run: npm test
@@ -24,10 +24,12 @@ jobs:
   # render, passed for months. That is worth a run on every push rather than when
   # someone remembers to type it.
   #
-  # Its own job, and its own Node: the client speaks CDP over the built-in
-  # WebSocket, so it needs Node 22+, where the unit tests need neither a browser
-  # nor a modern runtime. It starts its own server on a free port, so it shares
-  # nothing with the job above.
+  # Its own job: it starts its own server on a free port, so it shares nothing
+  # with the job above. It used to need its own Node too -- the client speaks
+  # CDP over the built-in WebSocket, which wanted 22+ while the unit tests ran
+  # on 20 -- but every job here is on 24 now, so that split is gone and the
+  # floor is a property of the whole repo (package.json engines) rather than
+  # this one job.
   smoke:
     runs-on: ubuntu-latest
     # Generous, and still a bound: the phases wait on the page, and a wedged
@@ -37,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - run: npm install
       # The runner image ships Chrome on the paths the smoke already looks in; if
       # a future image moves it, this fails naming SMOKE_CHROME rather than
@@ -123,7 +125,7 @@ jobs:
           path: android/app/build/outputs/apk/debug/
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '24'
       # The app cannot reach chat without signing in, so the flows need an
       # engine: this one lives only for the job, with a throwaway account.
       - name: Start a throwaway engine for the emulator
