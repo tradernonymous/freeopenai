@@ -1,4 +1,8 @@
 appId: com.neura.os
+# Needs a real model provider (image generation, a remote build, an
+# approval): skipped against CI's throwaway engine, run against a real one.
+tags:
+  - needs-provider
 ---
 # Build mode: tool execution progress
 - launchApp
