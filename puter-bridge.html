@@ -22,6 +22,19 @@
 <script>
     window.fa4uJobs = {};
 
+    // Mirrors the web app's own signed-in tracking (app.js's
+    // onAuthStateChanged), so a sign-in that completes is knowable the same
+    // way here as there: a reactive flag, not only the signIn() promise
+    // resolving. puter.auth.signIn()'s own promise depends on window.opener
+    // reaching back into this page from its popup, a channel Android's
+    // separate popup WebView is not guaranteed to keep working; this flag is
+    // what PuterBridge.kt's resolveSignInFromCurrentState polls as a
+    // fallback once the popup visibly closes.
+    window.fa4uSignedIn = false;
+    if (typeof puter !== 'undefined' && puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
+        puter.auth.onAuthStateChanged(function (user) { window.fa4uSignedIn = !!user; });
+    }
+
     function toDataUrl(blob) {
         return new Promise(function (resolve, reject) {
             var reader = new FileReader();

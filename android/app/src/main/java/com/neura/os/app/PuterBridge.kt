@@ -11,8 +11,10 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -34,6 +36,27 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
     private var onLoaded: ((Result<Unit>) -> Unit)? = null
+    // Puter's own signIn() promise is documented to resolve through
+    // window.opener reaching back into this page from the popup -- a channel
+    // Android's separate popup WebView instance is not guaranteed to keep
+    // working (see openSignInPopup and resolveSignInFromCurrentState below).
+    // Tracking the in-flight job id is what lets a popup close force that
+    // job done from the Kotlin side instead of only trusting the promise.
+    private var currentSignInJob: String? = null
+    // The last console.error/warn the bridge or popup page logged, so a
+    // failure message can show what actually went wrong instead of a bare
+    // "Puter failed" or "timed out". Reset per job in signIn().
+    private var lastConsoleIssue: String? = null
+
+    private fun logConsole(message: ConsoleMessage): Boolean {
+        if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR ||
+            message.messageLevel() == ConsoleMessage.MessageLevel.WARNING
+        ) {
+            lastConsoleIssue = message.message().take(200)
+            Log.w("PuterBridge", "console: " + message.message())
+        }
+        return false
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun load(then: (Result<Unit>) -> Unit) {
@@ -63,6 +86,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         created.webChromeClient = object : WebChromeClient() {
             override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean =
                 openSignInPopup(resultMsg)
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean = logConsole(message)
         }
         // A WebView that is never part of any window can run JavaScript fine
         // (chat and draw always have), but Chromium's window-creation path --
@@ -110,11 +134,18 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         // to nothing and the sign-in form the user needs to type into never
         // appears -- the same failure this whole fix exists to end.
         dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        dialog.setOnDismissListener { popup.destroy() }
+        dialog.setOnDismissListener {
+            popup.destroy()
+            // Fires for every way this dialog closes -- Puter's own
+            // window.close() below, or the user dismissing it by hand -- so
+            // this is the one place to check, whichever path was taken.
+            resolveSignInFromCurrentState()
+        }
         popup.webChromeClient = object : WebChromeClient() {
             override fun onCloseWindow(window: WebView) {
                 dialog.dismiss()
             }
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean = logConsole(message)
         }
         popup.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
@@ -259,10 +290,49 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 done(Result.failure(IllegalStateException("no WebView")))
             } else {
                 val job = "s" + System.nanoTime()
+                currentSignInJob = job
+                lastConsoleIssue = null
                 view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
                 pollSignIn(view, job, 0, done)
             }
         }
+    }
+
+    /** Puter's own signIn() promise resolves through window.opener reaching
+     * back into this page from the popup -- see the field comment on
+     * [currentSignInJob]. Called whenever the popup dialog closes, by
+     * whichever path closed it: if the bridge page's own
+     * puter.auth.isSignedIn() now says yes, the job is forced to "done"
+     * directly rather than left to time out because the promise that was
+     * supposed to report that never arrived. A no-op once the job has
+     * already resolved (currentSignInJob is cleared in pollSignIn's terminal
+     * cases), so a popup closed for an unrelated reason touches nothing. */
+    private fun resolveSignInFromCurrentState(tries: Int = 0) {
+        val job = currentSignInJob ?: return
+        val view = web ?: return
+        // Puter's own postMessage handling may still be settling when the
+        // dialog closes (window.close() and the message that is supposed to
+        // precede it are not guaranteed to be processed in that order); a
+        // handful of checks over ~2.5s gives that a real chance to land
+        // before this gives up. pollSignIn's own 300ms tick can also resolve
+        // the job on its own at any point, in which case currentSignInJob is
+        // already cleared and every step here no-ops.
+        main.postDelayed({
+            if (currentSignInJob != job) return@postDelayed
+            view.evaluateJavascript(
+                "(function(){ try { return !!(window.fa4uSignedIn || (window.puter && puter.auth && puter.auth.isSignedIn && puter.auth.isSignedIn())); } catch (e) { return false; } })()"
+            ) { raw ->
+                if (currentSignInJob != job) return@evaluateJavascript
+                if (raw == "true") {
+                    view.evaluateJavascript(
+                        "window.fa4uJobs && (window.fa4uJobs[" + JSONObject.quote(job) + "] = { state: 'done', length: 0, data: '' });",
+                        null
+                    )
+                } else if (tries < 5) {
+                    resolveSignInFromCurrentState(tries + 1)
+                }
+            }
+        }, 500)
     }
 
     private fun pollSignIn(view: WebView, job: String, tries: Int, done: (Result<Unit>) -> Unit) {
@@ -273,21 +343,33 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 } catch (e: Exception) {
                     JSONObject().put("state", "missing")
                 }
+                fun withConsole(message: String): String {
+                    val issue = lastConsoleIssue
+                    return if (issue.isNullOrEmpty()) message else "$message ($issue)"
+                }
                 when (status.optString("state")) {
                     // 500 * 300ms = 2.5 minutes: long enough for a real sign-in
                     // (password, maybe 2FA), short enough that a genuinely
                     // stuck popup surfaces a "timed out" notice instead of
                     // leaving the button animating for six minutes with no
                     // feedback at all.
-                    "pending" -> if (tries < 500) pollSignIn(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
-                    "missing" -> done(Result.failure(IllegalStateException("Puter did not load")))
+                    "pending" -> if (tries < 500) pollSignIn(view, job, tries + 1, done) else {
+                        currentSignInJob = null
+                        done(Result.failure(IllegalStateException(withConsole("timed out"))))
+                    }
+                    "missing" -> {
+                        currentSignInJob = null
+                        done(Result.failure(IllegalStateException(withConsole("Puter did not load"))))
+                    }
                     "done" -> {
+                        currentSignInJob = null
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
                         done(Result.success(Unit))
                     }
                     else -> {
+                        currentSignInJob = null
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
-                        done(Result.failure(IllegalStateException(status.optString("error", "Puter failed"))))
+                        done(Result.failure(IllegalStateException(withConsole(status.optString("error", "Puter failed")))))
                     }
                 }
             }
