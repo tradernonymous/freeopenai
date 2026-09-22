@@ -33,44 +33,59 @@ import org.json.JSONObject
 class PuterBridge(private val context: Context, private val baseUrl: () -> String) {
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
-    private var onLoaded: (() -> Unit)? = null
+    private var onLoaded: ((Result<Unit>) -> Unit)? = null
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun load(then: () -> Unit) {
-        val view = web ?: WebView(context).also { created ->
-            // false: this page itself is not a popup, so it may open the one
-            // popup fa4uSignIn asks for -- the reverse of the flag a popup
-            // window gets in openSignInPopup below, which must not open one of
-            // its own.
-            WebShell.harden(created, "NeuraOS/" + BuildConfig.VERSION_NAME, popup = false)
-            created.webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean =
-                    !sameOrigin(originOf(baseUrl()), request.url.toString())
-
-                override fun onPageFinished(v: WebView, url: String?) {
-                    val callback = onLoaded ?: return
-                    onLoaded = null
-                    // Give puter.js a moment to restore the saved sign-in.
-                    main.postDelayed(callback, 600)
-                }
-            }
-            created.webChromeClient = object : WebChromeClient() {
-                override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean =
-                    openSignInPopup(resultMsg)
-            }
-            // A WebView that is never part of any window can run JavaScript
-            // fine (chat and draw always have), but Chromium's window-creation
-            // path -- what has to fire for puter.auth.signIn()'s popup to
-            // exist at all -- needs the WebView attached to an active window.
-            // 1x1 and invisible: present in the tree, never seen.
-            (context as? android.app.Activity)?.window?.decorView
-                ?.findViewById<ViewGroup>(android.R.id.content)
-                ?.addView(created, 1, 1)
-            created.visibility = View.INVISIBLE
-            web = created
+    private fun load(then: (Result<Unit>) -> Unit) {
+        val existing = web
+        if (existing != null) {
+            onLoaded = then
+            existing.loadUrl(baseUrl() + "/puter-bridge.html")
+            return
         }
+        val created = WebView(context)
+        // false: this page itself is not a popup, so it may open the one
+        // popup fa4uSignIn asks for -- the reverse of the flag a popup
+        // window gets in openSignInPopup below, which must not open one of
+        // its own.
+        WebShell.harden(created, "NeuraOS/" + BuildConfig.VERSION_NAME, popup = false)
+        created.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean =
+                !sameOrigin(originOf(baseUrl()), request.url.toString())
+
+            override fun onPageFinished(v: WebView, url: String?) {
+                val callback = onLoaded ?: return
+                onLoaded = null
+                // Give puter.js a moment to restore the saved sign-in.
+                main.postDelayed({ callback(Result.success(Unit)) }, 600)
+            }
+        }
+        created.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean =
+                openSignInPopup(resultMsg)
+        }
+        // A WebView that is never part of any window can run JavaScript fine
+        // (chat and draw always have), but Chromium's window-creation path --
+        // what has to fire for puter.auth.signIn()'s popup to exist at all --
+        // needs the WebView attached to an active window. This used to be a
+        // silent optional chain: if the activity's content view was not the
+        // shape expected, attaching failed with no signal anywhere, and a
+        // later signIn() tap looked exactly like a dead button -- nothing
+        // ever happened, because Chromium had nowhere to put the popup it
+        // was asked to create. Failing loud here turns that into a message
+        // the sign-in button can actually show. 1x1 and invisible: present
+        // in the tree, never seen.
+        val container = (context as? android.app.Activity)?.window?.decorView
+            ?.findViewById<ViewGroup>(android.R.id.content)
+        if (container == null) {
+            then(Result.failure(IllegalStateException("Could not attach the Puter page to this screen.")))
+            return
+        }
+        container.addView(created, 1, 1)
+        created.visibility = View.INVISIBLE
+        web = created
         onLoaded = then
-        view.loadUrl(baseUrl() + "/puter-bridge.html")
+        created.loadUrl(baseUrl() + "/puter-bridge.html")
     }
 
     /** Puter's sign-in window, made visible: window.open() from the hidden
@@ -133,15 +148,17 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             done("not signed in")
             return
         }
-        load {
+        load { result ->
             val view = web
-            if (view == null) {
+            if (result.isFailure) {
+                done(result.exceptionOrNull()?.message ?: "could not open the Puter page")
+            } else if (view == null) {
                 done("no WebView")
-                return@load
+            } else {
+                val job = "c" + System.nanoTime()
+                view.evaluateJavascript("window.fa4uChat && window.fa4uChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
+                followChat(view, job, 0, 0, onDelta, done)
             }
-            val job = "c" + System.nanoTime()
-            view.evaluateJavascript("window.fa4uChat && window.fa4uChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
-            followChat(view, job, 0, 0, onDelta, done)
         }
     }
 
@@ -201,19 +218,21 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             done(Result.failure(IllegalStateException("not signed in")))
             return
         }
-        load {
+        load { result ->
             val view = web
-            if (view == null) {
+            if (result.isFailure) {
+                done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("could not open the Puter page")))
+            } else if (view == null) {
                 done(Result.failure(IllegalStateException("no WebView")))
-                return@load
+            } else {
+                val options = JSONObject()
+                if (model.isNotEmpty()) options.put("model", model)
+                if (ratio != null) options.put("ratio", JSONObject().put("w", ratio.first).put("h", ratio.second))
+                if (source != null) options.put("source", source)
+                val job = "j" + System.nanoTime()
+                view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
+                poll(view, job, 0, done)
             }
-            val options = JSONObject()
-            if (model.isNotEmpty()) options.put("model", model)
-            if (ratio != null) options.put("ratio", JSONObject().put("w", ratio.first).put("h", ratio.second))
-            if (source != null) options.put("source", source)
-            val job = "j" + System.nanoTime()
-            view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
-            poll(view, job, 0, done)
         }
     }
 
@@ -228,15 +247,17 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             done(Result.failure(IllegalStateException("not signed in to the app yet")))
             return
         }
-        load {
+        load { result ->
             val view = web
-            if (view == null) {
+            if (result.isFailure) {
+                done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("could not open the Puter page")))
+            } else if (view == null) {
                 done(Result.failure(IllegalStateException("no WebView")))
-                return@load
+            } else {
+                val job = "s" + System.nanoTime()
+                view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
+                pollSignIn(view, job, 0, done)
             }
-            val job = "s" + System.nanoTime()
-            view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
-            pollSignIn(view, job, 0, done)
         }
     }
 

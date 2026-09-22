@@ -418,6 +418,15 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }, onClick = null)
         Text("Change it from the model picker in any chat.", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.padding(start = 14.dp))
         SectionTitle("Images")
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Puter account", style = MaterialTheme.typography.bodyMedium)
+                Text("Needed once before Puter can draw for you.", color = Palette.muted, fontSize = 12.sp)
+            }
+            TextButton({ vm.signInToPuter() }, enabled = !vm.puterSigningIn) {
+                Text(if (vm.puterSigningIn) "Signing in…" else "Sign in")
+            }
+        }
         SettingSwitch("Puter images", "Your Puter account draws. Auto-off on failure or restart.", vm.puterImages) { vm.puterImages = it }
         SectionTitle("Server")
         LaunchedEffect(Unit) { if (vm.limits == null) vm.loadLimits() }
