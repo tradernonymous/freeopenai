@@ -47,3 +47,13 @@ test('the update manifest is signature-checked in the shell when a key is compil
   assert.match(wf, /desktop-version\.json\.sig/);
   assert.match(wf, /this build would refuse its own updates/, 'a key without its private half fails the job');
 });
+
+test('Authenticode: a .pfx, or Azure Trusted Signing through a signCommand, both verified', () => {
+  const wf = read('.github', 'workflows', 'desktop.yml');
+  assert.match(wf, /AZURE_CLIENT_SECRET: \$\{\{ secrets\.AZURE_CLIENT_SECRET \}\}/);
+  assert.match(wf, /cargo install trusted-signing-cli --locked/);
+  assert.match(wf, /trusted-signing-cli -e \$endpoint -a \$env:TRUSTED_SIGNING_ACCOUNT -c \$env:TRUSTED_SIGNING_PROFILE -d NeuraOS %1/);
+  assert.match(wf, /env\.WINDOWS_CERTIFICATE == '' && env\.AZURE_CLIENT_SECRET != ''/, 'the .pfx wins when both are set');
+  assert.match(wf, /npm run tauri:build -- --config \$env:TRUSTED_CONFIG/);
+  assert.match(wf, /if: \$\{\{ steps\.signing\.outputs\.thumbprint != '' \|\| steps\.trusted\.outputs\.config != '' \}\}/, 'a Trusted Signing build is verified too');
+});

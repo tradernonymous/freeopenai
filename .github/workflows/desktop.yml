@@ -23,6 +23,15 @@ jobs:
     env:
       WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      # Azure Trusted Signing (Microsoft's managed signing service): no .pfx
+      # and no hardware token, an app registration's client secret instead.
+      # Used when the .pfx secrets are absent and these are all set.
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      TRUSTED_SIGNING_ENDPOINT: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+      TRUSTED_SIGNING_ACCOUNT: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+      TRUSTED_SIGNING_PROFILE: ${{ vars.TRUSTED_SIGNING_PROFILE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -87,18 +96,37 @@ jobs:
           "thumbprint=$($imported.Thumbprint)" >> $env:GITHUB_OUTPUT
           Write-Host "Imported signing certificate $($imported.Thumbprint) ($($imported.Subject))"
 
+      # Trusted Signing: Tauri calls this CLI once per binary it signs (the app
+      # exe before bundling, then the NSIS and MSI installers) via signCommand.
+      - name: Set up Azure Trusted Signing (only when configured)
+        id: trusted
+        if: ${{ env.WINDOWS_CERTIFICATE == '' && env.AZURE_CLIENT_SECRET != '' && env.TRUSTED_SIGNING_ACCOUNT != '' && env.TRUSTED_SIGNING_PROFILE != '' }}
+        shell: pwsh
+        run: |
+          cargo install trusted-signing-cli --locked
+          $endpoint = if ($env:TRUSTED_SIGNING_ENDPOINT) { $env:TRUSTED_SIGNING_ENDPOINT } else { 'https://eus.codesigning.azure.net' }
+          $cmd = "trusted-signing-cli -e $endpoint -a $env:TRUSTED_SIGNING_ACCOUNT -c $env:TRUSTED_SIGNING_PROFILE -d NeuraOS %1"
+          # A file, not inline JSON: quotes do not survive pwsh -> npm.cmd.
+          $file = Join-Path $env:RUNNER_TEMP 'trusted-signing.json'
+          @{ bundle = @{ windows = @{ signCommand = $cmd } } } | ConvertTo-Json -Depth 4 | Set-Content -Path $file -Encoding utf8
+          "config=$file" >> $env:GITHUB_OUTPUT
+          Write-Host "Signing with Trusted Signing account $env:TRUSTED_SIGNING_ACCOUNT, profile $env:TRUSTED_SIGNING_PROFILE"
+
       - name: Build Tauri app
         working-directory: desktop
         shell: pwsh
         run: |
           if ('${{ steps.signing.outputs.thumbprint }}') {
             npm run tauri:build -- --config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"${{ steps.signing.outputs.thumbprint }}\"}}}"
+          } elseif ($env:TRUSTED_CONFIG) {
+            npm run tauri:build -- --config $env:TRUSTED_CONFIG
           } else {
-            Write-Host '::warning::Building UNSIGNED - set WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD to sign.'
+            Write-Host '::warning::Building UNSIGNED - see docs/desktop.md (Signing): a .pfx, or Azure Trusted Signing.'
             npm run tauri:build
           }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRUSTED_CONFIG: ${{ steps.trusted.outputs.config }}
           # The update-signing PUBLIC key (roadmap 5.9), compiled into net.rs.
           # Empty (the variable unset) keeps the sha256-only update check.
           NEURAOS_UPDATER_PUBKEY: ${{ vars.NEURAOS_UPDATER_PUBKEY }}
@@ -107,7 +135,7 @@ jobs:
       # difference between "we passed the thumbprint" and "the file Windows
       # will trust".
       - name: Verify the signature (only when signing)
-        if: ${{ steps.signing.outputs.thumbprint != '' }}
+        if: ${{ steps.signing.outputs.thumbprint != '' || steps.trusted.outputs.config != '' }}
         shell: pwsh
         run: |
           $files = @()
@@ -196,7 +224,7 @@ jobs:
           tag_name: desktop-latest
           name: NeuraOS Desktop for Windows (latest build)
           body: |
-            ${{ steps.signing.outputs.thumbprint != '' && 'Signed build — the installer and the portable exe carry an Authenticode signature this job verified.' || 'Unsigned build — Windows SmartScreen will warn on first run. See docs/desktop.md (Signing) for the certificate the pipeline is waiting for.' }}
+            ${{ (steps.signing.outputs.thumbprint != '' || steps.trusted.outputs.config != '') && 'Signed build — the installer and the portable exe carry an Authenticode signature this job verified.' || 'Unsigned build — Windows SmartScreen will warn on first run. See docs/desktop.md (Signing) for the certificate the pipeline is waiting for.' }}
 
             Built from `${{ github.sha }}`. Update metadata (`desktop-version.json`: version, sha256 and size per artifact) is published with this release and read by the app''s own update check.
           files: |

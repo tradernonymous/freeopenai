@@ -234,6 +234,21 @@ The pipeline is already wired for it. `bundle.windows.certificateThumbprint` is 
 | `WINDOWS_CERTIFICATE` | The `.pfx` bundle, base64-encoded |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Its password |
 
+**Or Azure Trusted Signing** (Microsoft's managed signing, about US$10/month, no .pfx and no hardware token; individuals can sign up after an identity check). In the Azure portal: create a *Trusted Signing account*, complete identity validation, create a *certificate profile* (Public Trust), and give an app registration the *Trusted Signing Certificate Profile Signer* role on the account. Then:
+
+```
+gh secret set AZURE_TENANT_ID
+gh secret set AZURE_CLIENT_ID
+gh secret set AZURE_CLIENT_SECRET
+gh variable set TRUSTED_SIGNING_ACCOUNT --body <account name>
+gh variable set TRUSTED_SIGNING_PROFILE --body <certificate profile name>
+gh variable set TRUSTED_SIGNING_ENDPOINT --body https://<region>.codesigning.azure.net
+```
+
+The Desktop workflow installs `trusted-signing-cli` and hands Tauri a `signCommand`, which signs the app exe and both installers; the same verification step below checks the result. The .pfx secrets win if both are set.
+
+Either way, SmartScreen trusts a signed build by publisher reputation, which a new certificate earns over the first downloads rather than instantly.
+
 With both set, CI imports the certificate, builds with its thumbprint, and **verifies** the signature on the installer and the portable exe — a build that claimed to be signed but is not fails the job rather than shipping quietly. Without them the build is unchanged, and the release notes say unsigned, so nobody has to guess which one they downloaded.
 
 ### Update signing
