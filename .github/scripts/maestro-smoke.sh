@@ -2,6 +2,9 @@
 set -euo pipefail
 
 adb install -r "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
+# A slow CI emulator can leave a "System UI isn't responding" dialog over
+# everything; close system dialogs before the flows start.
+adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
 cd "$GITHUB_WORKSPACE/.maestro"
 # Sign in once (the engine the job started on the runner); the session is
 # stored, so every flow after this opens on Chat instead of the sign-in form.

@@ -4,6 +4,14 @@ appId: com.neura.os
 # every flow that looked for chat_input failed on it. CI starts an engine on
 # the runner (10.0.2.2 from the emulator) with this throwaway account.
 - launchApp
+# The CI emulator sometimes raises "System UI isn't responding" over the app.
+- runFlow:
+    when:
+      visible:
+        text: ".*isn't responding"
+    commands:
+      - tapOn:
+          text: "Wait"
 - runFlow:
     when:
       visible:
