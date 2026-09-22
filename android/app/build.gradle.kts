@@ -55,6 +55,11 @@ android {
         buildConfigField("String", "DEFAULT_USERNAME", quoted(defaultUsername))
         buildConfigField("String", "UPDATE_URL", quoted(updateUrl))
         buildConfigField("boolean", "FCM_CONFIGURED", fcmConfigured.toString())
+        // Off by default, overridden on in the debug build type alone (see
+        // buildTypes below and WebShell.kt). Deliberately not tied to
+        // isDebuggable, which stays false everywhere -- this only ever
+        // controls chrome://inspect's view into the hidden Puter WebView.
+        buildConfigField("boolean", "WEBVIEW_DEBUG_ALLOWED", "false")
     }
 
     signingConfigs {
@@ -83,6 +88,17 @@ android {
             // installed alongside a release build on the same device, and a
             // suffixed id has no matching client in google-services.json --
             // processDebugGoogleServices failed the whole build over it.
+
+            // The one exception to "no debugging": chrome://inspect on the
+            // hidden Puter WebView, for a developer who built this variant
+            // themselves in Android Studio. isDebuggable above is untouched
+            // and stays false -- adb still cannot attach to the process or
+            // read its memory. This only opens the WebView's own devtools
+            // socket, which is how a stuck sign-in gets diagnosed by looking
+            // at the real page instead of guessing from error strings. CI's
+            // build of this same variant (the no-keystore fallback) never
+            // reaches a phone, so this never ships anywhere a user runs it.
+            buildConfigField("boolean", "WEBVIEW_DEBUG_ALLOWED", "true")
         }
         release {
             // The build that goes on the phone: non-debuggable, minified,

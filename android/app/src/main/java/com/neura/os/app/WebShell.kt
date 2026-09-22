@@ -1,5 +1,7 @@
 package com.neura.os.app
 
+import com.neura.os.BuildConfig
+
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
@@ -41,7 +43,15 @@ object WebShell {
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.userAgentString = settings.userAgentString + " " + userAgentSuffix
         web.overScrollMode = View.OVER_SCROLL_NEVER
-        WebView.setWebContentsDebuggingEnabled(false)
+        // A separate switch from the build's own debuggability, which stays
+        // off in every build type this project ships (build.gradle.kts:
+        // "NOT debuggable, even for testing: adb must not be able to attach
+        // and read memory" -- that stance is untouched here). This one only
+        // opens chrome://inspect's view into *this WebView's own page* --
+        // its console, network tab and DOM -- and only in a debug variant
+        // someone built and installed themselves from Android Studio, never
+        // in the release build android.yml publishes to apk-latest.
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.WEBVIEW_DEBUG_ALLOWED)
         val cookies = CookieManager.getInstance()
         cookies.setAcceptCookie(true)
         cookies.setAcceptThirdPartyCookies(web, false)
