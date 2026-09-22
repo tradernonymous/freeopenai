@@ -137,6 +137,19 @@ data class SessionState(val gated: Boolean, val user: String?)
 
 class ApiException(message: String, val authRequired: Boolean = false) : Exception(message)
 
+/** The inverse of [parseSessionCookie]: the Cookie-header-shaped string
+ * WebView's CookieManager wants to carry this deployment's session on its own
+ * requests, matching the server's own Set-Cookie shape (server.js:
+ * "fo_auth=<value>; ...; Path=/"). A null or empty [cookie] clears it instead
+ * (Max-Age=0), the same way the server's own sign-out response does -- used
+ * when the app signs out, so a stale session does not linger in a WebView
+ * nobody native-side remembers signing in. See WebShell.syncSessionCookie for
+ * why this exists: the app's login is native (this cookie is sent as a plain
+ * header on HttpURLConnection calls), so no WebView ever receives it unless
+ * something pushes it there explicitly. */
+fun sessionCookieHeaderValue(cookie: String?): String =
+    if (cookie.isNullOrEmpty()) "fo_auth=; Max-Age=0; Path=/" else "fo_auth=$cookie; Path=/"
+
 /** The fo_auth session value out of a Set-Cookie header, or null. The value
  * travels to the first semicolon untouched: it is opaque to us by design. */
 fun parseSessionCookie(setCookie: String?, name: String = "fo_auth"): String? {

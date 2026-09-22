@@ -18,6 +18,7 @@ import com.neura.os.app.ApiException
 import com.neura.os.app.BaseUrlResult
 import com.neura.os.app.ChatApi
 import com.neura.os.app.SecureStore
+import com.neura.os.app.WebShell
 import com.neura.os.app.data.BUILT_IN_PERSONAS
 import com.neura.os.app.data.ChatEvent
 import com.neura.os.app.data.ChatMessage
@@ -187,6 +188,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         private set
 
     init {
+        // Covers an account signed in before this existed: without this, the
+        // hidden Puter WebView stays 401'd on puter-bridge.html until the
+        // next fresh sign-in or silent re-auth happens to run. Every other
+        // caller (signIn, silentSignIn, signOut) keeps WebView's cookie jar
+        // in step with store.session from here on; this is the one-time
+        // catch-up for whatever store.session already held when the app
+        // launched. A no-op when nobody is signed in yet.
+        store.server?.let { server -> WebShell.syncSessionCookie(server, store.session) }
         io.execute {
             val chats = repo.loadConversations()
             val lib = repo.loadLibrary()
@@ -348,6 +357,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 store.username = username.trim()
                 store.password = password
                 store.session = cookie
+                WebShell.syncSessionCookie(server, cookie)
                 main.post {
                     signInBusy = false
                     signedIn = true
@@ -367,6 +377,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun signOut(erase: Boolean) {
         val server = store.server ?: ""
         val cookie = store.session
+        if (server.isNotEmpty()) WebShell.syncSessionCookie(server, null)
         io.execute {
             if (server.isNotEmpty()) {
                 val client = ChatApi(server)
@@ -394,7 +405,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val username = store.username ?: return false
         val password = store.password ?: return false
         return try {
-            store.session = ChatApi(server).login(username, password)
+            val cookie = ChatApi(server).login(username, password)
+            store.session = cookie
+            WebShell.syncSessionCookie(server, cookie)
             true
         } catch (e: Exception) {
             false

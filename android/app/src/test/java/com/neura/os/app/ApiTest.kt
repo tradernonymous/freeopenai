@@ -168,6 +168,24 @@ class ApiTest {
     }
 
     @Test
+    fun sessionCookieHeaderValue_roundTripsWithParseSessionCookie() {
+        // What WebShell.syncSessionCookie hands to CookieManager.setCookie,
+        // and its own parseSessionCookie reads back the same value out of --
+        // the two ends of the WebView cookie sync this class exists for.
+        assertEquals("fo_auth=abc.def; Path=/", sessionCookieHeaderValue("abc.def"))
+        assertEquals("abc.def", parseSessionCookie(sessionCookieHeaderValue("abc.def")))
+    }
+
+    @Test
+    fun sessionCookieHeaderValue_clearsOnNullOrEmpty() {
+        // Sign-out's shape: Max-Age=0, matching the server's own clearing
+        // Set-Cookie (server.js) rather than a bespoke format.
+        assertEquals("fo_auth=; Max-Age=0; Path=/", sessionCookieHeaderValue(null))
+        assertEquals("fo_auth=; Max-Age=0; Path=/", sessionCookieHeaderValue(""))
+        assertNull(parseSessionCookie(sessionCookieHeaderValue(null)))
+    }
+
+    @Test
     fun login_postsCredentialsAndKeepsTheSession() {
         val fake = FakeConnection(URL("http://x/api/login"))
         fake.code = 200
