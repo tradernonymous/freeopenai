@@ -4,7 +4,9 @@
 //   * web_search / web_fetch  -> the engine (/api/llm/websearch, /api/llm/fetch)
 //   * github_*                -> the engine's multi-account GitHub API, the same
 //                                routes the web app's connector uses
-//   * mcp__<server>__<tool>   -> the engine's MCP client (/api/mcp/call)
+//   * mcp__<server>__<tool>   -> the engine's MCP client (/api/mcp/call) for a
+//                                remote server; `tools/call` over the shell
+//                                (mcp.rs) for a local (stdio) one
 //   * list/read/write/edit/run -> the shell, confined to the folder the person
 //                                opened (local.rs enforces the confinement)
 //
@@ -13,7 +15,9 @@
 // factual, and an "Error: ..." sentence rather than a throw when the tool
 // itself said no -- a model can do something useful with a sentence.
 import { api } from './api';
-import { editLocalFile, hasShell, listLocalDir, readLocalFile, runLocal, writeLocalFile } from './bridge';
+import {
+  editLocalFile, hasShell, listLocalDir, mcpStdioList, mcpStdioRequest, mcpStdioStart, readLocalFile, runLocal, writeLocalFile,
+} from './bridge';
 import './tools.js';
 
 const tools: typeof import('./tools.js') = (globalThis as any).FreeAI4UTools;
@@ -154,9 +158,49 @@ async function local(name: string, a: Args, root: string): Promise<string> {
   return `Error: ${name} is not a local tool this app has.`;
 }
 
+type McpServer = import('./tools.js').McpServer;
+type McpTool = import('./tools.js').McpTool;
+
+/** A local server's shell id: the same slug its tool names carry. */
+export const stdioId = (server: McpServer) => tools.slug(server.name);
+
+/**
+ * Start (or restart) a local server, read its tools (every page of them) and
+ * cache them on its row. Throws the shell's error -- stderr tail included --
+ * when it cannot start.
+ */
+export async function startStdio(server: McpServer): Promise<McpTool[]> {
+  if (!hasShell()) throw new Error('A local MCP server needs the installed desktop app.');
+  const id = stdioId(server);
+  await mcpStdioStart({ id, command: server.command || '', args: server.args, env: server.env, cwd: server.cwd });
+  const list: McpTool[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page += 1) {
+    const result: any = await mcpStdioRequest(id, 'tools/list', cursor ? { cursor } : {});
+    for (const t of Array.isArray(result?.tools) ? result.tools : []) {
+      if (t && t.name) list.push({ name: String(t.name), description: String(t.description || ''), inputSchema: t.inputSchema || {} });
+    }
+    cursor = result?.nextCursor ? String(result.nextCursor) : undefined;
+    if (!cursor) break;
+  }
+  tools.setMcpTools(server.name, list);
+  return list;
+}
+
+/** `tools/call` over the shell; the server is started first if it is not running. */
+async function mcpStdio(server: McpServer, tool: string, a: Args): Promise<string> {
+  if (!hasShell()) return 'Error: a local MCP server needs the installed desktop app.';
+  const id = stdioId(server);
+  if (!(await mcpStdioList()).includes(id)) await startStdio(server);
+  const result: any = await mcpStdioRequest(id, 'tools/call', { name: tool, arguments: a }, 120_000);
+  const text = tools.mcpResultText(result);
+  return result?.isError ? `Error: ${text}` : text;
+}
+
 async function mcp(name: string, a: Args): Promise<string> {
   const target = tools.mcpTarget(name);
   if (!target) return `Error: no registered MCP server offers ${name}. It may have been removed in Settings → Connectors.`;
+  if (tools.isStdio(target.server)) return mcpStdio(target.server, target.tool, a);
   const data: any = await api.raw('/api/mcp/call', {
     method: 'POST',
     body: JSON.stringify({ url: target.server.url, tool: target.tool, arguments: a }),

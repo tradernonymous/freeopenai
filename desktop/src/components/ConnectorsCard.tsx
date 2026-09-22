@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { pushToast } from './Toasts';
 import { api } from '../api';
-import { authWindowOpen, hasShell, onConnectFinished } from '../bridge';
+import { authWindowOpen, hasShell, mcpStdioList, mcpStdioStop, onConnectFinished } from '../bridge';
+import { startStdio, stdioId } from '../tool-run';
 import HfSignIn from './HfSignIn';
 import '../tools.js';
 
@@ -18,8 +19,9 @@ type McpServer = import('../tools.js').McpServer;
 //     and only a window that shares this app's cookies can carry that session
 //     through GitHub and back.
 //   * MCP SERVERS are remote (https) servers the engine talks to on the app's
-//     behalf. Their tools are read once when the server is added, offered to
-//     the model under `mcp__<server>__<tool>`, and ask before they run.
+//     behalf, or local (stdio) programs the shell runs on this PC (mcp.rs).
+//     Their tools are read when the server is added or started, offered to the
+//     model under `mcp__<server>__<tool>`, and ask before they run.
 
 interface Account {
   login: string;
@@ -36,6 +38,12 @@ export function landingNote(landed: string): { same: boolean; login: string } {
 
 export const GITHUB_CHANGED_EVENT = 'freeai4u:github-changed';
 
+function without<T>(map: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
 export default function ConnectorsCard() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [canAddMore, setCanAddMore] = useState(true);
@@ -46,6 +54,20 @@ export default function ConnectorsCard() {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState('');
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  // Local (stdio) servers.
+  const [mode, setMode] = useState<'remote' | 'local'>('remote');
+  const [command, setCommand] = useState('');
+  const [argsLine, setArgsLine] = useState('');
+  const [envText, setEnvText] = useState('');
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [running, setRunning] = useState<string[]>([]);
+  const [failures, setFailures] = useState<Record<string, { message: string; stderr: string }>>({});
+
+  const refreshRunning = useCallback(() => {
+    mcpStdioList().then(setRunning).catch(() => setRunning([]));
+  }, []);
+  useEffect(() => { refreshRunning(); }, [refreshRunning]);
 
   // `announce`: a click on Refresh says what it found, so "nothing happened"
   // and "nothing is connected" can no longer look the same.
@@ -133,6 +155,79 @@ export default function ConnectorsCard() {
       .finally(() => setBusy(''));
   };
 
+  const startLocal = (server: McpServer) => {
+    setBusy(`mcp:${server.name}`);
+    return startStdio(server)
+      .then((list) => {
+        setFailures((all) => without(all, server.name));
+        pushToast('ok', `${server.name} is running: ${list.length} tool${list.length === 1 ? '' : 's'}.`);
+      })
+      .catch((e: unknown) => {
+        const failure = tools.splitStderr((e as Error)?.message || String(e));
+        setFailures((all) => ({ ...all, [server.name]: failure }));
+        pushToast('error', `${server.name}: ${failure.message.split('\n')[0]}`);
+      })
+      .finally(() => { setBusy(''); refreshRunning(); });
+  };
+
+  const stopLocal = (server: McpServer) => {
+    setBusy(`mcp:${server.name}`);
+    return mcpStdioStop(stdioId(server))
+      .catch(() => undefined)
+      .finally(() => { setBusy(''); refreshRunning(); });
+  };
+
+  const removeServer = (server: McpServer) => {
+    const stop = tools.isStdio(server) && running.includes(stdioId(server)) ? stopLocal(server) : Promise.resolve();
+    stop.finally(() => {
+      tools.removeMcpServer(server.name);
+      setFailures((all) => without(all, server.name));
+      pushToast('info', `${server.name} removed.`);
+    });
+  };
+
+  const addLocal = () => {
+    const parsedEnv = tools.parseEnvLines(envText);
+    if (parsedEnv.bad.length) {
+      pushToast('error', `Not a KEY=VALUE line: ${parsedEnv.bad[0]}`);
+      return;
+    }
+    const row = { name: name.trim(), command: command.trim(), args: tools.splitArgs(argsLine), env: parsedEnv.env };
+    const result = tools.addStdioServer(row);
+    if (!result.ok) {
+      pushToast('error', result.reason || 'That server could not be saved.');
+      return;
+    }
+    setName('');
+    setCommand('');
+    setArgsLine('');
+    setEnvText('');
+    const saved = tools.mcpServers().find((s) => tools.slug(s.name) === tools.slug(row.name));
+    if (saved && hasShell()) startLocal(saved);
+    else pushToast('info', `${row.name} saved. Local servers run in the installed desktop app.`);
+  };
+
+  // A pasted config is saved, not run: each local server starts on its own
+  // Start, so nothing from a clipboard runs without a second look.
+  const importConfig = () => {
+    const parsed = tools.parseMcpConfig(pasteText);
+    let added = 0;
+    parsed.servers.forEach((server) => {
+      if (tools.isStdio(server)) {
+        if (tools.addStdioServer({ ...server, command: server.command || '' }).ok) added += 1;
+      } else if (server.url) {
+        readTools(server.name, server.url);
+        added += 1;
+      }
+    });
+    if (parsed.errors.length) pushToast('warn', parsed.errors.slice(0, 3).join(' '));
+    if (added) {
+      pushToast('ok', `Imported ${added} server${added === 1 ? '' : 's'}. Press Start on a local one to run it.`);
+      setPasteText('');
+      setPasteOpen(false);
+    }
+  };
+
   return (
     <section className="settings-section">
       <h2>Connectors</h2>
@@ -186,28 +281,93 @@ export default function ConnectorsCard() {
         <h3 className="local-heading">MCP servers</h3>
         {servers.length > 0 && (
           <div className="local-catalogue">
-            {servers.map((server) => (
-              <div key={server.name} className="local-row">
-                <div className="local-row-main">
-                  <span className="local-row-name">
-                    <span className="mono">{server.name}</span>
-                    <span className="chip">{server.tools.length} tool{server.tools.length === 1 ? '' : 's'}</span>
-                  </span>
-                  <span className="local-row-note mono">{server.url}</span>
+            {servers.map((server) => {
+              const local = tools.isStdio(server);
+              const isRunning = local && running.includes(stdioId(server));
+              const failure = failures[server.name];
+              const working = busy === `mcp:${server.name}`;
+              return (
+                <div key={server.name} className="local-row">
+                  <div className="local-row-main">
+                    <span className="local-row-name">
+                      <span className="mono">{server.name}</span>
+                      <span className="chip">{server.tools.length} tool{server.tools.length === 1 ? '' : 's'}</span>
+                      {local && <span className={`chip ${isRunning ? 'mcp-running' : 'mcp-stopped'}`}>{isRunning ? 'running' : 'stopped'}</span>}
+                    </span>
+                    <span className="local-row-note mono">
+                      {local ? `${server.command} ${tools.joinArgs(server.args || [])}`.trim() : server.url}
+                    </span>
+                    {failure && (
+                      <>
+                        <div className="chip-note">{failure.message}</div>
+                        {failure.stderr && <pre className="mcp-stderr">{failure.stderr}</pre>}
+                      </>
+                    )}
+                  </div>
+                  {local ? (
+                    isRunning ? (
+                      <button onClick={() => stopLocal(server)} disabled={working}>Stop</button>
+                    ) : (
+                      <button onClick={() => startLocal(server)} disabled={working || !hasShell()}>{working ? 'Starting…' : 'Start'}</button>
+                    )
+                  ) : (
+                    <button onClick={() => readTools(server.name, server.url || '')} disabled={working}>Refresh</button>
+                  )}
+                  <button onClick={() => removeServer(server)} disabled={working}>Remove</button>
                 </div>
-                <button onClick={() => readTools(server.name, server.url)} disabled={busy === `mcp:${server.name}`}>Refresh</button>
-                <button onClick={() => { tools.removeMcpServer(server.name); pushToast('info', `${server.name} removed.`); }}>Remove</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
-        <form className="local-add" onSubmit={(e) => { e.preventDefault(); readTools(name.trim(), url.trim()); }}>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="MCP server name" style={{ maxWidth: 140 }} />
-          <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/mcp" spellCheck={false} aria-label="MCP server address" />
-          <button type="submit" disabled={!name.trim() || !url.trim() || !!busy}>{busy.startsWith('mcp:') ? 'Reading…' : 'Add'}</button>
-        </form>
+        <div className="mcp-mode" role="group" aria-label="Kind of MCP server">
+          <button type="button" aria-pressed={mode === 'remote'} onClick={() => setMode('remote')}>Remote (https)</button>
+          <button type="button" aria-pressed={mode === 'local'} onClick={() => setMode('local')}>On this PC (stdio)</button>
+          <button type="button" aria-pressed={pasteOpen} onClick={() => setPasteOpen((o) => !o)}>Paste config JSON</button>
+        </div>
+        {pasteOpen && (
+          <div className="mcp-paste">
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder={'{"mcpServers": {"files": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\\\work"]}}}'}
+              spellCheck={false}
+              rows={5}
+              aria-label="MCP config JSON"
+            />
+            <button type="button" onClick={importConfig} disabled={!pasteText.trim()}>Import</button>
+          </div>
+        )}
+        {mode === 'remote' ? (
+          <form className="local-add" onSubmit={(e) => { e.preventDefault(); readTools(name.trim(), url.trim()); }}>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="MCP server name" style={{ maxWidth: 140 }} />
+            <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/mcp" spellCheck={false} aria-label="MCP server address" />
+            <button type="submit" disabled={!name.trim() || !url.trim() || !!busy}>{busy.startsWith('mcp:') ? 'Reading…' : 'Add'}</button>
+          </form>
+        ) : (
+          <form className="mcp-local-add" onSubmit={(e) => { e.preventDefault(); addLocal(); }}>
+            <div className="local-add">
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="Local MCP server name" style={{ maxWidth: 140 }} />
+              <input type="text" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Command (npx, uvx, C:\…\server.exe)" spellCheck={false} aria-label="Command" />
+            </div>
+            <div className="local-add">
+              <input type="text" value={argsLine} onChange={(e) => setArgsLine(e.target.value)} placeholder='Arguments: -y @scope/server "C:\My Folder"' spellCheck={false} aria-label="Arguments" />
+            </div>
+            <textarea
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              placeholder={'Environment, one KEY=VALUE per line (optional)'}
+              spellCheck={false}
+              rows={2}
+              aria-label="Environment variables"
+            />
+            <button type="submit" disabled={!name.trim() || !command.trim() || !!busy}>{busy.startsWith('mcp:') ? 'Starting…' : 'Add and start'}</button>
+          </form>
+        )}
         <p className="settings-hint">
-          Remote (https) servers, reached through the engine. A server on this PC (stdio) is a later step — see docs/adr/0001.
+          {mode === 'remote'
+            ? 'Remote (https) servers, reached through the engine.'
+            : 'The program is started directly by this app — no shell in between — and stopped when you press Stop or quit. Environment values are stored on this PC with the server.'}
+          {!hasShell() && mode === 'local' ? ' Local servers need the installed desktop app.' : ''}
         </p>
       </div>
     </section>

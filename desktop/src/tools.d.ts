@@ -12,10 +12,27 @@ export interface ToolCall {
   arguments: string;
 }
 
+export type McpTool = { name: string; description?: string; inputSchema?: Record<string, any> };
+
+/** Remote: `{ name, url }` (https, through the engine). Local: `{ name, transport: 'stdio', command, args, env, cwd? }`. */
 export interface McpServer {
   name: string;
-  url: string;
-  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, any> }>;
+  url?: string;
+  transport?: 'stdio';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  tools: McpTool[];
+}
+
+export interface StdioServerInput {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  tools?: McpTool[];
 }
 
 export declare const MCP_KEY: string;
@@ -32,7 +49,17 @@ export declare function slug(name: string): string;
 export declare function mcpServers(storage?: any): McpServer[];
 export declare function saveMcpServers(list: McpServer[], storage?: any): boolean;
 export declare function addMcpServer(name: string, url: string, tools?: McpServer['tools'], storage?: any): { ok: boolean; reason: string };
+export declare function addStdioServer(row: StdioServerInput, storage?: any): { ok: boolean; reason: string };
+export declare function setMcpTools(name: string, tools: McpTool[], storage?: any): boolean;
 export declare function removeMcpServer(name: string, storage?: any): boolean;
+export declare function isStdio(server: McpServer | null | undefined): boolean;
+export declare function validateStdioServer(row: Partial<StdioServerInput> | null | undefined): { ok: boolean; reason: string; server: McpServer | null };
+export declare function splitArgs(line: string): string[];
+export declare function joinArgs(list: string[]): string;
+export declare function parseEnvLines(text: string): { env: Record<string, string>; bad: string[] };
+export declare function parseMcpConfig(text: string): { servers: McpServer[]; errors: string[] };
+export declare function mcpResultText(result: any): string;
+export declare function splitStderr(message: string): { message: string; stderr: string };
 export declare function mcpToolName(server: string, tool: string): string;
 export declare function mcpTarget(name: string, storage?: any): { server: McpServer; tool: string } | null;
 export declare function mcpDefs(storage?: any): ToolDef[];

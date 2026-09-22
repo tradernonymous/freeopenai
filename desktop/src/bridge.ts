@@ -483,6 +483,52 @@ export async function shellPostStream(
   }
 }
 
+// ---- local MCP servers (stdio) ----------------------------------------------
+//
+// The shell spawns the program directly (no shell in between), does the MCP
+// handshake, and keeps it running under the id until Stop or Quit (mcp.rs).
+// A failure's message may end in "\n\nstderr:\n<tail>" -- tools.splitStderr
+// separates the two.
+
+export interface McpStdioStarted {
+  id: string;
+  pid: number;
+  protocolVersion: string | null;
+  serverInfo: { name?: string; version?: string } | null;
+  capabilities: Record<string, any> | null;
+}
+
+export async function mcpStdioStart(args: {
+  id: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+}): Promise<McpStdioStarted> {
+  return call<McpStdioStarted>('mcp_stdio_start', {
+    id: args.id,
+    command: args.command,
+    args: args.args ?? [],
+    env: args.env ?? {},
+    cwd: args.cwd || null,
+  });
+}
+
+/** One JSON-RPC request to a running server: its `result`, or a throw with its error. */
+export async function mcpStdioRequest<T = any>(id: string, method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<T> {
+  return call<T>('mcp_stdio_request', { id, method, params: params ?? null, timeoutMs: timeoutMs ?? null });
+}
+
+export async function mcpStdioStop(id: string): Promise<{ stopped: boolean }> {
+  return call('mcp_stdio_stop', { id });
+}
+
+/** The ids running now; none without a shell. */
+export async function mcpStdioList(): Promise<string[]> {
+  if (!hasShell()) return [];
+  return (await call<string[]>('mcp_stdio_list')) ?? [];
+}
+
 // ---- connecting an account in a window of this app --------------------------
 //
 // The engine keys a GitHub connection to its session cookie. The system browser

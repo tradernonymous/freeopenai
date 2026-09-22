@@ -4595,6 +4595,14 @@ details.thinking { margin: 0 0 8px; border: 1px dashed var(--border); border-rad
 details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 12px; }
 .code-block-bar button + button { margin-left: 4px; }
 .code-preview-frame { display: block; width: 100%; height: 360px; border: 0; border-top: 1px solid var(--border); background: var(--bg-1); }
+.mermaid-view { padding: 12px; border-top: 1px solid var(--border); overflow: auto; color: var(--text-2); font-size: 12px; }
+.mermaid-view svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.attach-images { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 0; }
+.attach-thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.attach-thumb button { position: absolute; top: 2px; right: 2px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: rgba(0, 0, 0, 0.6); color: #fff; cursor: pointer; }
+.message-images { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 6px; }
+.message-images img { max-width: 220px; max-height: 160px; border-radius: 8px; border: 1px solid var(--border); object-fit: cover; }
 .compare-drawer { position: absolute; inset: 8px 8px auto 8px; max-height: 70%; z-index: 25; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--glass-bg-strong); backdrop-filter: blur(var(--glass-blur)); border: 1px solid var(--glass-border); border-radius: var(--radius); box-shadow: var(--glass-light), var(--shadow-2); }
 .compare-head { display: flex; gap: 8px; align-items: flex-start; }
 .compare-head textarea { flex: 1; resize: vertical; }
@@ -4611,3 +4619,27 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
 .evals-table td.is-pass { color: var(--ok); }
 .evals-table td.is-fail { color: var(--err); }
 .evals-running { padding: 0 4px; }
+
+/* Connectors: local (stdio) MCP servers. */
+.mcp-mode { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.mcp-mode button[aria-pressed='true'] { border-color: var(--accent); color: var(--text-1); background: var(--accent-dim); }
+.mcp-paste, .mcp-local-add { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.mcp-paste textarea, .mcp-local-add textarea { width: 100%; font-family: var(--font-mono); font-size: 12px; resize: vertical; }
+.mcp-paste button, .mcp-local-add button[type='submit'] { align-self: flex-start; }
+.mcp-local-add .local-add { margin-bottom: 0; }
+.chip.mcp-running { color: var(--ok); border-color: var(--ok); }
+.chip.mcp-stopped { color: var(--text-3); }
+.mcp-stderr {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--err);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

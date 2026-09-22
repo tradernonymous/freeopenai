@@ -2,7 +2,8 @@
 //
 // The engine already does the work -- web search and fetch, the multi-account
 // GitHub API, remote MCP servers (/api/mcp/*) -- and the shell already reads
-// files and runs commands in the folder the person opened. What Chat lacked
+// files and runs commands in the folder the person opened, and hosts local
+// (stdio) MCP servers (mcp.rs). What Chat lacked
 // was the conversation: offering the tools, reading a model's tool calls out
 // of a stream, asking before anything is changed, and handing results back.
 // The rules are here (pure, node-tested); tool-run.ts executes, agent-turn.ts
@@ -107,16 +108,68 @@
     return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24);
   }
 
+  function isStdio(server) {
+    return !!server && server.transport === 'stdio';
+  }
+
+  function cleanArgs(list) {
+    return (Array.isArray(list) ? list : []).filter(function (a) {
+      return typeof a === 'string' || typeof a === 'number';
+    }).map(String).slice(0, 64);
+  }
+
+  function cleanEnv(map) {
+    var out = {};
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return out;
+    Object.keys(map).forEach(function (key) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && map[key] != null && typeof map[key] !== 'object') out[key] = String(map[key]);
+    });
+    return out;
+  }
+
+  /**
+   * A local (stdio) server row, checked and normalised: { ok, reason, server }.
+   * The shell spawns `command` directly with `args` -- no shell -- so a command
+   * is one program, not a command line.
+   */
+  function validateStdioServer(row) {
+    var r = row || {};
+    var label = String(r.name || '').trim().slice(0, 40);
+    var command = String(r.command || '').trim();
+    if (!slug(label)) return { ok: false, reason: 'Give the server a short name.', server: null };
+    if (!command) return { ok: false, reason: 'A local MCP server needs a command, such as npx or uvx.', server: null };
+    if (/[\0\r\n]/.test(command)) return { ok: false, reason: 'A command is one line.', server: null };
+    var server = {
+      name: label,
+      transport: 'stdio',
+      command: command,
+      args: cleanArgs(r.args),
+      env: cleanEnv(r.env),
+      tools: Array.isArray(r.tools) ? r.tools : [],
+    };
+    var cwd = typeof r.cwd === 'string' ? r.cwd.trim() : '';
+    if (cwd) server.cwd = cwd;
+    return { ok: true, reason: '', server: server };
+  }
+
   function mcpServers(given) {
     var target = storage(given);
     if (!target) return [];
     try {
       var parsed = JSON.parse(target.getItem(MCP_KEY) || '[]');
-      return (Array.isArray(parsed) ? parsed : []).filter(function (s) {
-        return s && typeof s.name === 'string' && slug(s.name) && typeof s.url === 'string' && /^https:\/\//i.test(s.url);
-      }).map(function (s) {
-        return { name: s.name, url: s.url, tools: Array.isArray(s.tools) ? s.tools : [] };
+      var out = [];
+      (Array.isArray(parsed) ? parsed : []).forEach(function (s) {
+        if (!s || typeof s.name !== 'string' || !slug(s.name)) return;
+        if (isStdio(s)) {
+          var checked = validateStdioServer(s);
+          if (checked.ok) out.push(checked.server);
+          return;
+        }
+        if (typeof s.url === 'string' && /^https:\/\//i.test(s.url)) {
+          out.push({ name: s.name, url: s.url, tools: Array.isArray(s.tools) ? s.tools : [] });
+        }
       });
+      return out;
     } catch {
       return [];
     }
@@ -145,10 +198,145 @@
     return { ok: saveMcpServers(rest, given), reason: '' };
   }
 
+  /** Add or replace a local (stdio) server by name. */
+  function addStdioServer(row, given) {
+    var checked = validateStdioServer(row);
+    if (!checked.ok) return { ok: false, reason: checked.reason };
+    var rest = mcpServers(given).filter(function (s) { return slug(s.name) !== slug(checked.server.name); });
+    rest.push(checked.server);
+    return { ok: saveMcpServers(rest, given), reason: '' };
+  }
+
+  /** Cache a server's tool list on its row (either transport). */
+  function setMcpTools(name, list, given) {
+    var rows = mcpServers(given);
+    var found = false;
+    rows.forEach(function (s) {
+      if (slug(s.name) === slug(name)) {
+        s.tools = Array.isArray(list) ? list : [];
+        found = true;
+      }
+    });
+    return found && saveMcpServers(rows, given);
+  }
+
   function removeMcpServer(name, given) {
     var rows = mcpServers(given);
     var next = rows.filter(function (s) { return s.name !== name; });
     return next.length !== rows.length && saveMcpServers(next, given);
+  }
+
+  /**
+   * One line of arguments, split the way a terminal would: on spaces, with
+   * "double" or 'single' quotes keeping a space inside one argument, and a
+   * backslash escaping a quote inside double quotes. Backslashes elsewhere are
+   * kept (Windows paths).
+   */
+  function splitArgs(line) {
+    var text = String(line == null ? '' : line);
+    var out = [];
+    var current = '';
+    var started = false;
+    var quote = '';
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text[i];
+      if (quote) {
+        if (ch === quote) quote = '';
+        else if (quote === '"' && ch === '\\' && text[i + 1] === '"') { current += '"'; i += 1; }
+        else current += ch;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+        started = true;
+      } else if (/\s/.test(ch)) {
+        if (started) { out.push(current); current = ''; started = false; }
+      } else {
+        current += ch;
+        started = true;
+      }
+    }
+    if (started) out.push(current);
+    return out;
+  }
+
+  /** An argument list back as one line, quoting what needs it. */
+  function joinArgs(list) {
+    return (Array.isArray(list) ? list : []).map(function (a) {
+      var s = String(a);
+      return s === '' || /[\s"']/.test(s) ? '"' + s.replace(/"/g, '\\"') + '"' : s;
+    }).join(' ');
+  }
+
+  /** KEY=VALUE lines to an env map; blank lines and # comments are skipped. */
+  function parseEnvLines(text) {
+    var env = {};
+    var bad = [];
+    String(text || '').split(/\r?\n/).forEach(function (raw) {
+      var line = raw.trim();
+      if (!line || line[0] === '#') return;
+      var at = line.indexOf('=');
+      var key = at > 0 ? line.slice(0, at).trim() : '';
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) { bad.push(line.slice(0, 40)); return; }
+      env[key] = line.slice(at + 1);
+    });
+    return { env: env, bad: bad };
+  }
+
+  /**
+   * A pasted Claude-Desktop-style config -- {"mcpServers": {"x": {"command",
+   * "args", "env", "cwd"}}}, or the inner map by itself -- as server rows.
+   * An entry with a `url` is a remote server (https only, as everywhere else).
+   * Returns { servers, errors }; nothing is saved.
+   */
+  function parseMcpConfig(text) {
+    var parsed;
+    try {
+      parsed = JSON.parse(String(text || ''));
+    } catch {
+      return { servers: [], errors: ['That is not valid JSON.'] };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { servers: [], errors: ['Expected an object such as {"mcpServers": {...}}.'] };
+    }
+    var map = parsed.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : parsed;
+    var servers = [];
+    var errors = [];
+    Object.keys(map).forEach(function (name) {
+      var entry = map[name];
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        errors.push(name + ': not a server entry.');
+        return;
+      }
+      if (typeof entry.url === 'string' && !entry.command) {
+        var address = entry.url.trim();
+        if (!slug(name)) errors.push(name + ': give the server a short name.');
+        else if (!/^https:\/\/[^\s]+$/i.test(address)) errors.push(name + ': a remote server address starts with https://');
+        else servers.push({ name: String(name).trim().slice(0, 40), url: address, tools: [] });
+        return;
+      }
+      var checked = validateStdioServer({ name: name, command: entry.command, args: entry.args, env: entry.env, cwd: entry.cwd });
+      if (checked.ok) servers.push(checked.server);
+      else errors.push(name + ': ' + checked.reason);
+    });
+    if (!servers.length && !errors.length) errors.push('No servers were found in that config.');
+    return { servers: servers, errors: errors };
+  }
+
+  /** A `tools/call` result as the text a model is handed: its text parts, joined. */
+  function mcpResultText(result) {
+    var content = result && Array.isArray(result.content) ? result.content : [];
+    var text = content.filter(function (c) { return c && c.type === 'text' && typeof c.text === 'string'; })
+      .map(function (c) { return c.text; }).join('\n');
+    if (text) return text;
+    if (result && result.structuredContent) return JSON.stringify(result.structuredContent);
+    return JSON.stringify(result || {});
+  }
+
+  /** A shell error split into its message and the server's stderr tail (mcp.rs STDERR_MARK). */
+  function splitStderr(message) {
+    var s = String(message == null ? '' : message);
+    var at = s.indexOf('\n\nstderr:\n');
+    if (at < 0) return { message: s, stderr: '' };
+    return { message: s.slice(0, at), stderr: s.slice(at + '\n\nstderr:\n'.length) };
   }
 
   /** `mcp__<server>__<tool>`: a name a model can call and this app can route. */
@@ -386,7 +574,17 @@
     mcpServers: mcpServers,
     saveMcpServers: saveMcpServers,
     addMcpServer: addMcpServer,
+    addStdioServer: addStdioServer,
+    setMcpTools: setMcpTools,
     removeMcpServer: removeMcpServer,
+    isStdio: isStdio,
+    validateStdioServer: validateStdioServer,
+    splitArgs: splitArgs,
+    joinArgs: joinArgs,
+    parseEnvLines: parseEnvLines,
+    parseMcpConfig: parseMcpConfig,
+    mcpResultText: mcpResultText,
+    splitStderr: splitStderr,
     mcpToolName: mcpToolName,
     mcpTarget: mcpTarget,
     mcpDefs: mcpDefs,

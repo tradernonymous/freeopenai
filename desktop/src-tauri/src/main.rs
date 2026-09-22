@@ -8,7 +8,8 @@
 // it -- crash.rs (where a failure is recorded), webview2.rs (the runtime the
 // window needs), save.rs (the native save dialog), net.rs (the network edge a
 // webview cannot be), local.rs (the real filesystem and command runner, with the
-// engine's confinement rules), diag.rs (the facts behind Copy diagnostics).
+// engine's confinement rules), diag.rs (the facts behind Copy diagnostics),
+// mcp.rs (local MCP servers over stdio: the MCP host, docs/adr/0001).
 //
 // Release builds carry windows_subsystem="windows": a GUI app must never
 // open a console window (the "black terminal flash" on launch).
@@ -24,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod crash;
 mod diag;
 mod local;
+mod mcp;
 mod models;
 mod net;
 mod ollama;
@@ -92,6 +94,10 @@ fn main() {
             local::local_write_file,
             local::local_edit_file,
             local::local_run,
+            mcp::mcp_stdio_start,
+            mcp::mcp_stdio_request,
+            mcp::mcp_stdio_stop,
+            mcp::mcp_stdio_list,
             models::local_server_find,
             models::local_server_pick,
             models::local_server_use,
@@ -188,6 +194,8 @@ fn main() {
                         // Leaving one running after the window is gone would be
                         // a process the user cannot see and did not ask for.
                         models::shutdown();
+                        // The same for local MCP servers (mcp.rs).
+                        mcp::shutdown();
                         QUITTING.store(true, Ordering::SeqCst);
                         app.exit(0);
                     }
