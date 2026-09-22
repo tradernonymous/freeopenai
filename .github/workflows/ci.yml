@@ -121,6 +121,15 @@ jobs:
         with:
           name: maestro-debug-apk
           path: android/app/build/outputs/apk/debug/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # The app cannot reach chat without signing in, so the flows need an
+      # engine: this one lives only for the job, with a throwaway account.
+      - name: Start a throwaway engine for the emulator
+        run: |
+          AUTH_USER_1=maestro AUTH_PASS_1=maestro-ci-only PORT=3000 nohup node server.js > engine.log 2>&1 &
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:3000/api/health && break; sleep 1; done
       - name: Install Maestro
         run: |
           curl -Ls "https://get.maestro.mobile.dev" | bash

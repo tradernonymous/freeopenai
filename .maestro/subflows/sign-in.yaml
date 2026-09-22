@@ -1,0 +1,29 @@
+appId: com.neura.os
+---
+# Run once before flows/: a fresh install opens on the sign-in screen, so
+# every flow that looked for chat_input failed on it. CI starts an engine on
+# the runner (10.0.2.2 from the emulator) with this throwaway account.
+- launchApp
+- runFlow:
+    when:
+      visible:
+        id: "login_submit"
+    commands:
+      - tapOn:
+          id: "login_server"
+      - eraseText: 80
+      - inputText: "http://10.0.2.2:3000"
+      - tapOn:
+          id: "login_username"
+      - eraseText: 40
+      - inputText: "maestro"
+      - tapOn:
+          id: "login_password"
+      - inputText: "maestro-ci-only"
+      - hideKeyboard
+      - tapOn:
+          id: "login_submit"
+- extendedWaitUntil:
+    visible:
+      id: "chat_input"
+    timeout: 30000
