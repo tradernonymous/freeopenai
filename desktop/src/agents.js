@@ -40,6 +40,9 @@
     + 'credentials. When a page needs one, stop and tell the user to type it into the browser themselves; it must never '
     + 'be sent to you or appear in a tool call.';
 
+  /** The built-in that answers from project-scout.js's index (NEURA-056). */
+  var SCOUT_ID = 'project-scout';
+
   var BUILTINS = [
     {
       id: 'file-picker',
@@ -138,6 +141,50 @@
       outputMode: 'last_message',
       includeMessageHistory: false,
       spawnerPrompt: 'Give it the base branch if it is not the default, and anything the PR description must say.',
+    },
+    // NEURA-056. The context-economy agent: it maps the folder once and then
+    // answers from the map, so the coding agent stops paying to rediscover the
+    // same tree. Its answers are paths and line numbers, never file contents --
+    // the caller decides what is worth reading. The map itself is built and
+    // stored by project-scout.js; this definition is the model's half of it.
+    {
+      id: SCOUT_ID,
+      name: 'Project scout',
+      description: 'Maps the open folder once -- files, exported names, entry points, where each area lives -- and then answers "where is X?" with paths and line numbers instead of re-reading the tree.',
+      systemPrompt: 'You map a repository once and then answer questions about where things are.\n\n'
+        + 'FIRST TIME in a folder, build the map: walk it with list_files, breadth-first from the root. Never enter '
+        + 'node_modules, .git, target, dist, build, out, vendor, coverage, __pycache__ or any other dependency or build '
+        + 'folder, and never open a binary (images, archives, executables, model weights, fonts, lockfiles). Look at no '
+        + 'more than about 400 files and read no file larger than about 250 KB. read_file only what tells you structure: '
+        + 'the manifests (package.json, Cargo.toml, go.mod, pyproject.toml), the entry points (main/index/App/server), '
+        + 'and the files whose names say they hold the area in question.\n\n'
+        + 'Then report the map ONCE: the areas (directory, what lives there), the entry points (path, why), and the '
+        + 'notable symbols you saw (path, line, name). Symbols are what you can SEE in the text -- exported names, '
+        + 'function and class declarations, headings. You have no parser: say so, and never claim a name exists because '
+        + 'it probably does.\n\n'
+        + 'AFTER the map exists, answer "where is X?" from it. Reply with paths and LINE NUMBERS and one short reason '
+        + 'each, never file contents -- the caller chooses what to open. If the task says the map is stale, or what you '
+        + 'are asked about is not in it, say so and re-check just that part with list_files rather than answering from '
+        + 'an out-of-date map. Change nothing: you have no write, edit or command tools and must not ask for them.\n\n'
+        + 'Reply with JSON only: {"matches": [{"path": "relative/path", "line": 12, "what": "one short phrase"}], '
+        + '"areas": [{"dir": "...", "what": "..."}], "entries": [{"path": "...", "why": "..."}], "stale": false, '
+        + '"note": "what the map cannot see"}. Leave out areas and entries once the map has been reported.',
+      toolNames: ['list_files', 'read_file'],
+      outputMode: 'structured',
+      outputSchema: {
+        type: 'object',
+        required: ['matches'],
+        properties: {
+          matches: { type: 'array', items: { type: 'object' } },
+          areas: { type: 'array', items: { type: 'object' } },
+          entries: { type: 'array', items: { type: 'object' } },
+          stale: { type: 'boolean' },
+          note: { type: 'string' },
+        },
+      },
+      includeMessageHistory: false,
+      spawnerPrompt: 'Ask where something lives ("where is the approval gate?"), or say "map the folder" the first time. '
+        + 'It answers with paths and line numbers, not file contents.',
     },
   ];
 
@@ -531,6 +578,7 @@
     FIELDS: FIELDS,
     CODE_FIELDS: CODE_FIELDS,
     CREDENTIALS_RULE: CREDENTIALS_RULE,
+    SCOUT_ID: SCOUT_ID,
     BUILTINS: BUILTINS,
     codeReason: codeReason,
     validate: validate,

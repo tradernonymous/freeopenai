@@ -3,6 +3,7 @@
  */
 
 import type { EffectiveConfig } from './project-config';
+import type { ProjectIndex, QueryAnswer, ScoutIO } from './project-scout';
 
 export interface ToolParam {
   name: string;
@@ -69,10 +70,19 @@ export declare const TOOLS: ToolDef[];
 export declare const MAX_ROUNDS: number;
 export declare const MAX_TOOL_CALLS: number;
 /** `projectPrompt` is the already-labelled block from project-config.promptBlock. */
-export declare function systemPrompt(projectNotes?: string, projectPrompt?: string): string;
+export declare function systemPrompt(projectNotes?: string, projectPrompt?: string, projectMap?: string): string;
 export declare function parseToolCall(text: string): { name: string; args: Record<string, unknown> } | null;
 export declare function createSession(root: string, model?: string, provider?: string): AgentSession;
 export declare function readProjectNotes(readFile: (path: string) => Promise<string>): Promise<string>;
 export declare function computeDiff(oldText: string, newText: string): string;
 export declare function runAgent(session: AgentSession, callbacks: AgentCallbacks): Promise<AgentSession>;
 export declare function summarizeArgs(args: Record<string, unknown>): string;
+/** The scout's I/O with the session root bound to the agent's own callbacks (NEURA-056). */
+export declare function scoutIO(callbacks: AgentCallbacks, root: string): ScoutIO | null;
+/** The folder's index, rebuilt only when it is absent or stale; never throws. */
+export declare function ensureIndex(
+  session: Pick<AgentSession, 'root'>,
+  callbacks: AgentCallbacks,
+): Promise<{ index: ProjectIndex | null; note: string }>;
+/** A query answer as `path:line  kind name` lines -- never file contents. */
+export declare function renderMatches(answer: QueryAnswer | null): string;

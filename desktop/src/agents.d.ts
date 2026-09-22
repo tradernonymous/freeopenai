@@ -33,6 +33,8 @@ export declare const OUTPUT_MODES: OutputMode[];
 export declare const FIELDS: string[];
 export declare const CODE_FIELDS: string[];
 export declare const CREDENTIALS_RULE: string;
+/** The built-in that answers "where is X?" from project-scout.js's index (NEURA-056). */
+export declare const SCOUT_ID: string;
 export declare const BUILTINS: Array<Partial<Agent>>;
 export declare function codeReason(raw: unknown): string;
 export declare function validate(raw: unknown): Checked;

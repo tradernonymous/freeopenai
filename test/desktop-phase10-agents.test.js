@@ -74,8 +74,9 @@ test('required fields and types are checked strictly', () => {
 
 test('the built-ins validate, and the browser agent keeps credentials away from the model', () => {
   const ids = agents.BUILTINS.map((b) => b.id);
-  // Phase 12e added the code helpers after the original three.
-  assert.deepEqual(ids, ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener']);
+  // Phase 12e added the code helpers after the original three; NEURA-056 added
+  // project-scout (its own rules live in test/desktop-project-scout.test.js).
+  assert.deepEqual(ids, ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener', 'project-scout']);
   for (const b of agents.BUILTINS) assert.equal(agents.validate(b).ok, true, b.id);
   const browser = agents.BUILTINS.find((b) => b.id === 'browser');
   assert.deepEqual(browser.toolNames, ['browser/*']);
@@ -121,7 +122,7 @@ test('spawn_agent asks first unless always-allowed, and routes through tool-run'
 
 test('spawn targets: a spawner starts only its spawnableAgents; chat may start any', () => {
   const all = agents.list(memory());
-  assert.deepEqual(agents.spawnTargets(null, all), ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener']);
+  assert.deepEqual(agents.spawnTargets(null, all), ['file-picker', 'reviewer', 'browser', 'test-writer', 'doc-writer', 'pr-opener', 'project-scout']);
   assert.deepEqual(agents.spawnTargets({ id: 'x', spawnableAgents: ['reviewer', 'ghost', 'x'] }, all), ['reviewer']);
   assert.deepEqual(agents.spawnTargets({ id: 'x' }, all), []);
   assert.match(agents.spawnDescription(all), /file-picker/);

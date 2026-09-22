@@ -5,12 +5,15 @@ import { PENDING_COMMAND_KEY, RUN_COMMAND_EVENT } from './ChatScreen';
 import '../agents.js';
 import '../tools.js';
 import '../chats.js';
+import '../project-scout.js';
 
 const agentsLib: typeof import('../agents.js') = (globalThis as any).FreeAI4UAgents;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
+const scout: typeof import('../project-scout.js') = (globalThis as any).FreeAI4UProjectScout;
 
 type Agent = import('../agents.js').Agent;
+type ScoutStatus = import('../project-scout.js').ScoutStatus;
 
 // Agents (roadmap 6.7), under Library: the definitions `/agent <id> <task>`
 // runs and chat's spawn_agent delegates to. A definition is JSON and is edited
@@ -24,6 +27,65 @@ function spawnAlways(): boolean {
     const map = JSON.parse(localStorage.getItem(toolsLib.ALWAYS_KEY) || '{}');
     return !!(map && map[toolsLib.alwaysKey('spawn_agent')]);
   } catch { return false; }
+}
+
+/** When the map was built, in words a person reads faster than a timestamp. */
+function agoLabel(at: number): string {
+  if (!at) return '';
+  const secs = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)} h ago`;
+  return `${Math.round(secs / 86400)} d ago`;
+}
+
+/**
+ * The project index (NEURA-056): built / stale / building, how much of the
+ * folder it covers, and a Rebuild button. The index itself is built by whoever
+ * holds the open folder -- this card only reads what was stored and asks, via
+ * project-scout's REBUILD_EVENT, for a fresh map.
+ */
+function ProjectIndexCard() {
+  const [index, setIndex] = useState(() => scout.load());
+  const [building, setBuilding] = useState(false);
+
+  useEffect(() => {
+    const onChanged = () => { setIndex(scout.load()); setBuilding(false); };
+    window.addEventListener(scout.CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(scout.CHANGED_EVENT, onChanged);
+  }, []);
+
+  const state: ScoutStatus = scout.status(index, building);
+  const rebuild = () => {
+    setBuilding(true);
+    scout.requestRebuild();
+    pushToast('info', 'Rebuilding the project index.');
+  };
+
+  return (
+    <div className="ar-index">
+      <h3 className="local-heading">Project index</h3>
+      <p className="settings-hint">
+        <span className="chip">{state.label}</span>
+        {state.state === 'none'
+          ? ' No folder has been mapped yet. Open a folder in Code and rebuild.'
+          : ` ${state.fileCount} files, ${state.symbolCount} symbols${state.builtAt ? `, built ${agoLabel(state.builtAt)}` : ''}.`}
+      </p>
+      {state.root && <p className="settings-hint mono">{state.root}</p>}
+      {state.state === 'stale' && (
+        <p className="settings-hint" role="status">
+          The folder changed since this map was built ({state.reason}), so the scout says so instead of answering from it.
+        </p>
+      )}
+      <div className="ar-actions">
+        <button onClick={rebuild} disabled={building}>{building ? 'Rebuilding…' : 'Rebuild index'}</button>
+      </div>
+      <p className="settings-hint">
+        The map is regex-level: it finds exported names, declarations and headings, and answers with paths and line
+        numbers so the agent chooses what to read. It is not a parser, so anything indirect is missing.
+      </p>
+    </div>
+  );
 }
 
 function setSpawnAlways(on: boolean) {
@@ -166,6 +228,8 @@ export default function AgentsScreen() {
               />
               <button className="primary" onClick={runInChat}>Run in chat</button>
             </div>
+
+            {current.id === agentsLib.SCOUT_ID && <ProjectIndexCard />}
 
             <h3 className="local-heading">Definition</h3>
             <textarea

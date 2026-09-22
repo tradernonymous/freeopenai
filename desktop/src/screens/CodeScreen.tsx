@@ -15,8 +15,13 @@ import '../docker-sandbox.js';
 // Loaded before the agent ever runs: the agent reads the folder's rules off the
 // global, and without them it approval-gates every mutation.
 import '../project-config.js';
+// NEURA-056: the agent reads the folder's map off the global for the same
+// reason, and this screen owns the open folder, so it is the one that can
+// answer the Rebuild button in Agents.
+import '../project-scout.js';
 
 const agent: typeof import('../coding-agent.js') = (globalThis as any).FreeAI4UCodingAgent;
+const scout: typeof import('../project-scout.js') = (globalThis as any).FreeAI4UProjectScout;
 const projectConfig: typeof import('../project-config.js') = (globalThis as any).FreeAI4UProjectConfig;
 const dockerSandbox: typeof import('../docker-sandbox.js') = (globalThis as any).FreeAI4UDockerSandbox;
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
@@ -172,6 +177,43 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
     return () => { live = false; };
   }, [localRoot]);
 
+  // ---- the project index (NEURA-056) ------------------------------------
+  // What the agent's own indexing is doing, in one line under the request bar:
+  // building, built, or the reason it could not be.
+  const [indexNote, setIndexNote] = useState('');
+  // Agents' Rebuild button dispatches REBUILD_EVENT; only the screen holding
+  // the open folder can answer it, because only it has a root and a bridge.
+  const rebuildingRef = useRef(false);
+  useEffect(() => {
+    const onRebuild = () => {
+      if (rebuildingRef.current) return;
+      if (!localRoot || !hasShell()) {
+        setIndexNote('Open a folder before rebuilding the project index.');
+        return;
+      }
+      rebuildingRef.current = true;
+      setIndexNote('Building the project index…');
+      scout.buildIndex(localRoot, {
+        listFiles: (path: string) => listLocalDir(localRoot, path || ''),
+        readFile: (path: string) => readLocalFile(localRoot, path),
+      })
+        .then((index) => {
+          // save() fires CHANGED_EVENT, which is what the Agents card listens for.
+          scout.save(index);
+          const state = scout.status(index);
+          setIndexNote(`Project index: ${state.fileCount} files, ${state.symbolCount} symbols.`);
+        })
+        .catch((err: unknown) => {
+          // A map that cannot be built is a missing convenience, never a broken
+          // screen: the agent falls back to list_files and read_file.
+          setIndexNote(`Could not build the project index: ${(err as Error)?.message || String(err)}`);
+        })
+        .finally(() => { rebuildingRef.current = false; });
+    };
+    window.addEventListener(scout.REBUILD_EVENT, onRebuild);
+    return () => window.removeEventListener(scout.REBUILD_EVENT, onRebuild);
+  }, [localRoot]);
+
   const listRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<any>(null);
 
@@ -250,6 +292,18 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
         if (event.type === 'error') {
           setError(event.error);
           setStatus('error');
+        }
+        // The agent's own indexing, so a first turn that pauses to map the
+        // folder says what it is doing instead of just looking slow.
+        if (event.type === 'index') {
+          if (event.state === 'building') setIndexNote('Building the project index…');
+          if (event.state === 'ready') {
+            setIndexNote(`Project index: ${event.status?.fileCount ?? 0} files, ${event.status?.symbolCount ?? 0} symbols`
+              + `${event.status?.state === 'stale' ? ' (stale)' : ''}.`);
+          }
+          if (event.state === 'failed') {
+            setIndexNote(`No project index (${event.error}); the agent will list and read files as usual.`);
+          }
         }
         if (event.type === 'round') {
           // Could show a round counter if desired.
@@ -376,6 +430,12 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
             </span>
           )}
         </div>
+
+        {indexNote && (
+          <div className="code-project-index">
+            <span className="settings-hint">{indexNote}</span>
+          </div>
+        )}
 
         {(overrides.length > 0 || configProblems.length > 0) && (
           <div className="code-project-config" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

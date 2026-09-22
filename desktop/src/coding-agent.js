@@ -41,6 +41,18 @@
       ],
     },
     {
+      // NEURA-056. The whole point of the index: the answer is a list of places,
+      // so the model stops spending a list_files/read_file round trip to find
+      // out where a name lives. It never returns file contents.
+      name: 'find_symbol',
+      description: 'Look a name up in the project index: the answer is paths and line numbers, never file contents. '
+        + 'Try this before list_files or read_file. It says so when the index is stale, partial or missing.',
+      params: [
+        { name: 'query', type: 'string', required: true },
+        { name: 'limit', type: 'number', required: false },
+      ],
+    },
+    {
       name: 'write_file',
       description: 'Create or overwrite a file with new content.',
       params: [
@@ -91,7 +103,102 @@
     }
   }
 
-  function systemPrompt(projectNotes, projectPrompt) {
+  // NEURA-056. project-scout.js is read off the global for the same reason as
+  // project-config.js: these UMD modules are loaded as scripts, and a caller
+  // that never loaded it (Parallel, a test) must still get today's behaviour --
+  // no map, no find_symbol answer, and a note saying so rather than a crash.
+  function projectScout() {
+    try {
+      var scope = typeof globalThis !== 'undefined' ? globalThis : null;
+      return (scope && scope.FreeAI4UProjectScout) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The scout's I/O, which is the agent's own callbacks with the session root
+   * already bound: the scout asks for a relative path and never learns what
+   * folder it is in, which is the shape project-scout.js documents.
+   */
+  function scoutIO(c, root) {
+    if (!c || typeof c.listFiles !== 'function') return null;
+    var io = {
+      listFiles: function (path) { return c.listFiles(root, path || ''); },
+    };
+    if (typeof c.readFile === 'function') {
+      io.readFile = function (path) { return c.readFile(root, path); };
+    }
+    return io;
+  }
+
+  /**
+   * The map for this folder, built at most once per run: a saved index that
+   * still matches the tree is used as it is, anything else is rebuilt and
+   * saved. Never throws -- a folder that cannot be mapped degrades to the
+   * behaviour the agent has always had, with a line saying why.
+   *
+   * Returns `{ index, note }`; `note` is '' when there is nothing to say.
+   */
+  async function ensureIndex(session, c) {
+    var scout = projectScout();
+    if (!scout) return { index: null, note: '' };
+    var io = scoutIO(c, session && session.root);
+    if (!io) return { index: null, note: '' };
+    try {
+      var index = null;
+      try { index = scout.load(session.root); } catch { index = null; }
+      if (index) {
+        var fresh = await scout.checkFresh(index, io);
+        index = scout.markFresh(index, fresh);
+        // A stale map is worth less than the walk that replaces it, and the
+        // walk reads names and sizes only until it decides to.
+        if (fresh.stale) index = null;
+      }
+      if (!index) {
+        emit(c.onEvent, { type: 'index', state: 'building' });
+        index = await scout.buildIndex(session.root, io);
+      }
+      scout.save(index);
+      emit(c.onEvent, { type: 'index', state: 'ready', status: scout.status(index) });
+      return { index: index, note: '' };
+    } catch (err) {
+      var why = String(err?.message || err);
+      emit(c.onEvent, { type: 'index', state: 'failed', error: why });
+      return {
+        index: null,
+        note: 'The project index could not be built (' + why + '), so find_symbol has nothing to answer from. '
+          + 'Use list_files and read_file as usual.',
+      };
+    }
+  }
+
+  /**
+   * A query answer as lines the model can act on: `path:line  kind name`, and
+   * nothing else. No file content ever crosses this boundary, and a stale or
+   * partial index says so on its own line instead of being quietly trusted.
+   */
+  function renderMatches(answer) {
+    if (!answer) return 'No project index is available. Use list_files and read_file.';
+    var lines = [];
+    if (answer.stale) {
+      lines.push('STALE INDEX: ' + (answer.staleReason || 'the folder changed since this map was built')
+        + '. Treat these lines as a starting point and confirm with read_file.');
+    }
+    if (!answer.ok || !answer.matches || !answer.matches.length) {
+      lines.push('No match in the index for "' + answer.query + '".');
+      if (answer.note) lines.push(answer.note);
+      return lines.join('\n');
+    }
+    for (var i = 0; i < answer.matches.length; i++) {
+      var m = answer.matches[i];
+      lines.push(m.path + ':' + m.line + '  ' + m.kind + ' ' + m.name);
+    }
+    if (answer.note) lines.push(answer.note);
+    return lines.join('\n');
+  }
+
+  function systemPrompt(projectNotes, projectPrompt, projectMap) {
     var notes = projectNotes || '';
     var header = [
       'You are a coding assistant that helps the user edit files on their machine.',
@@ -118,6 +225,13 @@
     // them: a folder can add context about itself, not re-brief the agent.
     if (projectPrompt) {
       header.push('', String(projectPrompt));
+    }
+    // NEURA-056. The map goes in the prompt so the first turn already knows the
+    // areas and the entry points: that is a list_files round trip the agent no
+    // longer has to spend before it can think.
+    if (projectMap) {
+      header.push('', 'Project map (from the index; ask find_symbol for a name, do not re-walk the tree):',
+        String(projectMap));
     }
     header.push('', 'Available tools:');
     for (var i = 0; i < TOOLS.length; i++) {
@@ -199,7 +313,10 @@
     var notes = [];
     for (var i = 0; i < candidates.length; i++) {
       try {
-        var content = await readFile(candidates[i]);
+        var raw = await readFile(candidates[i]);
+        // The bridge's reader answers `{ text, binary, bytes }`; a test's may
+        // answer a plain string. Both are notes.
+        var content = raw && typeof raw === 'object' ? String(raw.text || '') : String(raw || '');
         if (content && content.trim()) {
           notes.push('## ' + candidates[i] + '\n' + content.trim());
         }
@@ -251,17 +368,23 @@
     session.updatedAt = Date.now();
     emit(c.onEvent, { type: 'status', status: 'running' });
 
-    // Step 0: project notes.
+    // Step 0: project notes, and the folder's map (NEURA-056). Both are read
+    // once, before the first model call, and neither can fail the run.
     var notes = '';
     if (c.readFile) {
       try {
-        notes = await readProjectNotes(c.readFile);
+        notes = await readProjectNotes(function (path) { return c.readFile(session.root, path); });
       } catch { /* ignore */ }
     }
 
+    var scouted = await ensureIndex(session, c);
+    var projectIndex = scouted.index;
+    var scout = projectScout();
+    var mapBlock = projectIndex && scout ? scout.describe(projectIndex) : scouted.note;
+
     var config = session.config || null;
     var pc = projectConfig();
-    var sysPrompt = systemPrompt(notes, pc && config ? pc.promptBlock(config.systemPrompt) : '');
+    var sysPrompt = systemPrompt(notes, pc && config ? pc.promptBlock(config.systemPrompt) : '', mapBlock);
     session.messages = [
       { role: 'system', content: sysPrompt },
       { role: 'user', content: session.plan[0]?.title || 'Help me with this project.' },
@@ -337,7 +460,7 @@
       if (!tool.mutating) {
         var result;
         try {
-          result = await executeReadOnly(tool.name, args, c, session.root);
+          result = await executeReadOnly(tool.name, args, c, session.root, projectIndex);
           step.status = 'done';
           step.result = result;
           emit(c.onEvent, { type: 'step', step: step });
@@ -413,6 +536,12 @@
       var execResult;
       try {
         execResult = await executeMutating(call.name, args, c, session.root);
+        // NEURA-056. The file just changed, so the map no longer describes the
+        // folder. Marking it stale (here and in storage) is what makes the next
+        // find_symbol say so instead of answering from a pre-edit map.
+        if (call.name === 'write_file' || call.name === 'edit_file') {
+          projectIndex = markIndexStale(projectIndex, String(args.path || 'a file'));
+        }
         step.status = 'done';
         step.result = execResult;
         emit(c.onEvent, { type: 'step', step: step });
@@ -438,7 +567,27 @@
 
   // --- tool executors -----------------------------------------------------
 
-  async function executeReadOnly(name, args, c, root) {
+  /**
+   * The index, and the copy in storage, marked stale after this session wrote
+   * to `path`. A failure to store is not a failure of the turn -- the in-memory
+   * index still carries the warning.
+   */
+  function markIndexStale(index, path) {
+    var scout = projectScout();
+    if (!scout || !index) return index;
+    try {
+      var next = scout.markFresh(index, {
+        stale: true,
+        reason: 'this session changed ' + path + ' after the map was built',
+      });
+      scout.save(next);
+      return next;
+    } catch {
+      return index;
+    }
+  }
+
+  async function executeReadOnly(name, args, c, root, index) {
     if (name === 'list_files') {
       if (!c.listFiles) throw new Error('list_files is not available');
       var listing = await c.listFiles(root, args.path || '');
@@ -453,6 +602,15 @@
       var file = await c.readFile(root, args.path);
       if (file && file.binary) return '(binary file — ' + file.bytes + ' bytes)';
       return file?.text || file || '(empty file)';
+    }
+    if (name === 'find_symbol') {
+      var scout = projectScout();
+      if (!scout || !index) {
+        return 'No project index has been built for this folder, so there is nothing to look up. '
+          + 'Use list_files and read_file instead.';
+      }
+      var limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
+      return renderMatches(scout.query(index, args.query || args.name || args.symbol || '', { limit: limit }));
     }
     throw new Error('Unknown read-only tool: ' + name);
   }
@@ -518,5 +676,8 @@
     computeDiff: computeDiff,
     runAgent: runAgent,
     summarizeArgs: summarizeArgs,
+    scoutIO: scoutIO,
+    ensureIndex: ensureIndex,
+    renderMatches: renderMatches,
   };
 });
