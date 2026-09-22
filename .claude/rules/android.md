@@ -5,7 +5,7 @@ paths:
 
 # Android app rules
 
-- Kotlin 2.0, AGP 8.7, Compose BOM 2024.12, minSdk 29, targetSdk 35. No Hilt, no Room, no Retrofit: org.json, HttpURLConnection, executors + a main-thread Handler.
+- Kotlin 2.3, AGP 8.13, Compose BOM 2026.09, minSdk 29, targetSdk 36. No Hilt, no Room, no Retrofit: org.json, HttpURLConnection, executors + a main-thread Handler.
 - Screen state: `ui/AppViewModel.kt` with Compose `mutableStateOf`; write state only on the main thread (`main.post`).
 - Pure logic goes in `data/` (no Android imports) so JVM tests in `android/app/src/test` cover it. Add tests there for new logic.
 - Storage: chats, images and the library are sealed with the Keystore AES-GCM key (`data/Storage.kt`); secrets with `SecureStore`. Never log chat text or secrets.

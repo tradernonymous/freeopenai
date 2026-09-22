@@ -39,14 +39,14 @@ fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("
 
 android {
     namespace = "com.neura.os"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.neura.os"
         // Android 10: MediaStore saves into Downloads with no storage
         // permission, which is what lets the manifest keep INTERNET alone.
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         versionCode = buildNumber
         versionName = "2.0.$buildNumber"
         buildConfigField("String", "DEFAULT_SERVER", quoted(defaultServer))

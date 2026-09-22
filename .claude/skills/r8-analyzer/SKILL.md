@@ -25,7 +25,7 @@ metadata:
 - Inspect `build.gradle`, `build.gradle.kts`, and `gradle.properties` and
   `libs.versions.toml` to get the AGP and R8 versions.
 
-- This project uses AGP 8.7 and has no local Gradle, so always use **Path C (Heuristic)** below.
+- This project uses AGP 8.13 and has no local Gradle, so always use **Path C (Heuristic)** below.
 
 ### Path C: Heuristic evaluation and recommendation (R8 \< 9.3.7-dev)
 
