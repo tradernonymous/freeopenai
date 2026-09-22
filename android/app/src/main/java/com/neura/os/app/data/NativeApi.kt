@@ -3,6 +3,7 @@ package com.neura.os.app.data
 import com.neura.os.app.ApiException
 import com.neura.os.app.ChatApi
 import com.neura.os.app.SecureStore
+import com.neura.os.app.retryNetwork
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -214,38 +215,64 @@ class NativeApi(
     }
 
     /** Streams one reply. [onEvent] runs on the calling thread for every
-     * event; [cancel] receives the connection so a Stop button can close it. */
+     * event; [cancel] receives the connection so a Stop button can close it.
+     *
+     * The handshake (open + first response byte) gets [CHAT_CONNECT_ATTEMPTS]
+     * tries with [retryNetwork]'s short backoff before giving up -- the same
+     * transport-blip tolerance login/session calls already get. This only
+     * covers the connect step: once a reply byte has actually arrived,
+     * a drop is reported once and left to the caller's outbox/retry, so a
+     * partial answer already shown is never silently replayed. */
     fun streamChat(
         provider: String,
         body: String,
         cancel: AtomicReference<HttpURLConnection?>,
         onEvent: (ChatEvent) -> Unit,
     ) = withSession { cookie ->
-        val conn = open("/api/llm/chat?provider=" + java.net.URLEncoder.encode(provider, "UTF-8"), cookie, "POST", 180000)
-        cancel.set(conn)
+        val path = "/api/llm/chat?provider=" + java.net.URLEncoder.encode(provider, "UTF-8")
+        var conn: HttpURLConnection? = null
+        var reader: BufferedReader? = null
         try {
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Accept", "text/event-stream")
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code == 401 || code == 302) throw ApiException("Session expired.", true)
-            val contentType = conn.contentType ?: ""
-            if (!contentType.startsWith("text/event-stream")) {
-                val text = readBody(conn, code in 200..299)
-                onEvent(ChatEvent.Failure(errorMessage(text, code)))
-                return@withSession
+            retryNetwork(CHAT_CONNECT_ATTEMPTS, CHAT_CONNECT_BACKOFF_MS) {
+                val c = open(path, cookie, "POST", 180000)
+                conn = c
+                cancel.set(c)
+                try {
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type", "application/json")
+                    c.setRequestProperty("Accept", "text/event-stream")
+                    c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    val code = c.responseCode
+                    if (code == 401 || code == 302) throw ApiException("Session expired.", true)
+                    val contentType = c.contentType ?: ""
+                    if (contentType.startsWith("text/event-stream")) {
+                        reader = (if (code in 200..299) c.inputStream else c.errorStream ?: c.inputStream).bufferedReader()
+                    } else {
+                        val text = readBody(c, code in 200..299)
+                        onEvent(ChatEvent.Failure(errorMessage(text, code)))
+                        c.disconnect()
+                    }
+                } catch (e: Exception) {
+                    c.disconnect()
+                    throw e
+                }
             }
-            val reader = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream).bufferedReader()
-            reader.use { consumeSseChatStream(it, onEvent) }
         } catch (e: ApiException) {
             throw e
         } catch (e: Exception) {
             if (cancel.get() == null) onEvent(ChatEvent.Done) // stopped by the user
             else onEvent(ChatEvent.Failure("Connection lost: " + (e.message ?: e.javaClass.simpleName), connectivity = true))
+            return@withSession
+        }
+        val activeReader = reader ?: return@withSession
+        try {
+            activeReader.use { consumeSseChatStream(it, onEvent) }
+        } catch (e: Exception) {
+            if (cancel.get() == null) onEvent(ChatEvent.Done) // stopped by the user
+            else onEvent(ChatEvent.Failure("Connection lost: " + (e.message ?: e.javaClass.simpleName), connectivity = true))
         } finally {
             cancel.set(null)
-            conn.disconnect()
+            conn?.disconnect()
         }
     }
 
@@ -373,5 +400,10 @@ class NativeApi(
         const val IMAGE_ATTEMPTS = 3
         const val IMAGE_BACKOFF_CAP_MS = 8000L
         const val MAX_IMAGE_BYTES = 20 * 1024 * 1024
+        // One retry, short backoff: a chat reply is latency-sensitive, so this
+        // absorbs a single transport blip without making the user wait long
+        // for what will otherwise show up as a failure anyway.
+        const val CHAT_CONNECT_ATTEMPTS = 2
+        const val CHAT_CONNECT_BACKOFF_MS = 400L
     }
 }
