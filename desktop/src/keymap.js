@@ -35,7 +35,7 @@
   function storage() {
     try {
       return (typeof globalThis !== 'undefined' && globalThis.localStorage) || null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -77,7 +77,7 @@
     try {
       var raw = JSON.parse(s.getItem(OVERRIDES_KEY) || '{}');
       return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-    } catch (e) {
+    } catch {
       return {};
     }
   }
@@ -97,7 +97,7 @@
     if (combo) current[id] = normalise(combo);
     else delete current[id];
     if (s) {
-      try { s.setItem(OVERRIDES_KEY, JSON.stringify(current)); } catch (e) { /* the session still has it */ }
+      try { s.setItem(OVERRIDES_KEY, JSON.stringify(current)); } catch { /* the session still has it */ }
     }
     return current;
   }
@@ -105,7 +105,7 @@
   function enabled(store) {
     var s = store || storage();
     if (!s) return true;
-    try { return s.getItem(OFF_KEY) !== '1'; } catch (e) { return true; }
+    try { return s.getItem(OFF_KEY) !== '1'; } catch { return true; }
   }
 
   function setEnabled(on, store) {
@@ -114,7 +114,7 @@
     try {
       if (on) s.removeItem(OFF_KEY);
       else s.setItem(OFF_KEY, '1');
-    } catch (e) { /* best effort */ }
+    } catch { /* best effort */ }
   }
 
   /**

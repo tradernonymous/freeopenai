@@ -30,11 +30,15 @@ test('design generation goes through the engine chat route, not the placeholder'
 });
 
 test('the system prompt demands a self-contained document and AA contrast', () => {
+  // Phase 4 moved the prompt into design/prompt.js (split by model tier); the
+  // screen builds every turn from it.
   const screen = read('src', 'screens', 'DesignScreen.tsx');
-  assert.match(screen, /self-contained/);
-  assert.match(screen, /WCAG AA/);
-  assert.match(screen, /DESIGN\.md contract/);
-  assert.match(screen, /no lorem ipsum/i, 'the anti-slop rule starts at the prompt');
+  assert.match(screen, /promptLib\.buildMessages\(/);
+  const prompt = read('src', 'design', 'prompt.js');
+  assert.match(prompt, /self-contained/);
+  assert.match(prompt, /WCAG AA/);
+  assert.match(prompt, /DESIGN\.md contract/);
+  assert.match(prompt, /no lorem ipsum/i, 'the anti-slop rule starts at the prompt');
 });
 
 test('the live preview is sandboxed and isolated', () => {

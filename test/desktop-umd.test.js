@@ -28,6 +28,12 @@ const MODULES = [
   [['net-policy.js'], 'FreeAI4UNetPolicy'],
   [['design/brand.js'], 'FreeAI4UBrand'],
   [['design/slop.js'], 'FreeAI4USlop'],
+  [['design/systems.js'], 'FreeAI4UDesignSystems'],
+  [['design/systems.js', 'design/prompt.js'], 'FreeAI4UDesignPrompt'],
+  [['design/artifact.js'], 'FreeAI4UArtifact'],
+  [['design/versions.js'], 'FreeAI4UDesignVersions'],
+  [['keymap.js'], 'FreeAI4UKeymap'],
+  [['composer.js'], 'FreeAI4UComposer'],
   [['files/zip.js'], 'FreeZip'],
   // office/pdf take deflate from the global zip.js publishes, so zip runs first
   // in the same context -- exactly as FilesScreen imports them.

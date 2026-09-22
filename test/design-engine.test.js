@@ -83,7 +83,8 @@ test('clean, decided HTML scores 100', () => {
   const clean = `
     <html><head><style>
       body { background: #f8f7f4; color: #1a1a2e; font-family: "Iowan Old Style", serif; }
-      .cta { background: #e63946; color: #ffffff; }
+      .cta { background: #b3261e; color: #fdfcf9; }
+      .cta:focus-visible { outline: 2px solid #1a1a2e; outline-offset: 2px; }
     </style></head>
     <body><h1>Field notes from the dock</h1>
     <button class="cta">Read the report</button></body></html>`;

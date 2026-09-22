@@ -100,7 +100,73 @@
       },
       fix: 'Write one real sentence per block, in the brand voice.',
     },
+    // The rules below judge a finished page (Phase 4.11's quality gate), so
+    // they only look at a full HTML document -- a snippet of CSS in a source
+    // file is not a design and must not be graded as one.
+    {
+      id: 'pure-black-white',
+      label: 'Pure black or pure white',
+      why: '#000 on #fff is harsher than any printed page and reads as unconsidered.',
+      test: (src) => isDoc(src) && /(?:^|[\s;{])(?:color|background(?:-color)?|fill|stroke|border(?:-color)?)\s*:\s*(?:#000(?:000)?|#fff(?:fff)?|black|white)\s*[;}!]/im.test(styleOf(src)),
+      fix: 'Use the paper and ink tokens: an off-white and a near-black.',
+    },
+    {
+      id: 'no-focus-style',
+      label: 'No visible focus style',
+      why: 'Keyboard users cannot see where they are; it fails WCAG 2.4.7.',
+      test: (src) => isDoc(src) && /<(a|button|input|select|textarea)[\s>]/i.test(src) && !/:focus/i.test(styleOf(src)),
+      fix: 'Add a :focus-visible outline in the accent colour to links, buttons and fields.',
+    },
+    {
+      id: 'untokened-colour',
+      label: 'Colours outside the tokens',
+      why: 'Literal colours scattered through the CSS drift from the system and defeat Tweaks.',
+      test: (src) => {
+        if (!isDoc(src)) return false;
+        const css = styleOf(src);
+        const tokens = (css.match(/:root\s*\{[^}]*\}/g) || []).join('');
+        const rest = css.replace(/:root\s*\{[^}]*\}/g, '');
+        const literal = new Set((rest.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi) || []).map((c) => c.toLowerCase()));
+        return /--[\w-]+\s*:/.test(tokens) ? literal.size > 3 : literal.size > 6;
+      },
+      fix: 'Declare colours once as :root custom properties and use var(--token) everywhere else.',
+    },
+    {
+      id: 'left-bar-card',
+      label: 'Coloured left-bar cards',
+      why: 'A thick coloured left border on every card is the most generated callout there is.',
+      test: (src) => isDoc(src) && /border-left\s*:\s*([3-9]|\d{2})px\s+solid/i.test(styleOf(src)),
+      fix: 'Separate with space or a hairline rule; emphasise with type, not a stripe.',
+    },
+    {
+      id: 'off-scale-spacing',
+      label: 'Spacing off the scale',
+      why: 'Many one-off margins and gaps (13px, 22px, 37px) make the rhythm wobble.',
+      test: (src) => {
+        if (!isDoc(src)) return false;
+        const odd = new Set();
+        const re = /(?:margin|padding|gap)(?:-[a-z]+)?\s*:\s*([^;}]+)/gi;
+        let m;
+        while ((m = re.exec(styleOf(src)))) {
+          (m[1].match(/\d+px/g) || []).forEach((v) => { if (parseInt(v, 10) % 4 !== 0) odd.add(v); });
+        }
+        return odd.size >= 5;
+      },
+      fix: 'Space in multiples of one unit (var(--space)): 4, 8, 12, 16, 24, 32…',
+    },
   ];
+
+  function isDoc(src) {
+    return /<!doctype html|<html[\s>]/i.test(String(src || ''));
+  }
+
+  /** The page's CSS: every <style> block and every inline style attribute. */
+  function styleOf(src) {
+    const s = String(src || '');
+    const blocks = (s.match(/<style[^>]*>[\s\S]*?<\/style>/gi) || []).join('\n');
+    const inline = (s.match(/style="[^"]*"/gi) || []).map((a) => '{' + a.slice(7, -1) + '}').join('\n');
+    return blocks + '\n' + inline;
+  }
 
   /** Runs every rule over an HTML/CSS artifact -> findings with fixes. */
   function lint(source) {
