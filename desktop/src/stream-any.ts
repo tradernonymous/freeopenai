@@ -1,15 +1,19 @@
 // One answer from any model the app knows, without tools: the engine's
-// providers, Hugging Face, and "my models" (Ollama Local, Unsloth Local).
+// providers, Hugging Face, "my models" (Ollama Local, Unsloth Local), and the
+// endpoints the user brought a key for (NEURA-054).
 //
 // Chat has its own richer turn (tools, approvals, fallbacks). Quick, Compare
 // and Evals only need "this prompt, that model, the text back", and they used
 // to be the place three copies of this switch would have drifted apart.
 import { streamChat, type StreamFrame } from './api';
+import { byokStream } from './bridge';
 import { isSavedProvider, streamSaved } from './run-model';
+import './byok.js';
 import './hf-auth.js';
 import './hf-inference.js';
 import './saved-models.js';
 
+const byok: typeof import('./byok.js') = (globalThis as any).FreeAI4UByok;
 const hfAuth: typeof import('./hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const hfInference: typeof import('./hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
 const savedModels: typeof import('./saved-models.js') = (globalThis as any).FreeAI4USavedModels;
@@ -26,6 +30,14 @@ export function streamAny(target: Target, messages: Message[], onFrame: (frame: 
   if (isSavedProvider(target.provider)) return streamSaved(target.provider, target.model, messages, onFrame, signal);
   if (target.provider === 'hf') {
     return hfInference.streamChat(target.model, messages, onFrame, signal, hfAuth.accessToken()?.access_token || undefined);
+  }
+  // The user's own endpoint. A target only ever carries the model id, so the
+  // saved entry (its base URL, and the NAME of its key) is looked up here; the
+  // key itself stays in the credential store, read on the Rust side. A model
+  // that is no longer in the list resolves to null, and byok.streamChat says
+  // so -- falling through would ask the engine for a provider called "byok".
+  if (target.provider === byok.PROVIDER_ID) {
+    return byok.streamChat(byok.findByModel(target.provider, target.model), messages, onFrame, signal, { byokStream });
   }
   return streamChat(target.provider, { model: target.model, messages }, onFrame, signal);
 }

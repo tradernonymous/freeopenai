@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, lazy, Suspense, type ComponentType } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
-import { hasShell, listLocalDir, localModelStatus, mcpStdioList, notifyUser, openUrl, readLocalFile } from '../bridge';
+import { byokStream, hasShell, listLocalDir, localModelStatus, mcpStdioList, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import { renderMermaid } from '../diagram';
 import { localSetup, startRecording, transcribeAuto, type Recording } from '../dictate';
@@ -26,6 +26,7 @@ import '../agents.js';
 import '../recipes.js';
 import { isSavedProvider, streamSaved } from '../run-model';
 import '../saved-models.js';
+import '../byok.js';
 import '../chats.js';
 import '../failure.js';
 import '../fallback.js';
@@ -53,6 +54,10 @@ const fallback: typeof import('../fallback.js') = (globalThis as any).FreeAI4UFa
 const localModels: typeof import('../local-models.js') = (globalThis as any).FreeAI4ULocalModels;
 const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
+// NEURA-054: the endpoints the user brought a key for. This screen only ever
+// holds their base URL and model id -- the key is in the OS credential store
+// and is read by the shell, so nothing below ever has one to pass on.
+const byok: typeof import('../byok.js') = (globalThis as any).FreeAI4UByok;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
 // ---- lazy parts (NEURA-035: a smaller first bundle, same behaviour) ----
@@ -462,6 +467,20 @@ export default function ChatScreen() {
       });
       return;
     }
+    // The user's own endpoints: the list is what they added, and asking the
+    // engine for the models of a provider it has never heard of would only
+    // empty the picker.
+    if (active.provider === byok.PROVIDER_ID) {
+      const own = byok.modelsFor(active.provider);
+      setModels(own);
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === active.id && !own.some((m) => m.id === s.model) ? { ...s, model: own[0]?.id || '' } : s);
+        saveSessions(next);
+        return next;
+      });
+      return;
+    }
     // HF: the curated list at once, then what the router serves right now.
     if (active.provider === 'hf') {
       setModels(hfInference.models(hfToken));
@@ -560,6 +579,15 @@ export default function ChatScreen() {
     }
     if (isSavedProvider(provider)) {
       return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered, active.reasoning);
+    }
+    // The user's own endpoint. The session remembers the model id only, so the
+    // entry is looked up per turn; when it has been deleted the lookup is null
+    // and byok.streamChat refuses in words, rather than this falling through to
+    // an engine that would answer with a model nobody asked for. `byokStream`
+    // carries the secret's NAME, never a key. `offered` rides as `tools`, the
+    // same OpenAI shape the other branches send.
+    if (provider === byok.PROVIDER_ID) {
+      return byok.streamChat(byok.findByModel(provider, model), messages, onFrame, signal, { byokStream }, offered);
     }
     const effort = active.reasoning && active.reasoning !== 'off' ? { reasoning_effort: active.reasoning } : {};
     if (provider === 'local') {
@@ -1189,6 +1217,10 @@ export default function ChatScreen() {
         await streamSaved(provider, model, turns, (frame) => {
           if (frame.content) append(frame.content);
         }, controller.signal, (stage) => { if (stage) pushToast('info', stage); });
+      } else if (provider === byok.PROVIDER_ID) {
+        await byok.streamChat(byok.findByModel(provider, model), turns, (frame) => {
+          if (frame.content) append(frame.content);
+        }, controller.signal, { byokStream });
       } else if (provider === 'local') {
         await streamLocalChat(localRow?.baseUrl || '', model, turns, (frame) => {
           if (frame.content) append(frame.content);

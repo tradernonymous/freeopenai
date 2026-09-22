@@ -22,6 +22,7 @@ use tauri::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod byok;
 mod chat_store;
 mod crash;
 mod diag;
@@ -177,6 +178,8 @@ fn main() {
             ollama::ollama_start,
             ollama::shell_chat_stream,
             ollama::shell_chat_cancel,
+            byok::byok_chat_stream,
+            byok::byok_chat_cancel,
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,

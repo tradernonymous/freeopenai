@@ -505,6 +505,52 @@ export async function shellPostStream(
   }
 }
 
+// ---- the user's own endpoint (NEURA-054) ------------------------------------
+//
+// Same events as shellPostStream, different command -- and one difference that
+// is the whole point: there is no `apiKey` argument. The page sends the NAME of
+// the credential-store entry (`byok.<id>`); the shell reads the value and sets
+// the Authorization header itself (src-tauri/src/byok.rs), so a key never
+// exists in the webview to be leaked, logged or persisted. The two functions
+// are kept apart rather than merged because their address rules differ:
+// shell_chat_stream is loopback-only, byok_chat_stream is https-or-loopback.
+
+export async function byokStream(
+  args: { secret: string; base: string; body: string },
+  onChunk: (text: string) => void,
+  onStatus?: (status: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const id = `b${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  let settle: (error?: Error) => void = () => {};
+  const finished = new Promise<void>((resolve, reject) => {
+    settle = (error) => (error ? reject(error) : resolve());
+  });
+  const stop = await subscribe<ShellChatEvent>('shell-chat', (event) => {
+    if (!event || event.id !== id) return;
+    if (typeof event.status === 'number') onStatus?.(event.status);
+    if (typeof event.chunk === 'string') onChunk(event.chunk);
+    if (event.error) settle(new Error(event.error));
+    else if (event.done) settle();
+  });
+  const onAbort = () => {
+    call('byok_chat_cancel', { id }).catch(() => {});
+    const error = new Error('aborted');
+    error.name = 'AbortError';
+    settle(error);
+  };
+  if (signal?.aborted) onAbort();
+  signal?.addEventListener('abort', onAbort);
+  call('byok_chat_stream', { id, secret: args.secret, base: args.base, body: args.body })
+    .catch((e: unknown) => settle(e instanceof Error ? e : new Error(String(e))));
+  try {
+    await finished;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    stop();
+  }
+}
+
 // ---- local MCP servers (stdio) ----------------------------------------------
 //
 // The shell spawns the program directly (no shell in between), does the MCP
