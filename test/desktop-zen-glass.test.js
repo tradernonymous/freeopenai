@@ -131,7 +131,9 @@ test('both themes answer the glass tokens, so neither borrows the other’s tint
   const root = bodies(':root').join('\n');
   const lightAt = CSS.indexOf('[data-theme="light"]');
   assert.ok(lightAt > 0, 'the light theme block exists');
-  const light = CSS.slice(lightAt, lightAt + 1200);
+  // The whole block, not a fixed window: a token added above (NEURA-024's
+  // --disabled-fg) must not push the glass ones out of view.
+  const light = CSS.slice(lightAt, CSS.indexOf('}', lightAt));
   for (const token of ['--glass-bg', '--glass-bg-strong', '--glass-border', '--glass-light', '--glass-blur']) {
     assert.match(root, new RegExp(token + '\\s*:'), `${token} is defined for the dark shell`);
     assert.match(light, new RegExp(token + '\\s*:'), `${token} is answered in the light theme`);

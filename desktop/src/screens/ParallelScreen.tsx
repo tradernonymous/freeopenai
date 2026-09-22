@@ -104,7 +104,7 @@ export default function ParallelScreen({ localRoot }: Props) {
         writeFile: (r, p, c) => writeLocalFile(r, p, c),
         editFile: (r, p, o, n) => editLocalFile({ root: r, path: p, oldText: o, newText: n }),
         // The Code screen's "Run agent commands in Docker" setting applies here too (docker-sandbox.js).
-        runCmd: (r, command, cwd) => dockerSandbox.run({ root: r, command, cwd }, (line, at, timeoutMs) =>
+        runCmd: (r, command, cwd) => dockerSandbox.run({ root: r, command, cwd, files: { write: (p, c) => writeLocalFile(r, p, c) } }, (line, at, timeoutMs) =>
           runLocal({ root: r, runId: 'pa-' + Date.now(), command: line, cwd: at, timeoutMs: timeoutMs ?? 120_000 })),
         onEvent: (event: any) => {
           if (event.type === 'step' && event.step) {

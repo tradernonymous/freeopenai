@@ -216,8 +216,9 @@ test('quitting is a clean exit, and only quitting closes the window', () => {
   const main = shellSource('main.rs');
   assert.ok(!main.includes('std::process::exit'),
     'process::exit skips window-state persistence and orphans WebView2 children');
-  assert.match(main, /QUITTING\.store/, 'the quit path raises the flag');
-  assert.match(main, /app\.exit\(0\)/, 'and exits through Tauri');
+  // swap: a second Quit while the first waits for the chat flush is ignored (NEURA-021).
+  assert.match(main, /QUITTING\.swap\(true/, 'the quit path raises the flag');
+  assert.match(main, /handle\.exit\(0\)/, 'and exits through Tauri (after the page flushes)');
   assert.match(main, /QUITTING\.load[\s\S]{0,200}prevent_close/,
     'the close handler still hides (tray-style) unless the app is quitting');
 });

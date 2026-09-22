@@ -14,6 +14,15 @@ export declare function importKey(base64: string): Promise<CryptoKey>;
 export declare function encrypt(key: CryptoKey, text: string): Promise<string>;
 export declare function decrypt(key: CryptoKey, blob: string): Promise<string>;
 export declare function loadOrCreateKey(store: ChatKeyStore): Promise<CryptoKey>;
+/** A new key, stored (replacing what was there) and read back. */
+export declare function createKey(store: ChatKeyStore): Promise<CryptoKey>;
+/** Error code: the key is missing/unusable/wrong while the store has rows. */
+export declare const UNREADABLE: string;
+/** The backend with the key decided first; never makes a key over unreadable rows. */
+export declare function openBackend(options: {
+  call: (command: string, args?: Record<string, unknown>) => Promise<any>;
+  store: ChatKeyStore;
+}): Promise<ChatBackend & { clear(): Promise<unknown> }>;
 export declare function backend(options: {
   call: (command: string, args?: Record<string, unknown>) => Promise<any>;
   key: CryptoKey;

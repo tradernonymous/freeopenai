@@ -83,21 +83,70 @@ test('wrap builds the documented docker line', () => {
   assert.equal(docker.wrap({ root: '/r', command: 'ls', cwd: './' }).command, 'docker run --rm -v "/r:/work" -w /work node:22-bookworm sh -lc "ls"');
 });
 
-test('wrap refuses what it cannot quote rather than escaping it', () => {
-  const refusals = [
-    ['echo "hi"', /double quote/],
-    ['echo `id`', /backtick/],
-    ['echo $HOME', /dollar/],
-    ['echo %PATH%', /percent/],
-    ['printf a\\nb', /backslash/],
-    ['ls\nrm -rf /', /line break/],
-  ];
-  for (const [command, why] of refusals) {
-    const r = docker.wrap({ root: '/r', command });
-    assert.equal(r.ok, false, command);
-    assert.match(r.reason, why, command);
-    assert.match(r.reason, /Refused/);
+test('NEURA-023: what the host shell would rewrite goes to a script file, never onto the line', () => {
+  const scripted = ['echo "hi"', 'echo `id`', 'echo $HOME', 'echo %PATH%', 'printf a\\nb', 'ls\nnpm test'];
+  for (const command of scripted) {
+    const r = docker.wrap({ root: 'C:\\p', command, id: 'abc123' });
+    assert.equal(r.ok, true, command);
+    assert.equal(r.command, 'docker run --rm -v "C:\\p:/work" -w /work node:22-bookworm sh /work/.neuraos/sandbox-abc123.sh', command);
+    assert.equal(r.script.path, '.neuraos/sandbox-abc123.sh');
+    assert.ok(r.script.content.includes(command), 'the command is written byte for byte: ' + command);
+    assert.ok(r.script.content.endsWith('\n'));
+    for (const ch of ['`', '$', '%', '\n']) {
+      assert.ok(!r.command.includes(ch), 'the docker line never carries ' + JSON.stringify(ch));
+    }
+    assert.equal((r.command.match(/"/g) || []).length, 2, 'the only quotes are the mount path\'s');
   }
+  // CRLF from a Windows editor would reach sh as part of a word.
+  assert.equal(docker.wrap({ root: '/r', command: 'echo $A\r\necho b', id: 'x1' }).script.content.includes('\r'), false);
+  // A cwd still becomes -w; an unusable id is replaced with a fresh one.
+  const inSub = docker.wrap({ root: '/r', command: 'echo $X', cwd: 'pkg', id: 'NOT OK' });
+  assert.match(inSub.command, /^docker run --rm -v "\/r:\/work" -w "\/work\/pkg" node:22-bookworm sh \/work\/\.neuraos\/sandbox-[a-z0-9]+\.sh$/);
+  // Plain commands keep the plain line.
+  assert.equal(docker.wrap({ root: '/r', command: 'npm test' }).script, undefined);
+  // Still refused: NUL, and a folder that escapes the project.
+  const nul = docker.wrap({ root: '/r', command: 'echo a\u0000b' });
+  assert.equal(nul.ok, false);
+  assert.match(nul.reason, /NUL/);
+  assert.equal(docker.wrap({ root: '/r', command: 'echo $X', cwd: '../up' }).ok, false);
+  assert.equal(docker.removeLine('C:\\p', '.neuraos/sandbox-a1.sh'), 'del /q .neuraos\\sandbox-a1.sh');
+  assert.equal(docker.removeLine('/home/me/p', '.neuraos/sandbox-a1.sh'), 'rm -f .neuraos/sandbox-a1.sh');
+});
+
+test('NEURA-023: run writes the script through the confined write, runs it, and deletes it even on failure', async () => {
+  docker.resetCheck();
+  const on = { enabled: true, image: 'node:22-bookworm' };
+  const calls = [];
+  const writes = [];
+  const files = { write: async (p, c) => { writes.push({ p, c }); calls.push('write ' + p); } };
+  let fail = false;
+  const runner = async (command, cwd, timeoutMs) => {
+    calls.push(command);
+    if (fail && command.startsWith('docker run')) throw new Error('container died');
+    return { exitCode: 0, timedOut: false, stdout: '', stderr: '' };
+  };
+  await docker.run({ root: '/r', command: 'echo "$HOME"', settings: on, files, id: 'q1' }, runner);
+  assert.deepEqual(calls, [
+    'docker version',
+    'write .neuraos/sandbox-q1.sh',
+    'docker run --rm -v "/r:/work" -w /work node:22-bookworm sh /work/.neuraos/sandbox-q1.sh',
+    'rm -f .neuraos/sandbox-q1.sh',
+  ]);
+  assert.ok(writes[0].c.includes('echo "$HOME"'));
+
+  calls.length = 0;
+  fail = true;
+  await assert.rejects(docker.run({ root: 'C:\\r', command: 'echo %X%', settings: on, files, id: 'q2' }, runner), /container died/);
+  assert.equal(calls[calls.length - 1], 'del /q .neuraos\\sandbox-q2.sh', 'deleted after a failed run too');
+
+  // A caller without a file writer cannot use script mode: said, nothing runs.
+  calls.length = 0;
+  await assert.rejects(docker.run({ root: '/r', command: 'echo $X', settings: on }, runner), /needs a script file/);
+  assert.deepEqual(calls, []);
+  docker.resetCheck();
+});
+
+test('wrap still refuses what cannot be mounted or run', () => {
   assert.equal(docker.wrap({ root: '/r', command: '   ' }).ok, false);
   assert.match(docker.wrap({ root: 'C:\\a"b', command: 'ls' }).reason, /double quote/);
   assert.match(docker.wrap({ root: '/a/$x', command: 'ls' }).reason, /dollar/);
@@ -165,7 +214,7 @@ test('run: Docker not running is said plainly, nothing runs, and the check is re
   up = true;
   await docker.run({ root: '/r', command: 'npm test', settings: on }, runner);
   assert.equal(calls.length, 3);
-  await assert.rejects(docker.run({ root: '/r', command: 'echo "x"', settings: on }, runner), /double quote/);
+  await assert.rejects(docker.run({ root: '/r', command: 'echo a' + String.fromCharCode(0) + 'b', settings: on }, runner), /NUL/);
   docker.resetCheck();
 });
 
@@ -174,8 +223,11 @@ test('both coding-agent runCmd callbacks go through the Docker sandbox; the togg
   const parallel = read('desktop', 'src', 'screens', 'ParallelScreen.tsx');
   for (const src of [code, parallel]) {
     assert.match(src, /import '\.\.\/docker-sandbox\.js';/);
-    assert.match(src, /runCmd:[\s\S]{0,200}?dockerSandbox\.run\(/);
+    assert.match(src, /runCmd:[\s\S]{0,400}?dockerSandbox\.run\(/);
     assert.doesNotMatch(src, /runCmd:[^\n]*=> runLocal\(/, 'no runCmd bypasses the sandbox');
+    // NEURA-023: script-file mode writes through the confined project write.
+    assert.match(src, /dockerSandbox\.run\(\{[^}]*\bfiles\b/);
+    assert.match(src, /write: \([^)]*\) => writeLocalFile\(/);
   }
   assert.match(code, /Run agent commands in Docker/);
   assert.match(code, /dockerSandbox\.saveSettings\(/);

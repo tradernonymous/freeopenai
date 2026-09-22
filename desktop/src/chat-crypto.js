@@ -112,14 +112,70 @@
   function loadOrCreateKey(store) {
     return Promise.resolve(store.get()).then(function (existing) {
       if (existing) return importKey(existing);
-      return generateKey().then(exportKey).then(function (base64) {
-        return Promise.resolve(store.set(base64))
-          .then(function () { return store.get(); })
-          .then(function (stored) {
-            if (stored !== base64) throw new Error('the credential store did not keep the chat key');
-            return importKey(base64);
-          });
+      return createKey(store);
+    });
+  }
+
+  /** A new key, stored (replacing whatever was there) and read back. */
+  function createKey(store) {
+    return generateKey().then(exportKey).then(function (base64) {
+      return Promise.resolve(store.set(base64))
+        .then(function () { return store.get(); })
+        .then(function (stored) {
+          if (stored !== base64) throw new Error('the credential store did not keep the chat key');
+          return importKey(base64);
+        });
+    });
+  }
+
+  // chats.js reads this code (UNREADABLE there) and offers the recovery
+  // notice instead of a quiet fallback (NEURA-022).
+  var UNREADABLE = 'chat-key-unreadable';
+
+  function unreadable(reason, rows, detail) {
+    var error = new Error(detail || 'the chat key does not open the stored chats');
+    error.code = UNREADABLE;
+    error.reason = reason;
+    error.rows = rows;
+    return error;
+  }
+
+  /**
+   * The backend for chats.hydrate, with the key decided first:
+   *
+   *   * a key that imports -> use it (list() still says so if it opens nothing);
+   *   * no key, or one that is not a key, and the file HAS rows -> an
+   *     UNREADABLE error: a new key must not be made over chats it cannot open,
+   *     because that hides them for good behind a history that looks empty;
+   *   * no usable key and no rows -> make one (the first run).
+   *
+   * `store` is { get, set } over the credential store; `call` is bridge.call.
+   * A credential store that cannot be read at all is an ordinary error.
+   */
+  function openBackend(options) {
+    var call = options.call;
+    var store = options.store;
+    function rowCount() {
+      return Promise.resolve(call('chat_store_list')).then(function (rows) {
+        return Array.isArray(rows) ? rows.length : 0;
       });
+    }
+    return Promise.resolve(store.get()).then(function (existing) {
+      if (!existing) {
+        return rowCount().then(function (n) {
+          if (n) throw unreadable('missing', n, 'the chat key is missing from the credential store');
+          return createKey(store);
+        });
+      }
+      return importKey(existing).catch(function (e) {
+        return rowCount().then(function (n) {
+          if (n) throw unreadable('unusable', n, (e && e.message) || 'the chat key is not usable');
+          // Nothing sealed with it: replacing it loses nothing.
+          return createKey(store);
+        });
+      });
+    }).then(function (key) {
+      return backend({ call: call, key: key });
     });
   }
 
@@ -150,7 +206,7 @@
             // credential entry was lost or replaced), not a few damaged rows.
             // Say so rather than show an empty history over the real one.
             if (list.length && !opened.length) {
-              throw new Error('the chat key does not open the stored chats');
+              throw unreadable('wrong-key', list.length);
             }
             return opened;
           });
@@ -186,6 +242,9 @@
     encrypt: encrypt,
     decrypt: decrypt,
     loadOrCreateKey: loadOrCreateKey,
+    createKey: createKey,
+    UNREADABLE: UNREADABLE,
+    openBackend: openBackend,
     backend: backend,
   };
 });

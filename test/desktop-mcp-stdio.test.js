@@ -155,7 +155,8 @@ test('the shell registers the four commands, and reaps servers on Quit', () => {
     assert.ok(main.includes(`mcp::${name},`) || main.includes(`mcp::${name}\n`), `main.rs registers ${name}`);
   }
   const quit = main.slice(main.indexOf('"quit" => {'));
-  assert.ok(quit.indexOf('mcp::shutdown();') > 0 && quit.indexOf('mcp::shutdown();') < quit.indexOf('app.exit(0)'), 'Quit stops every local server before exiting');
+  // The exit runs on a waiting thread since NEURA-021 (handle.exit after the chat flush).
+  assert.ok(quit.indexOf('mcp::shutdown();') > 0 && quit.indexOf('mcp::shutdown();') < quit.indexOf('.exit(0)'), 'Quit stops every local server before exiting');
 });
 
 test('mcp.rs spawns the program directly and does the MCP handshake', () => {

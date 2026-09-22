@@ -25,12 +25,43 @@ export interface HydrateOptions {
   onNotice?: (text: string) => void;
   /** Debounce before a flush, ms (default 400). */
   delay?: number;
+  /** Told once when the key cannot open the stored chats (NEURA-022). */
+  onRecovery?: (plan: ChatRecovery) => void;
 }
 export interface HydrateResult {
   mode: 'shell' | 'local';
   migrated: number;
   error?: string;
+  /** True when the failure was an unreadable store: see recovery(). */
+  recovery?: boolean;
 }
+export type ChatRecoveryChoice = 'start-fresh' | 'keep-local';
+export interface ChatRecovery {
+  reason: 'missing' | 'unusable' | 'wrong-key' | string;
+  rows: number;
+  text: string;
+  actions: { id: ChatRecoveryChoice; label: string }[];
+}
+export interface ChatRecoverResult {
+  mode: 'shell' | 'local';
+  migrated: number;
+  choice: ChatRecoveryChoice;
+  done: boolean;
+  /** The old file's new name, after start-fresh. */
+  movedTo?: string;
+  error?: string;
+}
+/** The error code chat-crypto puts on "this key cannot open these chats". */
+export declare const UNREADABLE: string;
+export declare function recoveryFor(error: unknown): ChatRecovery | null;
+export declare function recovery(): ChatRecovery | null;
+export declare function recover(
+  choice: ChatRecoveryChoice,
+  options?: {
+    setAside?: () => Promise<string>;
+    backend?: Parameters<typeof hydrate>[0];
+  },
+): Promise<ChatRecoverResult>;
 export declare function hydrate(
   backend:
     | ChatBackend

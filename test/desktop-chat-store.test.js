@@ -392,7 +392,8 @@ test('main.rs registers the module and every command', () => {
 test('the app hydrates at boot, and images are kept only when the store is SQLite', () => {
   const bridge = read('desktop', 'src', 'bridge.ts');
   assert.match(bridge, /export async function chatStoreBackend\(/);
-  assert.match(bridge, /loadOrCreateKey\(\{ get: chatStoreKeyGet, set: chatStoreKeySet \}\)/);
+  // NEURA-022: openBackend, which never makes a key over rows it cannot open.
+  assert.match(bridge, /openBackend\(\{[\s\S]{0,120}?store: \{ get: chatStoreKeyGet, set: chatStoreKeySet \}/);
   const app = read('desktop', 'src', 'App.tsx');
   assert.equal((app.match(/chats\.hydrate\(/g) || []).length, 1, 'one hydrate call');
   const screen = read('desktop', 'src', 'screens', 'ChatScreen.tsx');

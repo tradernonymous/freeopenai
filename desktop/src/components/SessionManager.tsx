@@ -133,6 +133,14 @@ export default function SessionManager({ onExport, onImport, importMsg }: Props)
         </label>
       </div>
       {importMsg && <div className="sidebar-hint">{importMsg}</div>}
+      {/* NEURA-022: the encrypted history opens only with the key in this PC's
+          credential store; an export is the copy that survives losing it. */}
+      {chats.persistent() && (
+        <div className="sidebar-hint export-hint">
+          Tip: Export now and then. Saved chats are encrypted with a key kept in this PC&apos;s credential store;
+          if that key is lost, an export is the copy you can still import.
+        </div>
+      )}
     </div>
   );
 }

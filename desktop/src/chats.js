@@ -98,6 +98,9 @@
     delay: DEFAULT_FLUSH_DELAY,
     onNotice: null,
     noticed: false,
+    // NEURA-022: the store's key cannot open the chats that are there.
+    onRecovery: null,
+    recovery: null,
   };
 
   function legacyStorage() {
@@ -222,6 +225,7 @@
     var opts = options || {};
     if (opts.storage !== undefined) state.storage = opts.storage;
     if (typeof opts.onNotice === 'function') state.onNotice = opts.onNotice;
+    if (typeof opts.onRecovery === 'function') state.onRecovery = opts.onRecovery;
     if (typeof opts.delay === 'number' && opts.delay >= 0) state.delay = opts.delay;
     if (!backend) return Promise.resolve({ mode: 'local', migrated: 0 });
     // Once per app: React's dev double-effect, or a second caller, gets the
@@ -314,6 +318,19 @@
         state.mode = 'local';
         state.backend = null;
         var reason = (err && err.message) || String(err);
+        var plan = recoveryFor(err);
+        if (plan) {
+          // Once per launch: a second hydrate (the dev double effect) does not
+          // stack a second notice.
+          var first = !state.recovery;
+          state.recovery = plan;
+          if (first && typeof state.onRecovery === 'function') {
+            try { state.onRecovery(plan); } catch { /* the notice must not break the store */ }
+          } else if (first) {
+            notice('Chat history is in browser storage: ' + reason + '.');
+          }
+          return { mode: 'local', migrated: 0, error: reason, recovery: true };
+        }
         notice('Chat history is in browser storage: the encrypted store is unavailable (' + reason + ').');
         return { mode: 'local', migrated: 0, error: reason };
       });
@@ -389,10 +406,96 @@
     return writeLocal(target, [session].concat(rest(readLocal(target, INBOX_KEY))), INBOX_KEY).ok;
   }
 
+  // The window is going away (reload, close, the tray Quit tearing the
+  // webview down): send what the 400 ms debounce is still holding. A page
+  // cannot hold its own unload open for a promise, so this starts the write
+  // and hopes; the tray Quit waits for it properly (onAppQuitting in App.tsx,
+  // quit_ready in main.rs).
+  function onLeave() {
+    flush().catch(function () { /* flush reports through onNotice */ });
+  }
+
   function listen(on) {
     var scope = typeof globalThis !== 'undefined' ? globalThis : {};
     var method = on ? 'addEventListener' : 'removeEventListener';
-    if (typeof scope[method] === 'function') scope[method]('storage', onStorage);
+    if (typeof scope[method] !== 'function') return;
+    scope[method]('storage', onStorage);
+    scope[method]('pagehide', onLeave);
+    scope[method]('beforeunload', onLeave);
+  }
+
+  // ---- an unreadable store (NEURA-022) ----------------------------------------
+  //
+  // The key is gone from the credential store, or it no longer opens the rows
+  // that are there. Falling back to localStorage quietly would leave the person
+  // with an empty history and no idea why, so the store says so once and offers
+  // two ways on. Neither deletes anything: "start fresh" renames the old file
+  // (chat_store_set_aside) and makes a new key; "keep browser storage" changes
+  // nothing and asks again next launch.
+  var UNREADABLE = 'chat-key-unreadable';
+  var RECOVERY_ACTIONS = [
+    { id: 'start-fresh', label: 'Start fresh (keep the old file)' },
+    { id: 'keep-local', label: 'Keep using browser storage for now' },
+  ];
+
+  /**
+   * What to tell the person about a failure to open the store: a recovery
+   * notice with its two actions when the key cannot open existing chats, or
+   * null for any other failure (those keep the plain one-line notice).
+   */
+  function recoveryFor(error) {
+    if (!error || error.code !== UNREADABLE) return null;
+    var rows = Number(error.rows) > 0 ? Number(error.rows) : 0;
+    var why = error.reason === 'missing'
+      ? 'The key that opens your saved chats is missing from the system credential store'
+      : 'The key in the system credential store does not open your saved chats';
+    return {
+      reason: error.reason || 'unusable',
+      rows: rows,
+      text: why + (rows ? ' (' + rows + ' saved chat' + (rows === 1 ? '' : 's') + ')' : '') + '. '
+        + 'Nothing has been deleted. Start fresh sets the old file aside as chats.unreadable-<time>.sqlite3 '
+        + 'and begins a new encrypted history; or keep using browser storage for now.',
+      actions: RECOVERY_ACTIONS.slice(),
+    };
+  }
+
+  /** The pending recovery notice, or null. */
+  function recovery() {
+    return state.recovery;
+  }
+
+  /**
+   * Answer the recovery notice. 'keep-local' leaves everything as it is.
+   * 'start-fresh' needs options.setAside (renames the old file; resolves with
+   * its new name) and options.backend (as for hydrate, making a new key); it
+   * sets the file aside, then hydrates into the new store, moving the chats
+   * written to localStorage meanwhile across. A failed set-aside keeps the
+   * notice and the localStorage history as they were.
+   */
+  function recover(choice, options) {
+    var opts = options || {};
+    if (!state.recovery) return Promise.resolve({ mode: state.mode, migrated: 0, choice: choice, done: false });
+    if (choice === 'keep-local') {
+      state.recovery = null;
+      return Promise.resolve({ mode: 'local', migrated: 0, choice: choice, done: true });
+    }
+    if (choice !== 'start-fresh') return Promise.reject(new Error('unknown recovery choice: ' + choice));
+    if (typeof opts.setAside !== 'function' || !opts.backend) {
+      return Promise.reject(new Error('starting fresh needs setAside and backend'));
+    }
+    return Promise.resolve()
+      .then(function () { return opts.setAside(); })
+      .then(function (movedTo) {
+        state.recovery = null;
+        state.hydrating = null;
+        // A new store is a new story: its failures deserve their own notice.
+        state.noticed = false;
+        return hydrate(opts.backend).then(function (result) {
+          var out = { mode: result.mode, migrated: result.migrated, choice: choice, done: true, movedTo: movedTo || '' };
+          if (result.error) out.error = result.error;
+          return out;
+        });
+      });
   }
 
   /** Back to the plain localStorage store, forgetting the backend (tests). */
@@ -412,6 +515,8 @@
     state.delay = DEFAULT_FLUSH_DELAY;
     state.onNotice = null;
     state.noticed = false;
+    state.onRecovery = null;
+    state.recovery = null;
   }
 
   function removeLocal(target, key) {
@@ -637,6 +742,10 @@
     handOff: handOff,
     persistent: persistent,
     detach: detach,
+    UNREADABLE: UNREADABLE,
+    recoveryFor: recoveryFor,
+    recovery: recovery,
+    recover: recover,
     byRecency: byRecency,
     isChatSession: isChatSession,
     updatedAtOf: updatedAtOf,

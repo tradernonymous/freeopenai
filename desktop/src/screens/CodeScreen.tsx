@@ -165,7 +165,9 @@ export default function CodeScreen({ localRoot }: { localRoot: string }) {
       },
       runCmd: async (root: string, command: string, cwd?: string) => {
         // docker-sandbox.run is a straight call when the Docker setting is off.
-        return dockerSandbox.run({ root, command, cwd }, (line, at, timeoutMs) =>
+        // A command the host shell would rewrite goes through a script file in .neuraos.
+        const files = { write: (p: string, c: string) => writeLocalFile(root, p, c) };
+        return dockerSandbox.run({ root, command, cwd, files }, (line, at, timeoutMs) =>
           runLocal({ root, runId: 'agent-' + Date.now(), command: line, cwd: at, timeoutMs: timeoutMs ?? 120_000 }));
       },
       onEvent: (event: any) => {
