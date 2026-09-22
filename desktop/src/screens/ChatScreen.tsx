@@ -1080,7 +1080,7 @@ export default function ChatScreen() {
   };
 
   useEffect(() => {
-    if (sending && !busyChat.current) {
+    if (sending && !busyChat.current && active) {
       busyChat.current = active.id;
       window.dispatchEvent(new CustomEvent(threads.ACTIVITY_EVENT, { detail: { id: active.id, busy: true } }));
     } else if (!sending && busyChat.current) {
@@ -1090,18 +1090,22 @@ export default function ChatScreen() {
   }, [sending]);
 
   // An MCP App's ui/message (McpAppFrame) is text for the person to review:
-  // it joins the draft and is never sent on its own.
+  // it joins the draft and is never sent on its own. `active` is null until
+  // the first chat exists, so the dependencies are read through `?.` -- a
+  // plain `active.id` here crashed the app on a fresh start.
+  const insertChatId = active?.id;
+  const insertDraft = active?.draft;
   useEffect(() => {
     const onInsert = (e: Event) => {
       const text = String((e as CustomEvent).detail?.text || '').trim();
-      if (!text) return;
+      if (!text || !active) return;
       e.preventDefault();
       patchSession(active.id, { draft: active.draft ? `${active.draft.replace(/\s+$/, '')}\n${text}` : text });
       inputRef.current?.focus();
     };
     window.addEventListener('freeai4u:composer-insert', onInsert);
     return () => window.removeEventListener('freeai4u:composer-insert', onInsert);
-  }, [active.id, active.draft]);
+  }, [insertChatId, insertDraft]);
 
   // Ctrl+V with a picture on the clipboard attaches it; text pastes normally.
   useEffect(() => {

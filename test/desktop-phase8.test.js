@@ -140,3 +140,18 @@ test('Ollama think follows /reasoning, and its thinking is folded into <think>',
   const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
   assert.match(chat, /offered, active\.reasoning\);/);
 });
+
+// ---- hotfixes -----------------------------------------------------------------
+
+test('Chat never reads active.* in a hook dependency list (null before the first chat)', () => {
+  const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
+  const deps = chat.match(/\}, \[[^\]]*\]\);/g) || [];
+  for (const d of deps) assert.ok(!/active\.[a-z]/i.test(d), `unsafe dependency list: ${d}`);
+});
+
+test('there is exactly one tray icon: built in main.rs with the app icon, none in the config', () => {
+  const conf = JSON.parse(read('desktop', 'src-tauri', 'tauri.conf.json'));
+  assert.equal(conf.app.trayIcon, undefined, 'a config trayIcon is a second, dead icon');
+  const main = read('desktop', 'src-tauri', 'src', 'main.rs');
+  assert.match(main, /tray\.icon\(icon\.clone\(\)\)/);
+});

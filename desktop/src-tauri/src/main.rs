@@ -179,7 +179,13 @@ fn main() {
             let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
 
-            let _tray = TrayIconBuilder::new()
+            // The ONE tray icon: tauri.conf.json must not declare `trayIcon`
+            // as well, or Windows shows a second, dead icon beside this one.
+            let mut tray = TrayIconBuilder::with_id("main").tooltip("NeuraOS");
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            let _tray = tray
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {
