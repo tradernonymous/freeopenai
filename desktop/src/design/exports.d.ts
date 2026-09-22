@@ -52,3 +52,24 @@ export declare function projectFiles(opts: {
   versions?: Array<{ label: string; html: string; ts: number }>;
   now?: number;
 }): Array<[string, string]>;
+
+/** Framework exports (Phase 12f). */
+export declare function componentName(name: string): string;
+export declare function htmlToJsx(html: string, notes?: { handlers: number; scripts: number; customProps?: boolean }): string;
+export interface ReactExport {
+  name: string;
+  tsx: string;
+  css: string;
+  tokens: string;
+  files: Array<[string, string]>;
+}
+export declare function toReact(html: string, name: string): ReactExport;
+export interface FrameworkPrompt {
+  name: string;
+  language: 'dart' | 'swift';
+  fileName: string;
+  messages: Array<{ role: 'system' | 'user'; content: string }>;
+}
+export declare function toFlutter(html: string, name: string): FrameworkPrompt;
+export declare function toSwiftUI(html: string, name: string): FrameworkPrompt;
+export declare function codeFromReply(reply: string, language?: string): string;

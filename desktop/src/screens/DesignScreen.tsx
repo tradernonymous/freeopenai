@@ -26,6 +26,7 @@ import '../design/critique.js';
 import '../design/social.js';
 import '../design/exports.js';
 import '../design/diagram-layout.js';
+import '../design/components.js';
 // zip.js first: office.js takes its zip writer from the global.
 import '../files/zip.js';
 import '../files/office.js';
@@ -42,6 +43,7 @@ const critiqueLib: typeof import('../design/critique.js') = (globalThis as any).
 const social: typeof import('../design/social.js') = (globalThis as any).FreeAI4USocial;
 const exportsLib: typeof import('../design/exports.js') = (globalThis as any).FreeAI4UDesignExports;
 const diagramLib: typeof import('../design/diagram-layout.js') = (globalThis as any).FreeAI4UDiagramLayout;
+const componentsLib: typeof import('../design/components.js') = (globalThis as any).FreeAI4UDesignComponents;
 const zip: typeof import('../files/zip.js') = (globalThis as any).FreeZip;
 const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
@@ -118,7 +120,7 @@ interface Pin {
 }
 
 type Tool = 'view' | 'comment' | 'edit';
-type Tab = 'tweaks' | 'tokens' | 'comments' | 'checks' | 'history';
+type Tab = 'tweaks' | 'tokens' | 'components' | 'comments' | 'checks' | 'history';
 
 type Viewport = import('../design/stage.js').PresetId;
 const VIEWPORTS = stageLib.PRESETS;
@@ -134,12 +136,15 @@ const DIAGRAM_TEMPLATE: Template = {
   description: 'Nodes and edges, laid out left to right with rounded orthogonal connectors (at most 9 nodes). Imports Mermaid flowcharts.',
 };
 
-type ExportKind = 'png' | 'svg' | 'pptx' | 'zip';
+type ExportKind = 'png' | 'svg' | 'pptx' | 'zip' | 'react' | 'flutter' | 'swiftui';
 const EXPORTS: Array<{ value: ExportKind; label: string; note: string }> = [
   { value: 'png', label: 'PNG', note: 'each artboard (a slide, or the page)' },
   { value: 'svg', label: 'SVG', note: 'each artboard, as foreignObject' },
   { value: 'pptx', label: 'PPTX', note: 'one slide per section.slide (text)' },
   { value: 'zip', label: 'Project ZIP', note: 'page, tokens, DESIGN.md, history' },
+  { value: 'react', label: 'React component (.tsx + .css)', note: 'a deterministic JSX conversion, tokens.css beside it' },
+  { value: 'flutter', label: 'Flutter widget (AI)', note: 'the current model translates the page; tokens become theme constants' },
+  { value: 'swiftui', label: 'SwiftUI view (AI)', note: 'the current model translates the page; tokens become theme constants' },
 ];
 
 const THREAD_PREFIX = 'freeai4u.design_thread.';
@@ -779,6 +784,17 @@ export default function DesignScreen() {
     });
   };
 
+  /** A palette component into the canvas: its CSS once, its markup before </main>, as a new version. */
+  const insertComponent = (id: string) => {
+    if (!canvasHtml || !active || draft) return;
+    const part = componentsLib.get(id);
+    if (!part) return;
+    // An in-frame edit waiting to be saved would otherwise land after this and undo it.
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    commit(componentsLib.insertInto(artifact.strip(canvasHtml), id), `Component: ${part.label}`);
+    pushToast('ok', `${part.label} added to the page.`);
+  };
+
   const exportAs = async (kind: ExportKind) => {
     if (!canvasHtml || !active || exporting) return;
     setLastExport(kind);
@@ -804,6 +820,20 @@ export default function DesignScreen() {
         if (!deck.slides.length) { pushToast('warn', 'PPTX needs a deck: slides as <section class="slide">.'); return; }
         const deckBytes = await office.writePptx(active.name, deck.slides, { size: deck.size });
         pushToast('ok', await saveFile({ name: `${slug}.pptx`, bytes: deckBytes, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
+      } else if (kind === 'react') {
+        // Deterministic: the component, its stylesheet and tokens.css, zipped together.
+        const out = exportsLib.toReact(artifact.strip(canvasHtml), active.name);
+        const archive = await zip.writeZip(out.files.map(([file, text]) => ({ name: `${out.name}/${file}`, data: bytes(text) })));
+        pushToast('ok', await saveFile({ name: `${slug}-react.zip`, bytes: archive, mime: 'application/zip' }));
+      } else if (kind === 'flutter' || kind === 'swiftui') {
+        // No honest string mapping exists, so the current model translates.
+        if (!provider || !model) { pushToast('warn', 'Pick a model on the left first: it writes the translation.'); return; }
+        const job = (kind === 'flutter' ? exportsLib.toFlutter : exportsLib.toSwiftUI)(artifact.strip(canvasHtml), active.name);
+        pushToast('info', `Asking ${model} for the ${kind === 'flutter' ? 'Flutter widget' : 'SwiftUI view'}…`);
+        const reply = await collect(job.messages, new AbortController());
+        const code = exportsLib.codeFromReply(reply, job.language);
+        if (!code.trim()) { pushToast('warn', 'The model replied with no code. Try again, or a larger model.'); return; }
+        pushToast('ok', await saveFile({ name: job.fileName, bytes: bytes(code), mime: 'text/plain' }));
       } else {
         const files = exportsLib.projectFiles({
           name: active.name,
@@ -1079,7 +1109,7 @@ export default function DesignScreen() {
 
       <aside className="studio-right">
         <div className="inspector-tabs" role="tablist" aria-label="Inspector">
-          {(['tweaks', 'tokens', 'comments', 'checks', 'history'] as Tab[]).map((t) => (
+          {(['tweaks', 'tokens', 'components', 'comments', 'checks', 'history'] as Tab[]).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
               {t === 'comments' && pins.length ? `Comments ${pins.length}` : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
@@ -1247,6 +1277,25 @@ export default function DesignScreen() {
                 </div>
               </div>
             ) : <div className="empty">Checks run on the canvas once there is a page.</div>
+          )}
+
+          {tab === 'components' && (
+            <div className="components-tab">
+              <p className="settings-hint">
+                Built from the page's own tokens (var(--accent), var(--space)…), so they follow the system and Tweaks.
+                Click one to add it at the end of the page, as a new version.
+              </p>
+              {!canvasHtml && <div className="empty">Components can be added once there is a page.</div>}
+              <div className="component-palette">
+                {componentsLib.COMPONENTS.map((c) => (
+                  <button key={c.id} className="component-tile" onClick={() => insertComponent(c.id)}
+                    disabled={!canvasHtml || !!draft} title={draft ? 'Apply or discard the draft first' : `Add ${c.label.toLowerCase()} to the page`}>
+                    <span className="component-name">{c.label}</span>
+                    <span className="component-note">{c.note}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {tab === 'history' && (

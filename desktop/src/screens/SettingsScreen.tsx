@@ -4,6 +4,7 @@ import { APP_VERSION } from '../version';
 import ConnectionCard from '../components/ConnectionCard';
 import DiagnosticsCard from '../components/DiagnosticsCard';
 import LocalModelsCard from '../components/LocalModelsCard';
+import DictationCard from '../components/DictationCard';
 import ConnectorsCard from '../components/ConnectorsCard';
 import ShortcutsCard from '../components/ShortcutsCard';
 import AppearanceCard from '../components/AppearanceCard';
@@ -176,6 +177,8 @@ export default function SettingsScreen({ onConnectionChanged, diagnosticsState }
           </section>
 
           <LocalModelsCard />
+
+          <DictationCard />
 
           {/* The engine's own shell, kept but demoted. It only works when the
               server sets WORKSPACE_RUN=1 and the account is signed in, which is

@@ -383,7 +383,294 @@
     return files;
   }
 
+  // ---- framework exports -----------------------------------------------------
+  //
+  // React is a real, deterministic conversion: the page body as JSX, its CSS
+  // in a stylesheet beside it, tokens.css imported. Flutter and SwiftUI have
+  // no honest string-level mapping from HTML/CSS, so those are prompts: the
+  // current model translates the page, with the tokens as theme constants.
+
+  var VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'];
+  var ATTR_NAMES = {
+    'class': 'className',
+    'for': 'htmlFor',
+    tabindex: 'tabIndex',
+    readonly: 'readOnly',
+    maxlength: 'maxLength',
+    minlength: 'minLength',
+    colspan: 'colSpan',
+    rowspan: 'rowSpan',
+    autocomplete: 'autoComplete',
+    autofocus: 'autoFocus',
+    autoplay: 'autoPlay',
+    contenteditable: 'contentEditable',
+    crossorigin: 'crossOrigin',
+    srcset: 'srcSet',
+    enctype: 'encType',
+    novalidate: 'noValidate',
+    allowfullscreen: 'allowFullScreen',
+    datetime: 'dateTime',
+    spellcheck: 'spellCheck',
+    usemap: 'useMap',
+    playsinline: 'playsInline',
+    referrerpolicy: 'referrerPolicy',
+    inputmode: 'inputMode',
+    accesskey: 'accessKey',
+    'xlink:href': 'xlinkHref',
+    'xml:lang': 'xmlLang',
+    'xml:space': 'xmlSpace',
+    value: 'defaultValue',
+    checked: 'defaultChecked',
+  };
+
+  /** "my landing page" -> "MyLandingPage" (a valid component name). */
+  function componentName(name) {
+    var words = text(name).replace(/[^A-Za-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    var out = words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join('');
+    if (!out) out = 'Design';
+    if (/^[0-9]/.test(out)) out = 'Design' + out;
+    return out;
+  }
+
+  function camel(name) {
+    return name.replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); });
+  }
+
+  /** "color: red; margin-top: 4px" -> "{ color: 'red', marginTop: '4px' }". */
+  function styleObject(css) {
+    var parts = [];
+    text(css).split(';').forEach(function (decl) {
+      var at = decl.indexOf(':');
+      if (at < 0) return;
+      var prop = decl.slice(0, at).trim();
+      var value = decl.slice(at + 1).trim();
+      if (!prop || !value) return;
+      var key;
+      if (prop.indexOf('--') === 0) key = "'" + prop + "'";
+      else if (/^-ms-/i.test(prop)) key = camel(prop.slice(1).toLowerCase());
+      else if (prop.charAt(0) === '-') key = camel(prop.slice(1).toLowerCase()).replace(/^./, function (c) { return c.toUpperCase(); });
+      else key = camel(prop.toLowerCase());
+      parts.push(key + ': ' + "'" + value.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'");
+    });
+    return '{ ' + parts.join(', ') + ' }';
+  }
+
+  function jsxAttrName(raw) {
+    var lower = raw.toLowerCase();
+    if (ATTR_NAMES[lower]) return ATTR_NAMES[lower];
+    if (/^(data|aria)-/.test(lower)) return lower;
+    if (raw.indexOf('-') > 0) return camel(raw);
+    if (raw.indexOf(':') > 0) return camel(raw.replace(':', '-'));
+    return raw;
+  }
+
+  /** Attributes React types as numbers. */
+  var NUMERIC_ATTRS = ['tabIndex', 'colSpan', 'rowSpan', 'maxLength', 'minLength', 'size', 'cols', 'rows', 'span'];
+
+  /** One start tag's attributes, as JSX. Inline on* handlers are dropped. */
+  function jsxAttrs(source, notes, tag) {
+    var field = /^(input|textarea|select)$/i.test(tag || '');
+    var out = [];
+    var re = /([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+)))?/g;
+    var m;
+    while ((m = re.exec(source))) {
+      var raw = m[1];
+      var value = m[2] != null ? m[2] : m[3] != null ? m[3] : m[4];
+      if (/^on[a-z]+$/i.test(raw)) { notes.handlers += 1; continue; }
+      // value/checked become defaultValue/defaultChecked on form fields only
+      // (uncontrolled, as the page had them); an <option value> stays value.
+      var name = !field && /^(value|checked)$/i.test(raw) ? raw.toLowerCase() : jsxAttrName(raw);
+      if (raw.toLowerCase() === 'style') {
+        var obj = styleObject(value);
+        // React's CSSProperties has no index for custom properties, so an
+        // object that sets one is asserted to the type.
+        if (/'--/.test(obj)) { notes.customProps = true; out.push('style={' + obj + ' as CSSProperties}'); } else out.push('style={' + obj + '}');
+      } else if (value == null) {
+        out.push(name);
+      } else if (NUMERIC_ATTRS.indexOf(name) >= 0 && /^-?\d+$/.test(value.trim())) {
+        out.push(name + '={' + parseInt(value, 10) + '}');
+      } else if (value.indexOf('"') >= 0) {
+        out.push(name + "={'" + value.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'}");
+      } else {
+        out.push(name + '="' + value + '"');
+      }
+    }
+    return out.length ? ' ' + out.join(' ') : '';
+  }
+
+  /** Text between tags, with JSX's braces escaped. */
+  function jsxText(s) {
+    return s.replace(/[{}>]/g, function (c) { return "{'" + c + "'}"; });
+  }
+
+  /**
+   * HTML (a fragment) -> JSX. Comments, scripts and style blocks are removed
+   * (the styles are the caller's to move); void tags self-close.
+   */
+  function htmlToJsx(html, notes) {
+    var n = notes || { handlers: 0, scripts: 0 };
+    var src = text(html)
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<script\b[\s\S]*?<\/script>/gi, function () { n.scripts += 1; return ''; })
+      .replace(/<style\b[\s\S]*?<\/style>/gi, '');
+    var out = '';
+    var re = /<(\/?)([A-Za-z][\w:-]*)((?:"[^"]*"|'[^']*'|[^'">])*)>/g;
+    var last = 0;
+    var m;
+    while ((m = re.exec(src))) {
+      out += jsxText(src.slice(last, m.index));
+      last = m.index + m[0].length;
+      var closing = m[1] === '/';
+      var tag = m[2];
+      var isVoid = VOID_TAGS.indexOf(tag.toLowerCase()) >= 0;
+      if (closing) {
+        if (!isVoid) out += '</' + tag + '>';
+        continue;
+      }
+      var rest = m[3];
+      var selfClosed = /\/\s*$/.test(rest);
+      if (selfClosed) rest = rest.replace(/\/\s*$/, '');
+      out += '<' + tag + jsxAttrs(rest, n, tag) + (isVoid || selfClosed ? ' />' : '>');
+    }
+    out += jsxText(src.slice(last));
+    return out;
+  }
+
+  /** The page's <body> content (or the whole fragment when there is no body). */
+  function bodyOf(html) {
+    var src = text(html);
+    var m = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(src);
+    if (m) return m[1];
+    return src.replace(/<!doctype[^>]*>/i, '').replace(/<head[^>]*>[\s\S]*?<\/head>/i, '').replace(/<\/?html[^>]*>/gi, '');
+  }
+
+  /**
+   * The page as a React component: { name, tsx, css, tokens, files }. The
+   * :root tokens go to tokens.css; every other rule to <Name>.css, which the
+   * component imports alongside it.
+   */
+  function toReact(html, name) {
+    var comp = componentName(name);
+    var notes = { handlers: 0, scripts: 0, customProps: false };
+    var body = htmlToJsx(bodyOf(html), notes).replace(/^\s*\n/, '').replace(/\s+$/, '');
+    var css = cssOf(html).replace(/:root\s*\{[^}]*\}/g, '').replace(/\n{3,}/g, '\n\n').trim();
+    var tokens = tokensCss(html, ':root {}\n');
+    var dropped = [];
+    if (notes.scripts) dropped.push(notes.scripts + ' <script> block(s)');
+    if (notes.handlers) dropped.push(notes.handlers + ' inline event handler(s)');
+    var indented = body.split('\n').map(function (line) { return line ? '      ' + line : line; }).join('\n');
+    var tsx = [
+      '// ' + comp + ' -- exported from the NeuraOS Design studio ("' + text(name).replace(/[\r\n]/g, ' ') + '").',
+      '// A deterministic HTML -> JSX conversion: class -> className, for -> htmlFor,',
+      '// style strings -> objects, void tags self-closed. Page styles are in',
+      '// ' + comp + '.css, design tokens in tokens.css.',
+      dropped.length ? '// Not carried over (wire these up in React): ' + dropped.join(', ') + '.' : '',
+      notes.customProps ? "import type { CSSProperties } from 'react';" : '',
+      "import './tokens.css';",
+      "import './" + comp + ".css';",
+      '',
+      'export default function ' + comp + '() {',
+      '  return (',
+      '    <>',
+      indented,
+      '    </>',
+      '  );',
+      '}',
+      '',
+    ].filter(function (line, i) { return !((i === 4 || i === 5) && !line); }).join('\n');
+    var cssFile = '/* ' + comp + ' -- the page styles; tokens live in tokens.css. */\n' + (css ? css + '\n' : '');
+    return {
+      name: comp,
+      tsx: tsx,
+      css: cssFile,
+      tokens: tokens,
+      files: [[comp + '.tsx', tsx], [comp + '.css', cssFile], ['tokens.css', tokens]],
+    };
+  }
+
+  var PAGE_LIMIT = 24000;
+
+  function frameworkPrompt(html, name, kind) {
+    var vars = rootVars(html);
+    var page = text(html).replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<!--[\s\S]*?-->/g, '');
+    if (page.length > PAGE_LIMIT) page = page.slice(0, PAGE_LIMIT) + '\n<!-- (truncated) -->';
+    var flutter = kind === 'flutter';
+    var suffix = flutter ? 'Page' : 'View';
+    var base = componentName(name);
+    var comp = new RegExp(suffix + '$').test(base) ? base : base + suffix;
+    var tokenLines = vars.length
+      ? vars.map(function (v) { return '  ' + v.name + ': ' + v.value; }).join('\n')
+      : '  (the page declares no :root tokens; derive a small palette from its CSS)';
+    var system = flutter
+      ? 'You translate HTML/CSS pages into idiomatic Flutter (Dart 3, Material 3). Reply with ONE ```dart code block and nothing else.'
+      : 'You translate HTML/CSS pages into idiomatic SwiftUI (iOS 17 / macOS 14). Reply with ONE ```swift code block and nothing else.';
+    var rules = flutter
+      ? [
+        '- One file: a `' + comp + 'Theme` class of static const theme constants built from the tokens below (Color(0xFF......) for colours, double for lengths), then a StatelessWidget `' + comp + '` that uses only those constants.',
+        '- Map the layout faithfully: flex rows/columns -> Row/Column, grids -> Wrap or GridView, max-width -> ConstrainedBox, scrolling page -> SingleChildScrollView.',
+        '- Keep every piece of copy exactly as written. Buttons and links get empty onPressed/onTap callbacks with a TODO.',
+        '- Imports: package:flutter/material.dart only. No third-party packages, no network images (use a placeholder Container with the token colour).',
+      ]
+      : [
+        '- One file: an `enum ' + comp + 'Theme` (or struct) of static let theme constants built from the tokens below (Color(red:green:blue:) for colours, CGFloat for lengths), then a `struct ' + comp + ': View` that uses only those constants.',
+        '- Map the layout faithfully: flex rows/columns -> HStack/VStack, grids -> LazyVGrid, max-width -> .frame(maxWidth:), a scrolling page -> ScrollView.',
+        '- Keep every piece of copy exactly as written. Buttons and links get empty actions with a TODO.',
+        '- Imports: SwiftUI only. Include a #Preview at the end.',
+      ];
+    var user = [
+      'Translate this page into ' + (flutter ? 'a Flutter widget' : 'a SwiftUI view') + ' named `' + comp + '`.',
+      '',
+      'Design tokens (make these the theme constants):',
+      tokenLines,
+      '',
+      'Rules:',
+      rules.join('\n'),
+      '',
+      'The page:',
+      '```html',
+      page,
+      '```',
+    ].join('\n');
+    return {
+      name: comp,
+      language: flutter ? 'dart' : 'swift',
+      fileName: flutter ? comp.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase() + '.dart' : comp + '.swift',
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    };
+  }
+
+  /** A prompt for the current model: the page as a Flutter widget, tokens as theme constants. */
+  function toFlutter(html, name) {
+    return frameworkPrompt(html, name, 'flutter');
+  }
+
+  /** A prompt for the current model: the page as a SwiftUI view, tokens as theme constants. */
+  function toSwiftUI(html, name) {
+    return frameworkPrompt(html, name, 'swift');
+  }
+
+  /** The code from a model's reply: the longest fenced block (preferring `language`), else the reply. */
+  function codeFromReply(reply, language) {
+    var src = text(reply);
+    var re = /```([\w+-]*)[^\n]*\n([\s\S]*?)```/g;
+    var best = '';
+    var bestTagged = '';
+    var m;
+    while ((m = re.exec(src))) {
+      if (m[2].length > best.length) best = m[2];
+      if (language && m[1].toLowerCase() === language && m[2].length > bestTagged.length) bestTagged = m[2];
+    }
+    var code = bestTagged || best || src;
+    return code.replace(/\s+$/, '') + '\n';
+  }
+
   return {
+    componentName: componentName,
+    htmlToJsx: htmlToJsx,
+    toReact: toReact,
+    toFlutter: toFlutter,
+    toSwiftUI: toSwiftUI,
+    codeFromReply: codeFromReply,
     ARTBOARD_CLASS: ARTBOARD_CLASS,
     slug: slug,
     rootVars: rootVars,
