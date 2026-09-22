@@ -67,6 +67,7 @@
     { id: 'design', hint: 'Send a brief to the Design studio', mode: 'design' },
     { id: 'agent', aliases: ['agents'], hint: 'Run a sub-agent — /agent file-picker find the router code' },
     { id: 'recipe', aliases: ['recipes'], hint: 'Run a saved recipe — /recipe daily-brief topic=rust' },
+    { id: 'research', hint: 'Search the web, read the sources, answer with citations — /research how do heat pumps work' },
     { id: 'model', aliases: ['models'], hint: 'Pick the model', keys: 'Ctrl+M' },
     { id: 'tools', hint: 'Tools and connectors (Settings)' },
     { id: 'mcp', hint: 'MCP servers (Settings)' },
