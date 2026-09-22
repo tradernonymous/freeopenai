@@ -42,13 +42,13 @@ import './chats.js';
 import './connection.js';
 import './onboarding.js';
 import './commands.js';
-import './keymap.js';
+import '../../shared/keymap.js';
 
 const chats: typeof import('./chats.js') = (globalThis as any).FreeAI4UChats;
 const connection: typeof import('./connection.js') = (globalThis as any).FreeAI4UConnection;
 const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4UOnboarding;
 const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
-const keymap: typeof import('./keymap.js') = (globalThis as any).FreeAI4UKeymap;
+const keymap: typeof import('../../shared/keymap.js') = (globalThis as any).FreeAI4UKeymap;
 
 type View = ViewId;
 type RightPanel = 'builds' | 'knowledge' | 'none';
@@ -356,7 +356,7 @@ export default function App() {
     }
   };
 
-  // Every app-wide key goes through ONE table (src/keymap.js): the resolver
+  // Every app-wide key goes through ONE table (shared/keymap.js): the resolver
   // decides what a press means -- priority, the "shortcuts off" switch, the
   // palette being open -- and this only acts on the answer. Alt+N is resolved
   // from the sidebar's own list (navForKey), so the rail and the key agree.

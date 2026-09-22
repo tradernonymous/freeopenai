@@ -9,6 +9,8 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // ../shared holds modules the web app loads too (docs/adr/0002).
+    fs: { allow: ['.', '../shared'] },
   },
   build: {
     outDir: 'dist',

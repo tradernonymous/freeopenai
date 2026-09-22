@@ -270,7 +270,7 @@ test('the way out of zen is hoverable while invisible', () => {
 test('zen mode is reachable from the keyboard and from the palette', () => {
   assert.match(COMMANDS, /id: 'toggle-zen'/, 'the palette lists it');
   assert.match(COMMANDS, /Ctrl\+Shift\+Z/, 'with its shortcut stated');
-  const keymap = require('../desktop/src/keymap.js');
+  const keymap = require('../shared/keymap.js');
   const zen = keymap.BINDINGS.find((b) => b.id === 'zen');
   assert.equal(zen && zen.keys, 'Ctrl+Shift+Z', 'Ctrl+Shift+Z is bound');
   assert.equal(zen.when, 'always', 'and it works with shortcuts off and inside the palette');

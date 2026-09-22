@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { NAV_ITEMS } from '../Sidebar';
 import { pushToast } from './Toasts';
 import { hasShell, quickHotkeySet, selectionHotkeySet } from '../bridge';
-import '../keymap.js';
+import '../../../shared/keymap.js';
 
-const keymap: typeof import('../keymap.js') = (globalThis as any).FreeAI4UKeymap;
+const keymap: typeof import('../../../shared/keymap.js') = (globalThis as any).FreeAI4UKeymap;
 
 /** The Quick window's global hotkey, as the person set it (the shell's default otherwise). */
 export const QUICK_HOTKEY_KEY = 'freeai4u.quick_hotkey';

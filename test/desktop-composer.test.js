@@ -1,4 +1,4 @@
-// Phase 2: the keyboard grammar. The key resolver (src/keymap.js) and the
+// Phase 2: the keyboard grammar. The key resolver (shared/keymap.js) and the
 // composer's modes, `/` and `@` menus (src/composer.js) are pure, so what a
 // key press or a typed character MEANS is tested here; the components only
 // render the answers.
@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const keymap = require('../desktop/src/keymap.js');
+const keymap = require('../shared/keymap.js');
 const composer = require('../desktop/src/composer.js');
 
 const ROOT = path.join(__dirname, '..');

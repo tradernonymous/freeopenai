@@ -32,7 +32,7 @@ const MODULES = [
   [['design/systems.js', 'design/prompt.js'], 'FreeAI4UDesignPrompt'],
   [['design/artifact.js'], 'FreeAI4UArtifact'],
   [['design/versions.js'], 'FreeAI4UDesignVersions'],
-  [['keymap.js'], 'FreeAI4UKeymap'],
+  [['../../shared/keymap.js'], 'FreeAI4UKeymap'],
   [['composer.js'], 'FreeAI4UComposer'],
   [['files/zip.js'], 'FreeZip'],
   // office/pdf take deflate from the global zip.js publishes, so zip runs first
