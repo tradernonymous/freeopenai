@@ -42,6 +42,23 @@
 
   var DECK_RULES = 'This is a deck: each slide is a <section class="slide"> sized 16:9 (width 100vw, aspect-ratio 16/9, overflow hidden), one idea per slide, and the <style> ends with @media print { .slide { break-after: page; } }.';
 
+  // The Tweaks protocol (tweaks.js): a schema of a few controls bound to the
+  // page's own custom properties, and a marked block holding their values.
+  var TWEAKS_RULES = [
+    'Tweaks: offer 3 to 8 controls for the choices a person would most want to adjust on THIS page (accent colour, a type size, density/spacing, corner radius, a dark/light toggle, a layout variant).',
+    'Declare them in the <head> as <script type="application/neura-tweaks+json">{"version":1,"controls":[...]}</script>. Each control binds ONE custom property: {"var":"--accent","label":"Accent","type":"color","default":"#2f6f4f"}; types are only "slider" (with "min","max","step","unit"), "color" (a #hex default), "toggle" (with "on" and "off" values) and "select" (with "options":[{"value":"...","label":"..."}]).',
+    'Make the CSS read those properties with var(), and end the <style> with their current values between the markers: /* neura-tweaks:start */ :root { --accent: #2f6f4f; } /* neura-tweaks:end */',
+  ].join('\n');
+
+  // Diagrams are drawn by the host (diagram-layout.js): the model only sends
+  // the graph, so the house rules hold whatever model made it.
+  var DIAGRAM_RULES = [
+    'You design diagrams for NeuraOS Design. Reply with ONLY the graph, as JSON inside <diagram> ... </diagram>:',
+    '{"nodes":[{"id":"api","label":"API gateway","group":"core"}],"edges":[{"from":"api","to":"db","label":"reads"}]}',
+    'At most 9 nodes: merge or leave out detail rather than exceed it. Labels are 1 to 4 words. Use "group" for at most 2 groups that matter (they get the accent colours); leave the rest ungrouped. Edge labels only where the relationship is not obvious.',
+    'The flow reads left to right, so list nodes roughly in the order things happen. No layout, colours or SVG: the studio draws it.',
+  ].join('\n');
+
   /** 'local' for models on this machine, 'cloud' for everything else. */
   function tierOf(provider) {
     var p = String(provider || '');
@@ -62,8 +79,9 @@
     var lib = systems();
     var tier = o.tier === 'local' ? 'local' : 'cloud';
     var system = o.system || (lib && lib.PRESETS[0]);
-    var sys = [CHARTER, tier === 'local' ? LOCAL_RULES : CLOUD_RULES];
-    if (o.format && o.format.deck) sys.push(DECK_RULES);
+    var sys = [CHARTER, tier === 'local' ? LOCAL_RULES : CLOUD_RULES, TWEAKS_RULES];
+    if (o.format && o.format.deck) sys.push(deckRules(o.format));
+    if (o.platform) sys.push(String(o.platform));
     var user = ['Brief: ' + String(o.brief || '').trim()];
     if (o.format && o.format.label) {
       user.push('Format: ' + o.format.label + (o.format.width ? ' (' + o.format.width + 'x' + o.format.height + (o.format.unit || 'px') + ')' : '') + '.');
@@ -80,6 +98,34 @@
     }
     return [
       { role: 'system', content: sys.join('\n\n') },
+      { role: 'user', content: user.join('\n\n') },
+    ];
+  }
+
+  /**
+   * The deck rules for a stage: 16:9 1920x1080 by default, or a carousel's own
+   * size. Either way the slides are what deck mode navigates and what the
+   * exports split on, and the print block is required.
+   */
+  function deckRules(format) {
+    var w = Number(format && format.width);
+    var h = Number(format && format.height);
+    var own = w >= 320 && h >= 320 && (!format.unit || format.unit === 'px') && !(w === 1920 && h === 1080);
+    if (!own) {
+      return DECK_RULES + ' The stage is 1920x1080: design each slide at that size. Include @media print { @page { size: 1920px 1080px; margin: 0; } } so a PDF has one slide per page.';
+    }
+    return 'This is a set of slides: each slide is a <section class="slide"> exactly ' + w + 'x' + h + 'px (width ' + w + 'px, height ' + h + 'px, overflow hidden), stacked vertically with no gap, one idea per slide. The <style> ends with @media print { @page { size: ' + w + 'px ' + h + 'px; margin: 0; } .slide { break-after: page; } }.';
+  }
+
+  /** One diagram turn: the brief (and the current graph, when revising) -> graph JSON. */
+  function diagramMessages(opts) {
+    var o = opts || {};
+    var user = ['Brief: ' + String(o.brief || '').trim()];
+    if (o.graph && Array.isArray(o.graph.nodes) && o.graph.nodes.length) {
+      user.push('Current diagram -- revise it and keep what the brief does not change:\n' + JSON.stringify({ nodes: o.graph.nodes, edges: o.graph.edges || [] }));
+    }
+    return [
+      { role: 'system', content: DIAGRAM_RULES },
       { role: 'user', content: user.join('\n\n') },
     ];
   }
@@ -110,8 +156,12 @@
     CLOUD_RULES: CLOUD_RULES,
     LOCAL_RULES: LOCAL_RULES,
     DECK_RULES: DECK_RULES,
+    TWEAKS_RULES: TWEAKS_RULES,
+    DIAGRAM_RULES: DIAGRAM_RULES,
     tierOf: tierOf,
+    deckRules: deckRules,
     buildMessages: buildMessages,
+    diagramMessages: diagramMessages,
     commentMessages: commentMessages,
   };
 });

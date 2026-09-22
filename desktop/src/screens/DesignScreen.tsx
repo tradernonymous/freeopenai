@@ -9,6 +9,7 @@ import { hasShell, writeLocalFile } from '../bridge';
 import { saveFile } from '../files/save';
 import { NAVIGATE_EVENT } from '../Sidebar';
 import { DESIGN_BRIEF_KEY } from './ChatScreen';
+import { CODE_HANDOFF_KEY } from './CodeScreen';
 import '../saved-models.js';
 // The design modules are UMD (shared with node:test): the import runs the
 // factory, which hangs the API off globalThis in the browser. systems.js
@@ -19,7 +20,15 @@ import '../design/systems.js';
 import '../design/prompt.js';
 import '../design/artifact.js';
 import '../design/versions.js';
+import '../design/tweaks.js';
+import '../design/stage.js';
+import '../design/critique.js';
+import '../design/social.js';
+import '../design/exports.js';
+import '../design/diagram-layout.js';
+// zip.js first: office.js takes its zip writer from the global.
 import '../files/zip.js';
+import '../files/office.js';
 
 const brand: typeof import('../design/brand.js') = (globalThis as any).FreeAI4UBrand;
 const slop: typeof import('../design/slop.js') = (globalThis as any).FreeAI4USlop;
@@ -27,13 +36,23 @@ const systemsLib: typeof import('../design/systems.js') = (globalThis as any).Fr
 const promptLib: typeof import('../design/prompt.js') = (globalThis as any).FreeAI4UDesignPrompt;
 const artifact: typeof import('../design/artifact.js') = (globalThis as any).FreeAI4UArtifact;
 const versionsLib: typeof import('../design/versions.js') = (globalThis as any).FreeAI4UDesignVersions;
+const tweaksLib: typeof import('../design/tweaks.js') = (globalThis as any).FreeAI4UTweaks;
+const stageLib: typeof import('../design/stage.js') = (globalThis as any).FreeAI4UStage;
+const critiqueLib: typeof import('../design/critique.js') = (globalThis as any).FreeAI4UCritique;
+const social: typeof import('../design/social.js') = (globalThis as any).FreeAI4USocial;
+const exportsLib: typeof import('../design/exports.js') = (globalThis as any).FreeAI4UDesignExports;
+const diagramLib: typeof import('../design/diagram-layout.js') = (globalThis as any).FreeAI4UDiagramLayout;
 const zip: typeof import('../files/zip.js') = (globalThis as any).FreeZip;
+const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 
 type DesignSystem = import('../design/systems.js').DesignSystem;
 type Variant = import('../design/systems.js').Variant;
 type Question = import('../design/artifact.js').Question;
 type Version = import('../design/versions.js').Version;
+type TweakSchema = import('../design/tweaks.js').TweakSchema;
+type Critique = import('../design/critique.js').Critique;
+type SlopFinding = import('../design/slop.js').SlopFinding;
 
 // The Design studio: three panes.
 //
@@ -47,6 +66,12 @@ type Version = import('../design/versions.js').Version;
 // A generation is a DRAFT until "Apply to canvas": it is scored first, and its
 // three directions (by the book, refined, novel) are token swaps done here, so
 // a local model generates once and still offers a choice.
+//
+// Phase 9: the page's own Tweaks schema (tweaks.js, a versioned protocol),
+// device frames and deck mode (stage.js), the extended gate plus an optional
+// model critique (slop.js, critique.js), the diagram type (diagram-layout.js),
+// picture/PPTX/ZIP exports and the handoff to Code (exports.js), and the
+// social templates (social.js).
 
 /** "My models" behind the same call shape streamChat has. */
 const streamMine: typeof streamChat = (provider, body, onFrame, signal) =>
@@ -76,7 +101,7 @@ interface Project {
 
 interface Draft {
   html: string;
-  findings: Array<{ id: string; label: string; why: string; fix: string }>;
+  findings: SlopFinding[];
   score: number;
   assumptions: string[];
   variants: Variant[];
@@ -95,12 +120,27 @@ interface Pin {
 type Tool = 'view' | 'comment' | 'edit';
 type Tab = 'tweaks' | 'tokens' | 'comments' | 'checks' | 'history';
 
-const VIEWPORTS: Record<string, { label: string; width: number; height: number }> = {
-  phone: { label: 'Phone', width: 390, height: 844 },
-  tablet: { label: 'Tablet', width: 820, height: 1180 },
-  desktop: { label: 'Desktop', width: 1440, height: 900 },
-  deck: { label: 'Deck', width: 1920, height: 1080 },
+type Viewport = import('../design/stage.js').PresetId;
+const VIEWPORTS = stageLib.PRESETS;
+
+/** The diagram artifact type: the model sends a graph, the studio draws it. */
+const DIAGRAM_TEMPLATE: Template = {
+  id: 'diagram',
+  label: 'Diagram',
+  category: 'diagram',
+  width: 1200,
+  height: 800,
+  unit: 'px',
+  description: 'Nodes and edges, laid out left to right with rounded orthogonal connectors (at most 9 nodes). Imports Mermaid flowcharts.',
 };
+
+type ExportKind = 'png' | 'svg' | 'pptx' | 'zip';
+const EXPORTS: Array<{ value: ExportKind; label: string; note: string }> = [
+  { value: 'png', label: 'PNG', note: 'each artboard (a slide, or the page)' },
+  { value: 'svg', label: 'SVG', note: 'each artboard, as foreignObject' },
+  { value: 'pptx', label: 'PPTX', note: 'one slide per section.slide (text)' },
+  { value: 'zip', label: 'Project ZIP', note: 'page, tokens, DESIGN.md, history' },
+];
 
 const THREAD_PREFIX = 'freeai4u.design_thread.';
 
@@ -129,6 +169,50 @@ function nidOrder(a: string, b: string): number {
   return 0;
 }
 
+/** An SVG artboard drawn to a canvas: PNG bytes. The SVG holds no external refs, so the canvas stays clean. */
+function svgToPng(svg: string, width: number, height: number): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('No 2D canvas here.')); return; }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('The artboard could not be encoded.')); return; }
+        blob.arrayBuffer().then((buf) => resolve(new Uint8Array(buf)), reject);
+      }, 'image/png');
+    };
+    img.onerror = () => reject(new Error('The artboard could not be drawn as an image.'));
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+}
+
+/** Is a key press meant for a field rather than the deck? */
+function typingIn(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+
+/** The critique radar: five axes, the 5 and 10 rings, the score polygon. */
+function CritiqueRadar({ scores }: { scores: Critique['scores'] }) {
+  const r = critiqueLib.radar(scores, 220);
+  return (
+    <svg className="critique-radar" viewBox={`0 0 ${r.size} ${r.size}`} width={r.size} height={r.size} role="img"
+      aria-label={r.axes.map((a) => `${a.label} ${a.value}`).join(', ')}>
+      <polygon className="radar-ring" points={r.ring} />
+      <polygon className="radar-ring" points={r.mid} />
+      {r.axes.map((a) => <line key={a.id} className="radar-axis" x1={r.size / 2} y1={r.size / 2} x2={a.x} y2={a.y} />)}
+      <polygon className="radar-score" points={r.polygon} />
+      {r.axes.map((a) => (
+        <text key={a.id} className="radar-label" x={a.lx} y={a.ly} textAnchor="middle" dominantBaseline="middle">{a.label} {a.value}</text>
+      ))}
+    </svg>
+  );
+}
+
 export default function DesignScreen() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -153,7 +237,20 @@ export default function DesignScreen() {
   const [error, setError] = useState('');
   const [brandUrl, setBrandUrl] = useState('');
   const [brandBusy, setBrandBusy] = useState(false);
-  const [viewport, setViewport] = useState<keyof typeof VIEWPORTS>('desktop');
+  const [viewport, setViewport] = useState<Viewport>('desktop');
+  // Deck mode: where the frame says it is ({index, count} from neura:deck).
+  const [deck, setDeck] = useState({ index: 0, count: 0 });
+  // The page's full size as the frame reports it (neura:size), for page exports.
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  // The page's own Tweaks schema (neura:tweaks-available) and its values.
+  const [tweakSchema, setTweakSchema] = useState<TweakSchema | null>(null);
+  const [schemaValues, setSchemaValues] = useState<Record<string, string>>({});
+  const [critique, setCritique] = useState<Critique | null>(null);
+  const [critiqueOn, setCritiqueOn] = useState(false);
+  const [critiqueBusy, setCritiqueBusy] = useState(false);
+  const [mermaidText, setMermaidText] = useState('');
+  const [lastExport, setLastExport] = useState<ExportKind>('png');
+  const [exporting, setExporting] = useState(false);
   const [fit, setFit] = useState(true);
   const [tool, setTool] = useState<Tool>('view');
   const [tab, setTab] = useState<Tab>('tweaks');
@@ -171,13 +268,21 @@ export default function DesignScreen() {
   const frameLabel = useRef('Direct edit');
   const frameEdit = useRef('');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const critiqueAbort = useRef<AbortController | null>(null);
 
   const active = projects.find((p) => p.id === activeId) || null;
   const canvasHtml = active?.canvas?.html || '';
   const brandSystem = active?.brand ? systemsLib.fromBrand(active.brand, active.name) : null;
   const allSystems = [...(brandSystem ? [brandSystem] : []), ...systemsLib.PRESETS, ...imported];
   const system = allSystems.find((s) => s.id === systemId) || systemsLib.PRESETS[0];
-  const template = templates.find((t) => t.id === (active?.template || templateId));
+  // The engine's templates, the social ones (social.js) and the diagram type.
+  const allTemplates: Template[] = useMemo(() => [...social.merge(templates), DIAGRAM_TEMPLATE], [templates]);
+  const template = allTemplates.find((t) => t.id === (active?.template || templateId));
+  const socialTpl = template ? social.byId(template.id) : null;
+  const isDiagram = template?.id === DIAGRAM_TEMPLATE.id;
+  const isDeckTemplate = !!socialTpl?.deck || /deck|slide|present/i.test(`${template?.id || ''} ${template?.category || ''}`);
+  // Deck mode's stage: a carousel's own size, else 1920x1080.
+  const stageFormat = socialTpl ? { width: socialTpl.width, height: socialTpl.height, unit: 'px' } : null;
   const tier = promptLib.tierOf(provider);
   const variant = draft?.variants.find((v) => v.id === variantId) || null;
   const shownHtml = draft ? (variantId === 'book' || !variant ? draft.html : artifact.setTweaks(draft.html, variant.vars)) : canvasHtml;
@@ -209,6 +314,11 @@ export default function DesignScreen() {
     } catch { /* nothing handed over */ }
   }, [refresh]);
 
+  // The critique runs by itself only for a cloud provider (critique.js).
+  useEffect(() => {
+    setCritiqueOn(critiqueLib.defaultOn(promptLib.tierOf(provider), isSavedProvider(provider)));
+  }, [provider]);
+
   useEffect(() => {
     if (!provider) { setModels([]); return; }
     if (isSavedProvider(provider)) {
@@ -232,16 +342,22 @@ export default function DesignScreen() {
     setPins([]);
     setQuestions(null);
     setDraft(null);
+    setCritique(null);
   }, [activeId]);
   const hasBrand = !!active?.brand;
   useEffect(() => { if (hasBrand) setSystemId('brand'); }, [activeId, hasBrand]);
+  // A deck or carousel project opens in deck mode.
+  useEffect(() => { if (activeId && isDeckTemplate) setViewport('deck'); }, [activeId, isDeckTemplate]);
 
   // Whatever should be on the canvas, loaded into the frame with the host
   // script -- unless the change came FROM the frame (a direct edit or a
-  // tweak), which the frame already shows.
+  // tweak), which the frame already shows. A reload re-announces the schema
+  // and the deck, so both start over.
   useEffect(() => {
     if (shownHtml && shownHtml === frameEdit.current) return;
     setFrameDoc(shownHtml ? artifact.inject(shownHtml) : '');
+    setTweakSchema(null);
+    setDeck({ index: 0, count: 0 });
   }, [shownHtml]);
 
   // The frame's size follows the stage; "Fit" scales the device down into it.
@@ -296,6 +412,17 @@ export default function DesignScreen() {
         const pin: Pin = { id: `p${Date.now().toString(36)}`, nid: String(data.nid || ''), tag: String(data.tag || ''), text: String(data.text || ''), outer: String(data.outer || ''), comment: '' };
         setPins((prev) => (prev.some((p) => p.nid === pin.nid) ? prev : [...prev, pin]));
         setTab('comments');
+      } else if (data.type === 'neura:tweaks-available') {
+        // Versioned: a schema from another protocol version is not guessed at.
+        if (data.version !== tweaksLib.VERSION) { setTweakSchema(null); return; }
+        const schema = tweaksLib.validateSchema(data.schema);
+        setTweakSchema(schema);
+        setSchemaValues(tweaksLib.initialValues(schema, draft ? draft.html : canvasHtml));
+      } else if (data.type === 'neura:deck') {
+        const count = Math.max(0, Math.min(500, Math.floor(Number(data.count) || 0)));
+        setDeck({ index: stageLib.clampSlide(Number(data.index) || 0, count, 0), count });
+      } else if (data.type === 'neura:size') {
+        setPageSize({ w: Math.max(0, Math.min(8000, Number(data.w) || 0)), h: Math.max(0, Math.min(20000, Number(data.h) || 0)) });
       } else if (data.type === 'neura:html' && !draft && active) {
         // An edit made in the frame: kept without reloading the frame, saved
         // and versioned once the edits pause.
@@ -366,15 +493,23 @@ export default function DesignScreen() {
     setStreamText('');
     setQuestions(null);
     if (!withAnswers) say('you', text);
-    const deck = /deck|slide|present/i.test(`${template?.id || ''} ${template?.category || ''}`) || viewport === 'deck';
-    const messages = promptLib.buildMessages({
-      brief: text,
-      system,
-      tier,
-      format: template ? { label: template.label, width: template.width, height: template.height, unit: template.unit, deck } : { deck },
-      html: canvasHtml ? artifact.strip(canvasHtml) : '',
-      answers: withAnswers,
-    });
+    setCritique(null);
+    const deck = isDeckTemplate || viewport === 'deck';
+    const stage = stageLib.deckSize(stageFormat);
+    const messages = isDiagram
+      ? promptLib.diagramMessages({ brief: text, graph: diagramLib.graphFromHtml(canvasHtml) })
+      : promptLib.buildMessages({
+        brief: text,
+        system,
+        tier,
+        // A deck is designed at its stage size, whatever the template says.
+        format: deck
+          ? { label: template?.label || 'Deck', width: stage.width, height: stage.height, unit: 'px', deck }
+          : template ? { label: template.label, width: template.width, height: template.height, unit: template.unit } : null,
+        html: canvasHtml ? artifact.strip(canvasHtml) : '',
+        answers: withAnswers,
+        platform: socialTpl ? socialTpl.prompt : '',
+      });
     // Record the hook on the project (status, prompt) -- best effort; the
     // artifact itself is produced by the chat route below.
     api.designGenerate({ projectId: active.id, prompt: text, provider, model }).catch(() => {});
@@ -382,6 +517,16 @@ export default function DesignScreen() {
     abortRef.current = controller;
     try {
       const reply = await collect(messages, controller, (acc) => setStreamText(acc.slice(-600)));
+      if (isDiagram) {
+        const graph = diagramLib.extractGraph(reply);
+        if (!graph || !graph.nodes.length) {
+          setError('The model replied, but there was no diagram JSON in it. Try again, or paste a Mermaid flowchart below.');
+          say('studio', 'No diagram came back.');
+          return;
+        }
+        showDiagram(graph, text);
+        return;
+      }
       const found = artifact.extract(reply);
       if (!found.html && found.questions) {
         setQuestions(found.questions);
@@ -400,6 +545,8 @@ export default function DesignScreen() {
       setVariantId('book');
       setBrief('');
       say('studio', `Draft ready: anti-slop score ${verdict.score}/100${verdict.findings.length ? `, ${verdict.findings.length} finding(s)` : ''}. Three directions to pick from.`);
+      // The gate has spoken first; the critique is the second opinion.
+      if (critiqueOn) runCritique(found.html, verdict.findings);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') setError((err as Error).message);
     } finally {
@@ -415,6 +562,48 @@ export default function DesignScreen() {
     commit(html, `AI: ${draft.brief.slice(0, 48)}${variantId === 'book' ? '' : ` (${variant?.label})`}`);
     setDraft(null);
     setTweakValues({});
+  };
+
+  // ---- diagrams: a graph in, a deterministic drawing out ----------------------
+
+  /** A graph drawn as a page and offered as a draft, like any generation. */
+  const showDiagram = (graph: import('../design/diagram-layout.js').Graph, label: string) => {
+    if (!active) return;
+    const html = diagramLib.toPage(graph, { title: active.name, tokens: system.tokens });
+    const verdict = slop.score(html);
+    setDraft({ html, ...verdict, assumptions: graph.message ? [graph.message] : [], variants: systemsLib.variants(system.tokens), brief: label });
+    setVariantId('book');
+    setBrief('');
+    if (graph.trimmed) pushToast('warn', graph.message);
+    say('studio', `Diagram drawn: ${graph.nodes.length} node(s), ${graph.edges.length} edge(s).${graph.trimmed ? ' ' + graph.message : ''}`);
+  };
+
+  const importMermaid = () => {
+    const graph = diagramLib.normalize(diagramLib.parseMermaid(mermaidText));
+    if (!graph.nodes.length) { pushToast('warn', 'No flowchart nodes found (try "A[Start] --> B[Next]").'); return; }
+    showDiagram(graph, 'Imported Mermaid');
+    setMermaidText('');
+  };
+
+  // ---- critique: the optional second opinion, after the gate -----------------
+
+  const runCritique = async (html: string, findings: SlopFinding[]) => {
+    if (!html || !provider || !model || critiqueBusy) return;
+    critiqueAbort.current?.abort();
+    const controller = new AbortController();
+    critiqueAbort.current = controller;
+    setCritiqueBusy(true);
+    try {
+      const reply = await collect(critiqueLib.messages({ html: artifact.strip(html), tier, findings }), controller);
+      const parsed = critiqueLib.parse(reply);
+      if (!parsed) { pushToast('warn', 'The critique came back without scores; try again or a larger model.'); return; }
+      setCritique(parsed);
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') pushToast('error', `Critique failed: ${(err as Error).message}`);
+    } finally {
+      setCritiqueBusy(false);
+      if (critiqueAbort.current === controller) critiqueAbort.current = null;
+    }
   };
 
   // ---- comments: one element at a time, so a small model can do it ---------
@@ -463,6 +652,42 @@ export default function DesignScreen() {
     setTweakValues({});
     commit(artifact.setTweaks(canvasHtml, {}), 'Tweaks reset');
   };
+
+  // The page's own controls (tweaks.js): each value sanitised against its
+  // control, posted as a versioned neura:set-tweaks; the frame writes it into
+  // the page's marker block and sends the page back, which saves a version.
+  const setSchemaTweak = (varName: string, value: string) => {
+    if (!tweakSchema || draft) return;
+    const next = { ...schemaValues, [varName]: value };
+    setSchemaValues(next);
+    frameLabel.current = 'Tweaks';
+    post(tweaksLib.message(tweakSchema, next));
+  };
+  const resetSchemaTweaks = () => {
+    if (!tweakSchema || draft) return;
+    const defaults = tweaksLib.initialValues(tweakSchema, '');
+    setSchemaValues(defaults);
+    frameLabel.current = 'Tweaks reset';
+    post(tweaksLib.message(tweakSchema, defaults));
+  };
+
+  // ---- deck mode ----------------------------------------------------------------
+
+  const goSlide = (delta: number) => {
+    if (!deck.count) return;
+    post({ type: 'neura:deck-go', index: stageLib.clampSlide(deck.index, deck.count, delta) });
+  };
+  // Arrow keys page the deck while the studio (not the frame, not a field) has focus.
+  useEffect(() => {
+    if (viewport !== 'deck' || !deck.count) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (typingIn(e.target)) return;
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); goSlide(1); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); goSlide(-1); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   // ---- brand: extract from a real page through the engine's SSRF-safe fetch --
 
@@ -516,9 +741,13 @@ export default function DesignScreen() {
   };
 
   const exportPdf = () => {
-    // The print engine is the PDF pipeline. The canvas frame stays strict; a
-    // throwaway frame that may open the print dialog (allow-modals) prints a
-    // copy and is removed.
+    // The print engine is the PDF pipeline. Why a copy and not the canvas:
+    // the canvas frame has an opaque origin (sandboxed, never same-origin), so the
+    // host cannot call its contentWindow.print(), and letting the frame print
+    // itself would need allow-modals on the frame that runs model HTML
+    // interactively. Instead a throwaway frame -- still without same-origin,
+    // allowed only to open the print dialog -- prints a copy of the page (its
+    // @media print block makes a deck one slide per page) and is removed.
     if (!canvasHtml) return;
     const frame = document.createElement('iframe');
     frame.setAttribute('sandbox', 'allow-scripts allow-modals');
@@ -528,27 +757,91 @@ export default function DesignScreen() {
     setTimeout(() => frame.remove(), 120000);
   };
 
+  /** Every artboard as SVG: each slide at the stage size, or the page at its full height. */
+  const artboardSvgs = () => {
+    const html = artifact.strip(canvasHtml);
+    // DOMParser builds an inert document: nothing in it runs.
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script').forEach((s) => s.remove());
+    const css = exportsLib.cssOf(html);
+    const pageWidth = viewport === 'deck' ? VIEWPORTS.desktop.width : device.width;
+    const boards = exportsLib.artboards(html, stageLib.deckSize(stageFormat), {
+      width: pageWidth,
+      height: Math.min(16000, pageSize.h && viewport !== 'deck' ? pageSize.h : device.height),
+    });
+    const slides = Array.from(doc.querySelectorAll('section.slide'));
+    const serializer = new XMLSerializer();
+    return boards.map((b) => {
+      const xhtml = b.index >= 0 && slides[b.index]
+        ? serializer.serializeToString(slides[b.index])
+        : Array.from(doc.body.childNodes).map((n) => serializer.serializeToString(n)).join('');
+      return { ...b, svg: exportsLib.artboardSvg({ css, xhtml, width: b.width, height: b.height }) };
+    });
+  };
+
+  const exportAs = async (kind: ExportKind) => {
+    if (!canvasHtml || !active || exporting) return;
+    setLastExport(kind);
+    setExporting(true);
+    const slug = slugOf(active.name);
+    try {
+      if (kind === 'png' || kind === 'svg') {
+        const boards = artboardSvgs();
+        const files = [];
+        for (const b of boards) {
+          files.push({ name: `${b.name}.${kind}`, data: kind === 'svg' ? bytes(b.svg) : await svgToPng(b.svg, b.width, b.height) });
+        }
+        if (files.length === 1) {
+          pushToast('ok', await saveFile({ name: `${slug}-${files[0].name}`, bytes: files[0].data, mime: kind === 'svg' ? 'image/svg+xml' : 'image/png' }));
+        } else {
+          const archive = await zip.writeZip(files.map((f) => ({ name: `${slug}/${f.name}`, data: f.data })));
+          pushToast('ok', await saveFile({ name: `${slug}-${kind}.zip`, bytes: archive, mime: 'application/zip' }));
+        }
+      } else if (kind === 'pptx') {
+        // office.js writes text slides; pictures are not carried (see its writer).
+        const texts = exportsLib.slideTexts(artifact.strip(canvasHtml));
+        if (!texts.length) { pushToast('warn', 'PPTX needs a deck: slides as <section class="slide">.'); return; }
+        const deckBytes = await office.writePptx(active.name, texts);
+        pushToast('ok', await saveFile({ name: `${slug}.pptx`, bytes: deckBytes, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
+      } else {
+        const files = exportsLib.projectFiles({
+          name: active.name,
+          html: artifact.strip(canvasHtml),
+          designMd: systemsLib.designMd(system),
+          fallbackTokens: systemsLib.tokensCss(system),
+          template: active.template,
+          systemName: system.name,
+          versions: versions.map((v) => ({ label: v.label, html: v.html, ts: v.ts })),
+        });
+        const archive = await zip.writeZip(files.map(([file, text]) => ({ name: file, data: bytes(text) })));
+        pushToast('ok', await saveFile({ name: `${slug}-project.zip`, bytes: archive, mime: 'application/zip' }));
+      }
+    } catch (e) {
+      pushToast('error', String((e as Error).message || e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handoff = async () => {
     if (!canvasHtml || !active) return;
     const slug = slugOf(active.name);
-    const files: Array<[string, string]> = [
-      ['index.html', artifact.strip(canvasHtml)],
-      ['tokens.css', systemsLib.tokensCss(system)],
-      ['DESIGN.md', systemsLib.designMd(system)],
-      ['README.md', [
-        `# ${active.name} — handoff`,
-        '',
-        '`index.html` is the approved design, self-contained. `tokens.css` and `DESIGN.md` are the system it was made with.',
-        '',
-        'To implement: keep the tokens as CSS custom properties (or map them to your theme), rebuild the page as components, and keep text contrast at WCAG AA.',
-        '',
-      ].join('\n')],
-    ];
+    // tokens.css is what the PAGE declares (tweaks included); the chosen
+    // system's tokens are the fallback for a page that declares none.
+    const files = exportsLib.handoffFiles({
+      name: active.name,
+      html: artifact.strip(canvasHtml),
+      designMd: systemsLib.designMd(system),
+      fallbackTokens: systemsLib.tokensCss(system),
+    });
     const folder = (() => { try { return localStorage.getItem('freeai4u.localRoot') || ''; } catch { return ''; } })();
     try {
       if (hasShell() && folder) {
-        for (const [file, text] of files) await writeLocalFile(folder, `design-handoff/${slug}/${file}`, text);
-        pushToast('ok', `Handed off to design-handoff/${slug}/ in the open folder.`);
+        const dir = `design-handoff/${slug}`;
+        for (const [file, text] of files) await writeLocalFile(folder, `${dir}/${file}`, text);
+        pushToast('ok', `Handed off to ${dir}/ in the open folder.`);
+        // The Code screen picks the request up on mount (as Design does Chat's brief).
+        try { sessionStorage.setItem(CODE_HANDOFF_KEY, exportsLib.handoffBrief({ name: active.name, dir })); } catch { /* the files are there anyway */ }
         window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: { view: 'code' } }));
         return;
       }
@@ -561,8 +854,10 @@ export default function DesignScreen() {
 
   // ---- layout ----------------------------------------------------------------
 
-  const device = VIEWPORTS[viewport];
-  const scale = fit ? Math.max(0.1, Math.min(1, (box.w - 32) / device.width, (box.h - 32) / device.height)) : 1;
+  const device = stageLib.device(viewport, stageFormat);
+  // Deck mode always fits (letterboxed); the other presets fit on request.
+  const scale = fit || viewport === 'deck' ? stageLib.fitScale(box, device) : 1;
+  const chrome = device.frame === 'browser' ? stageLib.CHROME_HEIGHT : 0;
   const checks = useMemo(() => (canvasHtml ? slop.score(canvasHtml) : null), [canvasHtml]);
 
   return (
@@ -582,7 +877,7 @@ export default function DesignScreen() {
               label="Template"
               title="Which template a new project starts from"
               value={templateId}
-              options={templates.map((t: any) => ({ value: t.id, label: t.label, note: `${t.width}×${t.height}${t.unit}` }))}
+              options={allTemplates.map((t) => ({ value: t.id, label: t.label, note: `${t.width}×${t.height}${t.unit}` }))}
               onPick={(id) => setTemplateId(id)}
             />
             <button onClick={createProject} disabled={!name.trim()} aria-label="Create project"><Icon name="plus" size={14} /></button>
@@ -668,17 +963,28 @@ export default function DesignScreen() {
               : <button className="primary" onClick={() => generate()} disabled={!brief.trim() || !model || !active}>Generate</button>}
           </div>
         )}
+        {isDiagram && active && (
+          <details className="mermaid-import">
+            <summary>Import a Mermaid flowchart</summary>
+            <textarea value={mermaidText} onChange={(e) => setMermaidText(e.target.value)} rows={5} spellCheck={false}
+              placeholder={'flowchart LR\n  A[Request] -->|HTTPS| B(API)\n  B -- reads --> C[(Database)]'} aria-label="Mermaid flowchart" />
+            <button onClick={importMermaid} disabled={!mermaidText.trim() || working}>Draw it</button>
+          </details>
+        )}
         {error && <div className="stream-error"><span>{error}</span></div>}
       </aside>
 
       <main className="studio-centre">
         <div className="design-toolbar">
           <div className="seg" role="group" aria-label="Viewport">
-            {Object.entries(VIEWPORTS).map(([id, v]) => (
-              <button key={id} className={viewport === id ? 'active' : ''} onClick={() => setViewport(id as keyof typeof VIEWPORTS)}>{v.label}</button>
+            {(Object.keys(VIEWPORTS) as Viewport[]).map((id) => (
+              <button key={id} className={viewport === id ? 'active' : ''} onClick={() => setViewport(id)}
+                title={id === 'deck' ? `Deck mode: a ${stageLib.deckSize(stageFormat).width}×${stageLib.deckSize(stageFormat).height} stage, one slide at a time` : `${VIEWPORTS[id].width}×${VIEWPORTS[id].height}${id === 'browser' ? ' in a browser frame' : ''}`}>
+                {VIEWPORTS[id].label}
+              </button>
             ))}
           </div>
-          <button className={fit ? 'active' : ''} onClick={() => setFit((f) => !f)} title="Fit the device to the stage, or show it at 100%">{fit ? `Fit ${Math.round(scale * 100)}%` : '100%'}</button>
+          <button className={fit || viewport === 'deck' ? 'active' : ''} onClick={() => setFit((f) => !f)} disabled={viewport === 'deck'} title="Fit the device to the stage, or show it at 100%">{fit || viewport === 'deck' ? `Fit ${Math.round(scale * 100)}%` : '100%'}</button>
           <div className="seg" role="group" aria-label="Canvas tool">
             {(['view', 'comment', 'edit'] as Tool[]).map((t) => (
               <button key={t} className={tool === t ? 'active' : ''} onClick={() => setTool(t)} disabled={!!draft || !canvasHtml}
@@ -688,9 +994,17 @@ export default function DesignScreen() {
             ))}
           </div>
           <span className="toolbar-spacer" />
-          <button onClick={exportHtml} disabled={!canvasHtml}>HTML</button>
-          <button onClick={exportPdf} disabled={!canvasHtml}>PDF</button>
-          <button onClick={handoff} disabled={!canvasHtml} title="The page, tokens.css and DESIGN.md, into the open folder (or a ZIP)">Handoff to Code</button>
+          <button onClick={exportHtml} disabled={!canvasHtml} title="The page as one self-contained HTML file">HTML</button>
+          <button onClick={exportPdf} disabled={!canvasHtml} title="Print the page (a deck prints one slide per page)">PDF</button>
+          <SelectPill
+            label="Export"
+            title="Export pictures, slides or the whole project"
+            value={lastExport}
+            disabled={!canvasHtml || exporting}
+            options={EXPORTS.map((x) => ({ value: x.value, label: x.label, note: x.note }))}
+            onPick={(k) => exportAs(k as ExportKind)}
+          />
+          <button onClick={handoff} disabled={!canvasHtml} title="The page, tokens.css, DESIGN.md and an implementation README, into the open folder and on to Code (or a ZIP)">Handoff to Code</button>
         </div>
 
         {draft && (
@@ -698,7 +1012,13 @@ export default function DesignScreen() {
             <div className="approval-title">
               Draft — anti-slop score {draft.score}/100
               {draft.findings.length ? ` · ${draft.findings.length} finding(s)` : ' · clean'}
+              {critiqueBusy && ' · critiquing…'}
+              {critique && !critiqueBusy && ` · critique ${critique.average}/10`}
             </div>
+            {/* The deterministic gate first, before any choice is offered. */}
+            {draft.findings.slice(0, 3).map((f) => (
+              <div key={f.id} className="slop-finding"><strong>{f.label}</strong>{f.detail ? ` (${f.detail})` : ''} — {f.why} <em>Fix: {f.fix}</em></div>
+            ))}
             <div className="variant-row" role="radiogroup" aria-label="Direction">
               {draft.variants.map((v) => (
                 <button key={v.id} role="radio" aria-checked={variantId === v.id} className={`variant-chip ${variantId === v.id ? 'active' : ''}`} onClick={() => setVariantId(v.id)} title={v.caption}>
@@ -713,9 +1033,6 @@ export default function DesignScreen() {
             {draft.assumptions.length > 0 && (
               <div className="draft-assumptions">Assumed: {draft.assumptions.join(' · ')}</div>
             )}
-            {draft.findings.slice(0, 3).map((f) => (
-              <div key={f.id} className="slop-finding"><strong>{f.label}</strong> — {f.why} <em>Fix: {f.fix}</em></div>
-            ))}
             <div className="approval-actions">
               <button className="primary" onClick={applyDraft}>Apply to canvas</button>
               <button onClick={() => setBrief(`More like the ${variant?.label || 'current'} direction: `)}>More like this</button>
@@ -724,17 +1041,25 @@ export default function DesignScreen() {
           </div>
         )}
 
-        <div className="studio-stage" ref={stageRef}>
+        <div className={`studio-stage ${viewport === 'deck' ? 'is-deck' : ''}`} ref={stageRef}>
           {frameDoc ? (
-            <div className={`device device-${viewport}`} style={{ width: device.width * scale, height: device.height * scale }}>
-              <iframe
-                ref={iframeRef}
-                title="Design canvas"
-                sandbox="allow-scripts"
-                className={`design-frame tool-${draft ? 'view' : tool}`}
-                srcDoc={frameDoc}
-                style={{ width: device.width, height: device.height, transform: scale === 1 ? undefined : `scale(${scale})` }}
-              />
+            <div className={`device device-${viewport} frame-${device.frame}`} style={{ width: device.width * scale, height: device.outerHeight * scale }}>
+              <div className="device-inner" style={{ width: device.width, height: device.outerHeight, transform: scale === 1 ? undefined : `scale(${scale})` }}>
+                {chrome > 0 && (
+                  <div className="browser-chrome" style={{ height: chrome }} aria-hidden="true">
+                    <span className="browser-dots"><i /><i /><i /></span>
+                    <span className="browser-address">{slugOf(active?.name || 'design')}.local</span>
+                  </div>
+                )}
+                <iframe
+                  ref={iframeRef}
+                  title="Design canvas"
+                  sandbox="allow-scripts"
+                  className={`design-frame tool-${draft ? 'view' : tool}`}
+                  srcDoc={frameDoc}
+                  style={{ width: device.width, height: device.height, top: chrome }}
+                />
+              </div>
             </div>
           ) : (
             <div className="canvas-placeholder">
@@ -742,6 +1067,13 @@ export default function DesignScreen() {
             </div>
           )}
         </div>
+        {viewport === 'deck' && frameDoc && (
+          <div className="deck-nav" role="group" aria-label="Slides">
+            <button onClick={() => goSlide(-1)} disabled={!deck.count || deck.index === 0} aria-label="Previous slide"><Icon name="chevron-right" size={14} className="flip-x" /></button>
+            <span className="deck-counter mono" aria-live="polite">{deck.count ? stageLib.counter(deck.index, deck.count) : 'No <section class="slide"> on this page'}</span>
+            <button onClick={() => goSlide(1)} disabled={!deck.count || deck.index >= deck.count - 1} aria-label="Next slide"><Icon name="chevron-right" size={14} /></button>
+          </div>
+        )}
       </main>
 
       <aside className="studio-right">
@@ -753,9 +1085,48 @@ export default function DesignScreen() {
           ))}
         </div>
         <div className="inspector-body">
+          {tab === 'tweaks' && tweakSchema && (
+            <div className="tweaks page-tweaks">
+              <h4>This page's controls</h4>
+              {draft && <p className="settings-hint">Apply or discard the draft to use them.</p>}
+              {tweakSchema.controls.map((c) => {
+                const value = schemaValues[c.var] ?? String(c.default);
+                return (
+                  <div key={c.var} className="tweak">
+                    <span>{c.label} <span className="mono tweak-var">{c.var}</span></span>
+                    {c.type === 'color' && (
+                      <input type="color" value={value} disabled={!!draft} aria-label={c.label} onChange={(e) => setSchemaTweak(c.var, e.target.value)} />
+                    )}
+                    {c.type === 'slider' && (
+                      <input type="range" min={c.min} max={c.max} step={c.step} value={parseFloat(value)} disabled={!!draft} aria-label={c.label}
+                        onChange={(e) => setSchemaTweak(c.var, `${e.target.value}${c.unit || ''}`)} />
+                    )}
+                    {c.type === 'toggle' && (
+                      <button role="switch" aria-checked={value === c.on} aria-label={c.label} disabled={!!draft} className={`tweak-toggle ${value === c.on ? 'on' : ''}`}
+                        onClick={() => setSchemaTweak(c.var, value === c.on ? String(c.off) : String(c.on))}>
+                        {value === c.on ? 'On' : 'Off'}
+                      </button>
+                    )}
+                    {c.type === 'select' && (
+                      <span className="question-options" role="radiogroup" aria-label={c.label}>
+                        {(c.options || []).map((o) => (
+                          <button key={o.value} role="radio" aria-checked={value === o.value} disabled={!!draft} className={value === o.value ? 'is-picked' : ''}
+                            onClick={() => setSchemaTweak(c.var, o.value)}>{o.label}</button>
+                        ))}
+                      </span>
+                    )}
+                    {c.type !== 'select' && c.type !== 'toggle' && <span className="tweak-value mono">{value}</span>}
+                  </div>
+                );
+              })}
+              <button onClick={resetSchemaTweaks} disabled={!!draft}>Back to the page's defaults</button>
+              <p className="settings-hint">Saved in the page itself, so every version and export keeps them.</p>
+            </div>
+          )}
           {tab === 'tweaks' && (
             vars.length ? (
               <div className="tweaks">
+                {tweakSchema && <h4>Page tokens</h4>}
                 {vars.map((v) => {
                   const value = tweaks[v.name] ?? v.value;
                   const control = artifact.controlFor(v.name, value);
@@ -841,11 +1212,38 @@ export default function DesignScreen() {
           {tab === 'checks' && (
             checks ? (
               <div className="checks-tab">
+                {/* The deterministic gate: free, instant, the same every time -- always first. */}
                 <div className="checks-score">{checks.score}<span>/100</span></div>
                 {!checks.findings.length && <div className="empty">Clean: nothing the anti-slop gate flags.</div>}
                 {checks.findings.map((f) => (
-                  <div key={f.id} className="slop-finding"><strong>{f.label}</strong> — {f.why} <em>Fix: {f.fix}</em></div>
+                  <div key={f.id} className="slop-finding"><strong>{f.label}</strong>{f.detail ? ` (${f.detail})` : ''} — {f.why} <em>Fix: {f.fix}</em></div>
                 ))}
+                <div className="critique">
+                  <h4>Critique</h4>
+                  <label className="critique-auto" title="Off by default for models on this PC: a critique is a second model call">
+                    <input type="checkbox" checked={critiqueOn} onChange={(e) => setCritiqueOn(e.target.checked)} />
+                    <span>After every draft</span>
+                  </label>
+                  <button onClick={() => runCritique(draft ? draft.html : canvasHtml, draft ? draft.findings : checks.findings)} disabled={critiqueBusy || !model || working}>
+                    {critiqueBusy ? 'Critiquing…' : 'Critique'}
+                  </button>
+                  {critiqueBusy && <button className="linkish" onClick={() => critiqueAbort.current?.abort()}>Stop</button>}
+                  {critique && (
+                    <div className="critique-result">
+                      <CritiqueRadar scores={critique.scores} />
+                      <div className="critique-average">{critique.average}<span>/10 average, from {model}</span></div>
+                      {([['Keep', critique.keep], ['Fix', critique.fix], ['Quick wins', critique.quickWins]] as Array<[string, string[]]>).map(([title, items]) => (
+                        items.length ? (
+                          <div key={title} className="critique-list">
+                            <strong>{title}</strong>
+                            <ul>{items.map((item, i) => <li key={i}>{item}</li>)}</ul>
+                          </div>
+                        ) : null
+                      ))}
+                    </div>
+                  )}
+                  {!critique && !critiqueBusy && <p className="settings-hint">A model's view of hierarchy, typography, colour, spacing and originality, scored 1–10. The checks above come first and cost nothing.</p>}
+                </div>
               </div>
             ) : <div className="empty">Checks run on the canvas once there is a page.</div>
           )}

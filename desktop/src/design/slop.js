@@ -42,9 +42,15 @@
       id: 'emoji-icons',
       label: 'Emoji standing in for icons',
       why: 'Emoji render differently on every machine and read as filler.',
+      // An emoji alone in an element, or leading the label of a button, link,
+      // list item or heading ("🚀 Fast setup") -- both are icon duty. Emoji in
+      // running text or in code samples is left alone.
       test: (src) => {
-        const withoutFences = src.replace(/```[\s\S]*?```/g, '');
-        return /<(span|div|button)[^>]*>\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]\s*<\/\1>/u.test(withoutFences);
+        const withoutCode = src.replace(/```[\s\S]*?```/g, '').replace(/<(pre|code)[^>]*>[\s\S]*?<\/\1>/gi, '');
+        const emoji = '(?:[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}]\\uFE0F?)';
+        const alone = new RegExp('<(span|div|button|i|a|li|p|td)[^>]*>\\s*' + emoji + '\\s*<\\/\\1>', 'u');
+        const leading = new RegExp('<(button|a|li|h[1-6])[^>]*>\\s*' + emoji + '\\s+\\S', 'u');
+        return alone.test(withoutCode) || leading.test(withoutCode);
       },
       fix: 'Use inline SVG icons; they inherit color and scale.',
     },
@@ -114,7 +120,7 @@
       id: 'no-focus-style',
       label: 'No visible focus style',
       why: 'Keyboard users cannot see where they are; it fails WCAG 2.4.7.',
-      test: (src) => isDoc(src) && /<(a|button|input|select|textarea)[\s>]/i.test(src) && !/:focus/i.test(styleOf(src)),
+      test: (src) => isDoc(src) && /<(a|button|input|select|textarea)[\s>]/i.test(src) && !/:focus-visible/i.test(styleOf(src)),
       fix: 'Add a :focus-visible outline in the accent colour to links, buttons and fields.',
     },
     {
@@ -125,7 +131,8 @@
         if (!isDoc(src)) return false;
         const css = styleOf(src);
         const tokens = (css.match(/:root\s*\{[^}]*\}/g) || []).join('');
-        const rest = css.replace(/:root\s*\{[^}]*\}/g, '');
+        // A var(--token, #fallback) is traceable to its token; only bare literals count.
+        const rest = css.replace(/:root\s*\{[^}]*\}/g, '').replace(/var\(\s*--[\w-]+\s*,[^)]*\)/g, '');
         const literal = new Set((rest.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi) || []).map((c) => c.toLowerCase()));
         return /--[\w-]+\s*:/.test(tokens) ? literal.size > 3 : literal.size > 6;
       },
@@ -154,7 +161,188 @@
       },
       fix: 'Space in multiples of one unit (var(--space)): 4, 8, 12, 16, 24, 32…',
     },
+    {
+      id: 'banned-display-font',
+      label: 'A default font as the display face',
+      why: 'Poppins, Montserrat, Roboto and friends are the fonts every template ships with; as headlines they say nothing.',
+      test: (src) => {
+        if (!isDoc(src)) return false;
+        const css = styleOf(src);
+        const faces = [];
+        const token = /--font-display\s*:\s*([^;}]+)/i.exec(css);
+        if (token) faces.push(token[1]);
+        const re = /(^|[}\s,>])(h1|h2|h3|\.display|\.hero[\w-]*)\b[^{}]*\{([^}]*)\}/gi;
+        let m;
+        while ((m = re.exec(css))) {
+          const ff = /font-family\s*:\s*([^;}]+)/i.exec(m[3]);
+          if (ff) faces.push(ff[1]);
+        }
+        const hit = faces.map(firstFamily).find((f) => BANNED_DISPLAY.includes(f));
+        return hit ? hit : false;
+      },
+      fix: 'Use the system\'s --font-display (a serif or a face with character); keep default sans faces for body text if at all.',
+    },
+    {
+      id: 'purple-wash',
+      label: 'Purple gradient wash',
+      why: 'A violet-to-anything gradient behind a section is the stock generated backdrop.',
+      test: (src) => {
+        const gradients = String(src).match(/(?:linear|radial|conic)-gradient\((?:[^()]|\([^()]*\))*\)/gi) || [];
+        const blue = /(blue|#3b82f6|#2563eb|#1d4ed8|#60a5fa)/i;
+        // Purple AND blue together is gradient-splash's finding; this is the rest.
+        return gradients.some((g) => !blue.test(g) && isPurpleGradient(g));
+      },
+      fix: 'Drop the wash: a flat var(--paper) surface, with the accent kept for one element.',
+    },
+    {
+      id: 'contrast-fail',
+      label: 'Text contrast below WCAG AA',
+      why: 'A colour and background that resolve to less than 4.5:1 (3:1 for headings) are hard to read and fail WCAG 1.4.3.',
+      test: (src) => {
+        if (!isDoc(src)) return false;
+        const fails = contrastFailures(styleOf(src));
+        return fails.length ? fails.slice(0, 3).map((f) => f.where + ' ' + f.ratio + ':1').join('; ') : false;
+      },
+      fix: 'Darken the text or lighten the surface until the pair reaches 4.5:1; the brand panel shows each role\'s ratio.',
+    },
   ];
+
+  /** Display faces that read as "nobody chose this" in a headline. */
+  const BANNED_DISPLAY = ['poppins', 'montserrat', 'roboto', 'open sans', 'lato', 'arial', 'helvetica', 'raleway', 'nunito', 'comic sans ms', 'papyrus', 'lobster', 'pacifico'];
+
+  function firstFamily(stack) {
+    return String(stack || '').split(',')[0].replace(/["']/g, '').replace(/!important/i, '').trim().toLowerCase();
+  }
+
+  // ---- colour, for the purple and contrast rules -----------------------------
+
+  const NAMED = { black: '#000000', white: '#ffffff', red: '#ff0000', gray: '#808080', grey: '#808080', purple: '#800080', violet: '#ee82ee', indigo: '#4b0082', magenta: '#ff00ff', fuchsia: '#ff00ff', navy: '#000080', silver: '#c0c0c0' };
+
+  /** '#rrggbb' from a hex, rgb() or a few names; null for anything else. */
+  function hexOf(raw) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (NAMED[v]) return NAMED[v];
+    let m = /^#([0-9a-f]{3})$/.exec(v);
+    if (m) return '#' + m[1].split('').map((c) => c + c).join('');
+    m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/.exec(v);
+    if (m) return m[2] && m[2] !== 'ff' ? null : '#' + m[1];
+    m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)\s*(?:[,/]\s*([\d.]+%?))?\s*\)$/.exec(v);
+    if (m) {
+      if (m[4] && parseFloat(m[4]) < (m[4].endsWith('%') ? 100 : 1)) return null;
+      return '#' + [m[1], m[2], m[3]].map((n) => ('0' + Math.min(255, Number(n)).toString(16)).slice(-2)).join('');
+    }
+    return null;
+  }
+
+  function rgbOf(hex) {
+    return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  }
+
+  function luminance(hex) {
+    const [r, g, b] = rgbOf(hex).map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function contrast(a, b) {
+    const la = luminance(a);
+    const lb = luminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  function hueSat(hex) {
+    const [r, g, b] = rgbOf(hex);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    if (!d) return { h: 0, s: 0 };
+    let h;
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+    const l = (max + min) / 2;
+    return { h, s: d / (1 - Math.abs(2 * l - 1)) };
+  }
+
+  function isPurpleGradient(g) {
+    if (/\b(purple|violet|indigo|magenta|fuchsia)\b/i.test(g)) return true;
+    const colours = g.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|rgba?\([^)]*\)/gi) || [];
+    return colours.some((c) => {
+      const hex = hexOf(c);
+      if (!hex) return false;
+      const { h, s } = hueSat(hex);
+      return h >= 255 && h <= 320 && s >= 0.35;
+    });
+  }
+
+  /** A declared value as a solid colour, following var(--token, fallback) chains. */
+  function resolve(value, tokens, depth) {
+    const v = String(value || '').replace(/!important/i, '').trim();
+    if ((depth || 0) > 6) return null;
+    const ref = /^var\(\s*(--[\w-]+)\s*(?:,\s*([^)]+))?\)$/.exec(v);
+    if (ref) {
+      if (tokens[ref[1]] != null) return resolve(tokens[ref[1]], tokens, (depth || 0) + 1);
+      return ref[2] ? resolve(ref[2], tokens, (depth || 0) + 1) : null;
+    }
+    return hexOf(v);
+  }
+
+  /** The background colour a `background` shorthand sets, when it is one plain colour. */
+  function backgroundColour(value, tokens) {
+    const v = String(value || '').trim();
+    if (/gradient\(|url\(/i.test(v)) return null;
+    const direct = resolve(v, tokens);
+    if (direct) return direct;
+    const parts = v.match(/var\([^)]*\)|#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|\b[a-z]+\b/gi) || [];
+    for (const part of parts) {
+      const hex = resolve(part, tokens);
+      if (hex) return hex;
+    }
+    return null;
+  }
+
+  /**
+   * Colour/background pairs the CSS states outright -- in one rule, or the
+   * system's own --ink/--muted on --paper -- that fall below AA.
+   */
+  function contrastFailures(css) {
+    const source = String(css || '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const tokens = {};
+    const roots = source.match(/:root\s*\{[^}]*\}/g) || [];
+    roots.forEach((block) => {
+      const re = /(--[\w-]+)\s*:\s*([^;}]+)/g;
+      let m;
+      while ((m = re.exec(block))) tokens[m[1]] = m[2].trim();
+    });
+    const out = [];
+    const paper = resolve('var(--paper)', tokens);
+    ['--ink', '--muted'].forEach((role) => {
+      const fg = resolve('var(' + role + ')', tokens);
+      if (paper && fg) {
+        const ratio = contrast(fg, paper);
+        if (ratio < 4.5) out.push({ where: role + ' on --paper', ratio: Math.round(ratio * 100) / 100 });
+      }
+    });
+    const rule = /([^{}]+)\{([^{}]*)\}/g;
+    let m;
+    while ((m = rule.exec(source))) {
+      const selector = m[1].trim();
+      if (/^:root$|^@/.test(selector)) continue;
+      const decls = {};
+      m[2].split(';').forEach((d) => {
+        const i = d.indexOf(':');
+        if (i > 0) decls[d.slice(0, i).trim().toLowerCase()] = d.slice(i + 1).trim();
+      });
+      if (!decls.color) continue;
+      const bg = decls['background-color'] ? resolve(decls['background-color'], tokens) : decls.background ? backgroundColour(decls.background, tokens) : null;
+      const fg = resolve(decls.color, tokens);
+      if (!bg || !fg) continue;
+      const ratio = contrast(fg, bg);
+      const large = /(^|[\s,>])h[12]\b/i.test(selector);
+      if (ratio < (large ? 3 : 4.5)) out.push({ where: selector.replace(/\s+/g, ' ').slice(0, 40), ratio: Math.round(ratio * 100) / 100 });
+    }
+    return out;
+  }
 
   function isDoc(src) {
     return /<!doctype html|<html[\s>]/i.test(String(src || ''));
@@ -175,7 +363,11 @@
     for (const rule of RULES) {
       let hit = false;
       try { hit = rule.test(src); } catch { /* a broken rule stays silent */ }
-      if (hit) findings.push({ id: rule.id, label: rule.label, why: rule.why, fix: rule.fix });
+      if (!hit) continue;
+      const finding = { id: rule.id, label: rule.label, why: rule.why, fix: rule.fix };
+      // A rule that can say WHERE (a selector, a ratio, a font) returns it.
+      if (typeof hit === 'string') finding.detail = hit;
+      findings.push(finding);
     }
     return findings;
   }
@@ -183,9 +375,9 @@
   /** Score: 100 with no findings; every finding costs its weight. */
   function score(source) {
     const findings = lint(source);
-    const penalty = findings.reduce((sum, f) => sum + (f.id === 'gray-on-color' ? 20 : 12), 0);
+    const penalty = findings.reduce((sum, f) => sum + (f.id === 'gray-on-color' || f.id === 'contrast-fail' ? 20 : 12), 0);
     return { findings, score: Math.max(0, 100 - penalty) };
   }
 
-  return { RULES, lint, score };
+  return { RULES, BANNED_DISPLAY, lint, score, contrastFailures, hexOf };
 });

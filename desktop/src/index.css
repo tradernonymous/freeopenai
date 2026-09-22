@@ -4603,6 +4603,24 @@ body.quick-body { background: var(--bg-1); }
 .quick-selection { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
 .quick-selection-text { max-height: 72px; overflow: hidden; font-size: 12px; line-height: 1.45; color: var(--text-2); white-space: pre-wrap; border-left: 2px solid var(--accent-mid); padding-left: 8px; }
 .quick-selection-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* Parallel agents (5.7): a form over a grid of agent cards. */
+.parallel-screen { display: flex; flex-direction: column; gap: 16px; height: 100%; overflow-y: auto; padding: 20px 24px; }
+.parallel-head { display: flex; flex-direction: column; gap: 8px; max-width: 880px; }
+.parallel-head h2 { margin: 0; font-size: 18px; }
+.parallel-head textarea { width: 100%; resize: vertical; }
+.parallel-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.parallel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.parallel-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.parallel-card.is-error { border-color: var(--danger, #d9534f); }
+.parallel-card.is-done { border-color: var(--accent-mid); }
+.parallel-card header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.parallel-card header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.parallel-timer { font-size: 12px; color: var(--text-2); }
+.parallel-meta { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parallel-steps { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-2); }
+.parallel-steps li.is-failed { color: var(--danger, #d9534f); }
+.parallel-stat, .parallel-approval pre { max-height: 140px; overflow: auto; margin: 0; padding: 6px 8px; font-size: 11px; background: var(--bg-1); border-radius: 6px; }
+.parallel-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .quick-continue { align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .hf-signin { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .hf-token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
@@ -4663,3 +4681,121 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ---- MCP Apps ---- */
+/* A server's own UI under its tool call (McpAppFrame.tsx): a sandboxed frame. */
+.mcp-app-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.mcp-app-bar > span { flex: 1; }
+.mcp-app-toggle {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.mcp-app { padding: 0 10px 10px; }
+.mcp-app-frame {
+  display: block;
+  width: 100%;
+  min-height: 80px;
+  max-height: 900px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: var(--bg-3, var(--bg));
+  transition: height 0.15s ease;
+}
+.mcp-app-note {
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.mcp-app-ask { margin-top: 6px; border: 1px solid var(--accent); border-radius: calc(var(--radius-sm) - 2px); }
+
+/* ---- Design studio: Phase 9 ---- */
+/* Device frames: the frame is drawn around the page, never inside it. */
+.device-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.device.frame-phone { border: 10px solid var(--bg-2); border-radius: 44px; box-sizing: content-box; }
+.device.frame-tablet { border: 12px solid var(--bg-2); border-radius: 28px; box-sizing: content-box; }
+.device.frame-browser { border-radius: 10px; }
+.device.frame-deck { border-radius: 2px; border-color: transparent; }
+.browser-chrome { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--bg-2); border-bottom: 1px solid var(--border); box-sizing: border-box; }
+.browser-dots { display: inline-flex; gap: 8px; }
+.browser-dots i { width: 12px; height: 12px; border-radius: 50%; background: var(--border); }
+.browser-address { flex: 1; max-width: 560px; margin: 0 auto; padding: 4px 16px; border-radius: 999px; background: var(--bg-1); color: var(--text-3); font-size: 13px; text-align: center; }
+/* Deck mode: the stage letterboxes the slide on a dark field and centres it. */
+.studio-stage.is-deck { align-items: center; background: var(--bg-0); }
+.deck-nav { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--border); }
+.deck-nav button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; }
+.deck-counter { min-width: 72px; text-align: center; font-size: 12px; color: var(--text-2); }
+.icon.flip-x { transform: scaleX(-1); }
+/* The page's own Tweaks controls. */
+.page-tweaks { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.page-tweaks h4, .tweaks h4, .critique h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+.tweak-var { color: var(--text-3); font-size: 10px; margin-left: 4px; }
+.tweak .question-options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.tweak-toggle { font-size: 12px; padding: 2px 10px; border-radius: 999px; }
+.tweak-toggle.on { border-color: var(--accent); background: var(--accent-dim); color: var(--text-1); }
+/* Mermaid import (diagram projects). */
+.mermaid-import { margin-top: 8px; font-size: 12px; }
+.mermaid-import summary { cursor: pointer; color: var(--text-2); }
+.mermaid-import textarea { width: 100%; box-sizing: border-box; margin: 6px 0; font-family: var(--font-mono, monospace); font-size: 12px; }
+/* The critique: after the gate, a radar and three short lists. */
+.critique { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.critique-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.critique-result { display: flex; flex-direction: column; gap: 8px; }
+.critique-radar { align-self: center; overflow: visible; }
+.critique-radar .radar-ring { fill: none; stroke: var(--border); stroke-width: 1; }
+.critique-radar .radar-axis { stroke: var(--border); stroke-width: 1; }
+.critique-radar .radar-score { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 2; }
+.critique-radar .radar-label { fill: var(--text-2); font-size: 10px; }
+.critique-average { font-size: 24px; font-weight: 700; }
+.critique-average span { font-size: 12px; font-weight: 400; color: var(--text-3); margin-left: 4px; }
+.critique-list strong { font-size: 12px; }
+.critique-list ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-2); }
+
+/* ---- Agents and recipes ---- */
+.screen.agents, .screen.recipes { display: flex; flex-direction: column; min-height: 0; }
+.ar-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: 12px; padding: 16px; overflow: auto; }
+.ar-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ar-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-1); }
+.ar-item.active { border-color: var(--accent); background: var(--accent-dim); }
+.ar-item-name { font-size: 13px; color: var(--text-1); }
+.ar-item-meta { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ar-recipe { flex-direction: row; align-items: center; padding: 0 8px 0 0; }
+.ar-item-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border: 0; background: none; }
+.ar-sched { margin: 0; }
+.ar-always { margin-top: 12px; font-size: 12px; color: var(--text-2); }
+.ar-detail { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ar-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ar-detail-head h2 { margin: 0 8px 0 0; font-size: 16px; }
+.ar-detail-head .linkish { margin-left: auto; }
+.ar-tool { margin-right: 4px; font-size: 11px; }
+.ar-run { display: flex; gap: 8px; }
+.ar-run input { flex: 1; min-width: 0; }
+.ar-json { width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px; line-height: 1.45; resize: vertical; }
+.ar-errors { margin: 0; padding: 8px 8px 8px 24px; border: 1px solid var(--err); border-radius: var(--radius-sm); color: var(--err); font-size: 12px; }
+.ar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ar-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.ar-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); min-width: 0; }
+.ar-form label.toggle { flex-direction: row; align-items: center; }
+.ar-form .ar-wide { grid-column: 1 / -1; }
+.ar-form textarea, .ar-form input[type='text'] { width: 100%; box-sizing: border-box; }
+@media (max-width: 760px) { .ar-body { grid-template-columns: 1fr; } .ar-form { grid-template-columns: 1fr; } }
+.consent-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.45); }
+.consent-dialog { width: min(520px, 100%); padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); box-shadow: var(--shadow-2); display: flex; flex-direction: column; gap: 8px; }
+.consent-dialog h3 { margin: 0; font-size: 15px; }
+.consent-dialog p { margin: 0; font-size: 13px; color: var(--text-2); }
+.consent-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.consent-cmd { display: block; color: var(--text-3); word-break: break-all; }
+.consent-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

@@ -58,8 +58,20 @@ interface Approval {
 
 // ---- the screen ----------------------------------------------------------
 
+/**
+ * A request handed over from another screen (Design's "Handoff to Code"),
+ * read once on mount -- the same pattern as Chat -> Design's DESIGN_BRIEF_KEY.
+ */
+export const CODE_HANDOFF_KEY = 'freeai4u.codeHandoff';
+
 export default function CodeScreen({ localRoot }: { localRoot: string }) {
   const [request, setRequest] = useState('');
+  useEffect(() => {
+    try {
+      const handed = sessionStorage.getItem(CODE_HANDOFF_KEY);
+      if (handed) { sessionStorage.removeItem(CODE_HANDOFF_KEY); setRequest(handed); }
+    } catch { /* nothing handed over */ }
+  }, []);
   const [steps, setSteps] = useState<Step[]>([]);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [status, setStatus] = useState<string>('idle');

@@ -96,17 +96,35 @@
   //
   // Plain ES5 in a string: it is written into srcdoc, not bundled. Messages it
   // takes (from the parent only): neura:mode {mode}, neura:set-tweaks {vars},
-  // neura:replace {nid, html}, neura:pins {nids}, neura:print. Messages it
-  // sends: neura:ready, neura:pick {nid, tag, text, outer}, neura:html {html}.
+  // neura:replace {nid, html}, neura:pins {nids}, neura:print,
+  // neura:deck-go {index}. Messages it sends: neura:ready, neura:pick {nid,
+  // tag, text, outer}, neura:html {html}, neura:tweaks-available {version,
+  // schema} (tweaks.js validates it), neura:deck {index, count} for pages
+  // made of <section class="slide">, and neura:size {w, h}.
+  //
+  // Tweaks are applied twice: as inline custom properties on :root (so they
+  // win at once, whatever the page's cascade), and into the page's
+  // neura-tweaks:start/end marker block when it has one (so the serialised
+  // page keeps them). The inline copy is removed again on serialisation.
   var HOST_SCRIPT = [
     '(function(){',
-    'var mode="view",hovered=null,timer=0;',
+    'var mode="view",hovered=null,timer=0,applied={},slide=0,deckTimer=0;',
+    // Split so the host script itself never contains a marker a reader could find.
+    'var TS="/* neura-tweaks"+":start */",TE="/* neura-tweaks"+":end */";',
+    'function slides(){return document.querySelectorAll("section.slide");}',
+    'function deckPost(){var n=slides().length;if(n)send({type:"neura:deck",index:slide,count:n});}',
+    'function goSlide(i){var list=slides();if(!list.length)return;slide=Math.max(0,Math.min(list.length-1,i));var r=list[slide].getBoundingClientRect();window.scrollTo(0,r.top+(window.pageYOffset||0));deckPost();}',
+    'function nearest(){var list=slides(),best=0,d=1e9;for(var i=0;i<list.length;i++){var t=Math.abs(list[i].getBoundingClientRect().top);if(t<d){d=t;best=i;}}if(best!==slide){slide=best;deckPost();}}',
+    'function markerStyle(){var st=document.querySelectorAll("style");for(var i=0;i<st.length;i++){if(st[i].id!=="' + HOST_MARK + '-style"&&st[i].textContent.indexOf(TS)>=0)return st[i];}return null;}',
+    'function writeMarkers(vars){var st=markerStyle();if(!st)return false;var t=st.textContent,a=t.indexOf(TS),b=t.indexOf(TE,a);if(b<0)return false;var cur={},re=/(--[\\w-]+)\\s*:\\s*([^;}]+)/g,m,body=t.slice(a+TS.length,b);while((m=re.exec(body)))cur[m[1]]=m[2].trim();',
+    'for(var k in vars)cur[k]=vars[k];var css="";for(var c in cur)css+=c+":"+cur[c]+";";st.textContent=t.slice(0,a)+TS+":root{"+css+"}"+TE+t.slice(b+TE.length);return true;}',
+    'function tweakSchema(){var s=document.querySelector("script[type=\\"application/neura-tweaks+json\\"]");if(!s)return;var raw=s.textContent;try{raw=JSON.parse(raw);}catch(e){}send({type:"neura:tweaks-available",version:1,schema:raw});}',
     'function number(el,path){var kids=el.children;for(var i=0;i<kids.length;i++){var k=kids[i];if(k.id==="' + HOST_MARK + '")continue;var p=path?path+"."+i:String(i);k.setAttribute("data-nid",p);number(k,p);}}',
     'function renumber(){if(document.body)number(document.body,"");}',
     'function clean(root){var sel=["[data-nid]","[data-neura-hover]","[data-neura-pin]"];for(var s=0;s<sel.length;s++){var list=root.querySelectorAll(sel[s]);for(var i=0;i<list.length;i++){list[i].removeAttribute("data-nid");list[i].removeAttribute("data-neura-hover");list[i].removeAttribute("data-neura-pin");}}',
     'var gone=root.querySelectorAll("#' + HOST_MARK + ',#' + HOST_MARK + '-style");for(var j=0;j<gone.length;j++)gone[j].parentNode.removeChild(gone[j]);',
     'var body=root.querySelector("body");if(body){body.removeAttribute("contenteditable");body.removeAttribute("spellcheck");}}',
-    'function serialize(){var copy=document.documentElement.cloneNode(true);clean(copy);return "<!DOCTYPE html>\\n"+copy.outerHTML;}',
+    'function serialize(){var copy=document.documentElement.cloneNode(true);clean(copy);for(var k in applied)copy.style.removeProperty(k);if(copy.getAttribute("style")==="")copy.removeAttribute("style");return "<!DOCTYPE html>\\n"+copy.outerHTML;}',
     'function send(msg){try{parent.postMessage(msg,"*");}catch(e){}}',
     'function sendHtml(){clearTimeout(timer);timer=setTimeout(function(){send({type:"neura:html",html:serialize()});},350);}',
     'function style(){var s=document.createElement("style");s.id="' + HOST_MARK + '-style";',
@@ -122,13 +140,21 @@
     'document.addEventListener("input",function(){if(mode==="edit")sendHtml();},true);',
     'window.addEventListener("message",function(e){if(e.source!==parent)return;var d=e.data||{};',
     'if(d.type==="neura:mode")setMode(d.mode);',
-    'else if(d.type==="neura:set-tweaks"){var st=document.getElementById("neura-tweaks");if(!st){st=document.createElement("style");st.id="neura-tweaks";(document.head||document.documentElement).appendChild(st);}',
-    'var css="";for(var k in d.vars){if(/^--[\\w-]+$/.test(k))css+=k+":"+String(d.vars[k]).replace(/[;{}<]/g,"")+";";}st.textContent="/* neura:tweaks */:root{"+css+"}";sendHtml();}',
+    'else if(d.type==="neura:set-tweaks"){var ok={};for(var k in d.vars){if(/^--[\\w-]+$/.test(k)){var v=String(d.vars[k]).replace(/[;{}<]/g,"").replace(/\\/\\*|\\*\\//g,"");ok[k]=v;applied[k]=1;document.documentElement.style.setProperty(k,v);}}',
+    // A versioned (protocol) message on a page without markers gets a marked block of its own.
+    'if(!writeMarkers(ok)&&d.version){var mk=document.createElement("style");mk.id="neura-tweak-defaults";mk.textContent=TS+":root{}"+TE;(document.head||document.documentElement).appendChild(mk);writeMarkers(ok);}',
+    'else if(!markerStyle()){var st=document.getElementById("neura-tweaks");if(!st){st=document.createElement("style");st.id="neura-tweaks";(document.head||document.documentElement).appendChild(st);}',
+    'var css="";for(var q in ok)css+=q+":"+ok[q]+";";st.textContent="/* neura:tweaks */:root{"+css+"}";}sendHtml();}',
+    'else if(d.type==="neura:deck-go"){goSlide(Number(d.index)||0);}',
     'else if(d.type==="neura:replace"){var el=document.querySelector("[data-nid=\\""+d.nid+"\\"]");if(el){var t=document.createElement("template");t.innerHTML=String(d.html||"");el.parentNode.replaceChild(t.content,el);renumber();sendHtml();}}',
     'else if(d.type==="neura:pins"){var old=document.querySelectorAll("[data-neura-pin]");for(var i=0;i<old.length;i++)old[i].removeAttribute("data-neura-pin");',
     '(d.nids||[]).forEach(function(n,i){var p=document.querySelector("[data-nid=\\""+n+"\\"]");if(p)p.setAttribute("data-neura-pin",String(i+1));});}',
     'else if(d.type==="neura:print"){window.print();}});',
-    'function boot(){style();renumber();send({type:"neura:ready"});}',
+    'document.addEventListener("keydown",function(e){if(mode!=="view"||!slides().length)return;var k=e.key;if(k==="ArrowRight"||k==="ArrowDown"||k==="PageDown"||k===" "){e.preventDefault();goSlide(slide+1);}else if(k==="ArrowLeft"||k==="ArrowUp"||k==="PageUp"){e.preventDefault();goSlide(slide-1);}},true);',
+    'window.addEventListener("scroll",function(){clearTimeout(deckTimer);deckTimer=setTimeout(nearest,120);});',
+    'function size(){var el=document.documentElement;send({type:"neura:size",w:el.scrollWidth,h:el.scrollHeight});}',
+    'window.addEventListener("resize",size);',
+    'function boot(){style();renumber();send({type:"neura:ready"});tweakSchema();deckPost();size();}',
     'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot);else boot();',
     '})();',
   ].join('\n');

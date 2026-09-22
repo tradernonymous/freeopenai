@@ -265,9 +265,13 @@ test('the studio uses the tested modules for every decision', () => {
   assert.match(SCREEN, /DESIGN_BRIEF_KEY/, 'a brief handed over from Chat is picked up');
 });
 
+// Phase 9 moved the bundle into design/exports.js (tokens.css is now what the
+// PAGE declares, tweaks included; the system's tokens are the fallback) --
+// test/desktop-phase9.test.js covers its contents.
 test('handoff ships the page with its system', () => {
-  assert.match(SCREEN, /\['tokens\.css', systemsLib\.tokensCss\(system\)\]/);
-  assert.match(SCREEN, /\['DESIGN\.md', systemsLib\.designMd\(system\)\]/);
+  assert.match(SCREEN, /exportsLib\.handoffFiles\(/);
+  assert.match(SCREEN, /designMd: systemsLib\.designMd\(system\)/);
+  assert.match(SCREEN, /fallbackTokens: systemsLib\.tokensCss\(system\)/);
   assert.match(SCREEN, /design-handoff\//);
   assert.match(SCREEN, /zip\.writeZip\(/, 'without an open folder it is a ZIP');
 });
