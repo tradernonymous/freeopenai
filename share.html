@@ -49,6 +49,7 @@
 <header>
     <h1 id="shareTitle">Shared chat</h1>
     <span id="shareMeta"></span>
+    <a id="shareForkLink" href="#" style="margin-left: auto; display: none; color: #6ea8fe; text-decoration: none; font-size: 12px; white-space: nowrap;">Fork this chat →</a>
 </header>
 <main id="shareMain" aria-live="polite"><div class="expired">Loading…</div></main>
 <footer><a href="/">Open NeuraOS</a></footer>
@@ -63,6 +64,13 @@
             document.title = (data.title || 'Shared chat') + ' — shared chat';
             var n = (data.messages || []).length;
             document.getElementById('shareMeta').textContent = n + (n === 1 ? ' message' : ' messages') + ' · read-only';
+            // Forking is a client-side concept -- chats live in the reader's own
+            // browser, not on this server -- so the link just hands the app's
+            // own page the same id it already fetched, via the fragment
+            // convention app.js's parseAppLink already reads (#new, #share=).
+            var fork = document.getElementById('shareForkLink');
+            fork.href = '/#fork=' + encodeURIComponent(id);
+            fork.style.display = 'inline';
             main.innerHTML = '';
             for (var i = 0; i < n; i++) {
                 var m = data.messages[i];

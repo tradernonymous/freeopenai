@@ -5216,14 +5216,24 @@ function conversationToMarkdown(messages, title) {
   return lines.join('\n').trim();
 }
 
-// Reads the fragment the Android app opens the page with: "#new" starts a
-// chat, "#share=<text>" drafts shared text into the composer. The fragment
-// never reaches the server, and shared text is only ever placed in the input
-// as a value -- never parsed as HTML or run. Anything else is not ours.
+// Reads the fragment the page can be opened with: "#new" starts a chat,
+// "#share=<text>" drafts shared text into the composer (how the Android app's
+// share sheet hands text in), "#fork=<id>" opens someone else's read-only
+// /s/<id> link as a new chat of your own. The fragment never reaches the
+// server as a request of its own, and a fork id is only ever used to build
+// the same /api/share/<id> GET the reader page already makes -- never parsed
+// as HTML or run. Anything else is not ours.
 const MAX_SHARED_TEXT_CHARS = 20000;
+// Matches crypto.randomBytes(16).toString('hex') -- the id shape server.js
+// actually hands out (see shareStorePath's own loadShareStore validation).
+const SHARE_ID_RE = /^[a-f0-9]{32}$/i;
 function parseAppLink(hash) {
   const raw = String(hash || '').replace(/^#/, '');
   if (raw === 'new') return { action: 'new' };
+  if (raw.startsWith('fork=')) {
+    const id = raw.slice('fork='.length).trim();
+    return SHARE_ID_RE.test(id) ? { action: 'fork', id } : null;
+  }
   if (!raw.startsWith('share=')) return null;
   let text;
   try {

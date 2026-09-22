@@ -2116,6 +2116,20 @@ async function llmTts(req, res) {
 // -- so links survive a redeploy, which is what a Railway volume mounts as.
 const SHARE_MAX_CONVERSATIONS = 200;
 const SHARE_BODY_MAX_CHARS = 400000;
+// Real expiration, server-computed at publish time rather than trusted from
+// a client-signed payload: a share-enhanced.js predecessor once shipped an
+// expiry the client alone decided and a signature that was just btoa(JSON).
+// An unrecognised or missing ttl (including 'never') means no expiry at all.
+const SHARE_TTL_MS = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+function shareExpiryFor(ttl) {
+  const ms = SHARE_TTL_MS[String(ttl || '')];
+  return ms ? Date.now() + ms : null;
+}
 // Both read through functions rather than frozen constants: the value is
 // process.env at require time on a real boot, and a test flips the env before
 // driving the same code paths. The cap floor is one oversized share plus
@@ -2149,10 +2163,13 @@ function loadShareStore() {
       // half-written file contributes only rows that look like shares.
       if (!/^[a-f0-9]{32}$/i.test(id)) continue;
       if (!entry || !Array.isArray(entry.messages) || !entry.messages.length) continue;
+      const expiresAt = Number(entry.expiresAt) || null;
+      if (expiresAt && Date.now() > expiresAt) continue; // already expired -- don't even load it
       shareStore.set(id, {
         title: String(entry.title || '').trim().slice(0, 200) || 'Shared chat',
         messages: entry.messages,
         createdAt: Number(entry.createdAt) || 0,
+        expiresAt,
       });
     }
   } catch {
@@ -2245,17 +2262,34 @@ function handleSharePublish(req, res) {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const messages = Array.isArray(body && body.messages) ? body.messages : null;
     if (!messages || !messages.length) return sendJson(res, 400, { error: 'Nothing to share — the conversation is empty' });
+    const expiresAt = shareExpiryFor(body && body.ttl);
     const entry = {
       title: String(body.title || '').trim().slice(0, 200) || 'Shared chat',
       messages,
       createdAt: Date.now(),
+      expiresAt,
     };
     const id = crypto.randomBytes(16).toString('hex');
     shareStore.set(id, entry);
     evictSharesToCap();
     scheduleShareFlush();
-    sendJson(res, 200, { id, url: '/s/' + id });
+    sendJson(res, 200, { id, url: '/s/' + id, expiresAt });
   });
+}
+
+// A lookup that also enforces expiry: an entry past its own expiresAt is
+// deleted on first sight rather than served once more, so "expired" and
+// "revoked" are the same 404/gone experience from the reader's side.
+function shareEntryOrExpire(id) {
+  if (!id) return null;
+  const entry = shareStore.get(id);
+  if (!entry) return null;
+  if (entry.expiresAt && Date.now() > entry.expiresAt) {
+    shareStore.delete(id);
+    scheduleShareFlush();
+    return null;
+  }
+  return entry;
 }
 
 function handleShareRevoke(req, res) {
@@ -2268,14 +2302,14 @@ function handleShareRevoke(req, res) {
 
 function handleShareData(req, res) {
   const id = req.url.slice('/api/share/'.length).split('?')[0];
-  const entry = id && shareStore.get(id);
+  const entry = shareEntryOrExpire(id);
   if (!entry) return sendJson(res, 404, { error: 'No share with that link' });
   sendJson(res, 200, entry, { 'Cache-Control': 'no-store' });
 }
 
 function handleShareRead(req, res) {
   const id = req.url.slice('/s/'.length).split('?')[0];
-  const entry = id && shareStore.get(id);
+  const entry = shareEntryOrExpire(id);
   if (!entry) {
     res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end('<!doctype html><meta charset="utf-8"><title>Link expired</title><p>This shared chat has expired or was revoked.</p><p><a href="/">Open the app</a></p>');
@@ -6028,4 +6062,12 @@ module.exports = {
     loadShareStore();
   },
   shareStoreOnDisk: () => !!shareStorePath(),
+  // Expiry is real wall-clock time, which a test cannot wait out. Backdating
+  // an existing entry's expiresAt is the same shape as the restart seam
+  // above: the test still exercises the real 404/cleanup path, just without
+  // sitting through the ttl.
+  shareBackdateForTest: (id) => {
+    const entry = shareStore.get(id);
+    if (entry) entry.expiresAt = 1;
+  },
 };

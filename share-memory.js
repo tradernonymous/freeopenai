@@ -224,7 +224,14 @@
     // sentence: the module decides *what happened*, the page decides *what to
     // say about it*. A second call while one is in flight is refused — a
     // double click waits for the first publish, never buys a second link.
-    async function publish(convo) {
+    //
+    // `ttl` names how long the link should live -- '1h'/'24h'/'7d'/'30d', or
+    // 'never' (or nothing) for no expiry. The server is the one that turns
+    // this into an actual expiresAt: a client-computed expiry is a client
+    // that could compute a different one, which is exactly the kind of
+    // trust-the-caller mistake share-enhanced.js made with its own
+    // btoa(JSON.stringify(...)) "signature".
+    async function publish(convo, ttl) {
       if (sharePublishing) return { ok: false, reason: 'busy' };
       sharePublishing = true;
       try {
@@ -234,6 +241,7 @@
             && ((String(m.content || '').trim()) || (Array.isArray(m.images) && m.images.length)));
           return { ok: false, reason: shareable ? 'too-large' : 'empty' };
         }
+        if (ttl) payload.ttl = ttl;
         const { ok, data } = await fetchJson('/api/share', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -244,7 +252,7 @@
         }
         shareActiveId = data.id;
         shareActiveLink = data.url || ('/s/' + data.id);
-        return { ok: true, id: data.id, url: shareActiveLink };
+        return { ok: true, id: data.id, url: shareActiveLink, expiresAt: data.expiresAt || null };
       } catch {
         return { ok: false, reason: 'network' };
       } finally {

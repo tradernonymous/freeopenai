@@ -143,6 +143,42 @@ test('a published share can be read by anyone and revoked by the owner', async (
   });
 });
 
+test('a ttl is turned into a real server-computed expiry, not trusted from the client', async () => {
+  await withApp(async (base) => {
+    const put = await fetch(base + '/api/share', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Expiring', messages: [{ type: 'user', content: 'hi' }], ttl: '1h' }),
+    });
+    const { id, expiresAt } = await put.json();
+    assert.ok(Number.isFinite(expiresAt), 'the ttl produced a real timestamp');
+    const inAnHour = Date.now() + 60 * 60 * 1000;
+    assert.ok(Math.abs(expiresAt - inAnHour) < 5000, 'roughly an hour out, not whatever the client might have sent');
+
+    const noTtl = await (await fetch(base + '/api/share', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ type: 'user', content: 'x' }] }),
+    })).json();
+    assert.equal(noTtl.expiresAt, null, 'no ttl means no expiry, matching the links published before this feature existed');
+
+    const never = await (await fetch(base + '/api/share', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ type: 'user', content: 'x' }], ttl: 'never' }),
+    })).json();
+    assert.equal(never.expiresAt, null);
+
+    const junk = await (await fetch(base + '/api/share', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ type: 'user', content: 'x' }], ttl: 'DROP TABLE shares' }),
+    })).json();
+    assert.equal(junk.expiresAt, null, 'an unrecognised ttl is never expiry, never an error');
+
+    server.shareBackdateForTest(id);
+    assert.equal((await fetch(base + '/api/share/' + id)).status, 404, 'an expired link reads exactly like a revoked one');
+    assert.equal((await fetch(base + '/s/' + id)).status, 404, 'the reader shell agrees');
+  });
+});
+
 test('an empty share is refused, an oversized one is refused, a big store evicts oldest', async () => {
   await withApp(async (base) => {
     const empty = await fetch(base + '/api/share', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"messages":[]}' });

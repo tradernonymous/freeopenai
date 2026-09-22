@@ -280,6 +280,16 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
                             </button>
                         </div>
+                        <!-- Arena decides how many models answer the next message -- it
+                             isn't a skill, a plan step, an image setting or a memory, so
+                             it doesn't belong inside any one tab below. It sits here,
+                             visible no matter which tab is open, alongside anything else
+                             that turns out to be this kind of cross-cutting switch. -->
+                        <div class="session-switch">
+                            <label for="arenaModeSwitch">Arena — ask several providers at once</label>
+                            <input type="checkbox" id="arenaModeSwitch" onchange="setArenaMode(this.checked)">
+                        </div>
+                        <p class="session-hint">The next message fans to a few already-configured providers, each answering into its own bubble, instead of the one model picked above.</p>
                         <div class="session-tabs" aria-label="Session sections">
                             <button class="session-tab" type="button" id="sessionTabSkills" aria-pressed="true" onclick="showSessionTab('skills')">Skills</button>
                             <button class="session-tab" type="button" id="sessionTabTasks" aria-pressed="false" onclick="showSessionTab('tasks')">Plan</button>
@@ -293,11 +303,6 @@
                                 <input type="checkbox" id="autoSkillsCheck" checked onchange="setSkillsEnabled(this.checked)">
                             </div>
                             <p class="session-hint">In Plan and Build the router picks skills per request. What it used shows up below, marked automatic, so an odd answer can be traced to a method rather than guessed at.</p>
-                            <div class="session-switch">
-                                <label for="arenaModeSwitch">Arena — ask several providers at once</label>
-                                <input type="checkbox" id="arenaModeSwitch" onchange="setArenaMode(this.checked)">
-                            </div>
-                            <p class="session-hint">The next message fans to a few already-configured providers, each answering into its own bubble, instead of the one model picked above.</p>
                             <input type="text" class="model-dropdown-search" id="skillSearch" placeholder="Filter skills…" aria-label="Filter skills" autocomplete="off" oninput="filterSkillOptions(this.value)">
                             <div class="model-dropdown-list" id="skillMenuList" role="listbox" aria-label="Installed skills"></div>
                             <h4 class="session-subhead">Used in this chat</h4>
@@ -641,6 +646,16 @@
                 <h3 id="shareTitle">Share this chat</h3>
             </div>
             <div class="modal-body">
+                <p style="margin: 0 0 10px; display: flex; align-items: center; gap: 8px;">
+                    <label for="shareExpiration" style="font-size: 12px; color: var(--text-muted); flex-shrink: 0;">Link expires after</label>
+                    <select id="shareExpiration" class="model-dropdown-search" style="width: auto;" onchange="changeShareExpiration()">
+                        <option value="1h">1 hour</option>
+                        <option value="24h">24 hours</option>
+                        <option value="7d" selected>7 days</option>
+                        <option value="30d">30 days</option>
+                        <option value="never">Never</option>
+                    </select>
+                </p>
                 <p style="margin: 0 0 10px;" id="shareStatus">Making a read-only link…</p>
                 <p style="margin: 0 0 12px;"><input type="text" id="shareLinkBox" class="model-dropdown-search" style="width: 100%;" readonly aria-label="Share link" onclick="this.select()"></p>
                 <p style="margin: 0; font-size: 12px; color: var(--text-muted);">Anyone with the link can read this conversation — it is frozen at publish time. Revoke the link below to take it down.</p>

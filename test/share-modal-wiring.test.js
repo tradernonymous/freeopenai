@@ -4,6 +4,11 @@
 // failure into the generic "try again" line -- silent, and invisible to the
 // module's own tests. So this pins the mapping: drive openShareModal against
 // each reason and assert the exact sentence.
+//
+// openShareModal just remembers the conversation id and delegates to
+// publishShareLink (which the expiry dropdown's onchange also calls to
+// re-publish) -- both are extracted together, sharing the same
+// shareModalConvoId the real page declares between them.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadFromIndex } = require('./helpers/index-html.js');
@@ -17,14 +22,16 @@ function modalHarness({ publishResult, convo }) {
     shareStatus: { textContent: '' },
     shareLinkBox: { value: '' },
     shareCopyBtn: { value: '' },
+    shareExpiration: { value: '7d', selectedIndex: 2, options: [{ textContent: '1 hour' }, { textContent: '24 hours' }, { textContent: '7 days' }, { textContent: '30 days' }, { textContent: 'Never' }] },
   };
   const deps = {
     document: { getElementById: (id) => els[id] || null },
     conversations: [convo],
     shareMemory: { publish: async () => publishResult },
     location: { origin: 'http://localhost:3000' },
+    shareModalConvoId: null,
   };
-  const loaded = loadFromIndex(['openShareModal'], deps);
+  const loaded = loadFromIndex(['openShareModal', 'publishShareLink'], deps);
   return { run: () => loaded.openShareModal('c1'), status: els.shareStatus, box: els.shareLinkBox, overlay };
 }
 
@@ -32,7 +39,7 @@ test('a successful publish fills the box with a link that includes the origin', 
   const h = modalHarness({ publishResult: { ok: true, url: '/s/abc123' }, convo: { id: 'c1', title: 'T', messages: [{ type: 'user', content: 'x' }] } });
   await h.run();
   assert.equal(h.box.value, NICE_URL);
-  assert.equal(h.status.textContent, 'Read-only link ready:');
+  assert.equal(h.status.textContent, 'Read-only link ready — expires in 7 days:');
 });
 
 test('every module failure reason gets its own honest sentence', async () => {

@@ -1109,9 +1109,10 @@ function updateNavActive(btn) {
         applyAppLink();
         window.addEventListener('hashchange', applyAppLink);
 
-        // The Android app's shortcuts and share sheet arrive as a fragment
-        // (see parseAppLink). It is cleared as soon as it is read, so a reload
-        // or a back step never replays it.
+        // The Android app's shortcuts and share sheet arrive as a fragment,
+        // and so does a "Fork this chat" tap from the read-only reader page
+        // (see parseAppLink). It is cleared as soon as it is read, so a
+        // reload or a back step never replays it.
         function applyAppLink() {
             const link = parseAppLink(location.hash);
             if (!link) return;
@@ -1121,7 +1122,71 @@ function updateNavActive(btn) {
             } else if (link.action === 'share') {
                 chatInput.value = chatInput.value ? chatInput.value + '\n\n' + link.text : link.text;
                 autoResize(chatInput);
+            } else if (link.action === 'fork') {
+                forkSharedChat(link.id);
+                return; // forkSharedChat focuses the composer once it lands
             }
+            chatInput.focus();
+        }
+
+        // Turns someone else's read-only /s/<id> link into a chat of your
+        // own: the same GET the reader page already makes, replayed here and
+        // written into a brand-new local conversation. Nothing server-side
+        // changes -- chats are client-side by design, so "forking" a share
+        // is exactly this and nothing more.
+        async function forkSharedChat(id) {
+            showStatus('info', 'Loading the shared chat…', 0);
+            let res;
+            try {
+                res = await fetch('/api/share/' + encodeURIComponent(id));
+            } catch {
+                showStatus('error', 'Could not reach the server to load that shared chat');
+                chatInput.focus();
+                return;
+            }
+            if (!res.ok) {
+                showStatus('error', 'That shared link has expired or been revoked');
+                chatInput.focus();
+                return;
+            }
+            const data = await res.json().catch(() => null);
+            const source = data && Array.isArray(data.messages) ? data.messages : [];
+            if (!source.length) {
+                showStatus('error', 'That shared chat has nothing to fork');
+                chatInput.focus();
+                return;
+            }
+            const forked = {
+                id: newConversationId(),
+                // Bot images ride as data: URLs in a share payload -- the same
+                // shape storedImageUrl() already reads via `{url}` -- but a
+                // share carries no stored image ids, so only bot messages get
+                // pictures back the same way the rest of the app renders them.
+                title: (data.title ? data.title + ' (forked)' : 'Forked chat').slice(0, 200),
+                messages: source.map((m) => ({
+                    type: m.type,
+                    content: m.content || '',
+                    images: m.type === 'bot' && Array.isArray(m.images) && m.images.length
+                        ? m.images.map((url) => ({ url })) : undefined,
+                    timestamp: Date.now(),
+                })),
+                skills: [],
+                skillsDismissed: [],
+                updatedAt: Date.now(),
+            };
+            conversations = upsertConversation(conversations, forked);
+            activeConversationId = forked.id;
+            messages = forked.messages;
+            usageCount = 0;
+            updateUsageDisplay();
+            taskGraph = newTaskGraph();
+            renderTaskList();
+            workspaceFiles = {};
+            renderWorkspaceFiles();
+            renderActiveConversation();
+            writeConversations();
+            if (isNarrowScreen()) toggleHistory(false, false);
+            showStatus('success', 'Forked "' + forked.title + '" into your own chat');
             chatInput.focus();
         }
 
@@ -8419,16 +8484,31 @@ function updateNavActive(btn) {
         // Read-only share links. The link state and the network live in the
         // ShareMemory module; these are the modal's hands on it.
 
+        // Which conversation the open modal is publishing, so the expiry
+        // dropdown can re-publish without the caller passing the id again.
+        let shareModalConvoId = null;
+
         async function openShareModal(convoId) {
             const convo = conversations.find((c) => c.id === convoId);
             if (!convo) return;
-            const overlay = document.getElementById('shareOverlay');
+            shareModalConvoId = convoId;
+            document.getElementById('shareOverlay').classList.add('open');
+            await publishShareLink();
+        }
+
+        // Actually publishes (or re-publishes) the link at the dropdown's
+        // current expiry. Split out from openShareModal so the expiry
+        // dropdown's onchange can call the same path without duplicating it.
+        async function publishShareLink() {
+            const convo = conversations.find((c) => c.id === shareModalConvoId);
+            if (!convo) return;
             const status = document.getElementById('shareStatus');
             const box = document.getElementById('shareLinkBox');
+            const ttlSelect = document.getElementById('shareExpiration');
+            const ttl = ttlSelect ? ttlSelect.value : '7d';
             box.value = '';
             status.textContent = 'Making a read-only link…';
-            overlay.classList.add('open');
-            const result = await shareMemory.publish(convo);
+            const result = await shareMemory.publish(convo, ttl);
             if (!result.ok) {
                 // The module decides what happened; the page decides what to say.
                 status.textContent = {
@@ -8441,7 +8521,19 @@ function updateNavActive(btn) {
                 return;
             }
             box.value = location.origin + result.url;
-            status.textContent = 'Read-only link ready:';
+            const label = ttlSelect ? ttlSelect.options[ttlSelect.selectedIndex].textContent.toLowerCase() : '7 days';
+            status.textContent = ttl === 'never'
+                ? 'Read-only link ready — it never expires:'
+                : 'Read-only link ready — expires in ' + label + ':';
+        }
+
+        // Expiry is fixed at publish time (that's what "frozen" means for a
+        // share), so choosing a different one here mints a new link rather
+        // than pretending the old one's expiry moved: the previous link is
+        // revoked first, exactly as if Revoke had been tapped.
+        async function changeShareExpiration() {
+            if (shareMemory.activeShare().id) await shareMemory.revoke();
+            await publishShareLink();
         }
 
         function closeShareModal() {
