@@ -45,7 +45,7 @@
 - Error text masks anything that looks like a key.
 - The hidden Puter page runs with no JavaScript bridge. The Puter picture is read back in slices by polling a page property.
 - Permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `USE_BIOMETRIC`, `SET_ALARM` and `FOREGROUND_SERVICE` (`dataSync`, only while a reply streams) are granted at install. `RECORD_AUDIO` is asked for the first time voice mode opens, and `POST_NOTIFICATIONS` once on Android 13+. `REQUEST_INSTALL_PACKAGES` is declared so in-app updates can hand the verified APK to the system installer (which re-verifies the signing certificate — an update signed with any other key is refused there); Android still asks you to allow “Install unknown apps” for NeuraOS first. The app requests no location, contacts, SMS, call-log or storage permission.
-- Nothing in the app drives other apps, uses an accessibility service, or impersonates another client.
+- Nothing in the app impersonates another client. Device control (above, off by default) is the one deliberate exception to "no accessibility service" — it exists only to read labelled elements and tap or scroll one you already approved, never a raw coordinate and never a screenshot.
 
 **Where the ideas came from.** Patterns were re-implemented, not copied, from:
 - Paseo and AgentDeck: mode chip, plan hand-off, tool timeline, status dot, reply notifications.

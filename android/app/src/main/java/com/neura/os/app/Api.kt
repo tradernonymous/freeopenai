@@ -69,15 +69,6 @@ private fun httpsHost(url: String): String? {
     }
 }
 
-/** Where a main-frame navigation may go without leaving the WebView: the
- * app's own origin, plus GitHub's sign-in, which the page's "connect GitHub"
- * flow round-trips through and straight back. Everything else -- a link in a
- * reply, a provider's site -- opens in the phone's browser, where it belongs. */
-fun staysInShell(origin: String, url: String): Boolean {
-    if (sameOrigin(origin, url)) return true
-    return httpsHost(url) == "github.com"
-}
-
 /** Where a popup the page opens may load: Puter's sign-in, which the page's
  * keyless provider needs and which answers the page through window.opener.
  * A popup anywhere else is handed to the browser instead. */

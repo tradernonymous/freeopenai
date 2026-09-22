@@ -237,20 +237,7 @@ class NativeApi(
                 return@withSession
             }
             val reader = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream).bufferedReader()
-            reader.use {
-                var ended = false
-                while (true) {
-                    val line = it.readLine() ?: break
-                    if (!line.startsWith("data:")) continue
-                    val event = parseSseData(line.removePrefix("data:")) ?: continue
-                    onEvent(event)
-                    if (event == ChatEvent.Done || event is ChatEvent.Failure) {
-                        ended = true
-                        break
-                    }
-                }
-                if (!ended) onEvent(ChatEvent.Done)
-            }
+            reader.use { consumeSseChatStream(it, onEvent) }
         } catch (e: ApiException) {
             throw e
         } catch (e: Exception) {

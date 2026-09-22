@@ -123,9 +123,75 @@ fun parseSseData(data: String): ChatEvent? {
     }
 }
 
+/** Reads a relayed chat stream line by line, dispatching each parsed event,
+ * until the server's own terminator ([ChatEvent.Done] from `[DONE]`, or a
+ * [ChatEvent.Failure]) arrives. Pulled out of NativeApi.streamChat as a pure
+ * function -- java.io.BufferedReader is a plain JVM type, so this is testable
+ * from a StringReader with no HttpURLConnection, no SecureStore, no Android
+ * framework at all, unlike the class around it.
+ *
+ * If the reader runs out of lines with neither terminator ever seen -- a
+ * flaky connection or a proxy's idle-kill closing the socket mid-reply --
+ * that is reported as a connectivity [ChatEvent.Failure], never silently as
+ * [ChatEvent.Done]: the caller (AppViewModel) already knows what to do with
+ * a connectivity failure -- retry it if nothing arrived yet, or keep
+ * whatever text did arrive with an honest "connection lost" notice appended
+ * -- and treating an unexplained early stream close as a normal finish is
+ * exactly how a real answer previously arrived at the user looking merely
+ * cut short, with nothing to say why. */
+fun consumeSseChatStream(reader: java.io.BufferedReader, onEvent: (ChatEvent) -> Unit) {
+    var ended = false
+    while (true) {
+        val line = reader.readLine() ?: break
+        if (!line.startsWith("data:")) continue
+        val event = parseSseData(line.removePrefix("data:")) ?: continue
+        onEvent(event)
+        if (event == ChatEvent.Done || event is ChatEvent.Failure) {
+            ended = true
+            break
+        }
+    }
+    if (!ended) onEvent(ChatEvent.Failure("Connection lost before the reply finished.", connectivity = true))
+}
+
 /** How many past messages ride along with each turn. Free models have small
  * context windows, and a long chat would otherwise fail on its own weight. */
 const val MAX_HISTORY_MESSAGES = 30
+
+/** Roughly how many tokens a piece of text costs -- four characters to a
+ * token, the same estimate the web app uses for the same purpose
+ * (chatlib.js's estimateTokens): close enough to decide what fits, not a
+ * real tokenizer. */
+fun estimateTokens(text: String): Int = if (text.isEmpty()) 0 else (text.length + 3) / 4
+
+/** How much the *weight* of the kept history may add up to, on top of the
+ * count cap above -- matching the web app's HISTORY_TOKEN_BUDGET. The count
+ * cap alone bounds how many turns ride along, not how heavy they are: thirty
+ * short turns and thirty turns each carrying a pasted file are very
+ * different requests. Sent uncapped, the heavier one can leave a provider's
+ * context window with little room left for the *reply*, which is why a long
+ * Android chat could see answers stop early with nothing in the response
+ * itself explaining why -- the web app already guards against exactly this. */
+const val HISTORY_TOKEN_BUDGET = 24000
+
+/** Keeps the newest messages whose combined estimated weight fits [budget].
+ * The newest message always rides regardless of its own size -- a request
+ * that arrives without it is answering a different question than the one
+ * just asked -- and trimming works backward from there the same way
+ * chatlib.js's budgetChatHistory does, so the two clients apply the same
+ * policy to the same conversation. */
+fun budgetChatHistory(messages: List<ChatMessage>, budget: Int = HISTORY_TOKEN_BUDGET): List<ChatMessage> {
+    if (messages.isEmpty()) return messages
+    val kept = ArrayDeque<ChatMessage>()
+    var spent = 0
+    for (i in messages.indices.reversed()) {
+        val cost = estimateTokens(messages[i].content)
+        if (kept.isNotEmpty() && spent + cost > budget) break
+        kept.addFirst(messages[i])
+        spent += cost
+    }
+    return kept.toList()
+}
 
 /** How many of the most recent photo turns are sent as pictures. */
 const val MAX_PHOTO_TURNS_IN_HISTORY = 2
@@ -159,6 +225,7 @@ fun buildChatBody(
     history: List<ChatMessage>,
     maxHistory: Int = MAX_HISTORY_MESSAGES,
     tools: JSONArray? = null,
+    historyBudget: Int = HISTORY_TOKEN_BUDGET,
 ): String {
     val messages = JSONArray()
     if (systemPrompt.isNotBlank()) messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
@@ -170,6 +237,9 @@ fun buildChatBody(
             else -> false
         }
     }.takeLast(maxHistory)
+    kept = budgetChatHistory(kept, historyBudget)
+    // The count cap and the budget trim can each leave a tool result at the
+    // front with the assistant call it answers now cut away.
     while (kept.isNotEmpty() && kept.first().role == "tool") kept = kept.drop(1)
     // Photos are the heavy part of a history: a few turns of them pass the
     // server's body limit and every later turn fails on weight. Only the most

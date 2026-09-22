@@ -71,16 +71,6 @@ class ApiTest {
     }
 
     @Test
-    fun staysInShell_ownOriginAndGithubSignInOnly() {
-        val origin = "https://abc.up.railway.app"
-        assertTrue(staysInShell(origin, "https://abc.up.railway.app/"))
-        assertTrue(staysInShell(origin, "https://github.com/login/oauth/authorize?client_id=x"))
-        assertFalse(staysInShell(origin, "http://github.com/login"))
-        assertFalse(staysInShell(origin, "https://gist.github.com/x"))
-        assertFalse(staysInShell(origin, "https://example.com/"))
-    }
-
-    @Test
     fun popupAllowed_puterAndOwnOriginOnly() {
         val origin = "https://abc.up.railway.app"
         assertTrue(popupAllowed(origin, "https://puter.com/action/sign-in"))
