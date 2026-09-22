@@ -37,6 +37,8 @@ function codeBlock(lang: string, body: string): string {
     `<div class="code-block-bar">${langLabel}` +
     // An HTML page can be looked at (sandboxed, in place) or sent to Design.
     (/^(html|svg|xml)$/i.test(lang) ? `<button class="code-preview" type="button">Preview</button><button class="code-design" type="button">To Design</button>` : '') +
+    // A Mermaid block draws itself on demand (mermaid loads lazily, strict mode).
+    (/^mermaid$/i.test(lang) ? `<button class="code-diagram" type="button">Diagram</button>` : '') +
     `<button class="code-copy" type="button">Copy</button></div>` +
     `<pre><code>${escapeHtml(body)}</code></pre>` +
     `</div>`

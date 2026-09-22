@@ -40,12 +40,15 @@ interface Props {
   recall: () => string;
   /** The paperclip: attach a file (PDF, Word, Excel, PowerPoint, text). */
   onAttach?: () => void;
+  /** The mic: start or stop dictation, and where it is. */
+  onDictate?: () => void;
+  dictation?: 'idle' | 'recording' | 'working';
   inputRef: RefObject<HTMLTextAreaElement>;
   placeholder?: string;
 }
 
 export default function Composer(props: Props) {
-  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, onAttach, inputRef } = props;
+  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, onAttach, onDictate, dictation, inputRef } = props;
   const [cursor, setCursor] = useState(0);
   const [caret, setCaret] = useState(0);
   const [dismissed, setDismissed] = useState('');
@@ -188,6 +191,18 @@ export default function Composer(props: Props) {
         {onAttach && (
           <button className="composer-icon" onClick={onAttach} title="Attach a file (PDF, Word, Excel, PowerPoint, text)" aria-label="Attach a file">
             <Icon name="paperclip" size={14} />
+          </button>
+        )}
+        {onDictate && (
+          <button
+            className={`composer-icon ${dictation === 'recording' ? 'recording' : ''}`}
+            onClick={onDictate}
+            disabled={dictation === 'working'}
+            title={dictation === 'recording' ? 'Stop and type what you said' : dictation === 'working' ? 'Transcribing…' : 'Dictate (Whisper on Hugging Face; Win+H works too)'}
+            aria-label={dictation === 'recording' ? 'Stop dictation' : 'Dictate'}
+            aria-pressed={dictation === 'recording'}
+          >
+            <Icon name="mic" size={14} />
           </button>
         )}
         {modelChip}

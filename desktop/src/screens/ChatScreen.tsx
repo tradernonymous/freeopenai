@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
 import { hasShell, listLocalDir, localModelStatus, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
+import { renderMermaid } from '../diagram';
+import { startRecording, transcribe, type Recording } from '../dictate';
+import { captureScreen, imageFileToDataUrl, imagesIn, withImages, MAX_IMAGES } from '../attach-image';
 import Icon from '../components/Icon';
 import ModelPicker from '../components/ModelPicker';
 import Composer from '../components/Composer';
@@ -69,6 +72,8 @@ export interface Msg {
    *  rides the next message instead, so turns keep alternating). */
   note?: boolean;
   shell?: string;
+  /** Pictures sent with a user turn, as data URLs (vision models only). */
+  images?: string[];
 }
 
 export interface ChatSession {
@@ -97,8 +102,15 @@ function loadSessions(): ChatSession[] {
 // fit (src/chats.js). That is a loss the user should hear about once, not a
 // history that quietly shrinks.
 let warnedQuota = false;
+// Pictures are data URLs, hundreds of KB each: the saved copy keeps them only
+// on a chat's last few messages, or four screenshots would evict whole chats.
+const KEEP_IMAGES_LAST = 6;
 function saveSessions(sessions: ChatSession[]) {
-  const report = chats.writeStoreReport(null, sessions);
+  const slim = sessions.map((s) => (s.messages.some((m) => m.images) ? {
+    ...s,
+    messages: s.messages.map((m, i) => (m.images && i < s.messages.length - KEEP_IMAGES_LAST ? { ...m, images: undefined } : m)),
+  } : s));
+  const report = chats.writeStoreReport(null, slim);
   if (report.quota && !warnedQuota) {
     warnedQuota = true;
     pushToast('warn', report.ok
@@ -134,8 +146,8 @@ export const TOOL_CARDS_EVENT = 'freeai4u:tool-cards';
 export const DESIGN_BRIEF_KEY = 'freeai4u.designBrief';
 
 /** The turns a model is shown: notes are for the person, shell output rides along. */
-export function turnsFor(messages: Msg[]): Array<{ role: string; content: string }> {
-  const out: Array<{ role: string; content: string }> = [];
+export function turnsFor(messages: Msg[]): Array<{ role: string; content: any }> {
+  const out: Array<{ role: string; content: any }> = [];
   let pending = '';
   for (const m of messages) {
     if (m.note) {
@@ -143,11 +155,11 @@ export function turnsFor(messages: Msg[]): Array<{ role: string; content: string
       continue;
     }
     if (m.role === 'user' && pending) {
-      out.push({ role: 'user', content: `Command output from the open folder:\n${pending}---\n${m.content}` });
+      out.push({ role: 'user', content: withImages(`Command output from the open folder:\n${pending}---\n${m.content}`, m.images) });
       pending = '';
     } else {
       // A model's shown reasoning is not part of what it said.
-      out.push({ role: m.role, content: m.role === 'assistant' ? String(m.content || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim() : m.content });
+      out.push({ role: m.role, content: m.role === 'assistant' ? String(m.content || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim() : withImages(m.content, m.images) });
     }
   }
   return out;
@@ -271,6 +283,9 @@ export default function ChatScreen() {
   ];
   const [sending, setSending] = useState(false);
   const [attached, setAttached] = useState<string>('');
+  const [images, setImages] = useState<string[]>([]);
+  const [dictation, setDictation] = useState<'idle' | 'recording' | 'working'>('idle');
+  const recording = useRef<Recording | null>(null);
   // Right-click on a reply opens the actions for what is under the pointer.
   const [radial, setRadial] = useState<{ x: number; y: number; items: RadialItem[] } | null>(null);
   // A switch the app may take on its own (the local model, when a remote one
@@ -482,9 +497,11 @@ export default function ChatScreen() {
     const userMsg: Msg = {
       role: 'user',
       content: attached ? `${text}\n\n--- attached ---\n${attached}` : text,
+      ...(images.length ? { images } : {}),
       ts: Date.now(),
     };
     if (attached) setAttached('');
+    if (images.length) setImages([]);
     // The turn records the provider AND the model it was asked of, so the label
     // above a failure names what was asked -- never whichever provider happened
     // to answer the error, which is what made an error look unrelated to the
@@ -539,7 +556,7 @@ export default function ChatScreen() {
           return hfInference.streamChat(model, messages, onFrame, signal, hfToken || undefined, offered);
         }
         if (isSavedProvider(provider)) {
-          return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered);
+          return streamSaved(provider, model, messages, onFrame, signal, (stage) => { if (stage) pushToast('info', stage); }, offered, active.reasoning);
         }
         const effort = active.reasoning && active.reasoning !== 'off' ? { reasoning_effort: active.reasoning } : {};
         if (provider === 'local') {
@@ -827,6 +844,69 @@ export default function ChatScreen() {
   // Attach a document as text: PDF, Word, Excel and PowerPoint through the
   // in-app extractors FilesScreen uses; anything else is read as text. The
   // chip shows a rough token cost, since a big PDF can fill a small context.
+  // Pictures ride the next message; the model on screen has to be able to see.
+  const addImage = (url: string) => {
+    setImages((prev) => {
+      if (prev.length >= MAX_IMAGES) { pushToast('warn', `Up to ${MAX_IMAGES} pictures per message.`); return prev; }
+      return [...prev, url];
+    });
+    pushToast('ok', 'Picture attached. It needs a vision model (llava, gemma3, qwen2.5-vl, GPT-4o...).');
+  };
+
+  // The mic: first press records, second press sends the audio to Whisper and
+  // types the words into the box (after whatever is already there).
+  const dictate = async () => {
+    if (dictation === 'recording' && recording.current) {
+      const rec = recording.current;
+      recording.current = null;
+      setDictation('working');
+      try {
+        const words = await transcribe(await rec.stop(), hfToken || '');
+        if (words) patchSession(active.id, { draft: active.draft ? `${active.draft.replace(/\s+$/, '')} ${words}` : words });
+        else pushToast('info', 'Nothing was heard.');
+      } catch (e) {
+        pushToast('error', ((e as Error).message || String(e)).split('\n')[0]);
+      } finally {
+        setDictation('idle');
+        inputRef.current?.focus();
+      }
+      return;
+    }
+    if (!hfToken) {
+      pushToast('info', 'Dictation uses Whisper on Hugging Face: sign in under Settings → Connectors. Windows can also type what you say — press Win+H.');
+      inputRef.current?.focus();
+      return;
+    }
+    try {
+      recording.current = await startRecording();
+      setDictation('recording');
+    } catch (e) {
+      pushToast('error', `Microphone: ${((e as Error).message || String(e)).split('\n')[0]}`);
+    }
+  };
+  useEffect(() => () => recording.current?.cancel(), []);
+
+  const screenshot = async () => {
+    try {
+      addImage(await captureScreen());
+    } catch (e) {
+      const msg = ((e as Error).message || String(e)).split('\n')[0];
+      if (!/denied|abort|cancel/i.test(msg)) pushToast('error', `Screen capture: ${msg}`);
+    }
+  };
+
+  // Ctrl+V with a picture on the clipboard attaches it; text pastes normally.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = imagesIn(e.clipboardData);
+      if (!files.length) return;
+      e.preventDefault();
+      files.forEach((f) => { imageFileToDataUrl(f).then(addImage, () => pushToast('error', 'That picture could not be read.')); });
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []);
+
   const attachFile = async (file: File) => {
     const name = file.name;
     const ext = (name.split('.').pop() || '').toLowerCase();
@@ -839,7 +919,7 @@ export default function ChatScreen() {
         const sheets = await office.extractXlsxSheets(new Uint8Array(await file.arrayBuffer()));
         text = sheets.map((sh) => `# ${sh.name}\n${office.sheetToText(sh.rows)}`).join('\n\n');
       } else if (/^(png|jpe?g|gif|webp|bmp)$/.test(ext)) {
-        pushToast('warn', 'Images need a vision model; attaching images is not supported in chat yet.');
+        addImage(await imageFileToDataUrl(file));
         return;
       } else {
         if (file.size > 2 * 1024 * 1024) { pushToast('warn', `${name} is over 2 MB; attach a smaller part of it.`); return; }
@@ -891,6 +971,7 @@ export default function ChatScreen() {
         setCompare({ open: true, prompt: arg || active.draft || grammar.lastUserText(active.messages) });
         return;
       case 'attach': clear(); fileRef.current?.click(); return;
+      case 'screenshot': clear(); screenshot(); return;
       case 'reasoning': {
         const level = (['off', 'low', 'medium', 'high'].find((l) => l === arg.toLowerCase()) || '') as ChatSession['reasoning'] | '';
         if (!level) { pushToast('info', `Reasoning is ${active.reasoning || 'the model default'}. Use /reasoning off, low, medium or high.`); clear(); return; }
@@ -1052,6 +1133,21 @@ export default function ChatScreen() {
   // Copy buttons inside rendered code blocks.
   const onMessagesClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
+    // A Mermaid block: draw it under the source, or hide the drawing again.
+    if (target.classList?.contains('code-diagram')) {
+      const block = target.closest('.code-block');
+      const shown = block?.querySelector('.mermaid-view');
+      if (shown) { shown.remove(); target.textContent = 'Diagram'; return; }
+      const view = document.createElement('div');
+      view.className = 'mermaid-view';
+      view.textContent = 'Drawing…';
+      block?.appendChild(view);
+      target.textContent = 'Hide diagram';
+      renderMermaid(block?.querySelector('pre')?.textContent || '')
+        .then((svg) => { view.innerHTML = svg; })
+        .catch((err: unknown) => { view.textContent = `Mermaid could not draw this: ${((err as Error).message || String(err)).split('\n')[0]}`; });
+      return;
+    }
     // An HTML block: look at it in place (sandboxed, no same-origin) or send it
     // to the Design studio.
     if (target.classList?.contains('code-preview') || target.classList?.contains('code-design')) {
@@ -1151,6 +1247,11 @@ export default function ChatScreen() {
                 ? 'You'
                 : (msg.providerLabel && msg.model ? `${msg.providerLabel} · ${msg.model}` : (msg.model || 'Assistant'))}
             </div>
+            {msg.images && msg.images.length > 0 && (
+              <div className="message-images">
+                {msg.images.map((url, j) => <img key={j} src={url} alt={`Picture ${j + 1} sent with this message`} />)}
+              </div>
+            )}
             {msg.role === 'assistant'
               ? (msg.content
                 ? <div className="message-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
@@ -1210,7 +1311,7 @@ export default function ChatScreen() {
         ref={fileRef}
         type="file"
         hidden
-        accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.html,.css,.js,.ts,.tsx,.py,.rs,.go,.java,.xml,.yaml,.yml,.log"
+        accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.html,.css,.js,.ts,.tsx,.py,.rs,.go,.java,.xml,.yaml,.yml,.log"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) attachFile(f); e.target.value = ''; }}
       />
       <CompareDrawer
@@ -1244,6 +1345,8 @@ export default function ChatScreen() {
         toolsOn={toolsOn}
         recall={() => grammar.lastUserText(active.messages)}
         onAttach={() => fileRef.current?.click()}
+        onDictate={dictate}
+        dictation={dictation}
         inputRef={inputRef}
         modelChip={(
           <>
@@ -1279,6 +1382,18 @@ export default function ChatScreen() {
                 <button className="follow-chip-close" onClick={() => setFlow(null)} aria-label="Dismiss the suggestion">
                   <Icon name="close" size={12} />
                 </button>
+              </div>
+            )}
+            {images.length > 0 && (
+              <div className="attach-images">
+                {images.map((url, i) => (
+                  <span className="attach-thumb" key={i}>
+                    <img src={url} alt={`Attached picture ${i + 1}`} />
+                    <button onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))} aria-label={`Remove picture ${i + 1}`}>
+                      <Icon name="close" size={11} />
+                    </button>
+                  </span>
+                ))}
               </div>
             )}
             {attached && (

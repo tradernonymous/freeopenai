@@ -98,12 +98,12 @@ test('HTML code blocks preview in a sandbox or go to Design', () => {
   assert.ok(!/allow-same-origin/.test(chat), 'a preview never shares the app origin');
 });
 
-test('documents attach as text with a token estimate; images are refused honestly', () => {
+test('documents attach as text with a token estimate; pictures attach for vision models', () => {
   const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
   for (const call of ['pdf.extractPdfText', 'office.extractDocxText', 'office.extractPptxText', 'office.extractXlsxSheets']) {
     assert.ok(chat.includes(call), `${call} is used`);
   }
-  assert.match(chat, /Images need a vision model/);
+  assert.match(chat, /addImage\(await imageFileToDataUrl\(file\)\)/);
   assert.match(chat, /tokens/);
   const composer = read('desktop', 'src', 'components', 'Composer.tsx');
   assert.match(composer, /onAttach && \(/, 'the paperclip is in the composer');

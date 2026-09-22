@@ -213,7 +213,7 @@ test('Chat offers tools on every provider, draws the cards, and Allow / Deny is 
   assert.match(chat, /await runTurn\(\{/);
   assert.match(chat, /toolsLib\.catalogue\(\{ github: githubConnected, localRoot: root, shell: hasShell\(\) \}\)/);
   assert.match(chat, /hfInference\.streamChat\(model, messages, onFrame, signal, hfToken \|\| undefined, offered\)/);
-  assert.match(chat, /streamSaved\(provider, model, messages, onFrame, signal, .*, offered\);/);
+  assert.match(chat, /streamSaved\(provider, model, messages, onFrame, signal, .*, offered, active\.reasoning\);/);
   assert.match(chat, /\.\.\.\(offered \? \{ tools: offered \} : \{\}\)/, 'the engine route is handed the tools');
   assert.match(chat, /<ToolCards events=\{msg\.tools\}/);
   const cards = read('desktop', 'src', 'components', 'ToolCards.tsx');

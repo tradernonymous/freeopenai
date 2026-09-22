@@ -136,7 +136,7 @@ export async function ensureUnsloth(entry: SavedModel, force = false, onStage?: 
 }
 
 /** One NDJSON line from Ollama's /api/chat, as a frame (or an error). */
-export function ollamaFrame(line: string): StreamFrame | null {
+export function ollamaFrame(line: string): (StreamFrame & { thinking?: string }) | null {
   const text = line.trim();
   if (!text) return null;
   let row: any;
@@ -149,8 +149,33 @@ export function ollamaFrame(line: string): StreamFrame | null {
   const content = row?.message?.content;
   // Ollama sends a tool call whole, with its arguments as an object.
   const called = Array.isArray(row?.message?.tool_calls) && row.message.tool_calls.length ? row.message.tool_calls : undefined;
+  // With `think` on, Ollama streams the reasoning apart as message.thinking.
+  const thinking = typeof row?.message?.thinking === 'string' && row.message.thinking ? row.message.thinking : undefined;
   if (row?.done) return { content: typeof content === 'string' && content ? content : undefined, toolCalls: called, done: true, model: row.model };
-  return (typeof content === 'string' && content) || called ? { content: content || undefined, toolCalls: called, model: row.model } : null;
+  return (typeof content === 'string' && content) || called || thinking
+    ? { content: content || undefined, toolCalls: called, model: row.model, ...(thinking ? { thinking } : {}) }
+    : null;
+}
+
+/**
+ * Ollama's `think` for a /reasoning level: unset leaves the model's default;
+ * off is false; gpt-oss takes the level itself, every other thinking model a
+ * plain true (Ollama refuses a level string for them).
+ */
+export function ollamaThink(model: string, reasoning?: string): boolean | string | undefined {
+  if (!reasoning) return undefined;
+  if (reasoning === 'off') return false;
+  return /gpt-oss/i.test(model) ? reasoning : true;
+}
+
+/** An Ollama user turn with pictures: text content plus bare base64 images. */
+function ollamaImages(message: any): any {
+  if (!Array.isArray(message.content)) return message;
+  const text = message.content.filter((p: any) => p?.type === 'text').map((p: any) => p.text).join('\n');
+  const images = message.content
+    .filter((p: any) => p?.type === 'image_url' && typeof p.image_url?.url === 'string')
+    .map((p: any) => String(p.image_url.url).replace(/^data:[^,]*,/, ''));
+  return { ...message, content: text, ...(images.length ? { images } : {}) };
 }
 
 /**
@@ -174,23 +199,38 @@ export function forOllama(message: any): any {
     };
   }
   if (message.role === 'tool' && message.name && !message.tool_name) return { ...message, tool_name: message.name };
-  return message;
+  return ollamaImages(message);
 }
 
-async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f: StreamFrame) => void, signal?: AbortSignal, offered?: any[]): Promise<void> {
+async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f: StreamFrame) => void, signal?: AbortSignal, offered?: any[], reasoning?: string): Promise<void> {
   if (!hasShell()) throw new ApiError(0, 'Ollama is reached through the installed desktop app.');
   if (!runSettings.limitsFor(entry.id)) await detectLimits(entry);
   const values = resolvedValues(entry);
+  const think = ollamaThink(entry.name, reasoning);
   const body = JSON.stringify({
     model: entry.name,
     messages: runSettings.withSystem(messages, values).map(forOllama),
     stream: true,
     options: runSettings.ollamaOptions(values),
+    ...(think !== undefined ? { think } : {}),
     ...(offered && offered.length ? { tools: offered } : {}),
   });
   let buffer = '';
   let status = 200;
   let failure = '';
+  // Reasoning is shown the way every other provider's is: inside <think>.
+  let thinking = false;
+  const emit = (frame: StreamFrame & { thinking?: string }) => {
+    const { thinking: thought, ...rest } = frame;
+    if (thought) {
+      onFrame({ content: (thinking ? '' : '<think>') + thought, model: rest.model });
+      thinking = true;
+    }
+    if (rest.content || rest.toolCalls || rest.done) {
+      if (thinking) { onFrame({ content: '</think>' }); thinking = false; }
+      onFrame(rest);
+    }
+  };
   const drain = (final: boolean) => {
     let idx: number;
     while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -198,13 +238,13 @@ async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f:
       buffer = buffer.slice(idx + 1);
       if (status >= 400) { failure += line; continue; }
       const frame = ollamaFrame(line);
-      if (frame) onFrame(frame);
+      if (frame) emit(frame);
     }
     if (final && buffer.trim()) {
       if (status >= 400) failure += buffer;
       else {
         const frame = ollamaFrame(buffer);
-        if (frame) onFrame(frame);
+        if (frame) emit(frame);
       }
       buffer = '';
     }
@@ -236,12 +276,14 @@ export async function streamSaved(
   onStage?: (stage: string) => void,
   /** Tool definitions to offer (OpenAI shape), when the turn has any. */
   offered?: any[],
+  /** The chat's /reasoning level; Ollama gets it as `think`. */
+  reasoning?: string,
 ): Promise<void> {
   const entry = savedModels.find(provider, model);
   if (!entry) {
     throw new ApiError(0, `${model || 'That model'} is no longer in your models. Add it again in Settings → Local models.`);
   }
-  if (entry.kind === 'ollama') return streamOllama(entry, messages, onFrame, signal, offered);
+  if (entry.kind === 'ollama') return streamOllama(entry, messages, onFrame, signal, offered, reasoning);
   const status = await ensureUnsloth(entry, false, onStage);
   onStage?.('');
   const values = settingsFor(entry);
