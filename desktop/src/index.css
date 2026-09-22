@@ -276,11 +276,15 @@
 }
 
 :root {
-  --bg-0: #0b0f0a;
-  --bg-1: #111a10;
-  --bg-2: #182417;
-  --bg-3: #1f2e1c;
-  --border: #2a3d26;
+  /* A darker green than the first ramp, so the gloss below has something to
+     sit on: every step keeps the same hue and only loses lightness, which
+     raises (never lowers) the contrast the accent and the text tokens were
+     measured against. */
+  --bg-0: #050a06;
+  --bg-1: #0a120b;
+  --bg-2: #101c11;
+  --bg-3: #172818;
+  --border: #223a24;
   --text-1: #e8f0e3;
   --text-2: #a8b8a0;
   /* Was #6a7a64: 3.88:1 -- fine for large text, short of AA for the 11-13px
@@ -295,9 +299,13 @@
      L 0.80 / C 0.18 is >= 6.2:1 on --bg-0..--bg-3 and >= 9:1 under black text
      at every hue (test/desktop-look.test.js). Hue 152 is the old #4ade80. */
   --accent-h: 152;
-  --accent: oklch(0.8 0.18 var(--accent-h));
-  --accent-dim: oklch(0.8 0.18 var(--accent-h) / 0.12);
-  --accent-mid: oklch(0.8 0.18 var(--accent-h) / 0.35);
+  /* Deepened from L 0.80 to 0.73 once the ramp went darker: a richer, less
+     fluorescent green, still >= 4.5:1 on --bg-0..--bg-2 at every hue
+     (test/desktop-look.test.js sweeps it) and still far above that under the
+     black --accent-contrast text on a primary button. */
+  --accent: oklch(0.73 0.19 var(--accent-h));
+  --accent-dim: oklch(0.73 0.19 var(--accent-h) / 0.14);
+  --accent-mid: oklch(0.73 0.19 var(--accent-h) / 0.38);
   --accent-strong: oklch(0.66 0.16 var(--accent-h));
   --accent-contrast: #000000;
   --ok: #4ade80;
@@ -5313,3 +5321,99 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
 .component-tile:disabled { opacity: 0.5; cursor: not-allowed; }
 .component-name { font-weight: 600; }
 .component-note { color: var(--text-3); font-size: 12px; line-height: 1.35; }
+
+/* ---- Mica (NEURA-050) ----------------------------------------------------
+   The whole opt-in lives inside one query, and that is deliberate:
+
+   - `data-material="mica"` is painted by theme.ts only when the person asked
+     for the material AND the shell confirmed the window actually has it, so a
+     Windows 10 window never reaches these rules.
+   - `not (prefers-reduced-transparency: reduce)` wraps them, so a person who
+     asked the system for less transparency simply never gets them -- and the
+     solid rules above stand untouched rather than being restored by hand. On a
+     WebView2 too old to know the feature the query is false, which fails the
+     safe way: solid.
+
+   Only the chrome goes translucent. `.main` keeps an opaque --bg-0 because
+   chat text, code and cards have to be readable over whatever wallpaper the
+   person happens to have; the rails are where Windows 11 shows its material,
+   and they carry short, high-contrast labels. */
+@media not (prefers-reduced-transparency: reduce) {
+  html[data-material="mica"],
+  html[data-material="mica"] body,
+  html[data-material="mica"] #root {
+    background: transparent;
+  }
+
+  /* The painted canvas -- noise plus a radial wash -- is the SOLID look's
+     depth. Mica brings its own, so the canvas steps aside instead of being
+     layered over the system's. */
+  html[data-material="mica"] .app {
+    background-color: transparent;
+    background-image: none;
+  }
+
+  html[data-material="mica"] .titlebar,
+  html[data-material="mica"] .sidebar,
+  html[data-material="mica"] .status-bar {
+    background: color-mix(in srgb, var(--bg-1) 72%, transparent);
+    -webkit-backdrop-filter: saturate(140%);
+    backdrop-filter: saturate(140%);
+  }
+
+  /* Stated rather than assumed: the content pane is the readable surface and
+     must not inherit the transparency above it. */
+  html[data-material="mica"] .main {
+    background: var(--bg-0);
+  }
+}
+
+/* ---- glossy green ---------------------------------------------------------
+   Gloss is one highlight, not a gradient on everything: a short light wash
+   across the top ~45% of a surface, the way a lacquered panel catches a room
+   light. It is painted as background-IMAGE so it composes over whatever colour
+   (or Mica translucency) a surface already has, and it is defined last so it
+   survives the `background:` shorthands above.
+
+   The light theme gets nothing here -- a wash of white on an already-light
+   surface is grey, not gloss. */
+:root {
+  --gloss: linear-gradient(180deg, rgba(180, 255, 200, 0.085), rgba(180, 255, 200, 0.02) 46%, rgba(0, 0, 0, 0) 46%);
+  --gloss-strong: linear-gradient(180deg, rgba(200, 255, 212, 0.14), rgba(200, 255, 212, 0.03) 50%, rgba(0, 0, 0, 0) 50%);
+  /* The lit edge of a lacquered panel: one hairline, never a glow. */
+  --gloss-edge: inset 0 1px 0 rgba(200, 255, 212, 0.07);
+}
+
+[data-theme="light"] {
+  --gloss: none;
+  --gloss-strong: none;
+  --gloss-edge: none;
+}
+
+.titlebar,
+.sidebar,
+.status-bar,
+.settings-card,
+.card {
+  background-image: var(--gloss);
+  box-shadow: var(--gloss-edge);
+}
+
+button,
+.swatch,
+.sidebar-search {
+  background-image: var(--gloss-strong);
+}
+
+/* A flat surface under the pointer would lose its highlight; keep it and let
+   the hover colour show through underneath. */
+button:hover,
+.sidebar-search:hover {
+  background-image: var(--gloss-strong);
+}
+
+/* Motion is a choice the person already made once (Reduce motion), and gloss
+   is decoration: when they ask for less, the surfaces go flat. */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --gloss: none; --gloss-strong: none; --gloss-edge: none; }
+}

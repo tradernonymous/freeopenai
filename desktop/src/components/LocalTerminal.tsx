@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icon from './Icon';
+import PtyTerminal from './PtyTerminal';
 import { useLocalRun } from '../useLocalRun';
 import { runLocal } from '../bridge';
 // UMD modules: loaded for their side effect, read off globalThis.
@@ -11,8 +12,24 @@ const runResult: typeof import('../run-result.js') = (globalThis as any).FreeAI4
 
 // The local terminal dock.
 //
-// Commands run on THIS machine, inside the open folder, and nothing here talks
-// to the engine. Three things make it a terminal rather than a submit button:
+// NEURA-058 moved this to a real PTY: the dock you see is PtyTerminal, an
+// xterm.js screen over one long-lived shell (src-tauri/src/pty.rs), so a REPL,
+// `git rebase -i`, an installer prompt and a progress bar that redraws all
+// work. This file is now the CHOICE between that and the one-shot runner below.
+//
+// The one-shot runner is KEPT, not deleted, and it is not dead code: a PTY is
+// ConPTY on Windows, which needs Windows 10 1809 or newer, and `pty_open` can
+// also fail on a machine that has run out of handles or in a build with no
+// desktop shell at all. When it does, the user gets a terminal that still runs
+// commands rather than an empty box with an error in it -- and the destructive
+// gate that lives in this file is the one that still applies on that path.
+// PtyTerminal reports the failure once, through onUnavailable, and the dock
+// never flips back on its own.
+//
+// ---------------------------------------------------------------------------
+// The one-shot runner, below. Commands run on THIS machine, inside the open
+// folder, and nothing here talks to the engine. Three things made it a terminal
+// rather than a submit button:
 //
 //   1. A cwd that survives commands. `cd` cannot be delegated to a child
 //      process -- the child could never hand the change back -- so it is a
@@ -53,7 +70,7 @@ interface LocalTerminalProps {
   cwd?: string;
 }
 
-export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cwdProp }: LocalTerminalProps) {
+function OneShotTerminal({ root, onOpenFolder, onCwdChange, cwd: cwdProp }: LocalTerminalProps) {
   const [history, setHistory] = useState<Entry[]>([]);
   const [input, setInput] = useState('');
   const [ownCwd, setOwnCwd] = useState('');
@@ -338,5 +355,27 @@ export default function LocalTerminal({ root, onOpenFolder, onCwdChange, cwd: cw
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The dock. A real terminal, with the one-shot runner behind it for a machine
+ * that cannot open a PTY.
+ *
+ * The fallback is one-way on purpose: flipping back to the PTY on the next
+ * render would restart the shell under a user who is already typing, and a
+ * terminal that reinvents itself is worse than one that is merely older.
+ */
+export default function LocalTerminal(props: LocalTerminalProps) {
+  const [noPty, setNoPty] = useState(false);
+  const onUnavailable = useCallback(() => setNoPty(true), []);
+  if (noPty) return <OneShotTerminal {...props} />;
+  return (
+    <PtyTerminal
+      root={props.root}
+      cwd={props.cwd}
+      onOpenFolder={props.onOpenFolder}
+      onUnavailable={onUnavailable}
+    />
   );
 }

@@ -96,11 +96,15 @@ test('every accent token is derived from --accent-h, in both themes', () => {
   assert.ok(!/--accent-contrast, #fff/.test(CSS), 'no fallback that is white on a light accent');
 });
 
-test('the default hue reproduces the old greens', () => {
+test('the default accent is the deeper green, and the light theme keeps its own', () => {
   const [dl, dc] = accentLC(DARK);
   const [ll, lc] = accentLC(LIGHT);
-  // #4ade80 is oklch(0.800 0.182 151.7); #166534 is oklch(0.448 0.108 151.3).
-  assert.ok(Math.abs(dl - 0.8) < 0.01 && Math.abs(dc - 0.182) < 0.01, 'dark matches #4ade80');
+  // The dark accent was #4ade80 (oklch 0.800 0.182) until the ramp went
+  // darker; it is deliberately deeper now -- richer, less fluorescent -- and
+  // the sweep below is what proves the new value still clears AA. The light
+  // theme sits on light surfaces and is unchanged: #166534, oklch 0.448 0.108.
+  assert.ok(Math.abs(dl - 0.73) < 0.01 && Math.abs(dc - 0.19) < 0.01, 'dark is the deepened green');
+  assert.ok(dl < 0.8, 'the dark accent is darker than the old #4ade80');
   assert.ok(Math.abs(ll - 0.448) < 0.01 && Math.abs(lc - 0.108) < 0.01, 'light matches #166534');
 });
 

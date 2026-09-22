@@ -33,10 +33,12 @@ mod mcp;
 mod models;
 mod net;
 mod ollama;
+mod pty;
 mod launch;
 mod quick;
 mod selection;
 mod save;
+mod sd;
 mod secrets;
 mod webview2;
 mod whisper;
@@ -117,6 +119,17 @@ fn quit_ready_slot() -> &'static std::sync::Mutex<Option<std::sync::mpsc::Sender
     SLOT.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+/// Whether this window really has Mica.
+///
+/// The page cannot see a DWM backdrop: to CSS the window is a page, and a
+/// translucent sidebar over a window with no backdrop is a sidebar over
+/// nothing. So the shell answers, and index.css only goes translucent when
+/// this said yes (theme.ts applyMaterial).
+#[tauri::command]
+fn window_has_mica() -> bool {
+    mica::supported()
+}
+
 /// The page has flushed its chats: the pending tray Quit may exit now.
 #[tauri::command]
 fn quit_ready() {
@@ -164,6 +177,7 @@ fn main() {
             }
         }))
         .invoke_handler(generate_handler![
+            window_has_mica,
             save::save_file_dialog,
             net::remote_get,
             net::update_manifest,
@@ -207,6 +221,12 @@ fn main() {
             mcp::mcp_stdio_request,
             mcp::mcp_stdio_stop,
             mcp::mcp_stdio_list,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_run,
+            pty::pty_resize,
+            pty::pty_close,
+            pty::pty_list,
             models::local_server_find,
             models::local_server_pick,
             models::local_server_use,
@@ -223,6 +243,16 @@ fn main() {
             whisper::whisper_use,
             whisper::whisper_pick_binary,
             whisper::whisper_transcribe,
+            sd::sd_find,
+            sd::sd_pick_binary,
+            sd::sd_use_model,
+            sd::sd_pick_model,
+            sd::sd_start,
+            sd::sd_status,
+            sd::sd_stop,
+            sd::sd_generate,
+            sd::sd_job,
+            sd::sd_cancel,
             gguf::gguf_info,
             quick::quick_hotkey_set,
             quick::quick_hide,
@@ -346,6 +376,9 @@ fn main() {
                             return;
                         }
                         models::shutdown();
+                        // NEURA-059: the image server is a child like the model
+                        // server, and Quit owes it the same end.
+                        sd::shutdown();
                         // The same for local MCP servers (mcp.rs).
                         mcp::shutdown();
                         // Ask the page to flush its chats (NEURA-021), then

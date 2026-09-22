@@ -38,6 +38,11 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "linux-
 minisign-verify = "0.2"
 # Chat history (chat_store.rs): SQLite compiled in, so no system library.
 rusqlite = { version = "0.31", features = ["bundled"] }
+# NEURA-058: the real terminal (pty.rs). ConPTY on Windows 10 1809+ and
+# openpty elsewhere. No default features -- the only ones are serde support we
+# do not use -- and no system library to find, so the terminal ships in the
+# same one-file build as everything else.
+portable-pty = { version = "0.9.0", default-features = false }
 
 [features]
 default = ["custom-protocol"]

@@ -42,6 +42,17 @@
   ];
 
   var BROWSER_ID = 'puter';
+  // The third answer to "who draws": this PC, through the user's own
+  // sd-server (stable-diffusion.cpp). No account, no network -- and no
+  // pretending: the row is ready only when the binary AND a model are chosen.
+  var LOCAL_ID = 'local';
+  // sd.cpp draws in multiples of 64, so a preset that is not one is snapped
+  // here rather than refused by the server after the user pressed Draw.
+  var LOCAL_STEP_PX = 64;
+  var LOCAL_MAX_PX = 2048;
+  // Enough steps for a recognisable picture without a ten-minute wait. The
+  // number is on screen: nothing here invents a "quality" for somebody.
+  var LOCAL_STEPS = 20;
 
   function preset(id) {
     for (var i = 0; i < SIZE_PRESETS.length; i += 1) {
@@ -105,6 +116,162 @@
       });
     }
     return out;
+  }
+
+  /**
+   * The same list with "This PC" on the front, when the shell reported an
+   * sd-server at all. It goes first because it is the one service that needs
+   * no account and no network; it is never auto-selected (see `chosen`),
+   * because generation here costs minutes of the user's own CPU and that is
+   * not a thing to start for somebody without being asked.
+   */
+  function withLocal(choices, facts) {
+    var list = Array.isArray(choices) ? choices.slice() : [];
+    if (!facts) return list;
+    list.unshift(localRow(facts));
+    return list;
+  }
+
+  /**
+   * The "This PC" row, from what the shell found (sd.rs `sd_find`).
+   *
+   * Ready means BOTH halves are in place. A row that says ready without a
+   * model is a Draw button that fails after the user pressed it.
+   */
+  function localRow(facts) {
+    var f = facts || {};
+    var binary = String(f.binary || '');
+    var model = String(f.model || '');
+    var reason = '';
+    if (!f.found || !binary) reason = 'Choose ' + String(f.expected_name || 'sd-server') + ' below.';
+    else if (!model) reason = 'Choose a model file below.';
+    return {
+      id: LOCAL_ID,
+      label: 'This PC',
+      kind: 'local',
+      ready: !!(f.found && binary && model),
+      model: modelName(model),
+      models: model ? [modelName(model)] : [],
+      reason: reason,
+      note: 'stable-diffusion.cpp on this machine: no account, no network.',
+      edits: '',
+      binary: binary,
+      modelPath: model,
+    };
+  }
+
+  /** The file name of a path, for a caption that fits on one line. */
+  function modelName(path) {
+    var text = String(path || '');
+    var cut = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'));
+    return cut >= 0 ? text.slice(cut + 1) : text;
+  }
+
+  /** Is this the row that draws on this machine? */
+  function isLocal(choice) {
+    return !!choice && choice.kind === 'local';
+  }
+
+  /** A side sd.cpp accepts: a multiple of 64, never bigger than LOCAL_MAX_PX. */
+  function localSide(px) {
+    var value = Math.round(Number(px) / LOCAL_STEP_PX) * LOCAL_STEP_PX;
+    if (!isFinite(value) || value < LOCAL_STEP_PX) value = LOCAL_STEP_PX;
+    return Math.min(value, LOCAL_MAX_PX);
+  }
+
+  /** The shape a preset becomes on this machine. */
+  function localSize(sizeId) {
+    var shape = preset(sizeId);
+    return { width: localSide(shape.width), height: localSide(shape.height) };
+  }
+
+  /**
+   * The arguments for the shell's `sd_generate`. The shell turns these into
+   * sd-server's documented `POST /sdcpp/v1/img_gen` body; nothing here names a
+   * host, because there is no host to name -- it is always this machine.
+   */
+  function localRequest(request) {
+    var req = request || {};
+    var shape = localSize(req.size);
+    return {
+      prompt: String(req.prompt || '').trim(),
+      negativePrompt: String(req.negativePrompt || '').trim(),
+      width: shape.width,
+      height: shape.height,
+      steps: Number(req.steps) > 0 ? Math.round(Number(req.steps)) : LOCAL_STEPS,
+    };
+  }
+
+  /**
+   * What one poll of a job means, for a progress line and for the gallery.
+   *
+   * The only way this returns a url is a completed job that actually carried
+   * an image. "completed" with an empty result is an error, not a picture:
+   * the screen must never show a frame it did not get bytes for.
+   */
+  function localJobView(job) {
+    var body = job || {};
+    var status = String(body.status || '').toLowerCase();
+    var result = body.result || {};
+    var first = Array.isArray(result.images) ? result.images[0] : null;
+    var b64 = first && typeof first.b64_json === 'string' ? first.b64_json : '';
+    var format = String(result.output_format || 'png').toLowerCase();
+    if (status === 'completed') {
+      if (!b64) {
+        return { state: 'failed', done: true, url: '', label: 'Finished', error: 'The local server finished without an image.' };
+      }
+      return {
+        state: 'completed',
+        done: true,
+        url: 'data:image/' + (format === 'jpeg' || format === 'webp' ? format : 'png') + ';base64,' + b64,
+        label: 'Done',
+        error: '',
+      };
+    }
+    if (status === 'failed') {
+      return {
+        state: 'failed',
+        done: true,
+        url: '',
+        label: 'Failed',
+        error: String(body.error || body.detail || 'The local server could not draw that.'),
+      };
+    }
+    if (status === 'cancelled') {
+      return { state: 'cancelled', done: true, url: '', label: 'Cancelled', error: '' };
+    }
+    if (status === 'queued') {
+      var place = Number(body.queue_position);
+      return {
+        state: 'queued',
+        done: false,
+        url: '',
+        label: isFinite(place) && place > 0 ? 'Queued, ' + place + ' ahead' : 'Queued',
+        error: '',
+      };
+    }
+    // "generating", and anything this build of sd-server calls it: the honest
+    // line is that it is working, not a percentage nobody measured.
+    return { state: 'generating', done: false, url: '', label: 'Drawing on this PC…', error: '' };
+  }
+
+  /** How long a job has been going, for the same progress line. */
+  function localElapsed(ms) {
+    var seconds = Math.max(0, Math.round(Number(ms) / 1000) || 0);
+    if (seconds < 60) return seconds + 's';
+    return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+  }
+
+  /** Whether a local failure is worth doing something about, and what. */
+  function localAdvice(message) {
+    var text = String(message || '');
+    if (/not set up|is not running|Choose /i.test(text)) {
+      return 'Choose sd-server and a model file below, then draw again.';
+    }
+    if (/No model chosen/i.test(text)) return 'Pick a model file below — sd-server needs weights to load.';
+    if (/did not become ready/i.test(text)) return 'The model may be too big for this machine, or the file may not be one sd.cpp loads.';
+    if (/without an image/i.test(text)) return 'Try again with fewer pixels, or check the server log in Diagnostics.';
+    return 'Try again, or pick a service above instead.';
   }
 
   /** The row to draw with: what was chosen, else the first ready one, else the browser. */
@@ -218,6 +385,19 @@
     QUALITY: QUALITY,
     SIZE_PRESETS: SIZE_PRESETS,
     BROWSER_ID: BROWSER_ID,
+    LOCAL_ID: LOCAL_ID,
+    LOCAL_STEPS: LOCAL_STEPS,
+    LOCAL_STEP_PX: LOCAL_STEP_PX,
+    LOCAL_MAX_PX: LOCAL_MAX_PX,
+    localRow: localRow,
+    withLocal: withLocal,
+    isLocal: isLocal,
+    localSide: localSide,
+    localSize: localSize,
+    localRequest: localRequest,
+    localJobView: localJobView,
+    localElapsed: localElapsed,
+    localAdvice: localAdvice,
     preset: preset,
     modelsFor: modelsFor,
     modelsForChoice: modelsForChoice,

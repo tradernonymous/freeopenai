@@ -16,8 +16,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import QuickAsk from './screens/QuickAsk';
-import { isQuickWindow } from './bridge';
-import { paintAppearance } from './theme';
+import { isQuickWindow, windowHasMica } from './bridge';
+import { applyMaterial, paintAppearance, readMaterial } from './theme';
 // Bundled, not borrowed from the machine: the app should look the same on every
 // Windows build rather than inheriting whatever Segoe happens to be installed.
 import '@fontsource-variable/inter';
@@ -64,6 +64,16 @@ window.addEventListener('unhandledrejection', (event) => {
 // the first frame is already in the person's colours and never animates when
 // they asked for less motion. A storage fault must not stop the app starting.
 try { paintAppearance(); } catch { /* the stylesheet defaults still apply */ }
+
+// NEURA-050: the window material is painted solid first and only upgraded once
+// the shell has confirmed Mica. Asking costs one IPC round trip, so it cannot
+// be part of the first paint -- and a first frame that is solid and then gains
+// a backdrop is the right way round: the other order flashes the wallpaper
+// through a window that turns out not to have one.
+applyMaterial(readMaterial(), false);
+void windowHasMica()
+  .then((has) => { applyMaterial(readMaterial(), has); })
+  .catch(() => { /* no shell, or it did not answer: solid stands */ });
 
 const container = rootElement();
 if (!container) {

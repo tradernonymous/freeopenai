@@ -167,3 +167,60 @@ export function useParallax(maxPx = 6): void {
     };
   }, [maxPx]);
 }
+
+// ---- window material (NEURA-050) -------------------------------------------
+//
+// Mica is the system's own material: the wallpaper, blurred by DWM, behind the
+// window. The shell asks for it in tauri.conf.json and withdraws it when the
+// machine cannot honour it -- a build below Windows 11, or Transparency
+// effects turned off (main.rs, mod mica). The page must not decide that for
+// itself: making the rails translucent on a window that has no backdrop paints
+// them over nothing, which is how a "premium" look becomes an unreadable one.
+//
+// So the material is two facts, not one. What the person asked for is
+// remembered here; whether the window actually has Mica is the shell's answer,
+// and only both together paint data-material="mica" on <html>. index.css keeps
+// the content pane opaque either way, and a person who asks the system for
+// less transparency overrides all of it (prefers-reduced-transparency).
+
+export type Material = 'mica' | 'solid';
+
+const MATERIAL_KEY = 'freeai4u.window_material';
+export const DEFAULT_MATERIAL: Material = 'mica';
+
+export function readMaterial(): Material {
+  try {
+    const saved = localStorage.getItem(MATERIAL_KEY);
+    return saved === 'solid' || saved === 'mica' ? saved : DEFAULT_MATERIAL;
+  } catch {
+    return DEFAULT_MATERIAL;
+  }
+}
+
+export function saveMaterial(material: Material): Material {
+  try {
+    localStorage.setItem(MATERIAL_KEY, material);
+  } catch { /* private mode: the choice still applies to this window */ }
+  return material;
+}
+
+/**
+ * Paint the EFFECTIVE material and return it: `mica` only when the person
+ * asked for it and the window really has it. Everything else is `solid`, which
+ * is the look the app has always had.
+ */
+export function applyMaterial(wanted: Material, hasMica: boolean): Material {
+  micaAvailable = hasMica;
+  const effective: Material = wanted === 'mica' && hasMica ? 'mica' : 'solid';
+  document.documentElement.setAttribute('data-material', effective);
+  return effective;
+}
+
+// The shell's last answer, so Settings can say "this machine has no Mica"
+// instead of offering a switch that does nothing. It starts false: until the
+// shell has answered, the app is solid, which is also what it looks like.
+let micaAvailable = false;
+
+export function windowHasMica(): boolean {
+  return micaAvailable;
+}

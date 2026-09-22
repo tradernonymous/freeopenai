@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, imageUrlFrom } from '../api';
 import Icon from '../components/Icon';
 import SelectPill from '../components/SelectPill';
+import LocalImagesCard from '../components/LocalImagesCard';
 // UMD modules: loaded for their side effect, read off globalThis.
 import '../images.js';
 import '../failure.js';
 import '../puter.js';
-import { hasShell, puterSigninOpen } from '../bridge';
+import { call, hasShell, puterSigninOpen } from '../bridge';
 
 const images: typeof import('../images.js') = (globalThis as any).FreeAI4UImages;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
@@ -27,6 +28,11 @@ const puter: typeof import('../puter.js') = (globalThis as any).FreeAI4UPuter;
 //     shape sent, to whichever service answered.
 //   * Every card says who drew it -- the engine reports the service it used --
 //     and a failure says what was tried and what to do next.
+//   * "This PC" is a third row: the user's own sd-server (sd.rs), started on
+//     127.0.0.1 when they draw and stopped when they quit. It is slow, so it
+//     reports what the server actually says -- queued, drawing, and for how
+//     long -- and can be cancelled, instead of a spinner that cannot be
+//     stopped. A job that finishes without bytes is an error, never a frame.
 
 interface Job {
   prompt: string;
@@ -36,6 +42,20 @@ interface Job {
   notes: string[];
   ts: number;
 }
+
+type SdFacts = import('../images.js').SdFacts;
+type SdStatus = {
+  state: 'stopped' | 'starting' | 'ready' | string;
+  binary: string;
+  model: string;
+  port: number;
+  pid: number;
+  uptime_ms: number;
+  base_url: string;
+  detail: string;
+};
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function ImagesScreen() {
   const [rows, setRows] = useState<any[]>([]);
@@ -49,18 +69,60 @@ export default function ImagesScreen() {
   const [signedIn, setSignedIn] = useState(false);
   const [puterMsg, setPuterMsg] = useState('');
   const [reportError, setReportError] = useState('');
+  const [sd, setSd] = useState<SdFacts | null>(null);
+  const [sdStatus, setSdStatus] = useState<SdStatus | null>(null);
+  // The job on this PC: its id (so it can be cancelled), what the server last
+  // said about it, and when it started.
+  const [localJob, setLocalJob] = useState<{ id: string; label: string; since: number } | null>(null);
+  const [localMs, setLocalMs] = useState(0);
+  // Set when the user cancels or the screen goes away: the poll loop reads it
+  // instead of running on after nobody is looking.
+  const stopPolling = useRef(false);
+
+  // What the shell knows about sd-server. A browser build has no shell, so it
+  // simply has no "This PC" row -- not a row that fails when pressed.
+  const readSd = useCallback(async () => {
+    if (!hasShell()) return null;
+    try {
+      const facts = await call<SdFacts>('sd_find');
+      setSd(facts);
+      const status = await call<SdStatus>('sd_status');
+      setSdStatus(status);
+      return facts;
+    } catch {
+      // The shell answering nothing about sd-server is not an Images failure:
+      // the engine services above still work.
+      setSd(null);
+      setSdStatus(null);
+      return null;
+    }
+  }, []);
 
   const refresh = useCallback(() => {
     setReportError('');
+    const local = readSd();
     api.imageProviders()
-      .then((data: any) => setRows(images.providerChoices(data)))
-      .catch((err: unknown) => {
-        setRows([]);
+      .then(async (data: any) => setRows(images.withLocal(images.providerChoices(data), await local)))
+      .catch(async (err: unknown) => {
+        // Even with no engine, this PC can still draw: the row survives.
+        setRows(images.withLocal([], await local));
         setReportError((err as Error).message || String(err));
       });
-  }, []);
+  }, [readSd]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // The elapsed line ticks on its own so a long job does not look stuck.
+  useEffect(() => {
+    if (!localJob) return undefined;
+    const timer = setInterval(() => setLocalMs(Date.now() - localJob.since), 1000);
+    return () => clearInterval(timer);
+  }, [localJob]);
+
+  // Leaving the screen stops the polling. The server itself is not stopped:
+  // it belongs to the user, the card starts and stops it, and the shell reaps
+  // it on exit (sd.rs shutdown).
+  useEffect(() => () => { stopPolling.current = true; }, []);
 
   // The Puter row reports its own state: the SDK knows whether anybody is
   // signed in, and that is a fact about the browser, not the engine.
@@ -72,6 +134,7 @@ export default function ImagesScreen() {
 
   const choice = useMemo(() => images.chosen(choiceId, rows), [choiceId, rows]);
   const isBrowser = choice?.kind === 'browser';
+  const isLocal = images.isLocal(choice || {});
 
   // The model follows the service: an id from one service means nothing on the
   // next, which is exactly how a draw used to land on the wrong model. The list
@@ -99,6 +162,54 @@ export default function ImagesScreen() {
       .finally(() => setBusy(false));
   };
 
+  /**
+   * Draw on this machine: make sure sd-server is up, submit the job, then poll
+   * it. Everything is awaited in small steps, so the window keeps painting
+   * through the minutes an image takes, and every step reports what the server
+   * itself said.
+   *
+   * Returns the data: URL, or '' when the user cancelled.
+   */
+  const drawHere = async (text: string): Promise<string> => {
+    stopPolling.current = false;
+    let status = await call<SdStatus>('sd_status');
+    if (status.state !== 'ready') {
+      setLocalJob({ id: '', label: 'Loading the model…', since: Date.now() });
+      status = await call<SdStatus>('sd_start', { port: null, threads: null });
+      setSdStatus(status);
+    }
+    if (stopPolling.current) { setLocalJob(null); return ''; }
+
+    const request = images.localRequest({ prompt: text, size });
+    const submitted = await call<any>('sd_generate', request);
+    const id = String(submitted?.id || '');
+    if (!id) throw new Error('The local server accepted the job without an id.');
+    setLocalJob({ id, label: 'Queued', since: Date.now() });
+    try {
+      for (;;) {
+        if (stopPolling.current) return '';
+        await wait(900);
+        if (stopPolling.current) return '';
+        const view = images.localJobView(await call<any>('sd_job', { id }));
+        setLocalJob((prev) => (prev && prev.id === id ? { ...prev, label: view.label } : prev));
+        if (view.state === 'cancelled') return '';
+        if (view.error) throw new Error(view.error);
+        if (view.done) return view.url;
+      }
+    } finally {
+      setLocalJob(null);
+      setSdStatus(await call<SdStatus>('sd_status').catch(() => null as any));
+    }
+  };
+
+  /** Stop the job the user started. The server stays up: the model is loaded. */
+  const cancelHere = async () => {
+    const id = localJob?.id || '';
+    stopPolling.current = true;
+    setLocalJob(null);
+    if (id) await call('sd_cancel', { id }).catch(() => undefined);
+  };
+
   const draw = async () => {
     const text = prompt.trim();
     if (!text || busy || !choice) return;
@@ -110,7 +221,14 @@ export default function ImagesScreen() {
       let url = '';
       let who = '';
       let notes: string[] = [];
-      if (isBrowser) {
+      if (isLocal) {
+        // Empty means cancelled: the user stopped it, which is not an error
+        // and not an image. (`finally` below puts the button back.)
+        const drawn = await drawHere(text);
+        if (!drawn) return;
+        url = drawn;
+        who = `This PC · ${choice.model || 'sd-server'}`;
+      } else if (isBrowser) {
         if (!puter.isSignedIn()) throw new Error('Sign in to Puter first.');
         url = await puter.draw(text, { model, ratio: shape.ratio, quality: images.QUALITY });
         who = `${choice.label} · ${model}`;
@@ -132,7 +250,14 @@ export default function ImagesScreen() {
     } catch (err) {
       const e = err as any;
       const message = images.describePuterError(e) || (e && e.message) || String(e);
-      if (isBrowser) {
+      if (isLocal) {
+        setError({
+          summary: 'This PC could not draw that',
+          upstream: message,
+          walk: '',
+          advice: images.localAdvice(message),
+        });
+      } else if (isBrowser) {
         setError({
           summary: 'Puter could not draw that',
           upstream: message,
@@ -270,6 +395,17 @@ export default function ImagesScreen() {
             <button className="primary send-btn-wide" onClick={draw} disabled={busy || !prompt.trim() || blocked}>
               {busy ? 'Drawing…' : isBrowser && !signedIn ? 'Sign in to draw' : 'Draw'}
             </button>
+            {/* A job on this PC is minutes of this machine's own work, so it
+                says what the server said and can be stopped -- the one thing a
+                spinner cannot offer. */}
+            {localJob && (
+              <>
+                <span className="chip-note">
+                  {localJob.label} · {images.localElapsed(localMs)}
+                </span>
+                <button onClick={cancelHere}>Cancel</button>
+              </>
+            )}
             {blocked && !isBrowser && !busy && (
               <span className="settings-hint">{choice?.reason || 'Pick a service that is ready.'}</span>
             )}
@@ -295,7 +431,7 @@ export default function ImagesScreen() {
               {rows.map((r) => (
                 <div key={r.id} className="provider-row">
                   <span className="setting-label">
-                    {r.label}{r.kind === 'browser' ? ' (browser)' : ''}
+                    {r.label}{r.kind === 'browser' ? ' (browser)' : r.kind === 'local' ? ' (this machine)' : ''}
                   </span>
                   <span className={`setting-value ${r.kind === 'browser' ? 'warn' : r.ready ? 'ok' : 'warn'}`}>
                     {r.kind === 'browser'
@@ -307,6 +443,15 @@ export default function ImagesScreen() {
               {rows.length === 0 && <div className="empty">The engine reported no image services.</div>}
             </div>
           </details>
+
+          <LocalImagesCard
+            facts={sd}
+            status={sdStatus}
+            drawing={busy}
+            onRefresh={async () => { await readSd(); refresh(); }}
+            onStart={async () => { setSdStatus(await call<SdStatus>('sd_start', { port: null, threads: null })); }}
+            onStop={async () => { await call('sd_stop'); setSdStatus(await call<SdStatus>('sd_status')); }}
+          />
         </div>
 
         <div className="images-gallery">

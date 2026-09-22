@@ -270,6 +270,107 @@ export async function onLocalRun(handler: (chunk: LocalRunChunk) => void): Promi
   return subscribe<LocalRunChunk>('local-run', handler);
 }
 
+// ---- the real terminal (NEURA-058) ---------------------------------------
+//
+// A PTY, not a command runner: one long-lived shell per session id, bytes in
+// both directions, and a size the shell is told about. The gate that local_run
+// applies before spawning lives on `ptyRun` here -- see src-tauri/src/pty.rs
+// for why the user's own keystrokes (`ptyWrite`) are NOT gated and anything an
+// agent sends still is.
+
+export interface PtySession {
+  id: string;
+  /** The shell that was started (COMSPEC / SHELL). */
+  shell: string;
+  pid: number | null;
+  /** Where it started, relative to the open folder. */
+  cwd: string;
+  absoluteCwd: string;
+  cols: number;
+  rows: number;
+}
+
+export interface PtyOutput {
+  id: string;
+  /** base64: a pty splits UTF-8 wherever the read ended, so bytes travel as bytes. */
+  data: string;
+  /** True when the shell outran the buffer and the OLDEST bytes were dropped. */
+  dropped?: boolean;
+}
+
+export interface PtyExit {
+  id: string;
+  exitCode: number | null;
+}
+
+/** Open a terminal in the open folder (or a folder inside it). */
+export async function ptyOpen(args: {
+  id: string;
+  root: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+}): Promise<PtySession> {
+  return call<PtySession>('pty_open', {
+    id: args.id,
+    root: args.root,
+    cwd: args.cwd ?? '',
+    cols: args.cols,
+    rows: args.rows,
+  });
+}
+
+/**
+ * Keystrokes. This is the user's own shell and it is deliberately NOT gated --
+ * only xterm's onData handler may call it. A command from anything that is not
+ * a human goes through ptyRun, which still asks local.rs's risk_of().
+ */
+export async function ptyWrite(id: string, data: string): Promise<void> {
+  await call('pty_write', { id, data });
+}
+
+/**
+ * A command from the agent, a recipe or a button. The shell refuses a
+ * destructive one unless `approveRisky` says a human said yes -- the same rule,
+ * the same wording, as runLocal.
+ */
+export async function ptyRun(
+  id: string,
+  command: string,
+  approveRisky = false,
+): Promise<{ id: string; command: string; sent: boolean }> {
+  return call('pty_run', { id, command, approveRisky });
+}
+
+export async function ptyResize(id: string, cols: number, rows: number): Promise<void> {
+  await call('pty_resize', { id, cols, rows });
+}
+
+export async function ptyClose(id: string): Promise<{ closed: boolean }> {
+  return call<{ closed: boolean }>('pty_close', { id });
+}
+
+export async function ptyList(): Promise<string[]> {
+  return call<string[]>('pty_list');
+}
+
+export function onPtyOutput(handler: (chunk: PtyOutput) => void): Promise<() => void> {
+  return subscribe<PtyOutput>('pty-output', handler);
+}
+
+export function onPtyExit(handler: (end: PtyExit) => void): Promise<() => void> {
+  return subscribe<PtyExit>('pty-exit', handler);
+}
+
+/** The bytes behind a PtyOutput. xterm.js takes a Uint8Array and decodes it
+ *  itself, across chunks, which is the point of not sending a String. */
+export function ptyBytes(data: string): Uint8Array {
+  const binary = atob(data);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
 function urlOf(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
   if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();
@@ -775,6 +876,20 @@ export function onAppQuitting(handler: () => void): Promise<() => void> {
 /** Tell the shell the page has flushed; it exits at once instead of after its wait. */
 export async function quitReady(): Promise<void> {
   if (hasShell()) await call('quit_ready');
+}
+
+/**
+ * Whether the window has the Windows 11 Mica material (NEURA-050). Outside the
+ * shell -- the dev browser -- the answer is no, which is also what it looks
+ * like there.
+ */
+export async function windowHasMica(): Promise<boolean> {
+  if (!hasShell()) return false;
+  try {
+    return (await call('window_has_mica')) === true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- local dictation (whisper.rs) ---------------------------------------------

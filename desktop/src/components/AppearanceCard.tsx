@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import {
   applyAccentHue,
+  applyMaterial,
+  readMaterial,
+  saveMaterial,
+  windowHasMica,
   applyReduceMotion,
   DEFAULT_ACCENT_HUE,
   readAccentHue,
@@ -25,7 +29,11 @@ const PRESETS: Array<{ name: string; hue: number }> = [
 export default function AppearanceCard() {
   const [hue, setHue] = useState<number>(readAccentHue);
   const [reduced, setReduced] = useState<boolean>(readReduceMotion);
+  const [material, setMaterial] = useState(readMaterial);
   const systemReduced = systemPrefersReducedMotion();
+  // Asked once, on the shell's answer from boot: a machine that cannot show
+  // Mica gets an explanation instead of a switch that changes nothing.
+  const micaHere = windowHasMica();
 
   const pick = (value: number) => setHue(applyAccentHue(value));
   const reset = () => setHue(applyAccentHue(null));
@@ -69,6 +77,25 @@ export default function AppearanceCard() {
         <span className="appearance-preview-link">Accent text</span>
         <span className="appearance-preview-chip">Selected</span>
       </div>
+
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={material === 'mica'}
+          disabled={!micaHere}
+          onChange={(e) => {
+            const wanted = saveMaterial(e.target.checked ? 'mica' : 'solid');
+            applyMaterial(wanted, micaHere);
+            setMaterial(wanted);
+          }}
+        />
+        Window material (Mica)
+      </label>
+      <p className="settings-hint">
+        {micaHere
+          ? 'The sidebar, title bar and status bar sit on the Windows 11 material, so your wallpaper shows through them. Chat and cards stay solid.'
+          : 'This machine does not offer Mica -- it needs Windows 11 with Transparency effects turned on -- so the window stays solid.'}
+      </p>
 
       <label className="toggle">
         <input
