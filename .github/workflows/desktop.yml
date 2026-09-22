@@ -98,6 +98,9 @@ jobs:
           }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The update-signing PUBLIC key (roadmap 5.9), compiled into net.rs.
+          # Empty (the variable unset) keeps the sha256-only update check.
+          NEURAOS_UPDATER_PUBKEY: ${{ vars.NEURAOS_UPDATER_PUBKEY }}
 
       # A build that says it is signed must be signed. Verifying here is the
       # difference between "we passed the thumbprint" and "the file Windows
@@ -160,6 +163,26 @@ jobs:
           $json = $meta | ConvertTo-Json -Depth 6
           Set-Content -Path desktop/src-tauri/target/release/desktop-version.json -Value $json -Encoding utf8
           Get-Content desktop/src-tauri/target/release/desktop-version.json
+      # The manifest's signature (5.9). A build that compiled a public key in
+      # MUST ship a signature, or every installed copy would refuse the update,
+      # so a key without its private half fails the job instead.
+      - name: Sign update metadata
+        working-directory: desktop
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          NEURAOS_UPDATER_PUBKEY: ${{ vars.NEURAOS_UPDATER_PUBKEY }}
+        run: |
+          $manifest = 'src-tauri/target/release/desktop-version.json'
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            if ($env:NEURAOS_UPDATER_PUBKEY) { throw 'NEURAOS_UPDATER_PUBKEY is set but TAURI_SIGNING_PRIVATE_KEY is not: this build would refuse its own updates.' }
+            Write-Host '::warning::Update metadata is UNSIGNED - see docs/desktop.md (Update signing).'
+            exit 0
+          }
+          npx tauri signer sign $manifest
+          if (-not (Test-Path "$manifest.sig")) { throw 'tauri signer produced no .sig' }
+          Get-Content "$manifest.sig"
       - name: Delete old release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,5 +203,6 @@ jobs:
             desktop/src-tauri/target/release/bundle/msi/*.msi
             desktop/src-tauri/target/release/freeai4u-desktop.exe
             desktop/src-tauri/target/release/desktop-version.json
+            desktop/src-tauri/target/release/desktop-version.json.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

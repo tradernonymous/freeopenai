@@ -16,12 +16,13 @@ import EvalsScreen from './screens/EvalsScreen';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
-import { hasShell, onDeepLink, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
+import { hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
 import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
 import { QUICK_HOTKEY_KEY, SELECTION_HOTKEY_KEY } from './components/ShortcutsCard';
 import { PENDING_MODEL_EVENT, PENDING_MODEL_KEY } from './components/LocalModelsCard';
 import './hf-auth.js';
 import './local-models.js';
+import './saved-models.js';
 
 const hfAuth: typeof import('./hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
 const localModels: typeof import('./local-models.js') = (globalThis as any).FreeAI4ULocalModels;
@@ -155,6 +156,31 @@ export default function App() {
         return;
       }
     }).then((unsubscribe) => { stop = unsubscribe; });
+    return () => stop();
+  }, []);
+
+  // Opened WITH something (5.4): a .gguf joins My models; a folder becomes the
+  // working folder. A first launch asks the shell once; a second launch sends
+  // an event. Either way the person sees where it went.
+  useEffect(() => {
+    if (!hasShell()) return;
+    const open = (path: string) => {
+      if (!path) return;
+      if (/\.gguf$/i.test(path)) {
+        const saved = (globalThis as any).FreeAI4USavedModels?.add({ kind: 'unsloth', path });
+        setView('settings');
+        pushToast(saved?.ok ? 'ok' : 'warn', saved?.ok ? `${saved.added ? 'Added' : 'Already in'} My models: ${path.split(/[\\/]/).pop()}` : (saved?.reason || 'That model could not be added.'));
+        return;
+      }
+      try { localStorage.setItem(LOCAL_ROOT_KEY, path); } catch { /* the session still has it */ }
+      setLocalRoot(path);
+      setShowFolder(true);
+      setView('local');
+      pushToast('ok', `Working in ${path}`);
+    };
+    launchTakePath().then((p) => { if (p) open(p); }).catch(() => {});
+    let stop = () => {};
+    onOpenPath(open).then((unsubscribe) => { stop = unsubscribe; }).catch(() => {});
     return () => stop();
   }, []);
 

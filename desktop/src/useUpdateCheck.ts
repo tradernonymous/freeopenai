@@ -15,10 +15,26 @@ import { useCallback, useEffect, useState } from 'react';
 import './update.js';
 import './net-policy.js';
 import { APP_VERSION } from './version';
-import { downloadVerified, hasShell, runInstaller, shellFetch } from './bridge';
+import { downloadVerified, hasShell, runInstaller, updateManifest } from './bridge';
 
 const update: typeof import('./update.js') = (globalThis as any).FreeAI4UUpdate;
 const netPolicy: typeof import('./net-policy.js') = (globalThis as any).FreeAI4UNetPolicy;
+
+/**
+ * fetch() for the manifest, answered by the shell's signature-checked read.
+ * A refused signature is logged and reads as "no answer": update.js then
+ * reports 'unknown', and nothing unverified is ever offered for install.
+ */
+async function signedFetch(input: RequestInfo | URL): Promise<Response> {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  try {
+    const { body } = await updateManifest(url);
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  } catch (e) {
+    console.warn('update manifest refused:', (e as Error).message || e);
+    return new Response('', { status: 502 });
+  }
+}
 
 const DISMISSED_KEY = 'freeai4u.updateDismissed';
 const POLL_MS = 1000 * 60 * 60;
@@ -78,7 +94,9 @@ export function useUpdateCheck(): UpdateCheck {
   // updates" in the command palette cannot behave differently from what runs on
   // its own -- including the retry/backoff and the dismissed-version rule.
   const checkNow = useCallback(async (): Promise<'update' | 'current' | 'unknown'> => {
-    const fetchImpl = hasShell() ? shellFetch : fetch;
+    // In the app the manifest comes through the shell, which checks its
+    // signature before anything here trusts the sha256 values inside it.
+    const fetchImpl = hasShell() ? signedFetch : fetch;
     const found = await update.fetchVersion({ fetchImpl });
     if (!found) return 'unknown';
     if (!update.isNewer(found.version, APP_VERSION)) return 'current';

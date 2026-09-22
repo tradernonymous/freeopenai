@@ -33,6 +33,9 @@ sha2 = "0.10"
 # The OS credential store (Credential Manager / Keychain / kernel keyring)
 # for the Hugging Face token, so it never sits in localStorage as plain text.
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+# Update manifests signed with `tauri signer` (minisign), checked against a key
+# compiled in at build time (net.rs update_manifest). Pure Rust, no deps.
+minisign-verify = "0.2"
 
 [features]
 default = ["custom-protocol"]

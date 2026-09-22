@@ -236,6 +236,23 @@ The pipeline is already wired for it. `bundle.windows.certificateThumbprint` is 
 
 With both set, CI imports the certificate, builds with its thumbprint, and **verifies** the signature on the installer and the portable exe — a build that claimed to be signed but is not fails the job rather than shipping quietly. Without them the build is unchanged, and the release notes say unsigned, so nobody has to guess which one they downloaded.
 
+### Update signing
+
+Separate from Authenticode, and free: the release's `desktop-version.json` (the version and every installer's sha256) can be signed with a `tauri signer` key. A build that carries the public key fetches `desktop-version.json.sig` too and refuses a manifest that is unsigned or signed by anyone else (`net.rs` `update_manifest`); since each download is then checked against the signed sha256, the installer is covered as well. It turns on once, from the `desktop` folder:
+
+```
+npx tauri signer generate -w %USERPROFILE%\freeai4u-keys\neuraos-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY < %USERPROFILE%\freeai4u-keys\neuraos-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+gh variable set NEURAOS_UPDATER_PUBKEY < %USERPROFILE%\freeai4u-keys\neuraos-updater.key.pub
+```
+
+Keep the key file and its password backed up: losing them means installed copies can only be updated by hand. The job fails if the public key is set without the private one, because that build would refuse its own updates.
+
+## Opening files and folders
+
+Double-clicking a `.gguf` opens NeuraOS and adds it to **My models**; right-click a folder (or the empty space inside one) → **Open in NeuraOS** makes it the working folder. The association is the bundle's (`fileAssociations`); the folder verb is written per user by the NSIS hook `src-tauri/windows/hooks.nsh` and removed on uninstall (the MSI does not add it). `DESIGN.md` is a file name, not an extension, so it is not associated — open its folder instead.
+
 ## Code map
 
 Each concern has one owner, and the shell (App.tsx) composes rather than implements.

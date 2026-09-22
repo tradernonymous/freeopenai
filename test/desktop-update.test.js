@@ -204,7 +204,7 @@ test('an install plan checks the digest only when the release published one', ()
 test('the download runs through the shell, so CORS cannot block it', () => {
   const hook = read('desktop', 'src', 'useUpdateCheck.ts');
   assert.match(hook, /hasShell\(\)/, 'the hook knows whether a shell is present');
-  assert.match(hook, /shellFetch/, 'the metadata fetch goes through the shell');
+  assert.match(hook, /updateManifest\(url\)/, 'the metadata fetch goes through the shell, which checks its signature');
   assert.match(hook, /downloadVerified/, 'so does the download, which is hashed as it streams');
   assert.match(hook, /netPolicy\.refusalReason/, 'a URL is refused before it is handed to the shell');
   assert.match(hook, /runInstaller/, 'and the installer is started by the shell');

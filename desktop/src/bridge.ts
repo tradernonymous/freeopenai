@@ -379,6 +379,26 @@ export function onLocalDownload(handler: (progress: LocalDownloadProgress) => vo
 }
 
 /** neuraos:// links handed over by the shell, as a list of URLs. */
+/**
+ * The release manifest, signature-checked in the shell when this build carries
+ * an update key (5.9). `signed` says whether it was; a bad or missing
+ * signature on a keyed build is an error, never a quiet fallback.
+ */
+export async function updateManifest(url: string): Promise<{ body: string; signed: boolean }> {
+  return call<{ body: string; signed: boolean }>('update_manifest', { url });
+}
+
+/** The .gguf file or folder this launch was opened with, once (5.4). */
+export async function launchTakePath(): Promise<string | null> {
+  if (!hasShell()) return null;
+  return call<string | null>('launch_take_path');
+}
+
+/** A second launch ("Open with", Explorer's "Open in NeuraOS") handed us a path. */
+export function onOpenPath(handler: (path: string) => void): Promise<() => void> {
+  return subscribe<string>('open-path', (payload) => handler(String(payload || '')));
+}
+
 export function onDeepLink(handler: (urls: string[]) => void): Promise<() => void> {
   return subscribe<string[]>('deep-link', (payload) => handler(Array.isArray(payload) ? payload : [String(payload)]));
 }

@@ -250,6 +250,63 @@ pub async fn get_following_with(
     Err(format!("too many redirects from {}", url))
 }
 
+/// The update-signing public key (roadmap 5.9), compiled in from the
+/// NEURAOS_UPDATER_PUBKEY build variable: the base64 `tauri signer` prints. A
+/// build without one keeps the sha256-only check; a build with one refuses a
+/// manifest that is unsigned or signed by anyone else.
+const UPDATER_PUBKEY: Option<&str> = option_env!("NEURAOS_UPDATER_PUBKEY");
+
+/// Base64 text (as `tauri signer` writes keys and .sig files) -> the minisign
+/// text inside it.
+fn unbase64_text(value: &str) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value.trim())
+        .map_err(|e| format!("not base64: {}", e))?;
+    String::from_utf8(bytes).map_err(|_| "not text".to_string())
+}
+
+/// Check `body` against a minisign signature with the compiled-in key.
+pub fn verify_manifest(body: &str, signature_b64: &str, pubkey_b64: &str) -> Result<(), String> {
+    let key_text = unbase64_text(pubkey_b64)?;
+    let sig_text = unbase64_text(signature_b64)?;
+    let key = minisign_verify::PublicKey::decode(&key_text).map_err(|e| format!("bad update key: {}", e))?;
+    let sig = minisign_verify::Signature::decode(&sig_text).map_err(|e| format!("bad signature file: {}", e))?;
+    key.verify(body.as_bytes(), &sig, true)
+        .map_err(|_| "the update manifest's signature does not match NeuraOS's key".to_string())
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
+    let response = get_following(url, &[]).await?;
+    let status = response.status().as_u16();
+    if status >= 400 {
+        return Err(format!("{} answered HTTP {}", url, status));
+    }
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if body.len() as u64 > MAX_GET_BYTES {
+        return Err("response too large".to_string());
+    }
+    Ok(body)
+}
+
+/// The release's desktop-version.json, verified when this build carries an
+/// update key: fetched with its .sig, and returned only if the signature holds.
+/// The sha256 values inside are then what every installer download is checked
+/// against, so a signed manifest covers the installer too.
+#[tauri::command]
+pub async fn update_manifest(url: String) -> Result<serde_json::Value, String> {
+    let body = fetch_text(&url).await?;
+    let key = match UPDATER_PUBKEY.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => key,
+        None => return Ok(serde_json::json!({ "body": body, "signed": false })),
+    };
+    let signature = fetch_text(&format!("{}.sig", url))
+        .await
+        .map_err(|e| format!("this release is not signed ({}); refusing to update from it", e))?;
+    verify_manifest(&body, &signature, key)?;
+    Ok(serde_json::json!({ "body": body, "signed": true }))
+}
+
 /// A small JSON/text fetch, outside the webview's CORS limits.
 #[tauri::command]
 pub async fn remote_get(

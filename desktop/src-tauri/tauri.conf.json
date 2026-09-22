@@ -18,8 +18,18 @@
     "longDescription": "NeuraOS Desktop — chat, images, local models and approval-gated builds, in one window.",
     "shortDescription": "NeuraOS Desktop",
     "category": "productivity",
-    "fileAssociations": [],
+    "fileAssociations": [
+      {
+        "ext": ["gguf"],
+        "name": "GGUF model",
+        "description": "Local AI model weights",
+        "role": "Viewer"
+      }
+    ],
     "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      },
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com",

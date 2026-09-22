@@ -29,6 +29,7 @@ mod mcp;
 mod models;
 mod net;
 mod ollama;
+mod launch;
 mod quick;
 mod selection;
 mod save;
@@ -62,9 +63,14 @@ fn main() {
     tauri::Builder::default()
         // Registered first: a second launch must focus the window that exists
         // rather than build a second tray icon and a second app object.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // A neuraos:// link in the second launch's argv is delivered by
             // the deep-link plugin (single-instance's `deep-link` feature).
+            // A .gguf file or a folder ("Open with", Explorer's verb) is ours.
+            if let Some(path) = launch::path_arg(&args) {
+                launch::remember(path.clone());
+                let _ = app.emit("open-path", path);
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -74,6 +80,7 @@ fn main() {
         .invoke_handler(generate_handler![
             save::save_file_dialog,
             net::remote_get,
+            net::update_manifest,
             net::remote_download,
             net::run_installer,
             net::open_url,
@@ -116,7 +123,8 @@ fn main() {
             quick::main_show,
             quick::notify,
             selection::quick_take_selection,
-            selection::selection_hotkey_set
+            selection::selection_hotkey_set,
+            launch::launch_take_path
         ])
         // neuraos:// links: "Use this model" on Hugging Face, once NeuraOS is
         // listed there, and the app's own bookmarklet until then. The URL is
@@ -150,6 +158,11 @@ fn main() {
             #[cfg(debug_assertions)]
             {
                 let _ = app.deep_link().register_all();
+            }
+
+            // Opened with a model file or a folder: the page takes it on load.
+            if let Some(path) = launch::path_arg(&std::env::args().collect::<Vec<String>>()) {
+                launch::remember(path);
             }
 
             // The Quick window hotkey. The frontend re-sends a remapped one at
