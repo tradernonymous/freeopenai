@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import HfSignIn from '../components/HfSignIn';
 import { api } from '../api';
 import Icon from '../components/Icon';
 import { OPEN_CHAT_EVENT, type ChatSession } from './ChatScreen';
@@ -53,8 +54,6 @@ export default function LibraryScreen() {
   const [hfResults, setHfResults] = useState<HfModel[]>([]);
   const [hfLoading, setHfLoading] = useState(false);
   const [hfError, setHfError] = useState('');
-  const [hfDeviceCode, setHfDeviceCode] = useState<any>(null);
-  const [hfPolling, setHfPolling] = useState(false);
 
   useEffect(() => {
     const onAuth = () => setHfSignedIn(hfAuth.signedIn());
@@ -80,30 +79,6 @@ export default function LibraryScreen() {
       setHfLoading(false);
     }
   }, [hfQuery]);
-
-  const hfSignIn = useCallback(async () => {
-    setHfError('');
-    try {
-      const dc = await hfAuth.startDeviceCode();
-      setHfDeviceCode(dc);
-      setHfPolling(true);
-      // Poll in background.
-      hfAuth.pollDeviceCode(dc.device_code, dc.interval, Date.now() + dc.expires_in * 1000)
-        .then(() => {
-          setHfSignedIn(true);
-          setHfDeviceCode(null);
-          setHfPolling(false);
-          hfAuth.fetchUser().then(u => { if (u) setHfUser(u); });
-        })
-        .catch(() => {
-          setHfPolling(false);
-          setHfDeviceCode(null);
-        });
-    } catch (err) {
-      setHfError((err as Error).message);
-      setHfPolling(false);
-    }
-  }, []);
 
   const hfSignOut = useCallback(() => {
     hfAuth.signOut();
@@ -164,19 +139,9 @@ export default function LibraryScreen() {
           )}
         </h3>
         {!hfSignedIn ? (
-          <div className="hf-signin">
+          <div>
             <p>Sign in to browse and download GGUF models (including gated repos).</p>
-            {hfDeviceCode ? (
-              <div className="hf-device-code">
-                <p>Open <a href={hfDeviceCode.verification_url} target="blank" rel="noreferrer">{hfDeviceCode.verification_url}</a> and enter:</p>
-                <div className="hf-code">{hfDeviceCode.user_code}</div>
-                <p>{hfPolling ? 'Waiting for authorization…' : ''}</p>
-              </div>
-            ) : (
-              <button className="primary" onClick={hfSignIn}>
-                <Icon name="terminal" size={13} /> Sign in with Hugging Face
-              </button>
-            )}
+            <HfSignIn onSignedIn={(who) => { setHfSignedIn(true); setHfUser(who); }} />
           </div>
         ) : (
           <div className="hf-browser">

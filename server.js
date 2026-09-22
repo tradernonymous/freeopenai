@@ -49,6 +49,9 @@ const GITHUB_STATE_COOKIE = 'fo_gh_state';
 // Marks an "add another account" trip, so the callback can tell the user when
 // GitHub silently handed back the account they already had.
 const GITHUB_ADD_COOKIE = 'fo_gh_add';
+// Set by /api/github/authorize?client=desktop: the sign-in is for the desktop
+// app, so the account cookie must be one its cross-site fetches can carry.
+const GITHUB_CLIENT_COOKIE = 'fo_gh_client';
 const GITHUB_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GITHUB_SCOPE = 'public_repo';
 let sessionSecret = process.env.SESSION_SECRET;
@@ -442,13 +445,37 @@ function setSessionCookie(res, username, req) {
   );
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(res, req) {
   // Drop the GitHub token alongside the session. Leaving it behind is what
-  // let a logout hand the next user someone else's repo access.
+  // let a logout hand the next user someone else's repo access. From the
+  // desktop app the clearing cookies must be cross-site ones too, or the
+  // browser refuses to apply them.
+  const attrs = req ? githubCookieSameSite(req) : '; SameSite=Lax';
   res.setHeader('Set-Cookie', [
-    `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
-    `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,
+    `${SESSION_COOKIE_NAME}=; HttpOnly${attrs}; Path=/; Max-Age=0`,
+    `${GITHUB_COOKIE}=; HttpOnly${attrs}; Path=/; Max-Age=0`,
   ]);
+}
+
+// The GitHub account cookie has to ride the desktop app's cross-site fetches
+// exactly like the session cookie (setSessionCookie): a browser sends a
+// cross-site cookie only when it is SameSite=None; Secure. A Lax one was set
+// fine at sign-in and then never sent, so the app always read "not
+// connected". The desktop is known by its Origin on a fetch, or -- on the
+// sign-in navigation, which carries none -- by the marker authorize left.
+/** A browser request from a site that is neither this engine nor the desktop app. */
+function isForeignOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin || origin === 'null') return !!origin;
+  if (corsOriginFor(origin)) return false;
+  return origin !== requestOrigin(req);
+}
+
+function githubCookieSameSite(req) {
+  if (req.headers['x-forwarded-proto'] !== 'https') return '; SameSite=Lax';
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const desktop = !!corsOriginFor(req.headers.origin) || cookies[GITHUB_CLIENT_COOKIE] === 'desktop';
+  return desktop ? '; SameSite=None; Secure' : '; SameSite=Lax; Secure';
 }
 
 function handleLogin(req, res) {
@@ -478,7 +505,7 @@ function handleLogin(req, res) {
 }
 
 function handleLogout(req, res) {
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
 }
@@ -566,10 +593,13 @@ function githubAuthorize(req, res) {
   }
   const state = crypto.randomBytes(16).toString('hex');
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  const adding = new URL(req.url, 'http://x').searchParams.get('add') === '1';
+  const query = new URL(req.url, 'http://x').searchParams;
+  const adding = query.get('add') === '1';
+  const desktop = query.get('client') === 'desktop';
   res.setHeader('Set-Cookie', [
     `${GITHUB_STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600${secure}`,
     `${GITHUB_ADD_COOKIE}=${adding ? '1' : ''}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${adding ? 600 : 0}${secure}`,
+    `${GITHUB_CLIENT_COOKIE}=${desktop ? 'desktop' : ''}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${desktop ? 600 : 0}${secure}`,
   ]);
   const params = new URLSearchParams({
     client_id: clientId,
@@ -638,7 +668,8 @@ async function githubCallback(req, res) {
     res.setHeader('Set-Cookie', [
       `${GITHUB_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
       `${GITHUB_ADD_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
-      `${GITHUB_COOKIE}=${sealed}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}${secure}`,
+      `${GITHUB_CLIENT_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`,
+      `${GITHUB_COOKIE}=${sealed}; HttpOnly${githubCookieSameSite(req)}; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}`,
     ]);
     // Asking for another account and getting the same one back is GitHub
     // reusing whoever is signed in at github.com. Say so, or the click looks
@@ -666,7 +697,6 @@ function githubStatus(req, res) {
 }
 
 function githubDisconnect(req, res) {
-  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
   const only = new URL(req.url, 'http://x').searchParams.get('account');
   const remaining = only ? accountsOf(getGithubSession(req)).filter((a) => a.login !== only) : [];
 
@@ -676,9 +706,9 @@ function githubDisconnect(req, res) {
       accounts: remaining,
       exp: Date.now() + GITHUB_TOKEN_TTL_MS,
     });
-    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=${sealed}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}${secure}`);
+    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=${sealed}; HttpOnly${githubCookieSameSite(req)}; Path=/; Max-Age=${Math.floor(GITHUB_TOKEN_TTL_MS / 1000)}`);
   } else {
-    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+    res.setHeader('Set-Cookie', `${GITHUB_COOKIE}=; HttpOnly${githubCookieSameSite(req)}; Path=/; Max-Age=0`);
   }
   sendJson(res, 200, { ok: true });
 }
@@ -5890,6 +5920,13 @@ function createRequestHandler(root) {
       }
       return handleShareRead(req, res);
     }
+    // The GitHub cookie rides cross-site requests for the desktop app, so a
+    // write from any other site is refused here: browsers always send Origin
+    // on a cross-site POST/PUT/DELETE, and only the engine's own pages and the
+    // desktop shell may make one.
+    if (urlPath.startsWith('/api/github/') && req.method !== 'GET' && isForeignOrigin(req)) {
+      return sendJson(res, 403, { error: 'Cross-site request refused' });
+    }
     if (urlPath === '/api/github/authorize' && req.method === 'GET') return githubAuthorize(req, res);
     if (urlPath === '/api/github/callback' && req.method === 'GET') return githubCallback(req, res);
     if (urlPath === '/api/github/status' && req.method === 'GET') return githubStatus(req, res);
@@ -6003,6 +6040,8 @@ if (require.main === module) {
 
 module.exports = {
   corsOriginFor,
+  githubCookieSameSite,
+  isForeignOrigin,
   githubApiHeaders,
   resolveSafePath,
   isAssetPath,

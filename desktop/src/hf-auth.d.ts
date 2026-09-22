@@ -38,6 +38,10 @@ export declare function configureStore(store: SecretStore | null): void;
 export declare function hydrate(): Promise<boolean>;
 export declare const CLIENT_ID: string;
 export declare const SCOPE: string;
+/** The token page, opened with the Inference Providers permission ticked. */
+export declare const TOKEN_PAGE: string;
+/** Check a pasted access token against whoami, store it, resolve with the user. */
+export declare function useToken(token: string, fetchImpl?: typeof fetch): Promise<any>;
 
 export declare function signedIn(): boolean;
 export declare function accessToken(): HfToken | null;

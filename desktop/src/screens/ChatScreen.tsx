@@ -11,6 +11,7 @@ import RadialMenu, { type RadialItem } from '../components/RadialMenu';
 import { pushToast } from '../components/Toasts';
 import RunSettings from '../components/RunSettings';
 import ToolCards from '../components/ToolCards';
+import HfSignIn from '../components/HfSignIn';
 import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
 import { executeTool } from '../tool-run';
@@ -248,20 +249,6 @@ export default function ChatScreen() {
       if (event) toolsLib.setAlways(event.name);
     }
     resolve(allow);
-  };
-  // Hugging Face sign-in, right here: a device code, the same flow Library uses.
-  const [hfCode, setHfCode] = useState<{ user_code: string; verification_uri: string } | null>(null);
-  const signInHf = () => {
-    hfAuth.startDeviceCode()
-      .then((dc: any) => {
-        setHfCode({ user_code: dc.user_code, verification_uri: dc.verification_uri });
-        const page = dc.verification_uri_complete || dc.verification_uri;
-        if (hasShell()) openUrl(page).catch(() => { /* the code and the address are on screen */ });
-        else window.open(page, '_blank');
-        return hfAuth.pollDeviceCode(dc.device_code, dc.interval, Date.now() + dc.expires_in * 1000);
-      })
-      .then(() => { setHfCode(null); pushToast('ok', 'Signed in to Hugging Face.'); })
-      .catch((e: unknown) => { setHfCode(null); pushToast('error', ((e as Error).message || String(e)).split('\n')[0]); });
   };
   const hfRow = hfInference.providerRow(hfToken);
   const choices = [
@@ -1019,17 +1006,9 @@ export default function ChatScreen() {
     <div className="screen chat">
       {active.provider === 'hf' && !hfToken && (
         <div className="hf-signin-banner" role="status">
-          {hfCode ? (
-            <span>
-              Enter <strong className="mono">{hfCode.user_code}</strong> at{' '}
-              <span className="mono">{hfCode.verification_uri}</span> (it opened in your browser). This finishes on its own.
-            </span>
-          ) : (
-            <>
-              <span>Hugging Face needs a sign-in. The token stays on this PC, in Windows Credential Manager.</span>
-              <button className="primary" onClick={signInHf}>Sign in to Hugging Face</button>
-            </>
-          )}
+          {/* A pasted access token, checked before it is kept: the OAuth app
+              the old device-code button relied on no longer exists. */}
+          <HfSignIn />
         </div>
       )}
       <RunSettings open={runOpen && isSavedProvider(active.provider)} onClose={() => setRunOpen(false)} provider={active.provider} model={active.model} />

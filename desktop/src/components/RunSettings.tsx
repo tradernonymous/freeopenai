@@ -3,7 +3,7 @@ import Icon from './Icon';
 import SelectPill from './SelectPill';
 import { pushToast } from './Toasts';
 import { localModelStop, ollamaEject } from '../bridge';
-import { applySettings, ensureUnsloth, forgetSettings, settingsFor } from '../run-model';
+import { applySettings, detectLimits, ensureUnsloth, forgetSettings, machineSpec, settingsFor, VRAM_KEY } from '../run-model';
 import '../saved-models.js';
 import '../run-settings.js';
 import '../local-models.js';
@@ -25,8 +25,6 @@ type RunValues = import('../run-settings.js').RunValues;
 //   * the memory line is an estimate, and the GPU verdict only appears once the
 //     person has said how much VRAM the card has (a webview cannot measure it).
 
-const VRAM_KEY = 'freeai4u.vram_gb';
-const CTX_STEPS = [0, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
 
 function readVram(): number {
   try {
@@ -54,6 +52,8 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
   const [presetName, setPresetName] = useState('');
   const [presets, setPresets] = useState<Record<string, RunValues>>({});
   const [busy, setBusy] = useState('');
+  // What this model says about itself (trained context, KV cost per token).
+  const [limits, setLimits] = useState<import('../run-settings.js').ModelLimits | null>(null);
 
   useEffect(() => {
     if (!entry) return;
@@ -61,19 +61,40 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
     setValues(current);
     setLoaded(current);
     setPresets(runSettings.presets());
+    setLimits(runSettings.limitsFor(entry.id));
   }, [entry]);
 
   if (!open) return null;
 
   const patch = (next: Partial<RunValues>) => setValues((v) => runSettings.clean({ ...v, ...next }));
   const machine = localModels.machine();
+  // The context that will really be used, and what the model allows.
+  const spec = { ...machineSpec(), vramGb: vram };
+  const usedCtx = runSettings.effectiveCtx(values, limits, { bytes: entry?.bytes || 0, gpuLayers: values.gpuLayers }, spec);
+  const steps = runSettings.ctxSteps(limits);
   const report = runSettings.estimate(
-    { bytes: entry?.bytes || 0, ctx: values.ctx, gpuLayers: values.gpuLayers },
+    { bytes: entry?.bytes || 0, ctx: usedCtx, gpuLayers: values.gpuLayers, kvBytesPerToken: limits?.kvBytesPerToken },
     { ramGb: machine.ramGb, vramGb: vram },
   );
   const isFile = entry?.kind === 'unsloth';
   const reloadNeeded = isFile && runSettings.needsReload(loaded, values);
-  const ctxIndex = Math.max(0, CTX_STEPS.findIndex((step) => step >= values.ctx));
+  const ctxIndex = values.ctx > 0 ? Math.max(1, steps.findIndex((step) => step >= values.ctx)) : 0;
+  const readLimits = () => {
+    if (!entry) return;
+    setBusy('limits');
+    const ask = entry.kind === 'ollama'
+      ? detectLimits(entry)
+      : ensureUnsloth(entry).then((status) => detectLimits(entry, status));
+    ask
+      .then((found) => {
+        setLimits(runSettings.limitsFor(entry.id));
+        pushToast(found?.trainCtx ? 'ok' : 'warn', found?.trainCtx
+          ? `${entry.name} was trained for ${found.trainCtx.toLocaleString()} tokens.`
+          : 'The model did not report its context length; Auto stays conservative.');
+      })
+      .catch((e: unknown) => pushToast('error', ((e as Error).message || String(e)).split('\n')[0]))
+      .finally(() => setBusy(''));
+  };
 
   const save = () => {
     if (!entry) return;
@@ -163,18 +184,37 @@ export default function RunSettings({ open, onClose, provider, model }: Props) {
           <section className="run-section">
             <div className="run-meter">
               <span className="run-label">Context length</span>
-              <span className="mono">{values.ctx > 0 ? values.ctx.toLocaleString() : 'Auto'}</span>
+              <span className="mono">
+                {values.ctx > 0 ? usedCtx.toLocaleString() : `Auto · ${usedCtx.toLocaleString()}`}
+              </span>
             </div>
             <input
               type="range"
               min={0}
-              max={CTX_STEPS.length - 1}
+              max={steps.length - 1}
               step={1}
-              value={ctxIndex}
-              onChange={(e) => patch({ ctx: CTX_STEPS[Number(e.target.value)] })}
+              value={Math.min(ctxIndex, steps.length - 1)}
+              onChange={(e) => patch({ ctx: steps[Number(e.target.value)] })}
               aria-label="Context length"
             />
-            <div className="run-meter settings-hint"><span>Auto</span><span>131,072</span></div>
+            <div className="run-meter settings-hint">
+              <span>Auto</span>
+              <span>{(steps[steps.length - 1] || 0).toLocaleString()}</span>
+            </div>
+            <div className="settings-hint">
+              {limits?.trainCtx
+                ? `This model was trained for ${limits.trainCtx.toLocaleString()} tokens`
+                : 'The model has not reported its maximum yet'}
+              {limits?.kvBytesPerToken ? ` · about ${Math.round(limits.kvBytesPerToken / 1024)} KB of cache per token` : ''}
+              {'. '}Auto picks the largest size that fits this PC{spec.vramGb ? ' and GPU' : ''}, up to {runSettings.AUTO_CAP.toLocaleString()}.
+              {' '}
+              <button className="linkish" onClick={readLimits} disabled={busy === 'limits'}>
+                {busy === 'limits' ? 'Reading…' : limits?.trainCtx ? 'Read again' : 'Read from model'}
+              </button>
+            </div>
+            {values.ctx > 0 && limits?.trainCtx && values.ctx > limits.trainCtx && (
+              <div className="run-warning">More than the model was trained for: {limits.trainCtx.toLocaleString()} is used.</div>
+            )}
           </section>
 
           <section className="run-section">

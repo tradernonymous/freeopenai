@@ -265,20 +265,7 @@ export async function localModelStop(): Promise<{ stopped: boolean }> {
 }
 
 export async function onLocalRun(handler: (chunk: LocalRunChunk) => void): Promise<() => void> {
-  const w = window as any;
-  const internals = w.__TAURI_INTERNALS__;
-  if (!internals || typeof internals.invoke !== 'function' || typeof internals.transformCallback !== 'function') {
-    return () => {};
-  }
-  const id = internals.transformCallback((payload: LocalRunChunk) => handler(payload), false);
-  try {
-    await call('plugin:event|listen', { event: 'local-run', target: { kind: 'Any' }, handler: id });
-  } catch {
-    return () => {};
-  }
-  return () => {
-    call('plugin:event|unlisten', { event: 'local-run', eventId: id }).catch(() => {});
-  };
+  return subscribe<LocalRunChunk>('local-run', handler);
 }
 
 function urlOf(input: RequestInfo | URL): string {
@@ -367,14 +354,23 @@ async function subscribe<T>(event: string, handler: (payload: T) => void): Promi
   if (!internals || typeof internals.invoke !== 'function' || typeof internals.transformCallback !== 'function') {
     return () => {};
   }
-  const id = internals.transformCallback((payload: T) => handler(payload), false);
+  // Tauri 2 hands a listener the whole Event ({ event, id, payload }), not the
+  // payload: every subscriber here used to receive that wrapper, so Ollama
+  // chunks, download progress, deep links and the GitHub "finished" signal
+  // arrived as the wrong shape. Either shape is accepted.
+  const id = internals.transformCallback((message: any) => {
+    const wrapped = message && typeof message === 'object' && 'payload' in message && 'event' in message;
+    handler((wrapped ? message.payload : message) as T);
+  }, false);
+  let eventId: unknown;
   try {
-    await call('plugin:event|listen', { event, target: { kind: 'Any' }, handler: id });
+    // listen answers with the id unlisten wants -- not the callback's id.
+    eventId = await call('plugin:event|listen', { event, target: { kind: 'Any' }, handler: id });
   } catch {
     return () => {};
   }
   return () => {
-    call('plugin:event|unlisten', { event, eventId: id }).catch(() => {});
+    call('plugin:event|unlisten', { event, eventId }).catch(() => {});
   };
 }
 
@@ -496,6 +492,7 @@ export async function authWindowOpen(url: string): Promise<void> {
   await call('auth_window_open', { url });
 }
 
-export function onConnectFinished(handler: () => void): Promise<() => void> {
-  return subscribe<string>('connect-finished', () => handler());
+/** The sign-in window closed; `landed` is where the engine sent it (path + query). */
+export function onConnectFinished(handler: (landed: string) => void): Promise<() => void> {
+  return subscribe<string>('connect-finished', (landed) => handler(String(landed || '')));
 }

@@ -234,7 +234,9 @@ test('Hugging Face is always in the picker, and Chat signs in on the spot', () =
   assert.match(out.freeTier.text, /Sign in/);
   assert.equal(hf.providerRow('tok').configured, true);
   const chat = read('desktop', 'src', 'screens', 'ChatScreen.tsx');
-  assert.match(chat, /hfAuth\.startDeviceCode\(\)/);
-  assert.match(chat, /Sign in to Hugging Face/);
+  // The OAuth app behind the old device code is gone; Chat signs in with the
+  // shared token flow (test/desktop-connect-fixes.test.js).
+  assert.match(chat, /<HfSignIn \/>/);
+  assert.match(read('desktop', 'src', 'components', 'HfSignIn.tsx'), /Sign in to Hugging Face/);
   assert.match(chat, /hfInference\.fetchModels\(hfToken\)/, 'the live router list replaces the curated one');
 });

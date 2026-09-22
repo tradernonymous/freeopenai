@@ -527,7 +527,13 @@ pub async fn auth_window_open(app: tauri::AppHandle, url: String) -> Result<(), 
         .on_navigation(move |next| {
             let back_home = next.host_str() == Some(engine_host.as_str()) && !next.path().starts_with("/api/github/");
             if back_home {
-                let _ = handle.emit("connect-finished", next.path().to_string());
+                // The query says how it went (?gh=same&login=... when GitHub
+                // handed back an account that was already connected).
+                let landed = match next.query() {
+                    Some(q) => format!("{}?{}", next.path(), q),
+                    None => next.path().to_string(),
+                };
+                let _ = handle.emit("connect-finished", landed);
                 if let Some(window) = handle.get_webview_window("connect") {
                     let _ = window.destroy();
                 }

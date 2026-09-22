@@ -15,9 +15,22 @@ import { ApiError, streamLocalChat, type StreamFrame } from './api';
 import { hasShell, localModelStart, localModelStatus, shellPostStream, type LocalModelStatus } from './bridge';
 import './saved-models.js';
 import './run-settings.js';
+import './local-models.js';
 
 const savedModels: typeof import('./saved-models.js') = (globalThis as any).FreeAI4USavedModels;
 const runSettings: typeof import('./run-settings.js') = (globalThis as any).FreeAI4URunSettings;
+const localModels: typeof import('./local-models.js') = (globalThis as any).FreeAI4ULocalModels;
+
+type ModelLimits = import('./run-settings.js').ModelLimits;
+
+/** What the person said their GPU has (a webview cannot measure it). */
+export const VRAM_KEY = 'freeai4u.vram_gb';
+
+export function machineSpec(): { ramGb: number; vramGb: number } {
+  let vramGb = 0;
+  try { vramGb = Number(localStorage.getItem(VRAM_KEY)) || 0; } catch { /* unknown */ }
+  return { ramGb: localModels.machine().ramGb, vramGb };
+}
 
 type Message = { role: string; content: any };
 type SavedModel = import('./saved-models.js').SavedModel;
@@ -48,6 +61,54 @@ export function forgetSettings(entry: SavedModel): void {
   runSettings.reset(entry.id);
 }
 
+/**
+ * The settings a request actually goes out with: the context resolved per
+ * model -- the person's pick capped at what the model was trained for, or
+ * Auto sized to this machine -- and always sent, never left to the runtime.
+ */
+export function resolvedValues(entry: SavedModel): RunValues {
+  const values = settingsFor(entry);
+  const limits = runSettings.limitsFor(entry.id);
+  const ctx = runSettings.effectiveCtx(values, limits, { bytes: entry.bytes, gpuLayers: values.gpuLayers }, machineSpec());
+  return { ...values, ctx };
+}
+
+/**
+ * Ask the model what it is: trained context and KV cost per token. Ollama
+ * answers /api/show at once; llama-server answers /v1/models once loaded.
+ * Remembered per model, so it is asked once.
+ */
+export async function detectLimits(entry: SavedModel, server?: { base_url: string; api_key?: string | null }): Promise<ModelLimits | null> {
+  try {
+    if (entry.kind === 'ollama') {
+      if (!hasShell()) return null;
+      let text = '';
+      let status = 200;
+      await shellPostStream(
+        { url: `${entry.base || savedModels.OLLAMA_BASE}/api/show`, body: JSON.stringify({ model: entry.name }) },
+        (chunk) => { text += chunk; },
+        (code) => { status = code; },
+      );
+      if (status >= 400) return null;
+      const limits = runSettings.parseOllamaShow(JSON.parse(text));
+      if (limits.trainCtx || limits.kvBytesPerToken) runSettings.setLimits(entry.id, limits);
+      return limits;
+    }
+    if (server?.base_url) {
+      const res = await fetch(`${server.base_url.replace(/\/+$/, '')}/v1/models`, {
+        headers: server.api_key ? { Authorization: `Bearer ${server.api_key}` } : {},
+      });
+      if (!res.ok) return null;
+      const limits = runSettings.parseLlamaModels(await res.json());
+      if (limits.trainCtx) runSettings.setLimits(entry.id, limits);
+      return limits;
+    }
+  } catch {
+    /* a model that will not describe itself keeps the defaults */
+  }
+  return null;
+}
+
 function sameFile(a: string, b: string): boolean {
   return a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase();
 }
@@ -64,11 +125,14 @@ export async function ensureUnsloth(entry: SavedModel, force = false, onStage?: 
   }
   onStage?.(`Loading ${entry.name}…`);
   const cores = Number((globalThis as any).navigator?.hardwareConcurrency) || 0;
-  return localModelStart({
+  const status = await localModelStart({
     repo: entry.name,
     file: entry.path,
-    ...runSettings.loadArgs(settingsFor(entry), cores),
+    ...runSettings.loadArgs(resolvedValues(entry), cores),
   });
+  // Learned on the first load: the next Auto is capped at the real maximum.
+  if (!runSettings.limitsFor(entry.id)?.trainCtx) detectLimits(entry, status).catch(() => {});
+  return status;
 }
 
 /** One NDJSON line from Ollama's /api/chat, as a frame (or an error). */
@@ -115,7 +179,8 @@ export function forOllama(message: any): any {
 
 async function streamOllama(entry: SavedModel, messages: Message[], onFrame: (f: StreamFrame) => void, signal?: AbortSignal, offered?: any[]): Promise<void> {
   if (!hasShell()) throw new ApiError(0, 'Ollama is reached through the installed desktop app.');
-  const values = settingsFor(entry);
+  if (!runSettings.limitsFor(entry.id)) await detectLimits(entry);
+  const values = resolvedValues(entry);
   const body = JSON.stringify({
     model: entry.name,
     messages: runSettings.withSystem(messages, values).map(forOllama),

@@ -94,3 +94,56 @@ test('a desktop sign-in sticks: SameSite=None; Secure on https, and /api/session
     assert.match(web.headers.get('set-cookie') || '', /SameSite=Lax/);
   });
 });
+
+// The GitHub account cookie was Lax, so the desktop's cross-site fetches never
+// carried it: sign-in "worked" and /api/github/status still said nobody was
+// connected. It now gets the same treatment as the session cookie.
+test('githubCookieSameSite: cross-site for the desktop, Lax for browsers and plain http', () => {
+  const { githubCookieSameSite } = require('../server.js');
+  const req = (headers) => ({ headers });
+  assert.equal(githubCookieSameSite(req({ 'x-forwarded-proto': 'https', origin: 'http://tauri.localhost' })), '; SameSite=None; Secure');
+  assert.equal(githubCookieSameSite(req({ 'x-forwarded-proto': 'https', cookie: 'fo_gh_client=desktop' })), '; SameSite=None; Secure',
+    'the sign-in callback has no Origin; the marker from authorize stands in');
+  assert.equal(githubCookieSameSite(req({ 'x-forwarded-proto': 'https', origin: 'https://evil.example' })), '; SameSite=Lax; Secure');
+  assert.equal(githubCookieSameSite(req({ 'x-forwarded-proto': 'https' })), '; SameSite=Lax; Secure', 'the web app keeps Lax');
+  assert.equal(githubCookieSameSite(req({ origin: 'http://tauri.localhost' })), '; SameSite=Lax', 'None needs Secure, so plain http stays Lax');
+});
+
+test('a desktop GitHub sign-in is remembered for the callback, and disconnect answers cross-site', async () => {
+  const saved = { id: process.env.GITHUB_CLIENT_ID, secret: process.env.GITHUB_CLIENT_SECRET };
+  process.env.GITHUB_CLIENT_ID = 'test-client';
+  process.env.GITHUB_CLIENT_SECRET = 'test-secret';
+  try {
+    await withApp({}, async ({ base }) => {
+      const start = await fetch(base + '/api/github/authorize?client=desktop&add=1', { redirect: 'manual', headers: { 'x-forwarded-proto': 'https' } });
+      assert.equal(start.status, 302);
+      const cookies = start.headers.getSetCookie().join('\n');
+      assert.match(cookies, /fo_gh_client=desktop/);
+      assert.match(cookies, /fo_gh_add=1/);
+      assert.match(start.headers.get('location'), /prompt=select_account/, 'another account means the account picker');
+      const out = await fetch(base + '/api/github/disconnect', {
+        method: 'POST',
+        headers: { Origin: 'http://tauri.localhost', 'x-forwarded-proto': 'https' },
+      });
+      assert.match(out.headers.getSetCookie().join('\n'), /fo_gh=;[^\n]*SameSite=None; Secure/);
+    });
+  } finally {
+    for (const [k, v] of [['GITHUB_CLIENT_ID', saved.id], ['GITHUB_CLIENT_SECRET', saved.secret]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+});
+
+test('GitHub writes from another website are refused; the engine and the desktop may write', async () => {
+  const { isForeignOrigin } = require('../server.js');
+  const req = (origin) => ({ headers: { origin, host: 'engine.example', 'x-forwarded-proto': 'https' } });
+  assert.equal(isForeignOrigin(req(undefined)), false, 'no Origin: not a browser cross-site write');
+  assert.equal(isForeignOrigin(req('https://engine.example')), false, 'the engine itself');
+  assert.equal(isForeignOrigin(req('http://tauri.localhost')), false, 'the desktop app');
+  assert.equal(isForeignOrigin(req('https://evil.example')), true);
+  assert.equal(isForeignOrigin(req('null')), true, 'a sandboxed page counts as foreign');
+  await withApp({}, async ({ base }) => {
+    const res = await fetch(base + '/api/github/disconnect', { method: 'POST', headers: { Origin: 'https://evil.example' } });
+    assert.equal(res.status, 403);
+  });
+});

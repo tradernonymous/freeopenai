@@ -45,6 +45,12 @@
   // it every chat turn answers 401 with a token that otherwise works fine for
   // the Hub, which is the most confusing failure this app can produce.
   var SCOPE = 'read-repos write-repos inference-api';
+  // The device-code and PKCE flows above need an OAuth app, and the one this
+  // app shipped with is gone (HF answers `invalid_client: Client not found`),
+  // so the button did nothing. A personal access token needs no app: this
+  // page opens with the one permission the router checks already ticked.
+  var TOKEN_PAGE = 'https://huggingface.co/settings/tokens/new?tokenType=fineGrained'
+    + '&ownUserPermissions=inference.serverless.write&description=NeuraOS%20Desktop';
 
   // --- helpers ------------------------------------------------------------
 
@@ -370,6 +376,37 @@
     }
   }
 
+  // --- personal access token ---------------------------------------------
+
+  /**
+   * Sign in with a pasted access token: checked against whoami first, so a
+   * typo or a token without the Inference Providers permission is refused
+   * here rather than as a 401 on the first chat turn. Resolves with the user.
+   */
+  async function useToken(token, fetchImpl) {
+    var value = String(token || '').trim();
+    if (!/^hf_[A-Za-z0-9]{20,}$/.test(value)) {
+      throw new Error('That does not look like a Hugging Face token (they start with hf_).');
+    }
+    var doFetch = fetchImpl || fetch;
+    var res = await doFetch(API_ME, { headers: { Authorization: 'Bearer ' + value } });
+    if (res.status === 401) throw new Error('Hugging Face refused that token. Create a new one and paste it again.');
+    if (!res.ok) throw new Error('Hugging Face did not answer (' + res.status + '). Try again in a moment.');
+    var user = await res.json();
+    var perms = user && user.auth && user.auth.accessToken && user.auth.accessToken.fineGrained;
+    var scoped = perms && Array.isArray(perms.scoped) ? perms.scoped : [];
+    var wide = perms && Array.isArray(perms.global) ? perms.global : [];
+    var canInfer = !perms
+      || wide.indexOf('inference.serverless.write') >= 0
+      || scoped.some(function (s) { return (s.permissions || []).indexOf('inference.serverless.write') >= 0; });
+    if (!canInfer) {
+      throw new Error('This token cannot call Inference Providers. Tick "Make calls to Inference Providers" when you create it.');
+    }
+    saveUser(user);
+    saveToken({ access_token: value, token_type: 'bearer', source: 'pat' });
+    return user;
+  }
+
   // --- sign out -----------------------------------------------------------
 
   function signOut() {
@@ -394,6 +431,8 @@
     hydrate: hydrate,
     CLIENT_ID: CLIENT_ID,
     SCOPE: SCOPE,
+    TOKEN_PAGE: TOKEN_PAGE,
+    useToken: useToken,
     signedIn: signedIn,
     accessToken: accessToken,
     authHeaders: authHeaders,

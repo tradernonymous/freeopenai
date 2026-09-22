@@ -37,10 +37,29 @@ export declare function savePreset(name: string, values: Partial<RunValues>, sto
 export declare function deletePreset(name: string, storage?: any): boolean;
 export declare function needsReload(before: Partial<RunValues>, after: Partial<RunValues>): boolean;
 export declare function estimate(
-  model: { bytes?: number; ctx?: number; gpuLayers?: number },
+  model: { bytes?: number; ctx?: number; gpuLayers?: number; kvBytesPerToken?: number },
   machine?: { ramGb?: number; vramGb?: number },
 ): RunEstimate;
 export declare function ollamaOptions(values: Partial<RunValues>): Record<string, number>;
 export declare function openaiParams(values: Partial<RunValues>): Record<string, number>;
 export declare function loadArgs(values: Partial<RunValues>, cores?: number): { ctx?: number; gpuLayers?: number; threads?: number };
 export declare function withSystem<T extends { role: string; content: any }>(messages: T[], values: Partial<RunValues>): T[];
+
+/** What a model reports about itself: trained context and KV-cache cost. */
+export interface ModelLimits {
+  trainCtx?: number;
+  kvBytesPerToken?: number;
+  source?: string;
+  at?: number;
+}
+export declare const LIMITS_KEY: string;
+export declare const CTX_STEPS: number[];
+export declare const DEFAULT_KV_BYTES: number;
+export declare const AUTO_CAP: number;
+export declare function limitsFor(modelId: string, storage?: any): ModelLimits | null;
+export declare function setLimits(modelId: string, limits: ModelLimits, storage?: any): boolean;
+export declare function parseOllamaShow(show: any): ModelLimits;
+export declare function parseLlamaModels(body: any): ModelLimits;
+export declare function autoCtx(limits: ModelLimits | null, model?: { bytes?: number; gpuLayers?: number }, machine?: { ramGb?: number; vramGb?: number }): number;
+export declare function effectiveCtx(values: Partial<RunValues>, limits: ModelLimits | null, model?: { bytes?: number; gpuLayers?: number }, machine?: { ramGb?: number; vramGb?: number }): number;
+export declare function ctxSteps(limits: ModelLimits | null): number[];
