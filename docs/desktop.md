@@ -193,9 +193,23 @@ A model in Chat can ask for things, on **every** provider -- the engine's, Huggi
 
 ## Hugging Face integration
 
-Library → **Hugging Face** lets the user sign in with their HF account (device-code OAuth, [`src/hf-auth.js`](../desktop/src/hf-auth.js)), search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. The OAuth scope includes `inference-api`, so the same token works for chat through the Hugging Face router (`src/hf-inference.js`).
+Library → **Hugging Face** lets the user sign in with a Hugging Face **access token** ([`src/hf-auth.js`](../desktop/src/hf-auth.js) `useToken`; the OAuth app the old device-code flow used no longer exists, `invalid_client`). **Sign in to Hugging Face** opens HF's token page with *Make calls to Inference Providers* already ticked; the pasted token is checked against `whoami-v2` before it is kept. The same button is in Chat and in Settings → Connectors. It lets the user search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. Because the token carries the Inference Providers permission, it also works for chat through the Hugging Face router (`src/hf-inference.js`).
 
 The model browser shows each GGUF file's quant tag (`Q4_K_M`, `Q8_0`, `F16`, etc.), a rough RAM fit estimate (`fits 8GB`, `fits 16GB`), and whether the repo is gated. Gated repos require the HF token to unlock downloads.
+
+## Desktop reach, parity and evals (Phases 5 and 6)
+
+- **Quick window.** `Alt+Space` from any app opens a small always-on-top window on the model your latest chat uses (`src-tauri/src/quick.rs`, `screens/QuickAsk.tsx`). Esc hides it; **Continue in NeuraOS** saves the exchange as a chat and opens it in the main window. Change the chord in Settings → Shortcuts; a chord another app already owns is reported.
+- **Notifications.** A tool waiting for your Allow, or a reply that took more than 15 seconds, shows a Windows notification and flashes the taskbar button -- only when the main window is not in front.
+- **Read aloud** is on a reply's right-click ring, using the voices Windows has.
+- **Reasoning.** Thinking a model streams (DeepSeek, Qwen, llama-server's default) appears as a folded *Thought* block and is not sent back in the history. `/reasoning off|low|medium|high` sets `reasoning_effort` for models that take it.
+- **HTML blocks** in a reply have **Preview** (sandboxed, in place) and **To Design**.
+- **Attachments.** The paperclip (or `/attach`) reads PDF, Word, Excel, PowerPoint and text files into the message, with a token estimate.
+- **Compare** (`/compare`, or the ring): one prompt on two or three models -- local and cloud -- side by side with timings.
+- **`/memory <fact>`** saves a fact; **`/share`** copies a read-only link.
+- **Evals** (Library → Evals): eight tasks scored by code -- a number, a JSON object and array, an exact list, three lowercase words, extraction, a trick question, tool-call arguments -- across the models you pick, with pass rate, average time, a per-task grid and CSV export (`src/evals.js`).
+
+The app's windows need a Tauri **capability** to hear shell events at all (`src-tauri/capabilities/default.json`, `core:default` for `main` and `quick`). Before it existed, no event -- GitHub sign-in finished, Ollama replies, download progress, deep links -- reached the frontend.
 
 ## Local coding agent
 
