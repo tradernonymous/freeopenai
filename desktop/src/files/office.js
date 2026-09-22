@@ -203,11 +203,63 @@
     });
   }
 
-  function writePptx(title, slideTexts) {
+  // ---- PPTX pictures --------------------------------------------------------
+  // A picture is a PNG or JPEG part under ppt/media/, a relationship from its
+  // slide, and a <p:pic> whose blip points at that relationship, placed in
+  // EMU (914400 per inch, 9525 per CSS pixel at 96 dpi).
+  var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+  function base64ToBytes(s) {
+    var clean = String(s).replace(/[^A-Za-z0-9+/]/g, '');
+    var out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+    var n = 0, buf = 0, bits = 0;
+    for (var i = 0; i < clean.length; i++) {
+      buf = (buf << 6) | B64.indexOf(clean.charAt(i));
+      bits += 6;
+      if (bits >= 8) { bits -= 8; out[n++] = (buf >> bits) & 0xFF; }
+    }
+    return out.subarray(0, n);
+  }
+
+  /** 'png' | 'jpeg' from the file's own magic bytes, or '' for anything else. */
+  function imageKind(bytes) {
+    if (!bytes || bytes.length < 4) return '';
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'png';
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'jpeg';
+    return '';
+  }
+
+  /** A PNG/JPEG data: URL as { kind, bytes }, or null (other types, remote URLs, bad data). */
+  function decodeImageDataUrl(url) {
+    var m = /^data:image\/(png|jpe?g);base64,([\s\S]*)$/i.exec(String(url || '').trim());
+    if (!m) return null;
+    var bytes = base64ToBytes(m[2]);
+    var kind = imageKind(bytes);
+    return kind ? { kind: kind, bytes: bytes } : null;
+  }
+
+  function pictureOf(img) {
+    if (!img) return null;
+    if (img.data instanceof Uint8Array) {
+      var kind = imageKind(img.data);
+      return kind ? { kind: kind, bytes: img.data } : null;
+    }
+    return decodeImageDataUrl(img.src || img.dataUrl);
+  }
+
+  function emu(value, min) {
+    var n = Math.round(Number(value));
+    return isFinite(n) ? Math.max(min, n) : min;
+  }
+
+  function writePptx(title, slideTexts, options) {
+    var opts = options || {};
     var contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
       '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
       '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Default Extension="png" ContentType="image/png"/>' +
+      '<Default Extension="jpeg" ContentType="image/jpeg"/>' +
       '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>';
     var slideEntries = [];
     var slideOverrides = '';
@@ -232,7 +284,12 @@
     for (var k = 0; k < slideTexts.length; k++) {
       presentation += '<p:sldId id="' + (256 + k) + '" r:id="rId' + (k + 1) + '"/>';
     }
-    presentation += '</p:sldIdLst></p:presentation>';
+    presentation += '</p:sldIdLst>';
+    if (opts.size) {
+      presentation += '<p:sldSz cx="' + emu(opts.size.cx, 914400) + '" cy="' + emu(opts.size.cy, 914400) + '"/>' +
+        '<p:notesSz cx="6858000" cy="9144000"/>';
+    }
+    presentation += '</p:presentation>';
     var presRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + slideRels + '</Relationships>';
 
@@ -242,16 +299,49 @@
       { name: 'ppt/presentation.xml', data: encode(presentation) },
       { name: 'ppt/_rels/presentation.xml.rels', data: encode(presRels) },
     ];
+    var mediaCount = 0;
     for (var j = 0; j < slideTexts.length; j++) {
-      var paras = String(slideTexts[j]).split('\n').map(function (line) {
+      // A slide is its text, or { text, images: [{ src | data, x, y, cx, cy }] }.
+      var entry = slideTexts[j];
+      var isObj = entry && typeof entry === 'object';
+      var slideText = isObj ? (entry.text == null ? '' : entry.text) : entry;
+      var paras = String(slideText).split('\n').map(function (line) {
         return '<a:p><a:r><a:t xml:space="preserve">' + xmlEscape(line) + '</a:t></a:r></a:p>';
       }).join('');
+      var pics = '';
+      var rels = '';
+      var images = isObj && Array.isArray(entry.images) ? entry.images : [];
+      var relId = 0;
+      for (var p = 0; p < images.length; p++) {
+        var pic = pictureOf(images[p]);
+        if (!pic) continue;
+        mediaCount += 1;
+        relId += 1;
+        var media = 'image' + mediaCount + '.' + pic.kind;
+        entries.push({ name: 'ppt/media/' + media, data: pic.bytes });
+        rels += '<Relationship Id="rId' + relId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/' + media + '"/>';
+        var im = images[p];
+        pics += '<p:pic><p:nvPicPr><p:cNvPr id="' + (relId + 1) + '" name="' + xmlEscape(im.name || ('Picture ' + relId)) + '"/>' +
+          '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>' +
+          '<p:blipFill><a:blip r:embed="rId' + relId + '"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>' +
+          '<p:spPr><a:xfrm><a:off x="' + emu(im.x, 0) + '" y="' + emu(im.y, 0) + '"/>' +
+          '<a:ext cx="' + emu(im.cx, 1) + '" cy="' + emu(im.cy, 1) + '"/></a:xfrm>' +
+          '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>';
+      }
       var slide = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ' +
-        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
         '<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/>' +
-        '<p:cNvGrpSpPr/></p:nvGrpSpPr><p:grpSpPr/>' + paras + '</p:spTree></p:cSld></p:sld>';
+        '<p:cNvGrpSpPr/></p:nvGrpSpPr><p:grpSpPr/>' + paras + pics + '</p:spTree></p:cSld></p:sld>';
       entries.push({ name: 'ppt/slides/slide' + (j + 1) + '.xml', data: encode(slide) });
+      if (rels) {
+        entries.push({
+          name: 'ppt/slides/_rels/slide' + (j + 1) + '.xml.rels',
+          data: encode('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + rels + '</Relationships>'),
+        });
+      }
     }
     return zip.writeZip(entries);
   }
@@ -264,5 +354,6 @@
     writeDocx: writeDocx,
     writeXlsx: writeXlsx,
     writePptx: writePptx,
+    decodeImageDataUrl: decodeImageDataUrl,
   };
 });

@@ -66,5 +66,27 @@ export declare function runTitle(recipe: Recipe | null, now: number): string;
 export declare function hasConsent(recipeId: string, server: string, storage?: any): boolean;
 export declare function grantConsent(recipeId: string, servers: string | string[], storage?: any): boolean;
 export declare function needsConsent(recipe: Recipe | null, storage?: any): string[];
+export interface BackgroundServers {
+  /** Local servers to start now: consent given, not running. */
+  start: string[];
+  /** Usable as they are: remote, or already running. */
+  ready: string[];
+  /** Local servers with no consent from this recipe yet. */
+  skipped: string[];
+  /** Extensions not registered in Settings → Connectors. */
+  missing: string[];
+}
+export declare function backgroundServers(
+  recipe: Recipe,
+  servers: Array<{ name: string; stdio: boolean; running: boolean }>,
+  storage?: any,
+): BackgroundServers;
+export declare function backgroundRefusal(recipe: Recipe | null, call: { name: string; asks?: string; usable?: boolean }): string;
+export declare function backgroundOffer<T extends { function: { name: string } }>(
+  recipe: Recipe,
+  defs: T[],
+  asks: (name: string) => string,
+  usableServers: string[],
+): T[];
 export declare function asAgent(recipe: Recipe): import('./agents.js').Agent;
 export declare function template(): Partial<Recipe>;

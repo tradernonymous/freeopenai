@@ -16,6 +16,29 @@ export declare function scopeCss(css: string, cls?: string): string;
 export declare function cssOf(html: string): string;
 export declare function artboardSvg(opts: { css: string; xhtml: string; width: number; height: number }): string;
 export declare function slideTexts(html: string): string[];
+/** A picture for office.writePptx: a PNG/JPEG data: URL placed in EMU. */
+export interface DeckImage {
+  src: string;
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  name: string;
+}
+export interface DeckOptions {
+  /** The deck's stage in px (default 1920x1080). */
+  stage?: { width: number; height: number };
+  /** A same-document image source -> a PNG/JPEG data: URL, or '' to skip it. */
+  resolve?: (src: string) => string;
+}
+export declare function slideImages(
+  slideHtml: string,
+  opts?: DeckOptions & { size?: { cx: number; cy: number } },
+): DeckImage[];
+export declare function pptxDeck(html: string, opts?: DeckOptions): {
+  size: { cx: number; cy: number };
+  slides: Array<{ text: string; images: DeckImage[] }>;
+};
 export declare function readme(name: string, html: string, tokens: Array<{ name: string; value: string }>): string;
 export declare function handoffFiles(opts: { name: string; html: string; designMd: string; fallbackTokens?: string }): Array<[string, string]>;
 export declare function handoffBrief(opts: { name: string; dir: string; target?: string }): string;

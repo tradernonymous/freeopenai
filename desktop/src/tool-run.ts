@@ -203,6 +203,13 @@ export function mcpCallResult(callId: string): any {
   return rawResults.get(callId);
 }
 
+/** Keeps a raw `tools/call` result for this call id (stdio and remote alike). */
+function rememberRaw(callId: string, result: any): void {
+  if (!callId || !result || typeof result !== 'object') return;
+  rawResults.set(callId, result);
+  if (rawResults.size > 50) rawResults.delete(rawResults.keys().next().value as string);
+}
+
 async function ensureStdio(server: McpServer): Promise<string> {
   const id = stdioId(server);
   if (!(await mcpStdioList()).includes(id)) await startStdio(server);
@@ -214,10 +221,7 @@ async function mcpStdio(server: McpServer, tool: string, a: Args, callId: string
   if (!hasShell()) return 'Error: a local MCP server needs the installed desktop app.';
   const id = await ensureStdio(server);
   const result: any = await mcpStdioRequest(id, 'tools/call', { name: tool, arguments: a }, 120_000);
-  if (callId) {
-    rawResults.set(callId, result);
-    if (rawResults.size > 50) rawResults.delete(rawResults.keys().next().value as string);
-  }
+  rememberRaw(callId, result);
   const text = tools.mcpResultText(result);
   return result?.isError ? `Error: ${text}` : text;
 }
@@ -286,6 +290,10 @@ async function mcp(name: string, a: Args, callId = ''): Promise<string> {
     method: 'POST',
     body: JSON.stringify({ url: target.server.url, tool: target.tool, arguments: a }),
   });
+  // The engine also hands back the raw result (content, structuredContent,
+  // isError) so a remote MCP App gets the same tool-result a local one does.
+  // An older engine sends text only; the app then falls back to that text.
+  if (data?.raw && typeof data.raw === 'object' && !Array.isArray(data.raw)) rememberRaw(callId, data.raw);
   const text = String(data?.text ?? '');
   return data?.isError ? `Error: ${text}` : text;
 }

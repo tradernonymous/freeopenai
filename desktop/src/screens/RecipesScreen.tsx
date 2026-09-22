@@ -1,14 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { pushToast } from '../components/Toasts';
 import { NAVIGATE_EVENT } from '../Sidebar';
-import { notifyUser } from '../bridge';
-import { collectReply } from '../stream-any';
+import { hasShell, mcpStdioList, notifyUser } from '../bridge';
+import { streamChat } from '../api';
+import { isSavedProvider, streamSaved } from '../run-model';
+import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
+import { executeTool, startStdio, stdioId } from '../tool-run';
 import { newSession, PENDING_COMMAND_KEY, RUN_COMMAND_EVENT } from './ChatScreen';
 import '../recipes.js';
 import '../agents.js';
 import '../chats.js';
 import '../threads.js';
+import '../tools.js';
+import '../hf-auth.js';
+import '../hf-inference.js';
 
+const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
+const hfAuth: typeof import('../hf-auth.js') = (globalThis as any).FreeAI4UHfAuth;
+const hfInference: typeof import('../hf-inference.js') = (globalThis as any).FreeAI4UHfInference;
 const recipesLib: typeof import('../recipes.js') = (globalThis as any).FreeAI4URecipes;
 const agentsLib: typeof import('../agents.js') = (globalThis as any).FreeAI4UAgents;
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
@@ -22,11 +31,59 @@ type RunEntry = import('../recipes.js').RunEntry;
 //
 //   * "Run in chat" hands `/recipe <id>` to Chat, which asks for consent the
 //     first time a recipe's servers would start, and gives it their tools.
-//   * "Run now" and the scheduler run it in the background, answer only
-//     (collectReply -- no tools, no servers started), each into a new chat
-//     titled "<recipe> · <time>", with a notification.
+//   * "Run now" and the scheduler run it in the background, each into a new
+//     chat titled "<recipe> · <time>", with a notification. They use Chat's
+//     tool loop (runTurn + executeTool) but only with tools that never ask:
+//     read-only built-ins and the recipe's "always allow" MCP tools. A call
+//     that would ask is refused inside the run (recipes.js
+//     backgroundRefusal), and a local server starts only if this recipe
+//     already has consent for it.
 
 const RUN_TIMEOUT_MS = 180000;
+
+type Target = { provider: string; model: string };
+
+/** runTurn's stream for any model, with tools offered -- streamAny plus `offered`. */
+const streamFor = (target: Target): TurnOptions['stream'] => (messages, offered, onFrame, signal) => {
+  if (isSavedProvider(target.provider)) {
+    return streamSaved(target.provider, target.model, messages as any, onFrame, signal, undefined, offered);
+  }
+  if (target.provider === 'hf') {
+    return hfInference.streamChat(target.model, messages as any, onFrame, signal, hfAuth.accessToken()?.access_token || undefined, offered as any);
+  }
+  return streamChat(target.provider, { model: target.model, messages, ...(offered ? { tools: offered } : {}) }, onFrame, signal);
+};
+
+/**
+ * Starts the recipe's local servers it already has consent for, and returns
+ * the servers usable in this run plus notes for what was left out.
+ */
+async function prepareServers(recipe: Recipe): Promise<{ usable: string[]; notes: string[] }> {
+  const servers = toolsLib.mcpServers();
+  const running = hasShell() ? await mcpStdioList().catch(() => [] as string[]) : [];
+  const plan = recipesLib.backgroundServers(recipe, servers.map((s) => ({
+    name: s.name,
+    stdio: toolsLib.isStdio(s),
+    running: toolsLib.isStdio(s) && running.includes(stdioId(s)),
+  })));
+  const usable = plan.ready.slice();
+  const notes: string[] = [];
+  for (const name of plan.start) {
+    const server = servers.find((s) => s.name === name);
+    if (!server || !hasShell()) { notes.push(`${name} needs the installed desktop app to start.`); continue; }
+    try {
+      await startStdio(server);
+      usable.push(name);
+    } catch (e) {
+      notes.push(`${name} did not start: ${toolsLib.splitStderr((e as Error).message || String(e)).message.split('\n')[0]}`);
+    }
+  }
+  if (plan.skipped.length) {
+    notes.push(`${plan.skipped.join(', ')} not started: this recipe has no consent to start ${plan.skipped.length > 1 ? 'them' : 'it'} yet. Run it from chat (\`/recipe ${recipe.id}\`) once to agree.`);
+  }
+  if (plan.missing.length) notes.push(`${plan.missing.join(', ')} ${plan.missing.length > 1 ? 'are' : 'is'} not in Settings → Connectors.`);
+  return { usable, notes };
+}
 
 /**
  * One background run: the filled prompt to the recipe's model (or the most
@@ -47,15 +104,57 @@ export async function runRecipeInBackground(recipe: Recipe, values: Record<strin
   const controller = new AbortController();
   const clock = setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
   try {
-    const reply = await collectReply({ ...target, label: target.provider }, agentsLib.messagesFor(agent, filled.text, []), controller.signal);
-    const result = agentsLib.formatResult(agent, reply.text);
-    const note = recipe.extensions.length ? '\n\n_Background runs do not start MCP servers; run it from chat (`/recipe`) to use them._' : '';
+    const toolsOn = toolsLib.enabled();
+    const { usable, notes } = toolsOn ? await prepareServers(recipe) : { usable: [] as string[], notes: [] as string[] };
+    // No folder is open for a background run, so the local file tools are
+    // not offered; GitHub's reads are, and its writes are filtered out.
+    const offered = toolsOn
+      ? recipesLib.backgroundOffer(recipe, toolsLib.catalogue({ github: true, localRoot: '', shell: false }), (n) => toolsLib.needsApproval(n), usable)
+      : [];
+    const events: ToolEvent[] = [];
+    let last = '';
+    await runTurn({
+      messages: agentsLib.messagesFor(agent, filled.text, []),
+      tools: offered,
+      stream: streamFor(target),
+      // The one gate: a call that may not run here gets the refusal as its
+      // result instead of running. approve() below is only reached for calls
+      // that would ask, and those are all refused here -- nothing is prompted.
+      execute: (call, args) => {
+        const refusal = recipesLib.backgroundRefusal(recipe, {
+          name: call.name,
+          asks: toolsLib.needsApproval(call.name),
+          usable: usable.some((s) => call.name.startsWith(`mcp__${toolsLib.slug(s)}__`)),
+        });
+        return refusal ? Promise.resolve(refusal) : executeTool(call, args, { localRoot: '' });
+      },
+      approve: async () => true,
+      onText: (piece) => { last += piece; },
+      onTool: (event) => {
+        last = '';
+        const at = events.findIndex((e) => e.id === event.id);
+        if (at >= 0) events[at] = event; else events.push(event);
+      },
+      onNote: (note) => notes.push(note),
+      signal: controller.signal,
+    });
+    const result = agentsLib.formatResult(agent, last);
+    const note = notes.length ? `\n\n_${notes.join(' ')}_` : '';
     const session = {
       ...newSession(target.provider, target.model),
       title: recipesLib.runTitle(recipe, startedAt),
       messages: [
         { role: 'user' as const, content: filled.text, ts: startedAt },
-        { role: 'assistant' as const, content: result.text + note, agent: recipe.name, model: target.model, provider: target.provider, providerLabel: target.provider, ts: Date.now() },
+        {
+          role: 'assistant' as const,
+          content: result.text + note,
+          agent: recipe.name,
+          model: target.model,
+          provider: target.provider,
+          providerLabel: target.provider,
+          ts: Date.now(),
+          ...(events.length ? { tools: events.map((e) => ({ ...e, startedAt, endedAt: Date.now() })) } : {}),
+        },
       ],
     };
     chats.writeStore(null, [session, ...chats.readStore()]);
@@ -72,25 +171,8 @@ export async function runRecipeInBackground(recipe: Recipe, values: Record<strin
   }
 }
 
-/** While the app runs: once a minute, run whatever recipes are due (recipes.js nextRun). */
-export function useRecipeScheduler() {
-  useEffect(() => {
-    const running = new Set<string>();
-    const tick = () => {
-      const now = Date.now();
-      for (const recipe of recipesLib.dueRecipes(recipesLib.list(), recipesLib.lastRuns(), now)) {
-        if (running.has(recipe.id)) continue;
-        running.add(recipe.id);
-        // Stamped before the reply, so a slow model is not started twice.
-        recipesLib.recordRun(recipe.id, { at: now, ok: true });
-        runRecipeInBackground(recipe, {}, now).finally(() => running.delete(recipe.id));
-      }
-    };
-    const first = setTimeout(tick, 5000);
-    const timer = setInterval(tick, 60000);
-    return () => { clearTimeout(first); clearInterval(timer); };
-  }, []);
-}
+// The scheduler that calls runRecipeInBackground lives in ../schedulers.ts, so
+// App can run it at start without pulling this screen into the first bundle.
 
 interface Form {
   id: string;
@@ -360,7 +442,8 @@ export default function RecipesScreen() {
           {current && <p className="settings-hint">{lastRunText(current.id)}. In chat: <code>/recipe {current.id}{current.params.map((p) => ` ${p.name}=…`).join('')}</code></p>}
           <p className="settings-hint">
             Run in chat gives the recipe its servers' tools, and asks before a server is started for it the first time. Run
-            now and scheduled runs answer in the background without tools, into a new chat.
+            now and scheduled runs answer in the background, into a new chat, using only tools that never ask: web and
+            GitHub reads, and its servers' tools you set to "always allow" (a local server starts only once you agreed in chat).
           </p>
         </section>
       </div>

@@ -126,6 +126,27 @@ test('tools/call from a remote app still goes through executeTool and /api/mcp/c
   assert.match(body, /api\.raw\('\/api\/mcp\/call'/);
 });
 
+test('a remote call keeps the engine\'s raw result, like a stdio call does', () => {
+  const src = read('desktop', 'src', 'tool-run.ts');
+  const remote = src.slice(src.indexOf('async function mcp('), src.indexOf('export async function executeTool'));
+  assert.match(remote, /data\?\.raw/);
+  assert.match(remote, /rememberRaw\(callId, data\.raw\)/);
+  const stdio = src.slice(src.indexOf('async function mcpStdio('), src.indexOf('export function mcpAppFor'));
+  assert.match(stdio, /rememberRaw\(callId, result\)/);
+  // The engine sends `raw` alongside the text.
+  const server = read('server.js');
+  const call = server.slice(server.indexOf('async function mcpCallTool'), server.indexOf('// MCP Apps: a tool may name'));
+  assert.match(call, /reply\.raw = raw/);
+  assert.match(call, /mcpRawResult\(result\)/);
+});
+
+test('the frame sends the kept raw result as the tool-result, text only as a fallback', () => {
+  const src = read('desktop', 'src', 'components', 'McpAppFrame.tsx');
+  assert.match(src, /const raw = mcpCallResult\(now\.callId\)/);
+  assert.match(src, /params: raw \?\? \{ content: \[\{ type: 'text', text: now\.result \}\]/);
+  assert.match(src, /reply\(id, mcpCallResult\(runId\) \?\?/);
+});
+
 test('the app frame is sandboxed to scripts only', () => {
   const src = read('desktop', 'src', 'components', 'McpAppFrame.tsx');
   const sandbox = /sandbox="([^"]*)"/.exec(src);

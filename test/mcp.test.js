@@ -6,7 +6,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { createRequestHandler, mcpUiMeta, mcpResourceContents } = require('../server.js');
+const {
+  createRequestHandler, mcpUiMeta, mcpResourceContents, mcpRawResult, mcpRouteRefusal, MCP_RATE_LIMIT,
+} = require('../server.js');
 const { mcpTool, MCP_LIST_TOOLS, isMcpTool, TOOL_GROUPS } = require('../chatlib.js');
 
 async function startApp() {
@@ -189,6 +191,74 @@ test('mcp/resource rejects non-http schemes and refuses loopback and private hos
   } finally {
     app.close();
   }
+});
+
+test('every mcp route refuses a cross-site POST before reading the body', async () => {
+  const app = await startApp();
+  try {
+    for (const route of ['/api/mcp/tools', '/api/mcp/call', '/api/mcp/resource']) {
+      const res = await fetch(`http://127.0.0.1:${app.address().port}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example', 'X-Forwarded-For': '198.51.100.1' },
+        body: JSON.stringify({ url: 'https://example.com/mcp', tool: 'x', uri: 'ui://a/b' }),
+      });
+      assert.equal(res.status, 403, route);
+      assert.match((await res.json()).error, /Cross-site/);
+    }
+  } finally {
+    app.close();
+  }
+});
+
+test('mcpRouteRefusal allows same-origin and no-origin requests, refuses foreign ones', () => {
+  const req = (headers) => ({ method: 'POST', headers: { host: 'engine.example', ...headers }, socket: { remoteAddress: '192.0.2.10' } });
+  assert.equal(mcpRouteRefusal(req({ 'x-forwarded-for': '192.0.2.11' })), null);
+  assert.equal(mcpRouteRefusal(req({ 'x-forwarded-for': '192.0.2.11', origin: 'http://engine.example' })), null);
+  assert.deepEqual(mcpRouteRefusal(req({ 'x-forwarded-for': '192.0.2.11', origin: 'https://evil.example' })).status, 403);
+  assert.equal(mcpRouteRefusal(req({ 'x-forwarded-for': '192.0.2.11', origin: 'null' })).status, 403);
+});
+
+test('mcp routes are rate limited per IP, 60 a minute, and the window resets', async () => {
+  assert.equal(MCP_RATE_LIMIT, 60);
+  const req = { method: 'POST', headers: { 'x-forwarded-for': '203.0.113.50' }, socket: {} };
+  const t0 = 1_000_000;
+  for (let i = 0; i < MCP_RATE_LIMIT; i++) assert.equal(mcpRouteRefusal(req, t0), null, `call ${i + 1}`);
+  const blocked = mcpRouteRefusal(req, t0 + 1000);
+  assert.equal(blocked.status, 429);
+  assert.match(blocked.error, /Too many MCP requests/);
+  // Another IP is unaffected; the same IP is let back in after the window.
+  assert.equal(mcpRouteRefusal({ ...req, headers: { 'x-forwarded-for': '203.0.113.51' } }, t0 + 1000), null);
+  assert.equal(mcpRouteRefusal(req, t0 + 60_001), null);
+
+  // Through the real handler: the 61st call in a minute is a 429.
+  const app = await startApp();
+  try {
+    const ip = '203.0.113.99';
+    let last;
+    for (let i = 0; i <= MCP_RATE_LIMIT; i++) {
+      last = await fetch(`http://127.0.0.1:${app.address().port}/api/mcp/tools`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+        body: '{}',
+      });
+      if (i < MCP_RATE_LIMIT) assert.equal(last.status, 400, `call ${i + 1} reaches the handler`);
+      await last.text();
+    }
+    assert.equal(last.status, 429);
+  } finally {
+    app.close();
+  }
+});
+
+test('mcpRawResult keeps content, structuredContent and isError only, capped at 256 KB', () => {
+  assert.deepEqual(
+    mcpRawResult({ content: [{ type: 'text', text: 'hi' }], structuredContent: { temp: 21 }, isError: false, _meta: { x: 1 } }),
+    { content: [{ type: 'text', text: 'hi' }], isError: false, structuredContent: { temp: 21 } },
+  );
+  assert.deepEqual(mcpRawResult({ isError: true }), { content: [], isError: true });
+  assert.equal(mcpRawResult(null), null);
+  assert.equal(mcpRawResult([1]), null);
+  assert.equal(mcpRawResult({ content: [{ type: 'text', text: 'a'.repeat(256 * 1024) }] }), null);
 });
 
 test('mcp/call refuses loopback and private hosts', async () => {

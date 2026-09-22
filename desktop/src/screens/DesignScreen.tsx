@@ -798,10 +798,11 @@ export default function DesignScreen() {
           pushToast('ok', await saveFile({ name: `${slug}-${kind}.zip`, bytes: archive, mime: 'application/zip' }));
         }
       } else if (kind === 'pptx') {
-        // office.js writes text slides; pictures are not carried (see its writer).
-        const texts = exportsLib.slideTexts(artifact.strip(canvasHtml));
-        if (!texts.length) { pushToast('warn', 'PPTX needs a deck: slides as <section class="slide">.'); return; }
-        const deckBytes = await office.writePptx(active.name, texts);
+        // Text and pictures: each slide's data: images are placed where the
+        // slide puts them (remote images are skipped -- nothing is fetched).
+        const deck = exportsLib.pptxDeck(artifact.strip(canvasHtml), { stage: stageLib.deckSize(stageFormat) });
+        if (!deck.slides.length) { pushToast('warn', 'PPTX needs a deck: slides as <section class="slide">.'); return; }
+        const deckBytes = await office.writePptx(active.name, deck.slides, { size: deck.size });
         pushToast('ok', await saveFile({ name: `${slug}.pptx`, bytes: deckBytes, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
       } else {
         const files = exportsLib.projectFiles({

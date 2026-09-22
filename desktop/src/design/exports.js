@@ -147,6 +147,162 @@
     });
   }
 
+  // ---- PPTX pictures ---------------------------------------------------------
+  //
+  // Each slide's <img> elements, for office.writePptx. Only pictures that can
+  // be read here go in: PNG/JPEG `data:` URLs, or a same-document source the
+  // host resolves to one (`resolve(src)`); a remote URL is skipped, never
+  // fetched. Placement is proportional: an inline left/top/width/height (px
+  // of the stage, or %) maps onto the slide; an image without a position
+  // flows into a column on the right half, keeping its aspect ratio.
+
+  var SLIDE_CX = 12192000; // 13.333 in, PowerPoint's 16:9 width in EMU
+
+  function attr(tag, name) {
+    var m = new RegExp('\\s' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))', 'i').exec(tag);
+    return m ? decode(m[1] != null ? m[1] : m[2] != null ? m[2] : m[3]) : '';
+  }
+
+  /** A CSS length in the style attribute, as a fraction of `total` (px or %), or null. */
+  function styleFraction(style, prop, total) {
+    var m = new RegExp('(?:^|;)\\s*' + prop + '\\s*:\\s*(-?[\\d.]+)(px|%)?', 'i').exec(style);
+    if (!m) return null;
+    var n = Number(m[1]);
+    if (!isFinite(n)) return null;
+    return m[2] === '%' ? n / 100 : n / total;
+  }
+
+  function base64Head(b64, count) {
+    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    var clean = text(b64).replace(/[^A-Za-z0-9+/]/g, '');
+    var out = [];
+    var buf = 0, bits = 0;
+    for (var i = 0; i < clean.length && out.length < count; i++) {
+      buf = ((buf << 6) | chars.indexOf(clean.charAt(i))) & 0xFFFFFF;
+      bits += 6;
+      if (bits >= 8) { bits -= 8; out.push((buf >> bits) & 0xFF); }
+    }
+    return out;
+  }
+
+  /** Natural { width, height } of a PNG/JPEG data URL, or null. */
+  function naturalSize(dataUrl) {
+    var m = /^data:image\/(png|jpe?g);base64,([\s\S]*)$/i.exec(dataUrl);
+    if (!m) return null;
+    if (/png/i.test(m[1])) {
+      var h = base64Head(m[2], 24);
+      if (h.length < 24 || h[0] !== 0x89 || h[1] !== 0x50) return null;
+      var w = ((h[16] << 24) | (h[17] << 16) | (h[18] << 8) | h[19]) >>> 0;
+      var ht = ((h[20] << 24) | (h[21] << 16) | (h[22] << 8) | h[23]) >>> 0;
+      return w && ht ? { width: w, height: ht } : null;
+    }
+    var b = base64Head(m[2], 256 * 1024);
+    if (b[0] !== 0xFF || b[1] !== 0xD8) return null;
+    var i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xFF) { i += 1; continue; }
+      var marker = b[i + 1];
+      if (marker === 0xD8 || marker === 0x01 || (marker >= 0xD0 && marker <= 0xD7) || marker === 0xFF) { i += marker === 0xFF ? 1 : 2; continue; }
+      if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+        var jh = (b[i + 5] << 8) | b[i + 6];
+        var jw = (b[i + 7] << 8) | b[i + 8];
+        return jw && jh ? { width: jw, height: jh } : null;
+      }
+      i += 2 + ((b[i + 2] << 8) | b[i + 3]);
+    }
+    return null;
+  }
+
+  function readableSrc(src, resolve) {
+    var s = text(src).trim();
+    if (/^data:image\/(png|jpe?g);base64,/i.test(s)) return s;
+    if (!s || /^([a-z][a-z0-9+.-]*:|\/\/)/i.test(s)) return ''; // remote or another scheme: skipped
+    if (typeof resolve !== 'function') return '';
+    var out = text(resolve(s)).trim();
+    return /^data:image\/(png|jpe?g);base64,/i.test(out) ? out : '';
+  }
+
+  /**
+   * slideImages(slideHtml, { stage, size, resolve }) -> [{ src, x, y, cx, cy, name }]
+   * in EMU on a slide of `size`, from a stage of `stage` px.
+   */
+  function slideImages(slideHtml, opts) {
+    var o = opts || {};
+    var stage = o.stage || { width: 1920, height: 1080 };
+    var size = o.size || { cx: SLIDE_CX, cy: Math.round(SLIDE_CX * stage.height / stage.width) };
+    var body = text(slideHtml).replace(/<(script|style|svg)[\s\S]*?<\/\1>/gi, '');
+    var placed = [];
+    var flowing = [];
+    var re = /<img\b[^>]*>/gi;
+    var m;
+    while ((m = re.exec(body))) {
+      var tag = m[0];
+      var src = readableSrc(attr(tag, 'src'), o.resolve);
+      if (!src) continue;
+      var style = attr(tag, 'style');
+      var natural = naturalSize(src);
+      var aspect = natural ? natural.width / natural.height : 4 / 3;
+      var fw = styleFraction(style, 'width', stage.width);
+      var fh = styleFraction(style, 'height', stage.height);
+      if (fw == null && Number(attr(tag, 'width')) > 0) fw = Number(attr(tag, 'width')) / stage.width;
+      if (fh == null && Number(attr(tag, 'height')) > 0) fh = Number(attr(tag, 'height')) / stage.height;
+      // One side known: the other follows the picture's own aspect ratio.
+      if (fw != null && fh == null) fh = (fw * stage.width / aspect) / stage.height;
+      if (fh != null && fw == null) fw = (fh * stage.height * aspect) / stage.width;
+      var fx = styleFraction(style, 'left', stage.width);
+      var fy = styleFraction(style, 'top', stage.height);
+      var row = { src: src, fw: fw, fh: fh, aspect: aspect, name: attr(tag, 'alt').slice(0, 80) };
+      if (fx != null && fy != null) { row.fx = fx; row.fy = fy; placed.push(row); } else flowing.push(row);
+    }
+    // The column for unpositioned pictures: right half, top to bottom.
+    var col = { x: 0.52, y: 0.08, w: 0.44, h: 0.84 };
+    flowing.forEach(function (row, i) {
+      var cellH = col.h / flowing.length;
+      var cellTop = col.y + i * cellH;
+      // Fit inside the cell (in stage px, so the aspect ratio holds), never larger than asked.
+      var maxW = col.w * stage.width;
+      var maxH = cellH * stage.height * 0.94;
+      var wantW = row.fw != null ? row.fw * stage.width : maxW;
+      var wantH = row.fh != null ? row.fh * stage.height : wantW / row.aspect;
+      var scale = Math.min(1, maxW / wantW, maxH / wantH);
+      var pw = wantW * scale;
+      var ph = wantH * scale;
+      row.fw = pw / stage.width;
+      row.fh = ph / stage.height;
+      row.fx = col.x + (col.w - row.fw) / 2;
+      row.fy = cellTop + (cellH - row.fh) / 2;
+      placed.push(row);
+    });
+    return placed.map(function (row, i) {
+      var fw = row.fw != null ? row.fw : 0.3;
+      var fh = row.fh != null ? row.fh : (fw * stage.width / row.aspect) / stage.height;
+      return {
+        src: row.src,
+        x: Math.round(Math.max(0, row.fx) * size.cx),
+        y: Math.round(Math.max(0, row.fy) * size.cy),
+        cx: Math.max(1, Math.round(fw * size.cx)),
+        cy: Math.max(1, Math.round(fh * size.cy)),
+        name: row.name || 'Picture ' + (i + 1),
+      };
+    });
+  }
+
+  /**
+   * pptxDeck(html, { stage, resolve }) -> { size, slides: [{ text, images }] },
+   * ready for office.writePptx(name, deck.slides, { size: deck.size }). The
+   * slide keeps the stage's aspect ratio at PowerPoint's 16:9 width.
+   */
+  function pptxDeck(html, opts) {
+    var o = opts || {};
+    var stage = o.stage && o.stage.width > 0 && o.stage.height > 0 ? o.stage : { width: 1920, height: 1080 };
+    var size = { cx: SLIDE_CX, cy: Math.round(SLIDE_CX * stage.height / stage.width) };
+    var texts = slideTexts(html);
+    var slides = slidesOf(html).map(function (s, i) {
+      return { text: texts[i] || '', images: slideImages(s, { stage: stage, size: size, resolve: o.resolve }) };
+    });
+    return { size: size, slides: slides };
+  }
+
   // ---- handoff ---------------------------------------------------------------
 
   /** An implementation README: what is on the page and how to rebuild it. */
@@ -238,6 +394,8 @@
     cssOf: cssOf,
     artboardSvg: artboardSvg,
     slideTexts: slideTexts,
+    slideImages: slideImages,
+    pptxDeck: pptxDeck,
     readme: readme,
     handoffFiles: handoffFiles,
     handoffBrief: handoffBrief,

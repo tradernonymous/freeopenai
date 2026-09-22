@@ -393,6 +393,89 @@
     return ((recipe && recipe.extensions) || []).filter(function (s) { return !hasConsent(recipe.id, s, given); });
   }
 
+  // ---- background runs ("Run now" and schedules) -----------------------------------
+  //
+  // Nobody is at the screen for these, so nothing may ask. A background run
+  // gets only what runs without asking: the read-only built-ins (tools.js
+  // needsApproval says '') and the tools of the recipe's own MCP servers the
+  // person set to "always allow". A local server is started only when this
+  // recipe already has consent for it. Anything else is refused inside the
+  // run with a sentence the model can pass on -- never prompted.
+
+  function mcpServerSlugOf(name) {
+    var m = /^mcp__([a-z0-9_]+?)__/.exec(String(name || ''));
+    return m ? m[1] : '';
+  }
+
+  function recipeServerSlugs(recipe) {
+    return ((recipe && recipe.extensions) || []).map(slug);
+  }
+
+  /**
+   * backgroundServers(recipe, servers, given) -> { start, ready, skipped, missing }
+   *
+   * servers: [{ name, stdio, running }] -- the registered MCP servers. Of the
+   * recipe's extensions: `start` are local ones to start now (consent given,
+   * not running), `ready` are usable as they are (remote, or already
+   * running), `skipped` are local ones with no consent yet, `missing` are
+   * names not registered at all.
+   */
+  function backgroundServers(recipe, servers, given) {
+    var out = { start: [], ready: [], skipped: [], missing: [] };
+    var rows = Array.isArray(servers) ? servers : [];
+    ((recipe && recipe.extensions) || []).forEach(function (name) {
+      var row = rows.find(function (s) { return s && slug(s.name) === slug(name); });
+      if (!row) out.missing.push(name);
+      else if (!row.stdio || row.running) out.ready.push(row.name);
+      else if (hasConsent(recipe.id, name, given)) out.start.push(row.name);
+      else out.skipped.push(row.name);
+    });
+    return out;
+  }
+
+  /**
+   * backgroundRefusal(recipe, call) -> '' when a background run may make this
+   * call, else the tool result handed back instead of running it.
+   *
+   *   call.name    the tool
+   *   call.asks    tools.needsApproval(name): '' when it runs without asking
+   *   call.usable  for an mcp__ tool: whether its server is ready (remote, or
+   *                a local one already running / started with consent)
+   */
+  function backgroundRefusal(recipe, call) {
+    var c = call || {};
+    var name = String(c.name || '');
+    var fromChat = recipe && recipe.id ? ' run this recipe from chat (/recipe ' + recipe.id + ')' : ' run this recipe from chat';
+    if (name === 'spawn_agent') return 'Error: sub-agents do not run in a background recipe run;' + fromChat + ' to use them.';
+    if (c.asks) return 'Error: ' + name + ' ' + c.asks + ', so it needs your approval;' + fromChat + ' to allow it.';
+    var server = mcpServerSlugOf(name);
+    if (server) {
+      if (recipeServerSlugs(recipe).indexOf(server) < 0) {
+        return 'Error: ' + name + ' belongs to an MCP server this recipe does not list, so a background run may not use it.';
+      }
+      if (!c.usable) {
+        return 'Error: that MCP server is not running, and this recipe has no consent to start it;' + fromChat + ' once to agree.';
+      }
+    }
+    return '';
+  }
+
+  /**
+   * backgroundOffer(recipe, defs, asks, usableServers) -> the tool defs a
+   * background run is offered: built-ins (never spawn_agent) that need no
+   * approval, and the no-approval tools of the recipe's ready servers.
+   * `asks(name)` is tools.needsApproval; usableServers are server names.
+   */
+  function backgroundOffer(recipe, defs, asks, usableServers) {
+    var usable = (Array.isArray(usableServers) ? usableServers : []).map(slug);
+    return (Array.isArray(defs) ? defs : []).filter(function (d) {
+      var name = d && d.function && d.function.name;
+      if (!name) return false;
+      var server = mcpServerSlugOf(name);
+      return !backgroundRefusal(recipe, { name: name, asks: asks(name), usable: !server || usable.indexOf(server) >= 0 });
+    });
+  }
+
   /**
    * A recipe as an agent definition (agents.js shape), so chat runs both with
    * one runner: the recipe's servers are its tools, its schema its output.
@@ -449,6 +532,9 @@
     hasConsent: hasConsent,
     grantConsent: grantConsent,
     needsConsent: needsConsent,
+    backgroundServers: backgroundServers,
+    backgroundRefusal: backgroundRefusal,
+    backgroundOffer: backgroundOffer,
     asAgent: asAgent,
     template: template,
   };
