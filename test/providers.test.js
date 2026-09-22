@@ -536,26 +536,8 @@ test('FREEBUFF_MODELS pins the freebuff picker to a subset', async () => {
   }
 });
 
-test('the freegpt4 slot stays off until it has somewhere to send', async () => {
-  delete process.env.FREEGPT4_API_KEY;
-  delete process.env.FREEGPT4_BASE_URL;
-  delete process.env.FREEGPT4_MODELS;
-  const app = http.createServer(createRequestHandler(__dirname + '/..'));
-  await new Promise((r) => app.listen(0, r));
-  const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/providers`)).json();
-  app.close();
-  assert.equal(body.find((p) => p.id === 'freegpt4').configured, false, 'an unconfigured slot reports itself off');
-  process.env.FREEGPT4_API_KEY = 'k';
-  const keyed = http.createServer(createRequestHandler(__dirname + '/..'));
-  await new Promise((r) => keyed.listen(0, r));
-  const keyedBody = await (await fetch(`http://127.0.0.1:${keyed.address().port}/api/llm/providers`)).json();
-  keyed.close();
-  assert.equal(keyedBody.find((p) => p.id === 'freegpt4').configured, false, 'a key alone still configures nothing');
-  delete process.env.FREEGPT4_API_KEY;
-});
-
 test('a bare string catalogue serves its ids', async () => {
-  // Free-GPT4-WEB-API answers /models with ["gpt-4", ...] rather than
+  // Some self-hosted gateways answer /models with ["gpt-4", ...] rather than
   // OpenAI row objects; those strings are addressable ids, not junk.
   clearModelCache();
   const upstream = http.createServer((req, res) => {
@@ -563,82 +545,18 @@ test('a bare string catalogue serves its ids', async () => {
     res.end(JSON.stringify({ object: 'list', data: ['gpt-4', 'gpt-4o'] }));
   });
   await new Promise((r) => upstream.listen(0, r));
-  process.env.FREEGPT4_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
+  process.env.FREEBUFF_BASE_URL = `http://127.0.0.1:${upstream.address().port}/v1`;
   let app;
   try {
     app = http.createServer(createRequestHandler(__dirname + '/..'));
     await new Promise((r) => app.listen(0, r));
-    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=freegpt4`)).json();
+    const body = await (await fetch(`http://127.0.0.1:${app.address().port}/api/llm/models?provider=freebuff`)).json();
     assert.deepEqual(body.map((m) => m.id), ['gpt-4', 'gpt-4o']);
   } finally {
     if (app) app.close();
     upstream.close();
-    delete process.env.FREEGPT4_BASE_URL;
+    delete process.env.FREEBUFF_BASE_URL;
     clearModelCache();
-  }
-});
-
-test('a text-query turn sends the last user text and returns the plain answer', async () => {
-  const received = [];
-  const upstream = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://x');
-    if (url.pathname === '/models') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ object: 'list', data: ['gpt-4'] }));
-      return;
-    }
-    received.push({ method: req.method, text: url.searchParams.get('text') });
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('plain answer');
-  });
-  await new Promise((r) => upstream.listen(0, r));
-  process.env.FREEGPT4_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
-  let app;
-  try {
-    app = http.createServer(createRequestHandler(__dirname + '/..'));
-    await new Promise((r) => app.listen(0, r));
-    const send = (payload) => fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=freegpt4`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const reply = await (await send({ model: 'gpt-4', messages: [{ role: 'system', content: 'be nice' }, { role: 'user', content: 'say hi' }] })).json();
-    assert.deepEqual(reply, { choices: [{ message: { role: 'assistant', content: 'plain answer' } }] });
-    assert.deepEqual(received, [{ method: 'GET', text: 'say hi' }]);
-    const streamed = await (await send({ model: 'gpt-4', stream: true, messages: [{ role: 'user', content: 'say hi' }] })).text();
-    assert.ok(streamed.includes('"content":"plain answer"'), 'the one-shot answer rides one SSE frame');
-    assert.ok(streamed.includes('[DONE]'), 'the stream still terminates');
-  } finally {
-    if (app) app.close();
-    upstream.close();
-    delete process.env.FREEGPT4_BASE_URL;
-  }
-});
-
-test('a text-query turn refuses image input and empty text instead of guessing', async () => {
-  const upstream = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('unreached');
-  });
-  await new Promise((r) => upstream.listen(0, r));
-  process.env.FREEGPT4_BASE_URL = `http://127.0.0.1:${upstream.address().port}`;
-  let app;
-  try {
-    app = http.createServer(createRequestHandler(__dirname + '/..'));
-    await new Promise((r) => app.listen(0, r));
-    const send = (messages) => fetch(`http://127.0.0.1:${app.address().port}/api/llm/chat?provider=freegpt4`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4', messages }),
-    });
-    const pictured = await (await send([{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,x' } }] }])).json();
-    assert.match(pictured.error, /text only/i);
-    const silent = await (await send([{ role: 'user', content: '   ' }])).json();
-    assert.match(silent.error, /needs a text message/i);
-  } finally {
-    if (app) app.close();
-    upstream.close();
-    delete process.env.FREEGPT4_BASE_URL;
   }
 });
 

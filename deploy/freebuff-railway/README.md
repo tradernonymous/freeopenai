@@ -43,6 +43,13 @@ behind a plain OpenAI-compatible endpoint: `GET /v1/models` and
    its name in the log rather than a proxy that 502s everything. `API_KEYS`
    puts a key in front of the proxy; set it if you expose the domain
    publicly, and leave it unset on the private network.
+
+   The proxy reads four more, and all four have working defaults — leave them
+   alone unless you have a reason: `ROTATION_INTERVAL` (`6h`, how often it
+   rotates your tokens), `REQUEST_TIMEOUT` (`15m` upstream), `UPSTREAM_BASE_URL`
+   (`https://codebuff.com`) and `HTTP_PROXY` (unset). `LISTEN_ADDR` is pinned to
+   `:8080` by the Dockerfile here, so Railway's injected `PORT` can never move
+   the port out from under step 4.
 4. **Settings → Networking → Generate Domain**, target port **8080**. You
    need this once, to check `…/v1/models` answers JSON.
 5. On the **freeopenai** service (same project), set:

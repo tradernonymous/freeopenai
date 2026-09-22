@@ -40,9 +40,9 @@ much work they are:
    `FREEBUFF_BASE_URL` at LiteLLM, and freeopenai gets FCC's 53 providers through
    its generic self-hosted slot (labelled "Freebuff" in the picker regardless of
    what is actually behind it — cosmetic only). No change to freeopenai's code.
-2. **Teach freeopenai the Responses API.** The provider layer already supports a
-   second chat shape (`chatShape: 'text-query'`, used by FreeGPT4), so a
-   `chatShape: 'responses'` is a natural addition — and it would unlock not just
+2. **Teach freeopenai the Responses API.** Every provider in the layer speaks
+   OpenAI Chat Completions today, so this means a second chat shape rather than
+   a second provider — and it would unlock not just
    FCC but any Responses-shaped gateway, including
    [my-free-code](https://github.com/hkqr/my-free-code), which has the same gap
    for the same reason. That is a real piece of work, not a one-liner: streaming
