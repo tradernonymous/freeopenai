@@ -47,6 +47,10 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     // failure message can show what actually went wrong instead of a bare
     // "Puter failed" or "timed out". Reset per job in signIn().
     private var lastConsoleIssue: String? = null
+    // Bumped on every load() call; lets a load's own timeout tell a stale
+    // attempt apart from the current one, the same way currentSignInJob does
+    // for pollSignIn. See load()'s own comment for why this exists.
+    private var loadGeneration = 0
 
     private fun logConsole(message: ConsoleMessage): Boolean {
         if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR ||
@@ -60,6 +64,28 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun load(then: (Result<Unit>) -> Unit) {
+        val generation = ++loadGeneration
+        // A bounded wait for onPageFinished, in addition to it. Every failure
+        // path below (attach failure, a signed-in-check timeout later) had a
+        // message; a page that starts loading and never finishes -- most
+        // plausibly a hung fetch of https://js.puter.com/v2/ itself -- did
+        // not, because nothing downstream of a successful load() ever got a
+        // chance to run: pollSignIn's own 2.5-minute timeout only starts
+        // once this callback has already fired once. Left the button
+        // animating forever with no way out, which is the exact class of bug
+        // 7faa151 set out to end but did not reach, since that commit's
+        // fixes are all inside code load() has not gotten to yet at this
+        // point. The generation check is what lets this no-op once the real
+        // onPageFinished (or a later load() call) has already resolved it.
+        main.postDelayed({
+            if (generation != loadGeneration) return@postDelayed
+            val callback = onLoaded ?: return@postDelayed
+            onLoaded = null
+            callback(Result.failure(IllegalStateException(
+                "Puter's page did not finish loading" + (lastConsoleIssue?.let { " ($it)" } ?: "")
+            )))
+        }, LOAD_TIMEOUT_MS)
+
         val existing = web
         if (existing != null) {
             onLoaded = then
@@ -77,6 +103,17 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 !sameOrigin(originOf(baseUrl()), request.url.toString())
 
             override fun onPageFinished(v: WebView, url: String?) {
+                // No generation check here: this WebViewClient is created
+                // once and reused across every later load() call that
+                // reuses `web` (the common case, since chat/draw/signIn all
+                // share one WebView once it exists), so a generation number
+                // captured at creation time would be stale on every reload
+                // after the first. onLoaded itself already says whether
+                // there is a call in flight to resolve; the timeout above is
+                // the one place a captured generation is actually needed,
+                // to stop a late timer from stealing a newer call's
+                // callback -- a real navigation event has no equivalent
+                // staleness risk.
                 val callback = onLoaded ?: return
                 onLoaded = null
                 // Give puter.js a moment to restore the saved sign-in.
@@ -427,5 +464,10 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
 
     private companion object {
         const val CHUNK = 400_000
+        // Generous for a same-network page load (the WebView is loading from
+        // this app's own server, plus one external script tag), short enough
+        // that a genuinely hung load surfaces a message rather than leaving
+        // the caller's button animating with no way out.
+        const val LOAD_TIMEOUT_MS = 20_000L
     }
 }

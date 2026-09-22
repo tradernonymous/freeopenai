@@ -31,8 +31,19 @@
     // what PuterBridge.kt's resolveSignInFromCurrentState polls as a
     // fallback once the popup visibly closes.
     window.fa4uSignedIn = false;
-    if (typeof puter !== 'undefined' && puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
-        puter.auth.onAuthStateChanged(function (user) { window.fa4uSignedIn = !!user; });
+    try {
+        // Guarded: everything below this (fa4uStatus, fa4uChat, fa4uSignIn,
+        // fa4uDraw) is defined later in this same script block, so a throw
+        // here -- Puter's SDK is not guaranteed to be done with its own
+        // async setup the instant its script tag finishes executing --
+        // would silently take all of them down with it, turning every
+        // window.fa4uX && window.fa4uX(...) call on the Kotlin side into a
+        // permanent no-op with no error ever surfaced.
+        if (typeof puter !== 'undefined' && puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
+            puter.auth.onAuthStateChanged(function (user) { window.fa4uSignedIn = !!user; });
+        }
+    } catch (e) {
+        console.error('fa4u: onAuthStateChanged registration failed: ' + (e && e.message || e));
     }
 
     function toDataUrl(blob) {
