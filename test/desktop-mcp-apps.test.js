@@ -88,8 +88,42 @@ test('tool-run keeps _meta from tools/list and reads the app with resources/read
   assert.match(src, /row\._meta = t\._meta/);
   assert.match(src, /'resources\/read', \{ uri: app\.uri \}/);
   assert.match(src, /appHtmlFrom\(result\)/);
-  // Remote servers: the engine has no resources route, so it says so.
-  assert.match(src, /local \(stdio\) servers for now/);
+  // Remote servers are no longer turned away.
+  assert.doesNotMatch(src, /local \(stdio\) servers for now/);
+});
+
+test('a remote server app is read through the engine resource route', () => {
+  const src = read('desktop', 'src', 'tool-run.ts');
+  const remote = src.slice(src.indexOf('async function readRemoteResource'), src.indexOf('export function readMcpApp'));
+  assert.match(remote, /api\.raw\('\/api\/mcp\/resource'/);
+  assert.match(remote, /JSON\.stringify\(\{ url: server\.url, uri \}\)/);
+  // An engine from before the route: a plain sentence, not a raw 404.
+  assert.match(remote, /e\.status === 404/);
+  assert.match(remote, /Update the engine to show this app/);
+  const reader = src.slice(src.indexOf('export function readMcpApp'), src.indexOf('async function mcp('));
+  assert.match(reader, /readRemoteResource\(app\.server, app\.uri\)/);
+  assert.match(reader, /appHtmlFrom\(result\)/);
+  // The engine serves the route the desktop calls.
+  assert.ok(read('server.js').includes("'/api/mcp/resource'"), 'the engine serves /api/mcp/resource');
+});
+
+test('a remote tool row keeps its _meta when cached', () => {
+  const rows = new Map();
+  const storage = { getItem: (k) => (rows.has(k) ? rows.get(k) : null), setItem: (k, v) => rows.set(k, String(v)) };
+  const list = [{ name: 'forecast', inputSchema: {}, _meta: { ui: { resourceUri: 'ui://weather/forecast' } } }];
+  assert.equal(tools.addMcpServer('Weather', 'https://weather.example/mcp', list, storage).ok, true);
+  const target = tools.mcpTarget('mcp__weather__forecast', storage);
+  assert.equal(tools.isStdio(target.server), false);
+  assert.equal(tools.uiResourceOf(target.server.tools.find((t) => t.name === 'forecast')), 'ui://weather/forecast');
+  // ConnectorsCard hands the engine's list straight to addMcpServer.
+  const card = read('desktop', 'src', 'components', 'ConnectorsCard.tsx');
+  assert.match(card, /tools\.addMcpServer\(serverName, address, list\)/);
+});
+
+test('tools/call from a remote app still goes through executeTool and /api/mcp/call', () => {
+  const src = read('desktop', 'src', 'tool-run.ts');
+  const body = src.slice(src.indexOf('async function mcp('), src.indexOf('export async function executeTool'));
+  assert.match(body, /api\.raw\('\/api\/mcp\/call'/);
 });
 
 test('the app frame is sandboxed to scripts only', () => {

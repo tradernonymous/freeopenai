@@ -14,7 +14,7 @@
 // first for anything in tools.ASKS). The result is TEXT for the model: short,
 // factual, and an "Error: ..." sentence rather than a throw when the tool
 // itself said no -- a model can do something useful with a sentence.
-import { api } from './api';
+import { api, ApiError } from './api';
 import {
   editLocalFile, hasShell, listLocalDir, mcpStdioList, mcpStdioRequest, mcpStdioStart, readLocalFile, runLocal, writeLocalFile,
 } from './bridge';
@@ -223,9 +223,9 @@ async function mcpStdio(server: McpServer, tool: string, a: Args, callId: string
 }
 
 /**
- * The MCP App behind an mcp__ tool: its `ui://` resource, and whether this app
- * can draw it. Only local (stdio) servers: the engine's remote MCP routes
- * list and call tools but have no `resources/read` (and drop `_meta`).
+ * The MCP App behind an mcp__ tool: its `ui://` resource and server. A local
+ * (stdio) server is read over the shell; a remote one through the engine's
+ * /api/mcp/resource, which forwards `resources/read` (ui:// only).
  */
 export function mcpAppFor(name: string): { uri: string; stdio: boolean; server: McpServer } | null {
   const target = tools.mcpTarget(name);
@@ -237,18 +237,36 @@ export function mcpAppFor(name: string): { uri: string; stdio: boolean; server: 
 
 const appCache = new Map<string, Promise<string>>();
 
+/**
+ * `resources/read` on a remote server, through the engine. An engine from
+ * before /api/mcp/resource answers 404 (or 405 for an unknown POST).
+ */
+async function readRemoteResource(server: McpServer, uri: string): Promise<any> {
+  try {
+    return await api.raw('/api/mcp/resource', {
+      method: 'POST',
+      body: JSON.stringify({ url: server.url, uri }),
+    });
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+      throw new Error('Update the engine to show this app.');
+    }
+    throw e;
+  }
+}
+
 /** An MCP App's HTML via `resources/read`, cached per server + uri for the session. Throws with a reason. */
 export function readMcpApp(name: string): Promise<string> {
   const app = mcpAppFor(name);
   if (!app) return Promise.reject(new Error('This tool has no app.'));
-  if (!app.stdio) return Promise.reject(new Error('MCP Apps work with local (stdio) servers for now.'));
-  if (!hasShell()) return Promise.reject(new Error('A local MCP server needs the installed desktop app.'));
+  if (app.stdio && !hasShell()) return Promise.reject(new Error('A local MCP server needs the installed desktop app.'));
   const key = `${stdioId(app.server)} ${app.uri}`;
   let pending = appCache.get(key);
   if (!pending) {
     pending = (async () => {
-      const id = await ensureStdio(app.server);
-      const result: any = await mcpStdioRequest(id, 'resources/read', { uri: app.uri }, 30_000);
+      const result: any = app.stdio
+        ? await mcpStdioRequest(await ensureStdio(app.server), 'resources/read', { uri: app.uri }, 30_000)
+        : await readRemoteResource(app.server, app.uri);
       const out = tools.appHtmlFrom(result);
       if (!out.html) throw new Error(out.reason);
       return out.html;

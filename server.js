@@ -5559,7 +5559,7 @@ const MCP_MAX_BYTES = 256 * 1024;
 // notification (no id) gets no response body back from a compliant server;
 // method calls do. SSRF-checked exactly like readPublicPage: every hop's
 // resolved address must be public before it is ever requested.
-async function mcpRpc(url, sessionId, body, expectReply) {
+async function mcpRpc(url, sessionId, body, expectReply, maxBytes = MCP_MAX_BYTES) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
   try {
@@ -5579,7 +5579,7 @@ async function mcpRpc(url, sessionId, body, expectReply) {
     if (!expectReply) return { sessionId: newSessionId, result: null };
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
-    if (text.length > MCP_MAX_BYTES) throw new Error('The server answered with too much data');
+    if (text.length > maxBytes) throw new Error('The server answered with too much data');
     const contentType = res.headers.get('content-type') || '';
     let payload;
     if (contentType.includes('text/event-stream')) {
@@ -5655,7 +5655,14 @@ async function mcpListTools(req, res) {
       const sessionId = await mcpHandshake(url);
       const { result } = await mcpRpc(url, sessionId, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, true);
       const tools = (result && Array.isArray(result.tools)) ? result.tools : [];
-      sendJson(res, 200, { tools: tools.map((t) => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} })) });
+      sendJson(res, 200, {
+        tools: tools.map((t) => {
+          const row = { name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} };
+          const meta = mcpUiMeta(t && t._meta);
+          if (meta) row._meta = meta;
+          return row;
+        }),
+      });
     } catch (e) {
       sendJson(res, 502, { error: 'Could not list that server\'s tools: ' + e.message });
     }
@@ -5686,6 +5693,63 @@ async function mcpCallTool(req, res) {
       sendJson(res, 200, { text: text || JSON.stringify(result || {}), isError: !!(result && result.isError) });
     } catch (e) {
       sendJson(res, 502, { error: 'That MCP call failed: ' + e.message });
+    }
+  });
+}
+
+// MCP Apps: a tool may name a `ui://` HTML resource in `_meta` that the host
+// draws under the call. Only that pointer is passed on -- `_meta.ui.resourceUri`
+// or the older `_meta["ui/resourceUri"]` -- never the rest of a server's
+// metadata. Returns null when the tool names no app.
+const MCP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
+const isUiUri = (v) => typeof v === 'string' && /^ui:\/\/\S+$/.test(v.trim());
+
+function mcpUiMeta(meta) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const out = {};
+  const ui = meta.ui;
+  if (ui && typeof ui === 'object' && !Array.isArray(ui) && isUiUri(ui.resourceUri)) {
+    out.ui = { resourceUri: ui.resourceUri.trim() };
+  }
+  if (isUiUri(meta['ui/resourceUri'])) out['ui/resourceUri'] = meta['ui/resourceUri'].trim();
+  return Object.keys(out).length ? out : null;
+}
+
+// A `resources/read` result cut down to what an app needs: each content's
+// uri, mimeType and its text or base64 blob.
+function mcpResourceContents(result) {
+  const list = (result && Array.isArray(result.contents)) ? result.contents : [];
+  return list.filter((c) => c && typeof c === 'object').map((c) => {
+    const row = { uri: typeof c.uri === 'string' ? c.uri : '', mimeType: typeof c.mimeType === 'string' ? c.mimeType : '' };
+    if (typeof c.text === 'string') row.text = c.text;
+    else if (typeof c.blob === 'string') row.blob = c.blob;
+    return row;
+  });
+}
+
+async function mcpReadResource(req, res) {
+  readJsonBody(req, 4 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const uri = body && typeof body.uri === 'string' ? body.uri.trim() : '';
+    if (!uri) return sendJson(res, 400, { error: 'uri is required' });
+    if (!isUiUri(uri)) return sendJson(res, 400, { error: 'Only ui:// resources can be read' });
+    let url;
+    try {
+      url = await assertMcpUrlIsPublic(body && body.url);
+    } catch (e) {
+      return sendJson(res, 400, { error: e.message });
+    }
+    try {
+      const sessionId = await mcpHandshake(url);
+      const { result } = await mcpRpc(url, sessionId, {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'resources/read',
+        params: { uri },
+      }, true, MCP_RESOURCE_MAX_BYTES);
+      sendJson(res, 200, { contents: mcpResourceContents(result) });
+    } catch (e) {
+      sendJson(res, 502, { error: 'Could not read that app: ' + e.message });
     }
   });
 }
@@ -6083,6 +6147,7 @@ function createRequestHandler(root) {
     if (urlPath === '/api/llm/fetch' && req.method === 'GET') return llmFetch(req, res);
     if (urlPath === '/api/mcp/tools' && req.method === 'POST') return mcpListTools(req, res);
     if (urlPath === '/api/mcp/call' && req.method === 'POST') return mcpCallTool(req, res);
+    if (urlPath === '/api/mcp/resource' && req.method === 'POST') return mcpReadResource(req, res);
     if (urlPath === '/api/github/repos' && req.method === 'GET') return githubRepos(req, res);
     if (urlPath === '/api/github/tree' && req.method === 'GET') return githubListDir(req, res);
     if (urlPath === '/api/github/file' && req.method === 'GET') return githubGetFile(req, res);
@@ -6223,6 +6288,8 @@ module.exports = {
   normalizeWiki,
   normalizeWikiFull,
   isPrivateIp,
+  mcpUiMeta,
+  mcpResourceContents,
   // Share-store seams: the file lifecycle runs at require time and on a
   // debounce, so a test drives these directly -- flush settles the write,
   // restart is what a reboot does.

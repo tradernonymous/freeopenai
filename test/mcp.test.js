@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { createRequestHandler } = require('../server.js');
+const { createRequestHandler, mcpUiMeta, mcpResourceContents } = require('../server.js');
 const { mcpTool, MCP_LIST_TOOLS, isMcpTool, TOOL_GROUPS } = require('../chatlib.js');
 
 async function startApp() {
@@ -107,6 +107,85 @@ test('mcp/call without a tool name is a 400 before any network reach', async () 
     const res = await postJson(app, '/api/mcp/call', { url: 'https://example.com/mcp' });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /tool is required/);
+  } finally {
+    app.close();
+  }
+});
+
+test('mcpUiMeta passes on only the ui:// app pointer from a tool\'s _meta', () => {
+  assert.deepEqual(
+    mcpUiMeta({ ui: { resourceUri: 'ui://weather/card', csp: { x: 1 } }, secret: 'token', other: { a: 1 } }),
+    { ui: { resourceUri: 'ui://weather/card' } },
+  );
+  assert.deepEqual(mcpUiMeta({ 'ui/resourceUri': ' ui://old/draft ' }), { 'ui/resourceUri': 'ui://old/draft' });
+  assert.equal(mcpUiMeta({ ui: { resourceUri: 'https://evil.example/app.html' } }), null);
+  assert.equal(mcpUiMeta({ 'ui/resourceUri': 'javascript:alert(1)' }), null);
+  assert.equal(mcpUiMeta({ ui: { resourceUri: 42 } }), null);
+  assert.equal(mcpUiMeta({ foo: 'bar' }), null);
+  assert.equal(mcpUiMeta(null), null);
+  assert.equal(mcpUiMeta([1, 2]), null);
+});
+
+test('mcpResourceContents keeps only uri, mimeType and text or blob', () => {
+  assert.deepEqual(
+    mcpResourceContents({ contents: [
+      { uri: 'ui://a', mimeType: 'text/html;profile=mcp-app', text: '<p>hi</p>', _meta: { x: 1 } },
+      { uri: 'ui://b', mimeType: 'text/html', blob: 'PGI+', extra: true },
+      null,
+    ] }),
+    [
+      { uri: 'ui://a', mimeType: 'text/html;profile=mcp-app', text: '<p>hi</p>' },
+      { uri: 'ui://b', mimeType: 'text/html', blob: 'PGI+' },
+    ],
+  );
+  assert.deepEqual(mcpResourceContents(null), []);
+});
+
+test('mcp/resource without a uri is a 400', async () => {
+  const app = await startApp();
+  try {
+    const res = await postJson(app, '/api/mcp/resource', { url: 'https://example.com/mcp' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /uri is required/);
+  } finally {
+    app.close();
+  }
+});
+
+test('mcp/resource reads only ui:// URIs, before any network reach', async () => {
+  const app = await startApp();
+  try {
+    for (const uri of ['file:///etc/passwd', 'https://example.com/app.html', 'ui://', 'resource://x']) {
+      const res = await postJson(app, '/api/mcp/resource', { url: 'https://example.com/mcp', uri });
+      assert.equal(res.status, 400);
+      assert.match((await res.json()).error, /Only ui:\/\//);
+    }
+  } finally {
+    app.close();
+  }
+});
+
+test('mcp/resource without a url is a 400', async () => {
+  const app = await startApp();
+  try {
+    const res = await postJson(app, '/api/mcp/resource', { uri: 'ui://weather/card' });
+    assert.equal(res.status, 400);
+  } finally {
+    app.close();
+  }
+});
+
+test('mcp/resource rejects non-http schemes and refuses loopback and private hosts', async () => {
+  const app = await startApp();
+  try {
+    const scheme = await postJson(app, '/api/mcp/resource', { url: 'file:///etc/passwd', uri: 'ui://a/b' });
+    assert.equal(scheme.status, 400);
+    assert.match((await scheme.json()).error, /http\(s\)/);
+    for (const url of ['http://127.0.0.1:9/', 'http://10.0.0.1/', 'http://169.254.169.254/', 'http://localhost:3000/']) {
+      const res = await postJson(app, '/api/mcp/resource', { url, uri: 'ui://a/b' });
+      assert.equal(res.status, 400);
+      assert.match((await res.json()).error, /not reachable from here/);
+    }
   } finally {
     app.close();
   }
