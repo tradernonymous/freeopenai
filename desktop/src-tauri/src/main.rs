@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 mod crash;
 mod diag;
 mod gguf;
+mod hf_oauth;
 mod local;
 mod mcp;
 mod models;
@@ -96,6 +97,11 @@ fn main() {
             secrets::secret_get,
             secrets::secret_set,
             secrets::secret_delete,
+            hf_oauth::hf_oauth_config,
+            hf_oauth::hf_oauth_listen,
+            hf_oauth::hf_oauth_cancel,
+            hf_oauth::hf_oauth_exchange,
+            hf_oauth::hf_oauth_refresh,
             diag::diagnostics,
             local::local_pick_folder,
             local::local_list_dir,

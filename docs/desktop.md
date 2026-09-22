@@ -193,9 +193,22 @@ A model in Chat can ask for things, on **every** provider -- the engine's, Huggi
 
 ## Hugging Face integration
 
-Library → **Hugging Face** lets the user sign in with a Hugging Face **access token** ([`src/hf-auth.js`](../desktop/src/hf-auth.js) `useToken`; the OAuth app the old device-code flow used no longer exists, `invalid_client`). **Sign in to Hugging Face** opens HF's token page with *Make calls to Inference Providers* already ticked; the pasted token is checked against `whoami-v2` before it is kept. The same button is in Chat and in Settings → Connectors. It lets the user search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. Because the token carries the Inference Providers permission, it also works for chat through the Hugging Face router (`src/hf-inference.js`).
+Library → **Hugging Face** lets the user sign in with one click when the build (or Settings → Connectors) has an OAuth client ID -- see *One-click Hugging Face sign-in* -- or with a Hugging Face **access token** ([`src/hf-auth.js`](../desktop/src/hf-auth.js) `beginOAuth` / `useToken`). **Sign in to Hugging Face** opens HF's token page with *Make calls to Inference Providers* already ticked; the pasted token is checked against `whoami-v2` before it is kept. The same button is in Chat and in Settings → Connectors. It lets the user search the Hub for GGUF models ([`src/hf-models.js`](../desktop/src/hf-models.js)), see available quants with sizes and RAM estimates, and download files for use with the local llama-server. Under the shell the token lives in the **OS credential store** (Windows Credential Manager, `src-tauri/src/secrets.rs`, service `NeuraOS Desktop`), read once at boot into memory; a token an older build left in `localStorage` is moved there on the first run and removed. In a plain browser build it stays in `localStorage` under `freeai4u.hf_token`. It is never sent to the engine. Because the token carries the Inference Providers permission, it also works for chat through the Hugging Face router (`src/hf-inference.js`).
 
 The model browser shows each GGUF file's quant tag (`Q4_K_M`, `Q8_0`, `F16`, etc.), a rough RAM fit estimate (`fits 8GB`, `fits 16GB`), and whether the repo is gated. Gated repos require the HF token to unlock downloads.
+
+### One-click Hugging Face sign-in
+
+With an OAuth client id, **Sign in with Hugging Face** is one click: the shell listens on `http://127.0.0.1:47823/hf/callback` ([`src-tauri/src/hf_oauth.rs`](../desktop/src-tauri/src/hf_oauth.rs)), HF's authorize page opens in the browser, and after **Authorize** the token arrives on its own (authorization code + PKCE, no client secret; `beginOAuth` in [`src/hf-auth.js`](../desktop/src/hf-auth.js)). The shell checks the returned `state`, trades the code at `https://huggingface.co/oauth/token`, and the token is checked against `whoami-v2` and kept in the credential store like a pasted one (`source: "oauth"`); it is renewed with its refresh token when it runs out. Without a client id the button is the access-token flow above, with a **Set up one-click sign-in** link here.
+
+Register the app once (it is free):
+
+1. Open <https://huggingface.co/settings/applications/new> while signed in to the account that should own the app.
+2. **Application name:** `NeuraOS`. **Homepage URL:** `https://github.com/tradernonymous/freeopenai`.
+3. **Redirect URI:** exactly `http://127.0.0.1:47823/hf/callback` (127.0.0.1, not localhost; the port is fixed, so if something else holds 47823 the sign-in says so and the token paste still works).
+4. **Scopes:** `openid`, `profile`, `read-repos` and `inference-api` (the last one is what lets the token call Inference Providers; `hf-auth.js` `SCOPE` asks for exactly these four).
+5. Create it and copy the **Client ID**. There is no secret to keep: the app is a public client and PKCE is the proof.
+6. Build it in: `gh variable set NEURAOS_HF_CLIENT_ID --body <client-id>`. The *Build Tauri app* step of `desktop.yml` passes it to the compiler (`option_env!("NEURAOS_HF_CLIENT_ID")`), so the next release has the button. To try it without a rebuild, paste the id into Settings → Connectors → Hugging Face → **OAuth client ID** (stored in `localStorage` as `freeai4u.hf_client_id`; it overrides the built-in one, and clearing it goes back).
 
 ## Desktop reach, parity and evals (Phases 5 and 6)
 
@@ -295,7 +308,7 @@ Each concern has one owner, and the shell (App.tsx) composes rather than impleme
 | `src/images.js` | Which image service draws, with which model, at which shape — and the curated Puter chains |
 | `src/puter.js` | The Puter SDK, injected only when the user picks it |
 | `src/local-models.js` | The local catalogue, the memory guard, and the lifecycle states |
-| `src/hf-auth.js` | HuggingFace OAuth: PKCE loopback + device-code fallback, token store |
+| `src/hf-auth.js` | Hugging Face sign-in: PKCE via the shell's loopback listener (`hf_oauth.rs`), access-token paste, refresh, token store |
 | `src/hf-models.js` | HuggingFace model browser: search, GGUF quants, download URLs |
 | `src/coding-agent.js` | Local coding agent: plan→approve→edit→run loop, tool parsing |
 | `src/remote-handoff.js` | Remote handoff orchestrator: package workspace, push to engine, SSE stream |

@@ -623,3 +623,37 @@ export async function notifyUser(title: string, body: string): Promise<boolean> 
 export async function ggufInfo(path: string): Promise<import('./run-settings.js').GgufInfo> {
   return call<import('./run-settings.js').GgufInfo>('gguf_info', { path });
 }
+
+// ---- one-click Hugging Face sign-in (hf_oauth.rs) --------------------------
+
+export interface HfOAuthConfig {
+  /** Compiled in from NEURAOS_HF_CLIENT_ID; null when the build had none. */
+  client_id: string | null;
+  redirect_uri: string;
+}
+
+export async function hfOAuthConfig(): Promise<HfOAuthConfig | null> {
+  if (!hasShell()) return null;
+  try {
+    return await call<HfOAuthConfig>('hf_oauth_config');
+  } catch {
+    return null;
+  }
+}
+
+/** Wait on 127.0.0.1:47823/hf/callback; resolves with the code once the state matches. */
+export async function hfOAuthListen(state: string, timeoutSecs: number): Promise<string> {
+  return call<string>('hf_oauth_listen', { state, timeoutSecs });
+}
+
+export async function hfOAuthCancel(): Promise<void> {
+  if (hasShell()) await call('hf_oauth_cancel');
+}
+
+export async function hfOAuthExchange(code: string, verifier: string, clientId: string, redirectUri: string): Promise<any> {
+  return call<any>('hf_oauth_exchange', { code, verifier, clientId, redirectUri });
+}
+
+export async function hfOAuthRefresh(refreshToken: string, clientId: string): Promise<any> {
+  return call<any>('hf_oauth_refresh', { refreshToken, clientId });
+}

@@ -19,9 +19,8 @@ describe('hf-auth', () => {
     assert.equal(typeof hfAuth.signedIn, 'function');
     assert.equal(typeof hfAuth.accessToken, 'function');
     assert.equal(typeof hfAuth.authHeaders, 'function');
-    assert.equal(typeof hfAuth.signInPKCE, 'function');
-    assert.equal(typeof hfAuth.startDeviceCode, 'function');
-    assert.equal(typeof hfAuth.pollDeviceCode, 'function');
+    assert.equal(typeof hfAuth.beginOAuth, 'function');
+    assert.equal(typeof hfAuth.resolveClientId, 'function');
     assert.equal(typeof hfAuth.refreshAccessToken, 'function');
     assert.equal(typeof hfAuth.fetchUser, 'function');
     assert.equal(typeof hfAuth.signOut, 'function');
@@ -35,8 +34,13 @@ describe('hf-auth', () => {
     assert.equal(hfAuth.TOKEN_KEY, 'freeai4u.hf_token');
   });
 
-  it('has a CLIENT_ID', () => {
-    assert.ok(hfAuth.CLIENT_ID.length > 0);
+  it('has no hard-coded OAuth client id and no device-code flow', () => {
+    // The old id was never a registered app (invalid_client); the id now
+    // comes from the build or Settings (test/desktop-hf-oauth.test.js).
+    assert.equal(hfAuth.CLIENT_ID, undefined);
+    assert.equal(hfAuth.startDeviceCode, undefined);
+    assert.equal(hfAuth.pollDeviceCode, undefined);
+    assert.ok(!/3087aa/.test(read('desktop', 'src', 'hf-auth.js')));
   });
 
   it('signedIn returns false when no token is stored', () => {
@@ -48,11 +52,6 @@ describe('hf-auth', () => {
   it('authHeaders returns empty object when not signed in', () => {
     const h = hfAuth.authHeaders();
     assert.deepEqual(h, {});
-  });
-
-  it('startDeviceCode returns a function', () => {
-    // The function itself exists; calling it would hit the network.
-    assert.equal(typeof hfAuth.startDeviceCode, 'function');
   });
 });
 

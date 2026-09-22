@@ -288,7 +288,7 @@ export default function ConnectorsCard() {
 
         <h3 className="local-heading">Hugging Face</h3>
         <p className="settings-hint">For the Hugging Face models in Chat (the Inference Providers router) and gated downloads.</p>
-        <HfSignIn />
+        <HfSignIn showClientId />
 
         <h3 className="local-heading">MCP servers</h3>
         {servers.length > 0 && (

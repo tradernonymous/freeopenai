@@ -1,13 +1,18 @@
-// HuggingFace OAuth for the desktop app.
+// Hugging Face sign-in for the desktop app.
 //
-// Two flows, one surface:
-//   1. PKCE loopback — the app opens the HF authorize URL in the system browser,
-//      spins up a one-shot HTTP server on 127.0.0.1:<port>/callback, exchanges
-//      the code for a token, and shuts the server down. Fast, seamless, no
-//      client secret (HF public apps use PKCE).
-//   2. Device-code fallback — for headless or when the loopback fails: the app
-//      shows a code and a URL, the user authorises in any browser, and the app
-//      polls until the token arrives.
+// Two ways in, one token store:
+//   1. One click (beginOAuth) -- OAuth authorization code + PKCE with a
+//      loopback redirect. The shell (hf_oauth.rs) listens on the fixed address
+//      registered with the OAuth app, http://127.0.0.1:47823/hf/callback, the
+//      authorize page opens in the system browser, and the code that comes
+//      back is traded for a token. Needs an OAuth client id: compiled in from
+//      NEURAOS_HF_CLIENT_ID, or set in Settings -> Connectors. No secret (a
+//      public client; PKCE is the proof).
+//   2. A pasted personal access token (useToken) -- always available, and the
+//      only way when no client id is configured or there is no shell.
+//
+// The orchestration takes its side effects as arguments (open a URL, listen,
+// exchange), so it runs -- and is tested -- without a shell.
 //
 // Where the token lives: under the desktop shell, in the OS credential store
 // (Credential Manager on Windows; secrets.rs), read once at boot by hydrate()
@@ -35,40 +40,55 @@
   var SECRET_USER = 'hf_user';
   var AUTH_CHANGED_EVENT = 'freeai4u:hf-auth-changed';
 
-  // HF's public OAuth app — no client secret, PKCE only.
-  var CLIENT_ID = '3087aa798961c2c8e4432978c9641a19';
   var AUTHORIZE = 'https://huggingface.co/oauth/authorize';
-  var TOKEN_URL = 'https://huggingface.co/oauth/token';
-  var DEVICE_URL = 'https://huggingface.co/oauth/device';
   var API_ME    = 'https://huggingface.co/api/whoami-v2';
   // `inference-api` is the scope the router (hf-inference.js) checks. Without
   // it every chat turn answers 401 with a token that otherwise works fine for
-  // the Hub, which is the most confusing failure this app can produce.
-  var SCOPE = 'read-repos write-repos inference-api';
-  // The device-code and PKCE flows above need an OAuth app, and the one this
-  // app shipped with is gone (HF answers `invalid_client: Client not found`),
-  // so the button did nothing. A personal access token needs no app: this
-  // page opens with the one permission the router checks already ticked.
+  // the Hub, which is the most confusing failure this app can produce. The
+  // OAuth app must be registered with every scope asked for here.
+  var SCOPE = 'openid profile read-repos inference-api';
+  // The one redirect address, registered with the OAuth app character for
+  // character (hf_oauth.rs REDIRECT_URI). A fixed port: HF matches it exactly.
+  var LOOPBACK_PORT = 47823;
+  var REDIRECT_URI = 'http://127.0.0.1:47823/hf/callback';
+  var DEFAULT_TIMEOUT_SECS = 180;
+  // A Settings override of the compiled-in client id. Not a secret.
+  var CLIENT_ID_KEY = 'freeai4u.hf_client_id';
+  // How to register the OAuth app (docs/desktop.md).
+  var DOCS_URL = 'https://github.com/tradernonymous/freeopenai/blob/main/docs/desktop.md#one-click-hugging-face-sign-in';
+  // A personal access token needs no OAuth app: this page opens with the one
+  // permission the router checks already ticked.
   var TOKEN_PAGE = 'https://huggingface.co/settings/tokens/new?tokenType=fineGrained'
     + '&ownUserPermissions=inference.serverless.write&description=NeuraOS%20Desktop';
+  // Refresh this long before the access token runs out.
+  var REFRESH_MARGIN_MS = 60 * 1000;
 
   // --- helpers ------------------------------------------------------------
 
   function base64url(buf) {
-    return btoa(String.fromCharCode.apply(null, new Uint8Array(buf)))
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    var bytes = new Uint8Array(buf);
+    var text = '';
+    for (var i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+    return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
-  async function sha256(input) {
-    var data = new TextEncoder().encode(input);
-    var hash = await crypto.subtle.digest('SHA-256', data);
-    return base64url(hash);
+  function webCrypto() {
+    var c = globalThis.crypto;
+    if (!c || !c.subtle || typeof c.getRandomValues !== 'function') {
+      throw new Error('This window has no Web Crypto, so one-click sign-in cannot run. Use an access token instead.');
+    }
+    return c;
   }
 
-  function randomString(len) {
-    var arr = new Uint8Array(len);
-    crypto.getRandomValues(arr);
-    return base64url(arr).slice(0, len);
+  /** `bytes` random bytes, base64url: 24 -> 32 characters, 48 -> 64. */
+  function randomToken(bytes) {
+    var arr = new Uint8Array(bytes);
+    webCrypto().getRandomValues(arr);
+    return base64url(arr);
+  }
+
+  function messageOf(e) {
+    return String((e && e.message) || e || 'unknown error');
   }
 
   // --- token store --------------------------------------------------------
@@ -78,6 +98,8 @@
   // else in this module, so the store is mirrored in memory by hydrate().
   var secretStore = null;
   var memory = { token: null, user: null, hydrated: false };
+  // refresh(refreshToken, clientId) -> HF's token JSON; see configureRefresh.
+  var refresher = null;
 
   function browserStorage() {
     try {
@@ -189,15 +211,21 @@
     try { localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch {}
   }
 
-  /** The access token string, or null when not signed in. */
+  /**
+   * The stored token, or null when not signed in. An OAuth token close to
+   * running out starts a refresh in the background (when a refresher is
+   * configured); until it lands the old token is returned.
+   */
   function accessToken() {
     var t = loadToken();
     if (!t) return null;
-    if (t.expires_at && Date.now() >= t.expires_at) {
-      // The refresh token, if present, lets us renew without user interaction.
-      if (t.refresh_token) return t; // caller should refresh
-      clearToken();
-      return null;
+    if (t.expires_at && Date.now() >= t.expires_at - REFRESH_MARGIN_MS) {
+      if (t.refresh_token && refresher) refreshAccessToken();
+      if (Date.now() >= t.expires_at) {
+        if (t.refresh_token) return t; // renewed without the user, see above
+        clearToken();
+        return null;
+      }
     }
     return t;
   }
@@ -208,138 +236,198 @@
     return !!(t && t.access_token);
   }
 
-  // --- PKCE loopback flow -------------------------------------------------
+  // --- the OAuth client id ------------------------------------------------
   //
-  // The loopback server is a one-shot thing: listen for exactly one request on
-  // 127.0.0.1:<port>, exchange the code, shut down. The port is chosen by the
-  // OS (port 0) on systems that support it, or falls back to a fixed high port.
+  // Compiled into the shell from NEURAOS_HF_CLIENT_ID (hf_oauth_config), and
+  // overridable in Settings -> Connectors (localStorage, it is not a secret).
+  // No id anywhere: one-click sign-in is not offered, the token paste is.
 
-  var LOOPBACK_PORT = 18923;
-  var REDIRECT_URI;
+  function validClientId(id) {
+    return typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id.trim());
+  }
 
-  /** Build the authorize URL and start the loopback listener. */
-  async function signInPKCE() {
-    var codeVerifier = randomString(64);
-    var codeChallenge = await sha256(codeVerifier);
-    var state = randomString(32);
+  function clientIdOverride() {
+    try {
+      var storage = browserStorage();
+      var value = storage ? storage.getItem(CLIENT_ID_KEY) : null;
+      return value && validClientId(value) ? value.trim() : null;
+    } catch {
+      return null;
+    }
+  }
 
-    // The redirect URI must match what HF expects: 127.0.0.1 (not localhost).
-    REDIRECT_URI = 'http://127.0.0.1:' + LOOPBACK_PORT + '/callback';
+  /** Keep (or, with an empty value, forget) the Settings override. */
+  function setClientIdOverride(id) {
+    var value = String(id == null ? '' : id).trim();
+    if (value && !validClientId(value)) {
+      throw new Error('A Hugging Face OAuth client id is letters, digits and dashes.');
+    }
+    var storage = browserStorage();
+    if (storage) {
+      if (value) storage.setItem(CLIENT_ID_KEY, value);
+      else storage.removeItem(CLIENT_ID_KEY);
+    }
+    announce();
+  }
 
+  /** The client id to sign in with: the Settings override, else the build's, else null. */
+  function resolveClientId(buildClientId) {
+    var override = clientIdOverride();
+    if (override) return override;
+    var built = String(buildClientId == null ? '' : buildClientId).trim();
+    return validClientId(built) ? built : null;
+  }
+
+  // --- one-click sign-in (authorization code + PKCE, loopback) --------------
+
+  /** A PKCE verifier (64 characters) and its S256 challenge. */
+  async function pkcePair() {
+    var verifier = randomToken(48);
+    var digest = await webCrypto().subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    return { verifier: verifier, challenge: base64url(digest) };
+  }
+
+  /** The huggingface.co authorize page for this request. */
+  function authorizeUrl(opts) {
     var params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
+      client_id: opts.clientId,
+      redirect_uri: opts.redirectUri || REDIRECT_URI,
       response_type: 'code',
-      scope: SCOPE,
-      state: state,
-      code_challenge: codeChallenge,
+      scope: opts.scope || SCOPE,
+      state: opts.state,
+      code_challenge: opts.challenge,
       code_challenge_method: 'S256',
     });
-
-    var authorizeUrl = AUTHORIZE + '?' + params.toString();
-
-    // Open the browser.
-    window.open(authorizeUrl, '_blank');
-
-    // Start a tiny server to catch the callback.
-    return new Promise(function (resolve, reject) {
-      var server = null;
-      var timeout = setTimeout(function () {
-        if (server) server.close();
-        reject(new Error('Sign-in timed out — the callback was not received within 120 seconds.'));
-      }, 120_000);
-
-      // We use a WebSocket-less approach: a simple fetch to our own loopback
-      // endpoint. In the Tauri shell, the Rust side handles the callback
-      // server. In a browser, we poll a known endpoint.
-      //
-      // Since we cannot start an HTTP server from JS in a browser, the PKCE
-      // flow in the desktop app actually goes through the Rust shell. This
-      // JS module provides the URL construction and token exchange; the shell
-      // provides the listener.
-      //
-      // For the browser/dev path, we fall back to device-code.
-      clearTimeout(timeout);
-      reject(new Error('pkce_needs_shell'));
-    });
+    return AUTHORIZE + '?' + params.toString();
   }
 
-  // --- device-code flow ---------------------------------------------------
-
-  /** Start the device-code flow: returns { device_code, user_code, verification_url, expires_in }. */
-  async function startDeviceCode() {
-    var res = await fetch(DEVICE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: CLIENT_ID,
-        scope: SCOPE,
-      }).toString(),
-    });
-    if (!res.ok) {
-      var body = await res.text();
-      throw new Error('Device code request failed (' + res.status + '): ' + body);
-    }
-    return res.json();
+  /** The token as it is kept: what HF answered, plus where it came from. */
+  function storedToken(data, clientId, now) {
+    var token = {
+      access_token: data.access_token,
+      token_type: data.token_type || 'bearer',
+      source: 'oauth',
+      client_id: clientId,
+    };
+    if (data.refresh_token) token.refresh_token = data.refresh_token;
+    if (data.scope) token.scope = data.scope;
+    var secs = Number(data.expires_in);
+    if (secs > 0) token.expires_at = now + secs * 1000;
+    return token;
   }
 
-  /** Poll for the device-code token. Resolves with the token object. */
-  async function pollDeviceCode(deviceCode, interval, expiresAt) {
-    var deadline = expiresAt || Date.now() + 900_000; // 15 min default
-    var pollInterval = Math.max(interval || 5, 5) * 1000;
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
 
-    while (Date.now() < deadline) {
-      await new Promise(function (r) { setTimeout(r, pollInterval); });
-      var res = await fetch(TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-          device_code: deviceCode,
-          client_id: CLIENT_ID,
-        }).toString(),
-      });
-      var data = await res.json();
-      if (data.access_token) {
-        data.expires_at = Date.now() + (data.expires_in || 3600) * 1000;
-        saveToken(data);
-        return data;
-      }
-      if (data.error === 'authorization_pending') continue;
-      if (data.error === 'slow_down') {
-        pollInterval += 5000;
-        continue;
-      }
-      throw new Error(data.error_description || data.error || 'Device code flow failed');
+  /**
+   * One-click sign-in. Every side effect is passed in:
+   *   openUrl(url)                        open the system browser
+   *   listen(state, timeoutSecs)          -> the code (the shell checks the state)
+   *   exchange(code, verifier, clientId, redirectUri) -> HF's token JSON
+   *   cancel()                            optional: stop listening
+   *   fetchImpl                           optional: for whoami
+   * Listens BEFORE the browser opens, so the answer always finds someone;
+   * resolves with the Hugging Face user once the token is checked and kept.
+   */
+  async function beginOAuth(opts) {
+    var o = opts || {};
+    var clientId = String(o.clientId == null ? '' : o.clientId).trim();
+    if (!validClientId(clientId)) {
+      throw new Error('One-click sign-in is not set up (no OAuth client id). Use an access token, or add the client id in Settings -> Connectors.');
     }
-    throw new Error('Device code expired — please try again.');
+    var redirectUri = o.redirectUri || REDIRECT_URI;
+    if (redirectUri !== REDIRECT_URI) {
+      throw new Error('The redirect address must be ' + REDIRECT_URI + '.');
+    }
+    ['openUrl', 'listen', 'exchange'].forEach(function (name) {
+      if (typeof o[name] !== 'function') throw new Error('beginOAuth needs ' + name + '()');
+    });
+
+    var pair = await pkcePair();
+    var state = randomToken(24);
+    var url = authorizeUrl({ clientId: clientId, redirectUri: redirectUri, state: state, challenge: pair.challenge, scope: o.scope });
+
+    var listening = Promise.resolve().then(function () {
+      return o.listen(state, o.timeoutSecs || DEFAULT_TIMEOUT_SECS);
+    });
+    // A busy port fails at once: give it a moment to say so, rather than
+    // open a browser tab that can never come back.
+    var settleMs = o.settleMs == null ? 300 : o.settleMs;
+    var early = await Promise.race([
+      listening.then(function () { return null; }, function (e) { return e || new Error('the sign-in listener failed'); }),
+      wait(settleMs).then(function () { return null; }),
+    ]);
+    if (early) throw early instanceof Error ? early : new Error(messageOf(early));
+
+    try {
+      await o.openUrl(url);
+    } catch (e) {
+      listening.catch(function () {});
+      if (typeof o.cancel === 'function') {
+        try { await o.cancel(); } catch { /* it times out on its own */ }
+      }
+      throw new Error('Could not open the browser: ' + messageOf(e));
+    }
+
+    var answer = await listening;
+    // The shell checks the state; a listener that hands back the whole answer
+    // is checked here too.
+    var code = answer;
+    if (answer && typeof answer === 'object') {
+      if (answer.state !== state) throw new Error('The sign-in answer did not match this request (state mismatch). Start the sign-in again.');
+      code = answer.code;
+    }
+    if (!code || typeof code !== 'string') throw new Error('Hugging Face sent no authorization code.');
+
+    var data = await o.exchange(code, pair.verifier, clientId, redirectUri);
+    if (!data || !data.access_token) {
+      throw new Error('Hugging Face did not hand out a token' + (data && data.error ? ' (' + data.error + ')' : '') + '.');
+    }
+    var token = storedToken(data, clientId, Date.now());
+    var user = await whoami(token.access_token, o.fetchImpl);
+    saveUser(user);
+    saveToken(token);
+    return user;
   }
 
   // --- token refresh ------------------------------------------------------
+  //
+  // An OAuth token runs out; its refresh token renews it without the browser.
+  // The refresh itself is the shell's (hf_oauth_refresh), passed in once by
+  // configureRefresh, or per call.
 
-  async function refreshAccessToken() {
+  var refreshing = null;
+
+  function configureRefresh(fn) {
+    refresher = typeof fn === 'function' ? fn : null;
+  }
+
+  /** Renew the stored OAuth token. Resolves with the new token, or null. */
+  function refreshAccessToken(refreshFn) {
+    var fn = typeof refreshFn === 'function' ? refreshFn : refresher;
     var t = loadToken();
-    if (!t || !t.refresh_token) {
-      clearToken();
-      return null;
-    }
-    var res = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: t.refresh_token,
-        client_id: CLIENT_ID,
-      }).toString(),
-    });
-    if (!res.ok) {
-      clearToken();
-      return null;
-    }
-    var data = await res.json();
-    data.expires_at = Date.now() + (data.expires_in || 3600) * 1000;
-    saveToken(data);
-    return data;
+    if (!t || !t.refresh_token || !t.client_id || !fn) return Promise.resolve(null);
+    if (refreshing) return refreshing;
+    refreshing = (async function () {
+      await null; // `refreshing` is set before anything below can finish
+      try {
+        var data = await fn(t.refresh_token, t.client_id);
+        if (!data || !data.access_token) throw new Error('no access token in the refresh answer');
+        var next = storedToken(data, t.client_id, Date.now());
+        if (!next.refresh_token) next.refresh_token = t.refresh_token;
+        saveToken(next);
+        return next;
+      } catch (e) {
+        // A refused refresh token (revoked, or run out) means signing in
+        // again; a network blip does not.
+        if (/invalid_grant|invalid_client|unauthorized_client/.test(messageOf(e))) clearToken();
+        return null;
+      } finally {
+        refreshing = null;
+      }
+    })();
+    return refreshing;
   }
 
   // --- user info ----------------------------------------------------------
@@ -350,11 +438,11 @@
     try {
       var token = t.access_token;
       // Refresh if close to expiry.
-      if (t.expires_at && Date.now() > t.expires_at - 60_000 && t.refresh_token) {
+      if (t.expires_at && Date.now() > t.expires_at - REFRESH_MARGIN_MS && t.refresh_token) {
         var refreshed = await refreshAccessToken();
         if (refreshed) token = refreshed.access_token;
       }
-      var res = await fetch(API_ME, {
+      var res = await globalThis.fetch(API_ME, {
         headers: { Authorization: 'Bearer ' + token },
       });
       if (!res.ok) return null;
@@ -374,6 +462,15 @@
     } catch {
       return null;
     }
+  }
+
+  /** whoami-v2 for a token: the user, or an error that says what went wrong. */
+  async function whoami(accessTokenValue, fetchImpl) {
+    var doFetch = fetchImpl || globalThis.fetch;
+    var res = await doFetch(API_ME, { headers: { Authorization: 'Bearer ' + accessTokenValue } });
+    if (res.status === 401) throw new Error('Hugging Face refused the token it just issued. Sign in again.');
+    if (!res.ok) throw new Error('Hugging Face did not answer (' + res.status + '). Try again in a moment.');
+    return res.json();
   }
 
   // --- personal access token ---------------------------------------------
@@ -429,16 +526,25 @@
     AUTH_CHANGED_EVENT: AUTH_CHANGED_EVENT,
     configureStore: configureStore,
     hydrate: hydrate,
-    CLIENT_ID: CLIENT_ID,
     SCOPE: SCOPE,
     TOKEN_PAGE: TOKEN_PAGE,
+    REDIRECT_URI: REDIRECT_URI,
+    LOOPBACK_PORT: LOOPBACK_PORT,
+    DEFAULT_TIMEOUT_SECS: DEFAULT_TIMEOUT_SECS,
+    CLIENT_ID_KEY: CLIENT_ID_KEY,
+    DOCS_URL: DOCS_URL,
     useToken: useToken,
     signedIn: signedIn,
     accessToken: accessToken,
     authHeaders: authHeaders,
-    signInPKCE: signInPKCE,
-    startDeviceCode: startDeviceCode,
-    pollDeviceCode: pollDeviceCode,
+    validClientId: validClientId,
+    clientIdOverride: clientIdOverride,
+    setClientIdOverride: setClientIdOverride,
+    resolveClientId: resolveClientId,
+    pkcePair: pkcePair,
+    authorizeUrl: authorizeUrl,
+    beginOAuth: beginOAuth,
+    configureRefresh: configureRefresh,
     refreshAccessToken: refreshAccessToken,
     fetchUser: fetchUser,
     cachedUser: cachedUser,

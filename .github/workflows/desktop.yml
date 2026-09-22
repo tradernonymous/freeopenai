@@ -130,6 +130,8 @@ jobs:
           # The update-signing PUBLIC key (roadmap 5.9), compiled into net.rs.
           # Empty (the variable unset) keeps the sha256-only update check.
           NEURAOS_UPDATER_PUBKEY: ${{ vars.NEURAOS_UPDATER_PUBKEY }}
+          # The Hugging Face OAuth app's client id (hf_oauth.rs); unset = token paste only.
+          NEURAOS_HF_CLIENT_ID: ${{ vars.NEURAOS_HF_CLIENT_ID }}
 
       # A build that says it is signed must be signed. Verifying here is the
       # difference between "we passed the thumbprint" and "the file Windows
