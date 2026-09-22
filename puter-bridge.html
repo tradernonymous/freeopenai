@@ -16,7 +16,83 @@
       fa4uStatus(id), then fa4uChunk for the picture. options is optional:
       { model, ratio: {w,h}, source }.
     -->
-    <script src="https://js.puter.com/v2/"></script>
+    <!--
+      Everything below runs before Puter's SDK, and nothing in it can throw:
+      three real-device reports have now come back as "the button animates and
+      no window appears", which is the same observable symptom for at least
+      four different causes -- the SDK script never arriving, the SDK arriving
+      but failing its own setup, window.open() never being called, and
+      window.open() being called and refused by the WebView. Guessing between
+      those from a phone screenshot has cost three round trips. This records
+      which one it is, so the next attempt answers it outright.
+    -->
+    <script>
+        // 'pending' until the SDK's own script tag settles, then 'loaded' or
+        // 'failed'. A 'loaded' that still leaves `puter` undefined is a real
+        // and separate case (the file arrived and threw), which is why this
+        // is tracked apart from typeof puter rather than inferred from it.
+        window.fa4uScript = 'pending';
+
+        // Wrapped before the SDK loads, so the SDK captures this rather than
+        // the original. Sign-in is one window.open() plus a postMessage back
+        // through window.opener, and "did anything even try to open a window"
+        // is the single fact that tells a WebView problem apart from an SDK
+        // one. Nothing is blocked: the real window.open still runs and its
+        // return value is passed straight back.
+        window.fa4uOpened = 0;
+        window.fa4uOpenBlocked = 0;
+        (function () {
+            var real = window.open;
+            window.open = function () {
+                window.fa4uOpened++;
+                var opened = null;
+                try {
+                    opened = real.apply(window, arguments);
+                } catch (e) {
+                    window.fa4uOpenError = String((e && e.message) || e).slice(0, 200);
+                }
+                if (!opened) window.fa4uOpenBlocked++;
+                return opened;
+            };
+        })();
+
+        // Deliberately defined here rather than in the body block below: if
+        // that block ever dies partway (the failure mode the try/catch around
+        // onAuthStateChanged exists for), every fa4u function goes with it and
+        // the app is left with no way to ask what happened. This one survives
+        // that, because nothing above it can throw.
+        window.fa4uDiagnose = function () {
+            var out = {
+                script: window.fa4uScript || 'unknown',
+                puter: typeof puter,
+                opened: window.fa4uOpened || 0,
+                blocked: window.fa4uOpenBlocked || 0,
+                jobs: window.fa4uJobs ? Object.keys(window.fa4uJobs).length : -1,
+                flag: window.fa4uSignedIn ? 1 : 0,
+                url: String(location.href).slice(0, 120)
+            };
+            if (window.fa4uOpenError) out.openError = window.fa4uOpenError;
+            // The SDK keeps its session in localStorage. A WebView with
+            // storage blocked would leave every reload signed out with no
+            // error anywhere, which looks exactly like a sign-in that failed.
+            try {
+                localStorage.setItem('fa4u.probe', '1');
+                localStorage.removeItem('fa4u.probe');
+                out.storage = 'ok';
+            } catch (e) {
+                out.storage = 'blocked';
+            }
+            try {
+                out.signedIn = puter.auth.isSignedIn() ? 1 : 0;
+            } catch (e) {
+                out.signedIn = -1;
+            }
+            return JSON.stringify(out);
+        };
+    </script>
+    <script src="https://js.puter.com/v2/"
+            onload="window.fa4uScript = 'loaded'"
+            onerror="window.fa4uScript = 'failed'"></script>
 </head>
 <body>
 <script>
@@ -104,7 +180,7 @@
         var jobs = window.fa4uJobs;
         jobs[id] = { state: 'pending', data: '', length: 0 };
         try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
             if (!signedIn) throw new Error('sign in to Puter in Web app first');
             var request = typeof payload === 'string' ? JSON.parse(payload) : (payload || {});
@@ -132,13 +208,41 @@
     // out of nowhere. puter.auth.signIn() opens the same window.open() popup
     // Android's WebChromeClient now knows how to host; this job just waits for
     // it to resolve (or for the user to close it without finishing).
+    // Resolves the moment the account actually becomes signed in, and gives
+    // up after [ms] with the diagnosis rather than a bare timeout. Raced
+    // against signIn()'s own promise below because that promise resolves
+    // through window.opener reaching back from the popup -- if that channel
+    // is what is broken, the sign-in can genuinely succeed while the promise
+    // it was supposed to be reported by never settles at all.
+    function signedInWithin(ms) {
+        var deadline = Date.now() + ms;
+        return new Promise(function (resolve, reject) {
+            (function tick() {
+                var yes = false;
+                try {
+                    yes = !!(window.fa4uSignedIn || (puter.auth && puter.auth.isSignedIn()));
+                } catch (e) {
+                    yes = false;
+                }
+                if (yes) return resolve();
+                if (Date.now() >= deadline) {
+                    return reject(new Error('Puter never reported a sign-in ' + window.fa4uDiagnose()));
+                }
+                setTimeout(tick, 500);
+            })();
+        });
+    }
+
     window.fa4uSignIn = async function (id) {
         var jobs = window.fa4uJobs;
         jobs[id] = { state: 'pending' };
         try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
-            if (!signedIn) await puter.auth.signIn();
+            // 110s, inside PuterBridge.kt's own 2.5-minute poll: the page
+            // gets to say *why* it failed before Kotlin can only say "timed
+            // out".
+            if (!signedIn) await Promise.race([puter.auth.signIn(), signedInWithin(110000)]);
             jobs[id] = { state: 'done', length: 0, data: '' };
         } catch (error) {
             jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300) };
@@ -150,7 +254,7 @@
         options = options || {};
         jobs[id] = { state: 'pending' };
         try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load');
+            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
             if (!signedIn) throw new Error('sign in to Puter in Web app first');
             var args = { quality: 'high' };

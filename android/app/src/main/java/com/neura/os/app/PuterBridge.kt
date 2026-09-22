@@ -81,9 +81,13 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             if (generation != loadGeneration) return@postDelayed
             val callback = onLoaded ?: return@postDelayed
             onLoaded = null
-            callback(Result.failure(IllegalStateException(
-                "Puter's page did not finish loading" + (lastConsoleIssue?.let { " ($it)" } ?: "")
-            )))
+            val message = "Puter's page did not finish loading" + (lastConsoleIssue?.let { " ($it)" } ?: "")
+            // The page may be far enough along to answer even though
+            // onPageFinished never fired -- a hung subresource (js.puter.com
+            // itself being the likeliest) stops the load event without
+            // stopping the inline scripts that already ran, and fa4uDiagnose
+            // is in the head precisely so it is one of them.
+            failWithDiagnosis(web, message) { callback(Result.failure(IllegalStateException(it))) }
         }, LOAD_TIMEOUT_MS)
 
         val existing = web
@@ -202,9 +206,18 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 return false
             }
         }
+        // show() before sendToTarget(), not after. setContentView puts the
+        // popup in the dialog's view tree, but a dialog that has not been
+        // shown has no window, so the WebView is not attached to one yet --
+        // and Chromium's documented contract for this callback is that the
+        // new WebView is in a hierarchy *before* the transport is sent.
+        // Handing it the transport first meant the popup's first navigation
+        // could be delivered to a detached view, which renders nothing: a
+        // full-screen dialog with a blank page in it, which is close enough
+        // to "no sign-in window appeared" to be reported as exactly that.
+        dialog.show()
         (resultMsg.obj as WebView.WebViewTransport).webView = popup
         resultMsg.sendToTarget()
-        dialog.show()
         Toast.makeText(context, "Opening Puter sign-in…", Toast.LENGTH_SHORT).show()
         return true
     }
@@ -248,7 +261,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 val state = status.optString("state")
                 val length = status.optInt("length")
                 if (state == "missing") {
-                    done("Puter did not load")
+                    failWithDiagnosis(view, "Puter did not load") { done(it) }
                     return@evaluateJavascript
                 }
                 if (length > read) {
@@ -392,11 +405,15 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     // feedback at all.
                     "pending" -> if (tries < 500) pollSignIn(view, job, tries + 1, done) else {
                         currentSignInJob = null
-                        done(Result.failure(IllegalStateException(withConsole("timed out"))))
+                        failWithDiagnosis(view, withConsole("timed out")) {
+                            done(Result.failure(IllegalStateException(it)))
+                        }
                     }
                     "missing" -> {
                         currentSignInJob = null
-                        done(Result.failure(IllegalStateException(withConsole("Puter did not load"))))
+                        failWithDiagnosis(view, withConsole("Puter did not load")) {
+                            done(Result.failure(IllegalStateException(it)))
+                        }
                     }
                     "done" -> {
                         currentSignInJob = null
@@ -406,11 +423,33 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     else -> {
                         currentSignInJob = null
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
-                        done(Result.failure(IllegalStateException(withConsole(status.optString("error", "Puter failed")))))
+                        failWithDiagnosis(view, withConsole(status.optString("error", "Puter failed"))) {
+                            done(Result.failure(IllegalStateException(it)))
+                        }
                     }
                 }
             }
         }, 300)
+    }
+
+    /** Appends the bridge page's own account of itself to a failure message
+     * before reporting it. fa4uDiagnose is defined in the page's head, ahead
+     * of Puter's SDK and of everything that could throw, so it answers even
+     * when nothing else on the page does -- which is the whole point: every
+     * failure below this line otherwise reads as one of "timed out", "Puter
+     * did not load" or "Puter failed", and those three words have now cost
+     * three round trips without once saying whether the SDK arrived, whether
+     * a window was ever asked for, or whether storage works. Asynchronous,
+     * so the caller hands in what to do with the finished message. */
+    private fun failWithDiagnosis(view: WebView?, message: String, report: (String) -> Unit) {
+        if (view == null) {
+            report(message)
+            return
+        }
+        view.evaluateJavascript("window.fa4uDiagnose ? window.fa4uDiagnose() : ''") { raw ->
+            val detail = unquote(raw)
+            report(if (detail.isEmpty()) message else "$message $detail")
+        }
     }
 
     private fun unquote(raw: String?): String = try {
@@ -430,7 +469,9 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 when (status.optString("state")) {
                     "pending" -> if (tries < 300) poll(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
                     "done" -> readChunks(view, job, status.optInt("length"), StringBuilder(), done)
-                    "missing" -> done(Result.failure(IllegalStateException("Puter did not load")))
+                    "missing" -> failWithDiagnosis(view, "Puter did not load") {
+                        done(Result.failure(IllegalStateException(it)))
+                    }
                     else -> done(Result.failure(IllegalStateException(status.optString("error", "Puter failed"))))
                 }
             }
