@@ -143,11 +143,9 @@ dependencies {
     // (InvalidFragmentVersionForActivityResult wants >= 1.3.0); pinning a
     // current version here is what Gradle's resolution actually picks.
     implementation(libs.androidx.fragment.ktx)
-    // Self-installs via a ContentProvider, 0 methods in a release build (the
-    // dependency itself is debug-only) -- catches a leaked Activity, Fragment,
-    // View or ViewModel with a heap dump, rather than a slow memory creep
-    // nobody notices until the app is why the phone needs a restart.
-    debugImplementation(libs.leakcanary.android)
+    // No LeakCanary: it throws "LeakCanary in non-debuggable build" at launch,
+    // and the debug variant is deliberately non-debuggable (see buildTypes),
+    // so every debug install -- CI's Maestro run included -- crashed on start.
     // Real org.json for local JVM tests only: on device the framework copy is
     // used and this never ships. (android.jar methods throw "not mocked"
     // under plain unit tests, so the parser tests need the real thing.)
