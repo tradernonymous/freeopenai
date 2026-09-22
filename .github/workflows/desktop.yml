@@ -78,6 +78,20 @@ jobs:
           test/desktop-handoff.test.js
           test/desktop-cors.test.js
           test/desktop-p6p8p9.test.js
+          test/desktop-neura-049-050.test.js
+      # NEURA-049: the Rust side has had unit tests all along and nothing ran
+      # them, so a red one shipped. `cargo test` compiles the binary, and
+      # generate_context! embeds `frontendDist` when it does -- so the frontend
+      # is built here rather than only inside `tauri build`. `npm run build` is
+      # `tsc && vite build`, which makes a type error fail here too.
+      - name: Build the frontend (generate_context! embeds it)
+        working-directory: desktop
+        run: npm run build
+      # The debug profile on purpose: a release build of this crate carries
+      # windows_subsystem="windows" (main.rs), and a GUI-subsystem test binary
+      # has no console to say which test failed on.
+      - name: Rust tests (cargo test)
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
       # Code signing is a certificate, not code, so the pipeline is built to
       # switch on the moment the repository has one and to be exactly today's
       # build when it does not. `bundle.windows.certificateThumbprint` is

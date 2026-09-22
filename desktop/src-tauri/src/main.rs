@@ -47,6 +47,62 @@ use tauri_plugin_deep_link::DeepLinkExt;
 // so it has to be able to tell a close from a quit.
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+// NEURA-050: which machines may actually be asked for Mica.
+//
+// tauri.conf.json declares the material, so the window is built with it and a
+// PC that can draw it needs no code at all. This is where that ask is taken
+// back: Mica is DWM's Windows 11 system backdrop, and DWM draws no backdrop at
+// all once Personalisation > Colours > Transparency effects is off. On those
+// machines the shell keeps the flat background it has always had rather than a
+// material that is only half there.
+//
+// The rule is deliberately pessimistic -- a Registry read that fails means no.
+// A window that is flat when it could have been Mica is one nobody notices; a
+// window that is translucent when the system will not draw the material behind
+// it is unreadable chat.
+mod mica {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    /// The first Windows 11 build. Below it the backdrop attribute does not
+    /// exist, so asking for it is the same as asking for nothing.
+    const WINDOWS_11_BUILD: u32 = 22000;
+
+    /// The version rule by itself, so it can be checked without a Registry:
+    /// the build number is stored as text, and something that is not a build
+    /// number is not evidence of Windows 11.
+    pub fn build_supports_mica(build: Option<&str>) -> bool {
+        build
+            .and_then(|b| b.trim().parse::<u32>().ok())
+            .map(|b| b >= WINDOWS_11_BUILD)
+            .unwrap_or(false)
+    }
+
+    /// Read the way webview2.rs reads its runtime version: the value Windows
+    /// itself keeps, rather than parsing the output of a command.
+    fn current_build() -> Option<String> {
+        winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            .ok()
+            .and_then(|hk| hk.get_value::<String, _>("CurrentBuildNumber").ok())
+    }
+
+    /// Personalisation > Colours > Transparency effects. A missing value is
+    /// the factory state, which is on -- the reading Windows itself makes.
+    fn transparency_enabled() -> bool {
+        winreg::RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            .ok()
+            .and_then(|hk| hk.get_value::<u32, _>("EnableTransparency").ok())
+            .map(|value| value != 0)
+            .unwrap_or(true)
+    }
+
+    /// Whether this PC can draw the material tauri.conf.json asked for.
+    pub fn supported() -> bool {
+        build_supports_mica(current_build().as_deref()) && transparency_enabled()
+    }
+}
+
 // NEURA-021: the page holds chat edits for 400 ms before they reach the chat
 // store. The tray Quit emits "app-quitting", and the page flushes and calls
 // quit_ready; the exit waits for that, or for QUIT_FLUSH_WAIT, whichever is
@@ -207,6 +263,22 @@ fn main() {
                 let _ = app.deep_link().register_all();
             }
 
+            // NEURA-050: the window was already built with the Mica material
+            // tauri.conf.json declares. Where the system cannot draw it, clear
+            // it again so the shell falls back to its own flat background
+            // instead of an effect Windows will only half honour. Failing to
+            // clear it is worth a line in the crash log and nothing more: the
+            // window is drawn and usable either way.
+            if !mica::supported() {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) =
+                        window.set_effects(None::<tauri::utils::config::WindowEffectsConfig>)
+                    {
+                        crash::log(&format!("mica: could not clear the window effect: {}", e));
+                    }
+                }
+            }
+
             // Opened with a model file or a folder: the page takes it on load.
             if let Some(path) = launch::path_arg(&std::env::args().collect::<Vec<String>>()) {
                 launch::remember(path);
@@ -345,4 +417,30 @@ fn fatal_error(msg: &str) {
             crash::hint()
         ))
         .show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mica;
+
+    // NEURA-050: the Windows 10 / Windows 11 line, and the fact that a
+    // build number we cannot read is not a yes. The material is declared in
+    // tauri.conf.json for every machine, so this predicate is the only thing
+    // standing between a Windows 10 user and an effect their DWM will not
+    // draw.
+    #[test]
+    fn mica_is_asked_for_on_windows_11_only() {
+        assert!(!mica::build_supports_mica(Some("19045")), "Windows 10 22H2");
+        assert!(!mica::build_supports_mica(Some("21390")), "an Insider build before 11");
+        assert!(mica::build_supports_mica(Some("22000")), "the first Windows 11 build");
+        assert!(mica::build_supports_mica(Some(" 26200 ")), "padded, as the Registry can return it");
+    }
+
+    #[test]
+    fn an_unreadable_build_number_is_not_windows_11() {
+        assert!(!mica::build_supports_mica(None));
+        assert!(!mica::build_supports_mica(Some("")));
+        assert!(!mica::build_supports_mica(Some("10.0.26200")));
+        assert!(!mica::build_supports_mica(Some("-1")));
+    }
 }
