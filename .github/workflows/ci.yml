@@ -17,6 +17,17 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm test
+      # NEURA-057. A step in this job rather than a job of its own: the harness
+      # needs exactly what `test` already has -- a checkout and node, no model,
+      # no key, no network -- runs in well under a second, and scores its cases
+      # by importing the same modules the unit tests import. A separate job
+      # would pay a fresh checkout and `npm install` to re-create this one.
+      # It runs after `npm test` so a broken module fails as a test first, with
+      # the better message, and the score line is the last thing in the log.
+      # The score also lands in the job summary; see docs/evals.md for what it
+      # does and does not measure (it is not a model benchmark).
+      - name: Evals
+        run: node scripts/run-evals.js
 
   # The smoke drives the real page in headless Chrome, from the login form to the
   # composer, so it is the only check that can see the wiring between a rule and

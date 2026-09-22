@@ -1,0 +1,8 @@
+// Probe `plan-queries`: a scripted planning reply turned into the searches
+// research mode would actually run (desktop/src/research.js parseQueries).
+// Fenced JSON, JSON buried in prose, a bare list, duplicates and the cap.
+{"id": "fenced-json-plan", "probe": "plan-queries", "input": {"question": "how do heat pumps work", "reply": "```json\n{\"queries\": [\"heat pump efficiency\", \"how a heat pump works\", \"heat pump cold climate 2025\"]}\n```"}, "expect": {"queries": ["heat pump efficiency", "how a heat pump works", "heat pump cold climate 2025"]}}
+{"id": "json-buried-in-prose", "probe": "plan-queries", "input": {"question": "how do heat pumps work", "reply": "Sure! Here is my plan:\n{\"queries\": [\"heat pump COP\", \"refrigerant cycle explained\"]}\nHope that helps."}, "expect": {"queries": ["heat pump COP", "refrigerant cycle explained"]}}
+{"id": "a-bulleted-list-instead-of-json", "probe": "plan-queries", "input": {"question": "how do heat pumps work", "reply": "- heat pump basics\n- \"ground source heat pump\"\n3. air source heat pump cost"}, "expect": {"queries": ["heat pump basics", "ground source heat pump", "air source heat pump cost"]}}
+{"id": "duplicates-dropped-and-capped-at-five", "probe": "plan-queries", "input": {"question": "how do heat pumps work", "reply": "{\"queries\": [\"a\", \"A\", \"b\", \"c\", \"d\", \"e\", \"f\"]}"}, "expect": {"queries": ["a", "b", "c", "d", "e"]}}
+{"id": "an-unusable-reply-falls-back-to-the-question", "probe": "plan-queries", "input": {"question": "how do heat pumps work", "reply": "I cannot help with that."}, "expect": {"queries": ["how do heat pumps work"]}}

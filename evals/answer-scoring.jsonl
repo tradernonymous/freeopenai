@@ -1,0 +1,15 @@
+// Probe `answer-scoring`: a scripted model reply, scored by the Evals feature's
+// own EvalTask check (desktop/src/evals.js). What is under test is answerOf /
+// jsonOf and each task's check -- reasoning blocks stripped, code fences
+// unwrapped, JSON recovered from prose -- not whether a model can multiply.
+{"id": "arith-bare-number", "probe": "answer-scoring", "input": {"taskId": "arith", "reply": "391"}, "expect": {"pass": true, "skill": "reasoning"}}
+{"id": "arith-behind-a-think-block", "probe": "answer-scoring", "input": {"taskId": "arith", "reply": "<think>17 x 20 = 340, plus 17 x 3 = 51</think>391"}, "expect": {"pass": true}}
+{"id": "arith-wrong-number-fails", "probe": "answer-scoring", "input": {"taskId": "arith", "reply": "392"}, "expect": {"pass": false}}
+{"id": "json-object-inside-a-fence", "probe": "answer-scoring", "input": {"taskId": "json-object", "reply": "```json\n{\"name\": \"Ada\", \"age\": 36}\n```"}, "expect": {"pass": true, "skill": "format"}}
+{"id": "json-object-age-as-string-fails", "probe": "answer-scoring", "input": {"taskId": "json-object", "reply": "{\"name\": \"Ada\", \"age\": \"36\"}"}, "expect": {"pass": false, "note": "expected {\"name\":\"Ada\",\"age\":36}"}}
+{"id": "json-array-any-order", "probe": "answer-scoring", "input": {"taskId": "json-array", "reply": "[\"green\", \"red\", \"blue\"]"}, "expect": {"pass": true}}
+{"id": "exact-list-trailing-full-stop", "probe": "answer-scoring", "input": {"taskId": "exact-list", "reply": "2, 3, 5, 7, 11."}, "expect": {"pass": true}}
+{"id": "three-words-with-commas-fails", "probe": "answer-scoring", "input": {"taskId": "three-words", "reply": "vast, salty, blue"}, "expect": {"pass": false, "note": "must be lowercase without punctuation"}}
+{"id": "extract-city-alone", "probe": "answer-scoring", "input": {"taskId": "extract", "reply": "Lisbon"}, "expect": {"pass": true, "skill": "extraction"}}
+{"id": "bat-ball-intuitive-answer-fails", "probe": "answer-scoring", "input": {"taskId": "bat-ball", "reply": "10"}, "expect": {"pass": false}}
+{"id": "tool-args-extra-key-fails", "probe": "answer-scoring", "input": {"taskId": "tool-args", "reply": "{\"query\": \"weather in Oslo\", \"units\": \"celsius\"}"}, "expect": {"pass": false, "skill": "tools"}}

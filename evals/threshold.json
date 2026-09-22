@@ -1,0 +1,4 @@
+{
+  "minPercent": 100,
+  "note": "The bar scripts/run-evals.js exits non-zero below. It started at the rate the suite passed on the day it landed (48/48). Raise it deliberately; lower it only to record a known gap, and say in the commit which NEURA item closes it."
+}

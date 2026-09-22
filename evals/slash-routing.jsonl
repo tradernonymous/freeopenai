@@ -1,0 +1,10 @@
+// Probe `slash-routing`: what the composer's registry does with a typed line
+// (desktop/src/composer.js parseSlash). Aliases, the mode a command switches
+// to, whether it pastes a canned instruction, and the step it suggests next.
+{"id": "research-keeps-its-question", "probe": "slash-routing", "input": {"text": "/research how do heat pumps work"}, "expect": {"command": "research", "arg": "how do heat pumps work", "mode": null, "insertsText": false}}
+{"id": "sh-alias-reaches-shell-mode", "probe": "slash-routing", "input": {"text": "/sh ls -la"}, "expect": {"command": "shell", "arg": "ls -la", "mode": "shell"}}
+{"id": "plan-suggests-implement-next", "probe": "slash-routing", "input": {"text": "/plan"}, "expect": {"command": "plan", "arg": "", "mode": "plan", "next": "implement"}}
+{"id": "do-alias-pastes-the-implement-instruction", "probe": "slash-routing", "input": {"text": "/do"}, "expect": {"command": "implement", "mode": "chat", "insertsText": true, "next": "review"}}
+{"id": "unknown-command-is-not-routed", "probe": "slash-routing", "input": {"text": "/definitely-not-a-command x"}, "expect": {"command": null}}
+{"id": "plain-prose-is-not-a-command", "probe": "slash-routing", "input": {"text": "what is 2/3 of 9?"}, "expect": {"command": null}}
+{"id": "recipe-argument-survives-whitespace", "probe": "slash-routing", "input": {"text": "  /recipe   daily-brief topic=rust  "}, "expect": {"command": "recipe", "arg": "daily-brief topic=rust"}}
