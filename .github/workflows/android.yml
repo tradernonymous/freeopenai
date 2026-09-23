@@ -229,17 +229,18 @@ jobs:
             "$VCODE" "$VCODE" "$GITHUB_REPOSITORY" "$VCODE" "${GITHUB_SHA:0:7}" "$APK_SHA256" "$APK_SIZE" > "$RUNNER_TEMP/version.json"
           # APK first, manifest second: a phone never sees a version that is
           # not downloadable yet.
-          # Delete, then upload, then check. Builds 223-225 showed
-          # `upload --clobber` exiting 0 while apk-latest kept serving build
-          # 222's files, with only the notes updated; so the old assets are
-          # removed explicitly and the step fails unless the release really
-          # serves this build's bytes afterwards.
+          # Delete, then upload, then check that the release really serves
+          # this build's bytes. The check reads the release's assets endpoint:
+          # the asset list embedded in /releases/tags/<tag> can lag behind by
+          # hours (it did on 2026-09-23 and was misread as a failed upload),
+          # so it is not trusted for this.
           for asset in neuraos.apk version.json; do
             gh release delete-asset apk-latest "$asset" --repo "$GITHUB_REPOSITORY" --yes || true
           done
           gh release upload apk-latest "$RUNNER_TEMP/neuraos.apk" --repo "$GITHUB_REPOSITORY"
           gh release upload apk-latest "$RUNNER_TEMP/version.json" --repo "$GITHUB_REPOSITORY"
-          SERVED="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/apk-latest" --jq '.assets[] | select(.name == "neuraos.apk") | "\(.size) \(.digest)"')"
+          RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/apk-latest" --jq '.id')"
+          SERVED="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "neuraos.apk") | "\(.size) \(.digest)"')"
           echo "apk-latest serves: $SERVED"
           if [ "$SERVED" != "$APK_SIZE sha256:$APK_SHA256" ]; then
             echo "::error::apk-latest does not serve this build's APK (expected $APK_SIZE sha256:$APK_SHA256)"
