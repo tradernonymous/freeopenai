@@ -94,6 +94,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
+import com.neura.os.app.data.buildLive
 import com.neura.os.app.data.isApprovalTarget
 import com.neura.os.app.data.isScheduleId
 import com.neura.os.app.data.PhoneAction
@@ -260,6 +261,9 @@ class NativeActivity : ComponentActivity(), Platform {
                     if (voice.state != VoiceSession.State.IDLE) voice.speak(text)
                     else if (!resumed && text.isNotBlank()) notifyReply(chatId, text)
                 }
+                // A followed build's Live Update tracks its steps while the app
+                // is out of sight, and goes when the build ends.
+                LaunchedEffect(vm.builds.current) { updateBuildLive() }
                 LaunchedEffect(vm.builds.attention) {
                     val attention = vm.builds.attention ?: return@LaunchedEffect
                     if (!resumed) notifyBuild(attention.buildId, attention.requestId, attention.text, attention.approval)
@@ -423,6 +427,7 @@ class NativeActivity : ComponentActivity(), Platform {
         // resuming, when a killed process never had a callback to fire.
         vm.drainOutbox()
         vm.resumeTick++
+        updateBuildLive()
     }
 
     /** A chat left waiting on a connectivity failure (see AppViewModel.outbox)
@@ -446,6 +451,7 @@ class NativeActivity : ComponentActivity(), Platform {
 
     override fun onPause() {
         resumed = false
+        updateBuildLive()
         super.onPause()
     }
 
@@ -1191,6 +1197,48 @@ class NativeActivity : ComponentActivity(), Platform {
         manager.notify(("build:" + buildId).hashCode(), notification)
     }
 
+    /** A running build, followed on the build screen, as an Android 16 Live
+     * Update while the app is out of sight (master plan v2, V7 gap): its
+     * repository, the step it is on, and a bar of steps done. Gone when the
+     * app is back on screen or the build ends. Older Androids show it as an
+     * ordinary quiet progress notification. */
+    private fun updateBuildLive() {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val session = vm.builds.current
+        val live = if (resumed) null else buildLive(session)
+        if (live == null || session == null) {
+            manager.cancel(BUILD_LIVE_ID)
+            return
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_BUILD_PROGRESS, "Builds in progress", NotificationManager.IMPORTANCE_LOW))
+        val open = PendingIntent.getActivity(
+            this, ("live:" + session.id).hashCode(),
+            Intent(this, NativeActivity::class.java).setAction(ACTION_OPEN_BUILD).putExtra(EXTRA_BUILD_ID, session.id),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val progress = NotificationCompat.ProgressStyle()
+        if (live.total > 0) {
+            progress.addProgressSegment(NotificationCompat.ProgressStyle.Segment(live.total)).setProgress(live.done)
+        } else {
+            progress.setProgressIndeterminate(true)
+        }
+        val notification = NotificationCompat.Builder(this, CHANNEL_BUILD_PROGRESS)
+            .setSmallIcon(R.drawable.ic_app)
+            .setContentTitle(live.title)
+            .setContentText(live.text)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setStyle(progress)
+            .setRequestPromotedOngoing(true)
+            .build()
+        manager.notify(BUILD_LIVE_ID, notification)
+    }
+
     override fun copyCrashLog(): Boolean {
         val log = CrashLog.read(this) ?: return false
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("NeuraOS crash log", log))
@@ -1211,6 +1259,8 @@ class NativeActivity : ComponentActivity(), Platform {
         // Not private: FcmService posts to the same channel for a build that
         // needs approval after Android has already killed this process.
         const val CHANNEL_BUILDS = "builds"
+        private const val CHANNEL_BUILD_PROGRESS = "build_progress"
+        private const val BUILD_LIVE_ID = 43
         private val WHATS_NEW = listOf(
             "🚀 Welcome to NeuraOS — your AI agent platform.",
             "🔍 Universal Vision: send any image to any model — even text-only models get a detailed description.",

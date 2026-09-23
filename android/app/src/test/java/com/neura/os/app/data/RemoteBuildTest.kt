@@ -136,4 +136,20 @@ class RemoteBuildTest {
         assertTrue(!isApprovalTarget("0123456789abcdef", "../../input"))
         assertTrue(!isApprovalTarget("0123456789ABCDEF", "a1b2c3d4e5f6a7b8c9d0e1f2"))
     }
+
+    @Test fun `a running build's Live Update says where it is, and ends with it`() {
+        fun session(status: String, vararg steps: Pair<String, String>) = BuildSession(
+            "b1", status, steps.mapIndexed { i, (title, state) -> BuildStep("s$i", title, state, "") },
+            "p", "m", "me/app", 0L, "", "", null, 0L,
+        )
+        val live = buildLive(session("running", "Clone" to "done", "Write tests" to "running", "Push" to "pending"))!!
+        assertEquals("me/app", live.title)
+        assertEquals("Step 2 of 3 · Write tests", live.text)
+        assertEquals(1, live.done)
+        assertEquals(3, live.total)
+        assertEquals("Needs approval", buildLive(session("awaiting_approval", "Clone" to "done"))!!.text)
+        assertEquals("Queued", buildLive(session("queued"))!!.text)
+        assertNull(buildLive(session("done", "Clone" to "done")))
+        assertNull(buildLive(null))
+    }
 }

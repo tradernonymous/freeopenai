@@ -15,9 +15,23 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.neura.os.app.data.WAVE_BARS
+import com.neura.os.app.data.WAVE_FLOOR
+import com.neura.os.app.data.pushLevel
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -163,6 +177,52 @@ fun VoiceAurora(level: Float, modifier: Modifier = Modifier) {
             val c2 = Offset(size.width * 0.65f - drift, size.height * 0.72f)
             drawCircle(Brush.radialGradient(listOf(accent.copy(alpha = 0.35f + clamped * 0.2f), Color.Transparent), c1, radius), radius, c1)
             drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.25f + clamped * 0.2f), Color.Transparent), c2, radius * 0.8f), radius * 0.8f, c2)
+        }
+    }
+}
+
+/** The voice waveform pill (docs/android-master-plan.md V6 gap): a glass pill
+ * of bars. While [listening] they scroll with the microphone's level, newest
+ * on the right (data/Waveform.kt); while [speaking] a soft wave runs through
+ * them; otherwise they rest low. With animations off or battery saver on,
+ * nothing scrolls: the bars show the current level and hold still. */
+@Composable
+fun WaveformPill(level: Float, listening: Boolean, speaking: Boolean, modifier: Modifier = Modifier) {
+    val still = effectsStill()
+    val current by rememberUpdatedState(level)
+    var history by remember { mutableStateOf(List(WAVE_BARS) { WAVE_FLOOR }) }
+    LaunchedEffect(listening, still) {
+        if (still) return@LaunchedEffect
+        while (true) {
+            history = pushLevel(history, if (listening) current else WAVE_FLOOR)
+            delay(70)
+        }
+    }
+    val transition = rememberInfiniteTransition(label = "wave")
+    val phase by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "wavePhase")
+    val accent = Palette.accent
+    val glow = Palette.glow
+    Canvas(
+        modifier
+            .width(220.dp)
+            .height(56.dp)
+            .glass(RoundedCornerShape(28.dp))
+            .semantics { contentDescription = if (listening) "Listening" else if (speaking) "Speaking" else "Voice paused" },
+    ) {
+        val pad = 18.dp.toPx()
+        val usable = size.width - pad * 2
+        val step = usable / WAVE_BARS
+        val stroke = step * 0.55f
+        val brush = Brush.horizontalGradient(listOf(accent, glow), pad, size.width - pad)
+        for (i in 0 until WAVE_BARS) {
+            val value = when {
+                speaking -> if (still) 0.35f else 0.3f + 0.25f * sin((phase + i / WAVE_BARS.toFloat()) * 2f * PI.toFloat())
+                still -> if (listening) current.coerceIn(WAVE_FLOOR, 1f) else WAVE_FLOOR
+                else -> history[i]
+            }
+            val half = (size.height - pad) * value.coerceIn(WAVE_FLOOR, 1f) / 2f
+            val x = pad + step * i + step / 2f
+            drawLine(brush, Offset(x, size.height / 2f - half), Offset(x, size.height / 2f + half), stroke, StrokeCap.Round)
         }
     }
 }

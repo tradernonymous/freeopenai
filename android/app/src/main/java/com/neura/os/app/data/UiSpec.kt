@@ -128,3 +128,19 @@ fun formAnswer(form: UiSpec.Form, values: Map<String, String>): Result<String> {
     if (lines.isEmpty()) return Result.failure(IllegalArgumentException("Nothing filled in yet"))
     return Result.success(lines.joinToString("\n"))
 }
+
+/** A date picker's choice (midnight UTC, as Material's picker reports it)
+ * as the form's text: "2026-09-23". */
+fun pickedDate(utcMillis: Long): String =
+    java.time.Instant.ofEpochMilli(utcMillis).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
+
+/** A time picker's choice as the form's text: "09:05". */
+fun pickedTime(hour: Int, minute: Int): String = "%02d:%02d".format(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
+
+/** The picker's starting point for what a field already holds: a typed or
+ * earlier date as UTC millis, or null to open on today. */
+fun dateMillisOf(text: String): Long? = try {
+    java.time.LocalDate.parse(text.trim()).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
+} catch (e: Exception) {
+    null
+}

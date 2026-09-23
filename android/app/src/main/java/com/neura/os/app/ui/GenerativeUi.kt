@@ -17,7 +17,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,7 +49,10 @@ import androidx.compose.ui.unit.sp
 import com.neura.os.app.data.FieldKind
 import com.neura.os.app.data.UiField
 import com.neura.os.app.data.UiSpec
+import com.neura.os.app.data.dateMillisOf
 import com.neura.os.app.data.formAnswer
+import com.neura.os.app.data.pickedDate
+import com.neura.os.app.data.pickedTime
 
 // Generative UI (docs/android-master-plan.md V8): a reply's ```ui block drawn
 // with the app's own components. [onAnswer] is present only on the latest
@@ -133,10 +149,9 @@ private fun FormField(field: UiField, value: String, enabled: Boolean, onChange:
         }
         return
     }
-    val hint = when (field.kind) {
-        FieldKind.DATE -> "YYYY-MM-DD"
-        FieldKind.TIME -> "HH:MM"
-        else -> ""
+    if (field.kind == FieldKind.DATE || field.kind == FieldKind.TIME) {
+        PickerField(field, value, enabled, onChange)
+        return
     }
     OutlinedTextField(
         value = value,
@@ -144,13 +159,8 @@ private fun FormField(field: UiField, value: String, enabled: Boolean, onChange:
         enabled = enabled,
         singleLine = true,
         label = { Text(field.label + if (field.required) " *" else "") },
-        placeholder = { if (hint.isNotEmpty()) Text(hint, color = Palette.muted) },
         keyboardOptions = KeyboardOptions(
-            keyboardType = when (field.kind) {
-                FieldKind.NUMBER -> KeyboardType.Decimal
-                FieldKind.DATE, FieldKind.TIME -> KeyboardType.Number
-                else -> KeyboardType.Text
-            },
+            keyboardType = if (field.kind == FieldKind.NUMBER) KeyboardType.Decimal else KeyboardType.Text,
         ),
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Palette.accent,
@@ -160,6 +170,63 @@ private fun FormField(field: UiField, value: String, enabled: Boolean, onChange:
         ),
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/** A date or a time, chosen with Material's own picker rather than typed
+ * (V8 gap): the field shows what was picked, a tap opens the picker, and the
+ * answer is the same "2026-09-23" / "09:05" text a person would type. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PickerField(field: UiField, value: String, enabled: Boolean, onChange: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val date = field.kind == FieldKind.DATE
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(field.label + if (field.required) " *" else "", color = Palette.muted, fontSize = 12.sp)
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                .border(1.dp, Palette.outline, RoundedCornerShape(12.dp))
+                .clickable(enabled = enabled) { open = true }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (date) Icons.Filled.CalendarMonth else Icons.Filled.Schedule, null, tint = Palette.accent, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                value.ifEmpty { if (date) "Pick a date" else "Pick a time" },
+                color = if (value.isEmpty()) Palette.muted else Palette.text,
+                fontSize = 14.sp,
+            )
+        }
+    }
+    if (!open) return
+    if (date) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = dateMillisOf(value))
+        DatePickerDialog(
+            onDismissRequest = { open = false },
+            confirmButton = {
+                TextButton({
+                    state.selectedDateMillis?.let { onChange(pickedDate(it)) }
+                    open = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton({ open = false }) { Text("Cancel") } },
+        ) { DatePicker(state) }
+    } else {
+        val now = remember { java.time.LocalTime.now() }
+        val start = runCatching { java.time.LocalTime.parse(value.trim()) }.getOrNull() ?: now
+        val state = rememberTimePickerState(initialHour = start.hour, initialMinute = start.minute, is24Hour = true)
+        AlertDialog(
+            onDismissRequest = { open = false },
+            confirmButton = {
+                TextButton({
+                    onChange(pickedTime(state.hour, state.minute))
+                    open = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton({ open = false }) { Text("Cancel") } },
+            text = { TimePicker(state) },
+        )
+    }
 }
 
 @Composable

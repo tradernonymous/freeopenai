@@ -201,4 +201,18 @@ class ScreenshotTest {
         shot("genui_phone", dark = true, sample)
         shot("genui_phone", dark = false, sample)
     }
+
+    /** The voice waveform pill (V6 gap): listening, speaking, paused. */
+    @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun wave_phone() {
+        val sample: @Composable () -> Unit = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                WaveformPill(level = 0.6f, listening = true, speaking = false)
+                WaveformPill(level = 0f, listening = false, speaking = true)
+                WaveformPill(level = 0f, listening = false, speaking = false)
+            }
+        }
+        shot("wave_phone", dark = true, sample)
+        shot("wave_phone", dark = false, sample)
+    }
 }

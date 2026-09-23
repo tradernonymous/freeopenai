@@ -254,3 +254,25 @@ private val BUILD_HEX_ID = Regex("^[a-f0-9]{16,64}$")
  * network (master plan v2, V7), since both arrive through an intent. */
 fun isApprovalTarget(buildId: String?, requestId: String?): Boolean =
     buildId != null && requestId != null && BUILD_HEX_ID.matches(buildId) && BUILD_HEX_ID.matches(requestId)
+
+/** What a running build's Live Update says (master plan v2, V7 gap): its
+ * repository, where it is, and how many steps are done of how many. */
+data class BuildLive(val title: String, val text: String, val done: Int, val total: Int)
+
+/** The Live Update for [session], or null when there should be none: no
+ * build followed, or it has ended. A build waiting on the person keeps its
+ * Live Update (it is still in progress) and says so. */
+fun buildLive(session: BuildSession?): BuildLive? {
+    if (session == null || session.finished) return null
+    val total = session.steps.size
+    val done = session.doneSteps.coerceAtMost(total)
+    val now = session.steps.firstOrNull { it.status == "running" }?.title
+        ?: session.steps.firstOrNull { it.status != "done" }?.title
+    val text = when {
+        session.waiting -> buildStatusLabel(session.status)
+        total > 0 && now != null -> "Step ${minOf(done + 1, total)} of $total · $now"
+        total > 0 -> "$done of $total steps"
+        else -> buildStatusLabel(session.status)
+    }
+    return BuildLive(session.repo.ifEmpty { "Build" }, text.take(120), done, total)
+}

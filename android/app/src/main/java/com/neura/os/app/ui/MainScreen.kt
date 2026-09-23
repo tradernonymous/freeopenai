@@ -91,6 +91,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -202,15 +204,29 @@ fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
         }
         drawer.close()
     }
-    ModalNavigationDrawer(
-        drawerState = drawer,
-        drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = Palette.surface, modifier = Modifier.width(304.dp)) {
-                Drawer(vm, platform, chat.id) { scope.launch { drawer.close() } }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (maxWidth >= LIST_DETAIL_MIN_WIDTH) {
+            // List-detail on a tablet or an unfolded phone (master plan v2, V4
+            // gap): the chats stay beside the chat instead of in a drawer.
+            Row(Modifier.fillMaxSize()) {
+                Surface(color = Palette.surface, modifier = Modifier.width(320.dp).fillMaxHeight()) {
+                    Drawer(vm, platform, chat.id) {}
+                }
+                VerticalDivider(color = Palette.outline.copy(alpha = 0.5f))
+                Box(Modifier.weight(1f)) { ChatSurface(vm, platform, chat, onMenu = null) }
             }
-        },
-    ) {
-        ChatSurface(vm, platform, chat, onMenu = { scope.launch { drawer.open() } })
+        } else {
+            ModalNavigationDrawer(
+                drawerState = drawer,
+                drawerContent = {
+                    ModalDrawerSheet(drawerContainerColor = Palette.surface, modifier = Modifier.width(304.dp)) {
+                        Drawer(vm, platform, chat.id) { scope.launch { drawer.close() } }
+                    }
+                },
+            ) {
+                ChatSurface(vm, platform, chat, onMenu = { scope.launch { drawer.open() } })
+            }
+        }
     }
     if (voice.state != VoiceSession.State.IDLE || voice.error != null) {
         VoiceOverlay(voice)
@@ -218,6 +234,10 @@ fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
 }
 
 // --- Drawer ------------------------------------------------------------------------
+
+/** From this width the chat list stands beside the chat (Material's
+ * "expanded" window class starts at 840 dp). */
+private val LIST_DETAIL_MIN_WIDTH = 840.dp
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -406,7 +426,7 @@ private fun DrawerRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation, onMenu: () -> Unit) {
+private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation, onMenu: (() -> Unit)?) {
     var modelSheet by remember { mutableStateOf(false) }
     var sessionSheet by remember { mutableStateOf(false) }
     var workspaceSheet by remember { mutableStateOf(false) }
@@ -423,7 +443,8 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
         topBar = {
             Column {
                 TopAppBar(
-                    navigationIcon = { IconButton(onMenu, Modifier.pressScale().testTag("drawer_button")) { Icon(Icons.Filled.Menu, "Menu") } },
+                    // No menu button when the chat list is already on screen (wide).
+                    navigationIcon = { onMenu?.let { IconButton(it, Modifier.pressScale().testTag("drawer_button")) { Icon(Icons.Filled.Menu, "Menu") } } },
                     title = {
                         Row(
                             Modifier.clip(RoundedCornerShape(12.dp)).clickable { modelSheet = true }.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1075,7 +1096,9 @@ private fun VoiceOverlay(voice: VoiceSession) {
                 Spacer(Modifier.height(10.dp))
                 NeuraPulse()
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(18.dp))
+            WaveformPill(voice.level, voice.state == VoiceSession.State.LISTENING, voice.state == VoiceSession.State.SPEAKING)
+            Spacer(Modifier.height(14.dp))
             Text(voice.partial, color = Palette.muted, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
         Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
