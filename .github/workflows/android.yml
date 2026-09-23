@@ -95,11 +95,7 @@ jobs:
           else
             gradle :app:verifyRoborazziDebug
           fi
-      # The pictures as one small contact sheet in this log (see
-      # printScreenshotSheet in app/build.gradle.kts), and as an artifact.
-      - name: Print the screenshot contact sheet
-        if: always()
-        run: gradle -q :app:printScreenshotSheet || true
+      # The pictures as an artifact; the contact sheet is printed last (below).
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -133,6 +129,12 @@ jobs:
         run: |
           gradle :app:assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/neuraos.apk"
+      # The screenshots as one small contact sheet (printScreenshotSheet in
+      # app/build.gradle.kts). Last in the job on purpose: it is read back from
+      # the end of this job's log, where nothing else follows it.
+      - name: Print the screenshot contact sheet
+        if: always()
+        run: gradle -q :app:printScreenshotSheet || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: neuraos-apk

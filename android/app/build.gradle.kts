@@ -5,7 +5,9 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.util.Base64
+import javax.imageio.IIOImage
 import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
 
 plugins {
     alias(libs.plugins.android.application)
@@ -219,7 +221,7 @@ tasks.register("printScreenshotSheet") {
             println("NEURA-SHEET: no screenshots")
             return@doLast
         }
-        val cell = 300
+        val cell = 160
         val columns = 4
         val rows = (files.size + columns - 1) / columns
         val labels = 18
@@ -238,10 +240,21 @@ tasks.register("printScreenshotSheet") {
             g.drawString(f.nameWithoutExtension, x + 4, y + 13)
         }
         g.dispose()
+        // Small on purpose: the sheet is read back out of a job log, so every
+        // kilobyte here is one someone has to fetch.
         val out = ByteArrayOutputStream()
-        ImageIO.write(sheet, "jpg", out)
+        val writer = ImageIO.getImageWritersByFormatName("jpg").next()
+        val params = writer.defaultWriteParam.apply {
+            compressionMode = ImageWriteParam.MODE_EXPLICIT
+            compressionQuality = 0.6f
+        }
+        ImageIO.createImageOutputStream(out).use { stream ->
+            writer.output = stream
+            writer.write(null, IIOImage(sheet, null, null), params)
+        }
+        writer.dispose()
         println("NEURA-SHEET-BEGIN " + files.size)
-        Base64.getMimeEncoder(76, "\n".toByteArray()).encodeToString(out.toByteArray()).lines().forEach { println(it) }
+        Base64.getMimeEncoder(4000, "\n".toByteArray()).encodeToString(out.toByteArray()).lines().forEach { println(it) }
         println("NEURA-SHEET-END")
     }
 }
