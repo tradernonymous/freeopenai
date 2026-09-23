@@ -2,8 +2,8 @@
 
 [← Back to README](../README.md)
 
-Status: **V1–V8 shipped 2026-09-23** (see §4.1 for what each left undone); V0's
-phone session is still open. v2 written 2026-09-23 against
+Status: **V1–V8 shipped 2026-09-23**, V3 and the phase gaps finished the same day
+(§4.1 lists what is still left); V0's phone session is still open. v2 written 2026-09-23 against
 `9b70b7d` (the R2 reskin). v1 (Phases 0–5, all done) is in git history:
 `git show 5d136ca:docs/android-master-plan.md`.
 
@@ -157,9 +157,10 @@ checked on the CI emulator.
 
 Following the `kotlin-concurrency-and-flow` skill:
 
-- **The data layer becomes `suspend`.** `ChatApi`, `NativeApi` and `Repository` get
-  `suspend` calls that move to `Dispatchers.IO` themselves. They keep no scope and
-  launch nothing.
+- **The data layer stays blocking; the view model changes threads** (revised when
+  V3 shipped). The receivers below call `NativeApi` synchronously inside `goAsync`,
+  so blocking calls stay. The view model reaches them only through one `onIo {}`
+  (`withContext` on its pool). The data layer keeps no scope and launches nothing.
 - **The view model owns every launch**, on `viewModelScope`: the one place a UI event
   becomes work. Stop is `job.cancel()`. Leaving a screen cancels what it started.
 - **Streams become cold `Flow`s.** A streaming reply and a build's event stream
@@ -239,12 +240,12 @@ what the row above asked for and the phase did not do.
 | :-- | :-- | :-- | :-- |
 | V1 | `014b6d1` | AGP 9.4.0 / Gradle 9.6 (builds Kotlin itself), compileSdk 37, targetSdk 36, BOM 2026.09.00, Navigation 3, lifecycle 2.11, coroutines-test | APK size and R8 check (P7) |
 | V2 | `59585a1` | Roborazzi on Robolectric (SDK 35); baselines in the Actions cache; `[screenshots]` in a commit message records them; a contact sheet at the end of the build log | Tablet width covers the chat only |
-| V3 | `8c8dc9a` | The executor became a coroutine dispatcher with a failure handler; notices are a `Channel` read through `receiveAsFlow()`; Stop cancels the reply's `Job` | **Most of §3.1**: the data layer has no `suspend` calls, streams are not `callbackFlow`s, 40 `io.execute` remain (target under 15) |
-| V4 | `09d451e` | Navigation 3 back stack; the dock with the orb; Chat, Create, Agents, Activity; home with greeting and Continue cards; Go anywhere | List–detail on wide screens |
+| V3 | `8c8dc9a`, `5581c72` | Notices through a `Channel`; replies and the build stream as cold flows (`data/Streams.kt`: cancelling closes the connection; builds reconnect from the last event); every job on `viewModelScope`, 0 `io.execute` (target under 15); Stop ends a Puter wait too; `CancellationException` rethrown | The data layer stays blocking by design (§3.1) |
+| V4 | `09d451e`, `d13c935` | Navigation 3 back stack; the dock with the orb; Chat, Create, Agents, Activity; home with greeting and Continue cards; Go anywhere; from 840 dp the chat list stands beside the chat | — |
 | V5 | `4b299e1` | "Thought for 12 s", streaming caret, source chips, context meter; send ↔ Stop morph; shared titles; the agents gallery | Shared elements beyond titles |
-| V6 | `274e8f6` | Glass surfaces (translucent, no blur: none without a library); AI edge glow; voice aurora (AGSL on API 33+); still under Remove animations or battery saver | Waveform pill |
-| V7 | `438cdac` | "Replying…" as a Live Update (`ProgressStyle`, promoted ongoing); Approve on a build's notification, behind the device unlock | Live Update for a running build; P8 (parked) |
-| V8 | `70fb4dc` | ` ```ui ` blocks (choices, form, table, card; data only, checked against fixed limits) drawn natively, latest reply only; "Open in canvas" for long replies, stepping through the chat's replies | Native date/time pickers (typed with a hint); charts inside a ui block; canvas versions of one reply |
+| V6 | `274e8f6`, `d13c935` | Glass surfaces (translucent); AI edge glow; voice aurora (AGSL on API 33+); the voice waveform pill; still under Remove animations or battery saver | Blur behind glass, **decided against**: nothing scrolls behind the dock or composer, so it would blur a plain background |
+| V7 | `438cdac`, `d13c935` | "Replying…" and a followed running build as Live Updates (`ProgressStyle`, promoted ongoing; the build's shows its step and a bar of steps done); Approve on a build's notification, behind the device unlock | P8 (parked) |
+| V8 | `70fb4dc`, `d13c935` | ` ```ui ` blocks (choices, form with Material date and time pickers, table, card; data only, checked against fixed limits) drawn natively, latest reply only; "Open in canvas" for long replies, stepping through the chat's replies | Charts inside a ui block; canvas versions of one reply |
 
 `6e78972` made screenshots stable: they are taken with animations off, and entrances
 now honour "Remove animations" too.
