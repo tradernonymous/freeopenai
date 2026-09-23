@@ -172,6 +172,61 @@ class NativeApi(
         emptyList()
     }
 
+    /** A GitHub-connector route. Like getJson/postJson, except that the
+     * server's 401 for "GitHub not connected" is reported as exactly that
+     * rather than as a lapsed app session -- which would send the app to its
+     * sign-in screen and re-log in for nothing (see isGithubNotConnected). */
+    private fun githubJson(path: String, post: String? = null): String = withSession { cookie ->
+        val conn = open(path, cookie, if (post == null) "GET" else "POST", 30000)
+        try {
+            if (post != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(post.toByteArray(Charsets.UTF_8)) }
+            }
+            val code = conn.responseCode
+            val body = readBody(conn, code in 200..299)
+            if (code == 401 && isGithubNotConnected(body)) {
+                throw ApiException("GitHub is not connected. Connect it in Settings, under Connectors.")
+            }
+            if (code == 401 || code == 302) throw ApiException("Session expired.", true)
+            if (code !in 200..299) throw ApiException(errorMessage(body, code))
+            body
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: Exception) {
+            throw ApiException("Could not reach the server: " + (e.message ?: e.javaClass.simpleName))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Public repos the connected accounts can reach, for the review picker. */
+    fun githubRepoNames(): List<String> = try {
+        val list = org.json.JSONArray(githubJson("/api/github/repos"))
+        (0 until list.length()).mapNotNull { list.optJSONObject(it)?.optString("fullName")?.ifEmpty { null } }.distinct()
+    } catch (e: ApiException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    fun pulls(repo: String): List<PullSummary> =
+        parsePulls(githubJson("/api/github/pulls?repo=" + java.net.URLEncoder.encode(repo, "UTF-8")))
+
+    fun pull(repo: String, number: Int): PullDetail =
+        parsePull(githubJson("/api/github/pull?repo=" + java.net.URLEncoder.encode(repo, "UTF-8") + "&number=" + number))
+            ?: throw ApiException("The server sent a pull request this app could not read.")
+
+    /** GitHub's answer state, e.g. APPROVED or CHANGES_REQUESTED. */
+    fun review(repo: String, number: Int, event: ReviewEvent, text: String): String = try {
+        org.json.JSONObject(githubJson("/api/github/review", reviewRequestBody(repo, number, event, text))).optString("state", "")
+    } catch (e: ApiException) {
+        throw e
+    } catch (e: Exception) {
+        ""
+    }
+
     private fun postJson(path: String, body: String): String = withSession { cookie ->
         val conn = open(path, cookie, "POST", 30000)
         try {

@@ -1171,6 +1171,132 @@ async function githubListCommits(req, res) {
   }
 }
 
+// Pull requests from the phone (docs/android-master-plan.md, Phase 4): list a
+// repo's open PRs, read one with its changed files, submit a review. A repo
+// name is checked before it becomes part of a path -- the user's token rides
+// every call, and a "repo" with ../ in it would carry that token to some other
+// GitHub endpoint.
+const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const REVIEW_EVENTS = new Set(['APPROVE', 'COMMENT', 'REQUEST_CHANGES']);
+const PR_BODY_MAX = 4000;
+const PR_PATCH_MAX = 6000;
+
+function validRepoName(repo) {
+  return typeof repo === 'string' && REPO_NAME.test(repo) && !repo.split('/').some((part) => part === '.' || part === '..');
+}
+
+// A pull request number, or 0 for anything that is not a plain positive integer.
+function pullNumber(value) {
+  const text = String(value == null ? '' : value).trim();
+  return /^\d{1,9}$/.test(text) ? Number(text) : 0;
+}
+
+async function githubListPulls(req, res) {
+  const repo = new URL(req.url, 'http://x').searchParams.get('repo');
+  if (!validRepoName(repo)) return sendJson(res, 400, { error: 'repo must be owner/name' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
+  try {
+    const { ok, status, data } = await githubApiFetch(
+      account.token,
+      `https://api.github.com/repos/${repo}/pulls?state=open&per_page=30&sort=updated&direction=desc`
+    );
+    if (!ok) return sendJson(res, status, { error: (data && data.message) || 'Could not list pull requests' });
+    const rows = Array.isArray(data) ? data : [];
+    sendJson(res, 200, rows.map((pr) => ({
+      number: Number(pr.number) || 0,
+      title: String(pr.title || '').slice(0, 300),
+      author: (pr.user && pr.user.login) || '',
+      draft: !!pr.draft,
+      updatedAt: pr.updated_at || '',
+      head: (pr.head && pr.head.ref) || '',
+      base: (pr.base && pr.base.ref) || '',
+    })));
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+async function githubGetPull(req, res) {
+  const query = new URL(req.url, 'http://x').searchParams;
+  const repo = query.get('repo');
+  const number = pullNumber(query.get('number'));
+  if (!validRepoName(repo)) return sendJson(res, 400, { error: 'repo must be owner/name' });
+  if (!number) return sendJson(res, 400, { error: 'number must be a pull request number' });
+  const account = resolveAccount(req, res, repo);
+  if (!account) return;
+  try {
+    const [pr, files] = await Promise.all([
+      githubApiFetch(account.token, `https://api.github.com/repos/${repo}/pulls/${number}`),
+      githubApiFetch(account.token, `https://api.github.com/repos/${repo}/pulls/${number}/files?per_page=100`),
+    ]);
+    if (!pr.ok) return sendJson(res, pr.status, { error: (pr.data && pr.data.message) || 'Could not read the pull request' });
+    const p = pr.data || {};
+    const list = files.ok && Array.isArray(files.data) ? files.data : [];
+    sendJson(res, 200, {
+      number: Number(p.number) || number,
+      title: String(p.title || '').slice(0, 300),
+      body: String(p.body || '').slice(0, PR_BODY_MAX),
+      author: (p.user && p.user.login) || '',
+      state: String(p.state || ''),
+      draft: !!p.draft,
+      head: (p.head && p.head.ref) || '',
+      base: (p.base && p.base.ref) || '',
+      additions: Number(p.additions) || 0,
+      deletions: Number(p.deletions) || 0,
+      url: String(p.html_url || ''),
+      // The files are a second call; if it fails the PR still reads, and
+      // says why its files are missing instead of showing none.
+      filesError: files.ok ? '' : ((files.data && files.data.message) || 'Could not list the changed files'),
+      files: list.map((f) => {
+        const patch = String(f.patch || '');
+        return {
+          filename: String(f.filename || ''),
+          status: String(f.status || ''),
+          additions: Number(f.additions) || 0,
+          deletions: Number(f.deletions) || 0,
+          patch: patch.slice(0, PR_PATCH_MAX),
+          clipped: patch.length > PR_PATCH_MAX,
+        };
+      }),
+    });
+  } catch (err) {
+    sendJson(res, 502, { error: err.message });
+  }
+}
+
+// Approve, comment or request changes. Everything that can be wrong is refused
+// before GitHub is asked; GitHub's own refusal (approving your own PR, say) is
+// passed on with its reason.
+function githubReviewPull(req, res) {
+  readJsonBody(req, 64 * 1024, async (err, body) => {
+    if (err) return sendJson(res, 400, { error: 'Invalid request' });
+    const { repo, event, account: requested } = body || {};
+    const number = pullNumber(body && body.number);
+    const text = body && typeof body.body === 'string' ? body.body.trim() : '';
+    if (!validRepoName(repo)) return sendJson(res, 400, { error: 'repo must be owner/name' });
+    if (!number) return sendJson(res, 400, { error: 'number must be a pull request number' });
+    if (!REVIEW_EVENTS.has(event)) return sendJson(res, 400, { error: 'event must be APPROVE, COMMENT or REQUEST_CHANGES' });
+    if (event !== 'APPROVE' && !text) return sendJson(res, 400, { error: 'a comment or a change request needs text' });
+    if (text.length > 20000) return sendJson(res, 400, { error: 'the review text is over 20000 characters' });
+    const picked = pickAccount(getGithubSession(req), repo, requested);
+    if (picked.error) {
+      return sendJson(res, picked.error === 'GitHub not connected' ? 401 : 400, { error: picked.error });
+    }
+    try {
+      const { ok, status, data } = await githubApiFetch(
+        picked.account.token,
+        `https://api.github.com/repos/${repo}/pulls/${number}/reviews`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, body: text }) }
+      );
+      if (!ok) return sendJson(res, status, { error: (data && data.message) || 'GitHub refused the review' });
+      sendJson(res, 200, { id: (data && data.id) || 0, state: (data && data.state) || '' });
+    } catch (e) {
+      sendJson(res, 502, { error: e.message });
+    }
+  });
+}
+
 // Delete one file, as a commit. The contents API wants the blob's current sha,
 // the same way an update does, and for the same reason it is looked up here
 // rather than carried by the caller: a model that deletes without reading first
@@ -6040,6 +6166,9 @@ function createRequestHandler(root) {
     if (urlPath === '/api/github/file' && req.method === 'DELETE') return githubDeleteFile(req, res);
     if (urlPath === '/api/github/search' && req.method === 'GET') return githubSearchCode(req, res);
     if (urlPath === '/api/github/commits' && req.method === 'GET') return githubListCommits(req, res);
+    if (urlPath === '/api/github/pulls' && req.method === 'GET') return githubListPulls(req, res);
+    if (urlPath === '/api/github/pull' && req.method === 'GET') return githubGetPull(req, res);
+    if (urlPath === '/api/github/review' && req.method === 'POST') return githubReviewPull(req, res);
     if (urlPath === '/api/github/branches' && req.method === 'GET') return githubListBranches(req, res);
     if (urlPath === '/api/github/branch' && req.method === 'POST') return githubCreateBranch(req, res);
     if (urlPath === '/api/workspace/run' && req.method === 'POST') return handleWorkspaceRun(req, res, root);

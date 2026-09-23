@@ -46,6 +46,9 @@ import com.neura.os.app.data.NativeApi
 import com.neura.os.app.data.Outbox
 import com.neura.os.app.data.FailureRing
 import com.neura.os.app.data.ResponseCache
+import com.neura.os.app.data.PullDetail
+import com.neura.os.app.data.PullSummary
+import com.neura.os.app.data.ReviewEvent
 import com.neura.os.app.data.responseCacheKey
 import com.neura.os.app.data.Persona
 import com.neura.os.app.data.PromptTemplate
@@ -1308,6 +1311,99 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             puterSigningIn = false
             if (result.isFailure) recordFailure("puter", result.exceptionOrNull()?.message)
             notice = if (result.isSuccess) "Signed in to Puter." else "Puter sign-in: " + (result.exceptionOrNull()?.message ?: "failed")
+        }
+    }
+
+    // --- Pull request review (master plan Phase 4) -------------------------------
+    // Supervision from the phone: read what changed, then approve, comment or
+    // ask for changes. The server does the GitHub calls (githubListPulls,
+    // githubGetPull, githubReviewPull); a failure lands in the failure ring.
+
+    var reviewRepos by mutableStateOf<List<String>>(emptyList())
+        private set
+    var reviewPulls by mutableStateOf<List<PullSummary>>(emptyList())
+        private set
+    var reviewPull by mutableStateOf<PullDetail?>(null)
+        private set
+    var reviewBusy by mutableStateOf(false)
+        private set
+    var reviewError by mutableStateOf<String?>(null)
+        private set
+
+    private fun reviewFailed(e: ApiException) {
+        recordFailure("github", e.message)
+        main.post {
+            reviewBusy = false
+            reviewError = e.message
+            if (e.authRequired) signedIn = false
+        }
+    }
+
+    fun loadReviewRepos() {
+        io.execute {
+            try {
+                val names = api.githubRepoNames()
+                main.post { reviewRepos = names }
+            } catch (e: ApiException) {
+                reviewFailed(e)
+            }
+        }
+    }
+
+    fun loadPulls(repo: String) {
+        reviewBusy = true
+        reviewError = null
+        reviewPull = null
+        io.execute {
+            try {
+                val list = api.pulls(repo)
+                main.post {
+                    reviewPulls = list
+                    reviewBusy = false
+                }
+            } catch (e: ApiException) {
+                main.post { reviewPulls = emptyList() }
+                reviewFailed(e)
+            }
+        }
+    }
+
+    fun openPull(repo: String, number: Int) {
+        reviewBusy = true
+        reviewError = null
+        io.execute {
+            try {
+                val detail = api.pull(repo, number)
+                main.post {
+                    reviewPull = detail
+                    reviewBusy = false
+                }
+            } catch (e: ApiException) {
+                reviewFailed(e)
+            }
+        }
+    }
+
+    fun closePull() {
+        reviewPull = null
+        reviewError = null
+    }
+
+    fun submitReview(repo: String, number: Int, event: ReviewEvent, text: String, onSent: () -> Unit) {
+        if (reviewBusy || !event.canSend(text)) return
+        reviewBusy = true
+        reviewError = null
+        io.execute {
+            try {
+                val state = api.review(repo, number, event, text)
+                main.post {
+                    reviewBusy = false
+                    notice = "Review sent to #$number" + (if (state.isEmpty()) "." else ": " + state.lowercase().replace('_', ' ') + ".")
+                    onSent()
+                }
+            } catch (e: ApiException) {
+                reviewFailed(e)
+            }
         }
     }
 

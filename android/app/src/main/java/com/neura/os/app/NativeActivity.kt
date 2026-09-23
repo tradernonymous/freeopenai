@@ -71,6 +71,7 @@ import com.neura.os.app.data.parseLocalDateTime
 import com.neura.os.app.ui.AppViewModel
 import com.neura.os.app.ui.BuildScreen
 import com.neura.os.app.ui.AutomationScreen
+import com.neura.os.app.ui.ReviewsScreen
 import com.neura.os.app.ui.BuildsScreen
 import com.neura.os.app.ui.CommandInfoDialog
 import com.neura.os.app.ui.NeuraTheme
@@ -271,6 +272,7 @@ class NativeActivity : ComponentActivity(), Platform {
                                         Route.Build -> BuildScreen(vm)
                                         is Route.Detail -> Unit
                                         Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
+                                        Route.Reviews -> Page("Pull requests", vm) { ReviewsScreen(vm) }
                                     }
                                 }
                             }

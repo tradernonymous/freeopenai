@@ -20,6 +20,8 @@ import kotlinx.serialization.Serializable
     @Serializable data object Build : Route
     @Serializable data class Detail(val kind: String, val id: String) : Route
     @Serializable data object Automation : Route
+    /** Pull request review (master plan Phase 4). */
+    @Serializable data object Reviews : Route
 }
 
 /** A key that survives process death, unlike [Route.toString] -- adding a
@@ -35,6 +37,7 @@ fun Route.screenKey(): String = when (this) {
     Route.Builds -> "builds"
     Route.Build -> "build"
     Route.Automation -> "automation"
+    Route.Reviews -> "reviews"
     is Route.Detail -> "detail:$kind:$id"
 }
 
@@ -49,6 +52,7 @@ fun screenFromKey(key: String): Route? = when {
     key == "builds" -> Route.Builds
     key == "build" -> Route.Build
     key == "automation" -> Route.Automation
+    key == "reviews" -> Route.Reviews
     key.startsWith("detail:") -> key.removePrefix("detail:").split(":", limit = 2)
         .takeIf { it.size == 2 }?.let { (kind, id) -> Route.Detail(kind, id) }
     else -> null

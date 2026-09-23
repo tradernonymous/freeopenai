@@ -81,6 +81,7 @@ import com.neura.os.app.data.looksLikePlan
 import com.neura.os.app.data.openAction
 import com.neura.os.app.data.safeFileName
 import com.neura.os.app.data.splitCodeBlocks
+import com.neura.os.app.data.parseChartSpec
 import com.neura.os.app.data.toolCallSummary
 import kotlinx.coroutines.delay
 
@@ -515,6 +516,7 @@ fun ChatImage(vm: AppViewModel, platform: Platform, id: String) {
 fun TaskPanel(tasks: List<TaskItem>) {
     if (tasks.isEmpty()) return
     var open by remember { mutableStateOf(false) }
+    var map by remember { mutableStateOf(false) }
     val done = tasks.count { it.status == "done" }
     Surface(color = Palette.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).animateContentSize()) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -543,10 +545,12 @@ fun TaskPanel(tasks: List<TaskItem>) {
                             )
                         }
                     }
+                    androidx.compose.material3.TextButton({ map = true }) { Text("View as map", fontSize = 12.sp) }
                 }
             }
         }
     }
+    if (map) PlanMapDialog(tasks) { map = false }
 }
 
 @Composable
@@ -585,9 +589,17 @@ fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
     // composable is recomposed for each delta, and every visible turn was
     // re-parsed each time.
     val segments = remember(text) { splitCodeBlocks(text) }
+    // A ```chart block that parses is drawn (master plan Phase 4); one that
+    // does not -- still streaming, or a bad spec -- stays ordinary code.
+    val charts = remember(text) {
+        segments.map { if (it.code && it.language.equals("chart", ignoreCase = true)) parseChartSpec(it.text) else null }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (segment in segments) {
-            if (segment.code) {
+        for ((index, segment) in segments.withIndex()) {
+            val chart = charts[index]
+            if (chart != null) {
+                ChartView(chart)
+            } else if (segment.code) {
                 var copied by remember(segment.text) { mutableStateOf(false) }
                 LaunchedEffect(copied) {
                     if (copied) {

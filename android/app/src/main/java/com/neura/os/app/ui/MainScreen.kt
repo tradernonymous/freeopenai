@@ -138,6 +138,9 @@ import com.neura.os.app.data.PUTER_PROVIDER
 import com.neura.os.app.data.modeLabel
 import com.neura.os.app.data.personaFor
 import com.neura.os.app.data.slashSuggestions
+import com.neura.os.app.data.summarisePrompt
+import com.neura.os.app.data.translatePrompt
+import com.neura.os.app.data.isLanguageName
 import kotlinx.coroutines.launch
 
 /** Everything the screens need from Android itself, implemented by the
@@ -951,6 +954,25 @@ private fun SessionSheet(vm: AppViewModel, chat: Conversation, onPickModel: () -
             SessionRow("Messages", chat.messages.size.toString())
             if (chat.tasks.isNotEmpty()) SessionRow("Tasks", "${chat.tasks.count { it.status == "done" }}/${chat.tasks.size} done")
             if (chat.skills.isNotEmpty()) SessionRow("Skills", chat.skills.joinToString(", "))
+            if (chat.messages.isNotEmpty()) {
+                // Transcript actions (master plan Phase 4): ordinary messages
+                // through the normal send path, so a voice chat gets them too.
+                HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
+                var language by rememberSaveable { mutableStateOf("English") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.OutlinedButton({ if (vm.send(chat.id, summarisePrompt())) onClose() }) { Text("Summarise") }
+                    androidx.compose.material3.OutlinedButton(
+                        { if (vm.send(chat.id, translatePrompt(language))) onClose() },
+                        enabled = isLanguageName(language),
+                    ) { Text("Translate") }
+                }
+                OutlinedTextField(
+                    language, { language = it.take(40) },
+                    label = { Text("Translate into") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                )
+            }
             Spacer(Modifier.height(16.dp))
         }
     }

@@ -306,7 +306,7 @@ solved it and the port is mostly field selection.
 
 **Shipped (2026-09-23):** (1) cold start is measured — process start to the first frame, once per fresh launch — and reported by Copy diagnostics against the 2 s target; the number itself needs a real phone. (2) a queued chat shows why and when above its composer ("Tried 2 times. Next try in 3 s…"), with Retry now. (3) **Offline answers**, off by default (Settings → Data): answers kept sealed on the phone, keyed by model, mode and every question in the chat; on a lost connection the kept answer is shown marked "cached, refreshes when online" and the chat stays queued for a fresh reply. Turning it off, Delete all chats and Erase all delete what was kept.
 
-### Phase 4 — The surfaces worth adding
+### Phase 4 — The surfaces worth adding · **done**
 
 In recommended order:
 
@@ -324,6 +324,8 @@ In recommended order:
    model-returned spec. No dependency.
 5. **Library content, not code.** Tutoring, code-review and content-tone personas and
    prompts. The Library already holds these; this is an idle hour, not a phase.
+
+**Shipped (2026-09-23):** (1) **PR review** — `GET /api/github/pulls`, `GET /api/github/pull`, `POST /api/github/review` (repo names checked before they reach a path; every refusal before GitHub is asked; `test/github-pulls.test.js`), and Settings → Connectors → Review pull requests: pick a repo, read a PR with its diffs, then Approve, Comment or Request changes, each confirmed. "GitHub not connected" no longer reads as a lapsed app session. (2) **Plan map** — the task panel's "View as map" draws the plan as a read-only radial map. (3) **Transcript actions** — Session sheet → Summarise, or Translate into a named language, sent as ordinary messages (so voice chats get them too). (4) **Charts** — a reply's ```chart block of JSON is drawn as a bar, line or scatter chart in Canvas; a block that does not parse stays code. (5) **Library** — Tutor and Code reviewer already existed; a Tone editor persona was added.
 
 ### Phase 5 — Desktop parity, triaged (NEURA-039)
 

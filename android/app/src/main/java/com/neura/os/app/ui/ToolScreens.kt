@@ -462,6 +462,9 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
                 Text(if (vm.githubConnecting) "Connecting…" else if (vm.githubConnected) "Add another account" else "Connect")
             }
         }
+        if (vm.githubConnected) {
+            SettingRow("Review pull requests", "Approve, comment, request changes") { vm.push(Route.Reviews) }
+        }
         SectionTitle("Server")
         LaunchedEffect(Unit) { if (vm.limits == null) vm.loadLimits() }
         SettingRow("Timeouts", vm.limits?.detail() ?: "Tap to load") { vm.loadLimits() }
