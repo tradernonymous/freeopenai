@@ -115,6 +115,10 @@ interface SidebarProps {
   onOpenPalette: () => void;
   onTogglePanel: (key: PanelId) => void;
   panels: Partial<PanelKeyMap>;
+  /** Pinned: the rail stands beside the floor. Unpinned it floats over it and
+      the floor keeps a rail's width of margin, so nothing hides underneath. */
+  pinned: boolean;
+  onTogglePin: () => void;
 }
 
 // The name is the product's, not the engine's: this is NeuraOS, and the engine
@@ -122,10 +126,19 @@ interface SidebarProps {
 // identifier and the localStorage keys all keep their freeai4u-* spelling, so
 // an existing install updates in place and existing chats and settings survive
 // the rename.
-export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels }: SidebarProps) {
+export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePanel, panels, pinned, onTogglePin }: SidebarProps) {
   const approvals = usePendingApprovals();
+  // A peeking rail is held open by the pointer and by focus, so Escape closes
+  // it by letting the focus go; there is no "open" flag to clear. A pinned rail
+  // is where the person put it, and stays. Escape is not swallowed -- the
+  // palette and the composer listen for it too.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key !== 'Escape' || pinned) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && e.currentTarget.contains(focused)) focused.blur();
+  };
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" data-pinned={pinned ? 'true' : 'false'} onKeyDown={onKeyDown}>
       <div className="sidebar-brand">
         <div className="sidebar-logo">N</div>
         <span className="sidebar-title">NeuraOS</span>
@@ -176,6 +189,20 @@ export default function Sidebar({ active, onNavigate, onOpenPalette, onTogglePan
           </button>
         ))}
       </nav>
+
+      {/* Icon only, with no label span: the pin sits at the rail's right edge,
+          so a label would be the part clipped away at 40px and the icon the
+          part hidden. The title and the aria-label carry the words instead. */}
+      <button
+        className="sidebar-pin"
+        type="button"
+        aria-pressed={pinned}
+        aria-label={pinned ? 'Unpin the sidebar' : 'Keep the sidebar open'}
+        title={pinned ? 'Let this rail close again when you move away' : 'Keep this rail open'}
+        onClick={onTogglePin}
+      >
+        <Icon name="paperclip" size={12} />
+      </button>
 
       <div className="sidebar-footer">
         <span className="sidebar-version" title="FreeAI4U Desktop">v{APP_VERSION}</span>

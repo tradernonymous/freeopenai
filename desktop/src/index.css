@@ -5417,3 +5417,289 @@ button:hover,
 @media (prefers-reduced-transparency: reduce) {
   :root { --gloss: none; --gloss-strong: none; --gloss-edge: none; }
 }
+
+/* ===========================================================================
+   Shell III -- "instrument, not app"
+   ===========================================================================
+   Three physical layers, not a pile of cards: the VOID the window floats in,
+   the FLOOR the work sits on, and the RISERS (rails, docks, title bar) that
+   stand above it. Each riser is separated from the floor by a one-pixel
+   chrome top-light and an occlusion shadow underneath -- that is the whole
+   3D vocabulary, reused everywhere, instead of a drop shadow per component.
+
+   Gold marks exactly one thing: which tool currently owns the workspace. If
+   gold appears twice at once, the rule has been broken. Green goes back to
+   meaning state -- connected, passing, done -- which is what it is good at. */
+
+:root {
+  --abyss: #0b0f0e;
+  --slate: #141a18;
+  --riser: #1b2321;
+  --edge: #2a3733;
+  /* Gold, chosen by hand rather than by formula: a brass that stays warm on a
+     green grey and never turns yellow-green beside the accent tokens. */
+  --gilt: #c9a961;
+  --gilt-dim: rgba(201, 169, 97, 0.16);
+  --gilt-line: rgba(201, 169, 97, 0.55);
+  /* Chrome is a light, not a colour: a top edge catching the room. */
+  --chrome-top: rgba(232, 240, 238, 0.09);
+  --chrome-top-strong: rgba(232, 240, 238, 0.16);
+  --occlude: 0 12px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --riser-edge: inset 0 1px 0 var(--chrome-top);
+  --workspace-max: 820px;
+  --workbench-open: 420px;
+}
+
+[data-theme="light"] {
+  /* The light theme keeps its own surfaces; only the structural roles are
+     re-pointed, so one set of rules below serves both themes. */
+  --abyss: var(--bg-0);
+  --slate: var(--bg-0);
+  --riser: var(--bg-1);
+  --edge: var(--border);
+  --gilt: #7a5c14;
+  --gilt-dim: rgba(122, 92, 20, 0.1);
+  --gilt-line: rgba(122, 92, 20, 0.45);
+  --chrome-top: rgba(255, 255, 255, 0.8);
+  --chrome-top-strong: rgba(255, 255, 255, 0.95);
+  --occlude: 0 10px 24px rgba(20, 30, 18, 0.12), 0 1px 3px rgba(20, 30, 18, 0.1);
+}
+
+/* ---- the three layers --------------------------------------------------- */
+
+.app { background-color: var(--abyss); }
+.main { background: var(--slate); }
+
+.titlebar,
+.status-bar {
+  background: var(--riser);
+  box-shadow: var(--riser-edge);
+}
+
+/* ---- rails: hover to peek, click to pin --------------------------------
+   The rails float ABOVE the floor instead of pushing it, so the centre column
+   never moves when a rail opens and the line you are reading stays where your
+   eye left it. That is the whole reason for the overlay: panes that shove the
+   conversation sideways every time a panel appears cost more attention than
+   they save. */
+
+.sidebar,
+.workbench {
+  background: var(--riser);
+  box-shadow: var(--riser-edge), var(--occlude);
+  z-index: 40;
+}
+
+.app-body { position: relative; }
+
+.sidebar[data-pinned="false"],
+.workbench[data-pinned="false"] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.sidebar[data-pinned="false"] { left: 0; }
+.workbench[data-pinned="false"] { right: 0; }
+
+/* The floor keeps a rail's width of margin on each side, so nothing is ever
+   hidden underneath a collapsed rail. */
+.app-body:has(.sidebar[data-pinned="false"]) > .main { margin-left: var(--rail); }
+.app-body:has(.workbench[data-pinned="false"]) > .main { margin-right: var(--rail); }
+
+/* ---- the workspace ------------------------------------------------------ */
+
+.workspace {
+  max-width: var(--workspace-max);
+  margin-inline: auto;
+  width: 100%;
+}
+
+/* ---- the right rail: Design, Build, Files, Changes ---------------------- */
+
+.workbench {
+  width: var(--rail);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--edge);
+  transition: width 160ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.workbench:hover,
+.workbench:focus-within,
+.workbench[data-pinned="true"] { width: var(--workbench-open); }
+
+/* Pinning is a promise: the rail stays open when the pointer leaves. The left
+   rail already widens on hover through its own rule; this is the half that
+   makes the pin mean anything. */
+.sidebar[data-pinned="true"] { width: var(--rail-open); }
+
+.workbench-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px var(--rail-tile-pad);
+}
+
+.workbench-tab {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workbench-tab:hover { color: var(--text-1); background: var(--hover); }
+
+/* The one gold moment: the tool that owns the workspace right now. The inset
+   left edge is the tell at 40px wide, when the label is still clipped away. */
+.workbench-tab[aria-selected="true"] {
+  color: var(--text-1);
+  background: var(--gilt-dim);
+  border-color: var(--gilt-line);
+  box-shadow: inset 2px 0 0 var(--gilt), inset 0 1px 0 var(--chrome-top-strong);
+}
+
+.workbench-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--edge);
+}
+
+.workbench-pin,
+.sidebar-pin {
+  align-self: flex-end;
+  margin: 4px 6px 6px;
+  padding: 3px 7px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workbench-pin[aria-pressed="true"],
+.sidebar-pin[aria-pressed="true"] {
+  color: var(--gilt);
+  border-color: var(--gilt-line);
+}
+
+/* A rail is labelled only once it is wide enough to hold a label. */
+.workbench[data-pinned="false"]:not(:hover):not(:focus-within) .workbench-tab-label,
+.workbench[data-pinned="false"]:not(:hover):not(:focus-within) .workbench-body,
+.workbench[data-pinned="false"]:not(:hover):not(:focus-within) .workbench-pin { display: none; }
+
+/* The left rail's pin is icon-only, so it survives the 40px width -- but it
+   still has no business being the widest thing on a collapsed rail. */
+.sidebar[data-pinned="false"]:not(:hover):not(:focus-within) .sidebar-pin { align-self: center; margin-inline: 0; }
+
+/* ---- composer: the tool toggles, and the most dangerous menu in the app -- */
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tool-chip {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.tool-chip:hover { color: var(--text-1); }
+
+.tool-chip[aria-pressed="true"] {
+  color: var(--text-1);
+  background: var(--gilt-dim);
+  border-color: var(--gilt-line);
+  box-shadow: inset 0 1px 0 var(--chrome-top-strong);
+}
+
+.approval-menu {
+  min-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--edge);
+  border-radius: 11px;
+  background: var(--riser);
+  box-shadow: var(--riser-edge), var(--occlude);
+}
+
+.approval-item {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.approval-item:hover { background: var(--hover); }
+.approval-item[aria-checked="true"] { border-color: var(--gilt-line); background: var(--gilt-dim); }
+
+.approval-item-why {
+  grid-column: 2 / -1;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* The riskiest choice says so in the colour this app already uses for risk,
+   not in gold -- gold means "active tool", and one signal means one thing. */
+.approval-item[data-risk="high"] .approval-item-why { color: var(--warning, #d8a657); }
+
+/* ---- motion: one moment, on the thing you are pointing at --------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .workbench-tab,
+  .tool-chip { transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
+
+  /* The specular sweep: one pass of room light across the gold edge as a tool
+     becomes active. It runs once, on change -- not on a loop, which would
+     turn a status signal into decoration. */
+  .workbench-tab[aria-selected="true"]::after,
+  .tool-chip[aria-pressed="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: linear-gradient(105deg, transparent 35%, var(--chrome-top-strong) 50%, transparent 65%);
+    /* forwards, or the sweep parks itself across the chip: with no fill mode
+       the element drops back to transform:none when the animation ends, which
+       leaves the highlight band sitting over the middle of the gold. It has to
+       stay where it finished -- off the right edge. */
+    animation: sheen 620ms cubic-bezier(0.22, 0.61, 0.36, 1) 1 forwards;
+  }
+
+  @keyframes sheen {
+    from { transform: translateX(-120%); }
+    to { transform: translateX(120%); }
+  }
+}

@@ -21,6 +21,7 @@ import { GITHUB_CHANGED_EVENT } from '../components/ConnectorsCard';
 import { runTurn, type ToolEvent, type TurnOptions } from '../agent-turn';
 import { executeTool, startStdio, stdioId } from '../tool-run';
 import '../tools.js';
+import '../approval.js';
 import '../composer.js';
 import '../agents.js';
 import '../recipes.js';
@@ -59,6 +60,7 @@ const savedModels: typeof import('../saved-models.js') = (globalThis as any).Fre
 // and is read by the shell, so nothing below ever has one to pass on.
 const byok: typeof import('../byok.js') = (globalThis as any).FreeAI4UByok;
 const toolsLib: typeof import('../tools.js') = (globalThis as any).FreeAI4UTools;
+const approval: typeof import('../approval.js') = (globalThis as any).FreeAI4UApproval;
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
 // ---- lazy parts (NEURA-035: a smaller first bundle, same behaviour) ----
 //
@@ -1086,7 +1088,14 @@ export default function ChatScreen() {
       await runTurn({
         messages: turns,
         tools: toolsOn
-          ? toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() })
+          // The composer's Search / Code / MCP chips decide which groups are
+          // on offer this turn. Filtering here rather than in the composer is
+          // the point: a chip that only remembered itself would be a claim the
+          // turn never honoured.
+          ? approval.offered(
+            toolsLib.catalogue({ github: githubConnected, localRoot: root, shell: hasShell() }),
+            approval.readGroups(),
+          )
             // Plan changes nothing, so it is offered nothing that could.
             .filter((t) => active.mode !== 'plan' || (!toolsLib.ASKS[t.function.name] && !t.function.name.startsWith('mcp__')))
             // Delegation too: a sub-agent can have tools that change things.

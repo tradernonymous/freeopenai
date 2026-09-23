@@ -1,8 +1,13 @@
 import { useMemo, useState, type ReactNode, type RefObject } from 'react';
 import Icon from './Icon';
+import ApprovalMenu from './ApprovalMenu';
 import '../composer.js';
+import '../approval.js';
 
 const grammar: typeof import('../composer.js') = (globalThis as any).FreeAI4UComposer;
+const approval: typeof import('../approval.js') = (globalThis as any).FreeAI4UApproval;
+
+type GroupId = import('../approval.js').GroupId;
 
 type ModeId = import('../composer.js').ModeId;
 type SlashCommand = import('../composer.js').SlashCommand;
@@ -17,6 +22,12 @@ type MentionSource = import('../composer.js').MentionSource;
 // Stop are one button that changes with the turn. `/` and `@` open menus above
 // it; the keyboard does the rest (Tab cycles the mode, Up recalls the last
 // message, Backspace at the start or Esc leaves a mode).
+//
+// Under the box is one row, read left to right: what to add to this message
+// (attach), what the agent may do without asking (the approval menu), which
+// tools it may reach for (the chips), and then -- pushed to the far end -- who
+// answers and how the message leaves (model, mic, send). Nothing in that row
+// is decoration: every control there changes the next turn.
 
 interface Props {
   value: string;
@@ -40,6 +51,8 @@ interface Props {
   recall: () => string;
   /** The paperclip: attach a file (PDF, Word, Excel, PowerPoint, text). */
   onAttach?: () => void;
+  /** Told when the tool chips change, with the groups that are now on. */
+  onToolGroups?: (groups: GroupId[]) => void;
   /** The mic: start or stop dictation, and where it is. */
   onDictate?: () => void;
   dictation?: 'idle' | 'recording' | 'working';
@@ -48,10 +61,20 @@ interface Props {
 }
 
 export default function Composer(props: Props) {
-  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, onAttach, onDictate, dictation, inputRef } = props;
+  const { value, onChange, mode, onMode, sending, onSend, onStop, onCommand, slashExtra, mentionSources, onMention, modelChip, toolsOn, above, recall, onAttach, onDictate, dictation, inputRef, onToolGroups } = props;
   const [cursor, setCursor] = useState(0);
   const [caret, setCaret] = useState(0);
   const [dismissed, setDismissed] = useState('');
+  const [groups, setGroups] = useState<GroupId[]>(() => approval.readGroups());
+
+  // ChatScreen filters the turn's catalogue through approval.offered() with
+  // exactly these ids, so a chip turned off is a group the model is never
+  // shown -- not a preference the turn quietly ignores.
+  const toggleGroup = (id: GroupId) => {
+    const next = approval.saveGroups(approval.toggleGroup(groups, id));
+    setGroups(next);
+    if (onToolGroups) onToolGroups(next);
+  };
 
   const slash = useMemo(() => grammar.slashMenu(value, slashExtra), [value, slashExtra]);
   const at = grammar.mentionAt(value, caret);
@@ -177,15 +200,6 @@ export default function Composer(props: Props) {
           rows={1}
           aria-label="Message"
         />
-        <button
-          className={`send-btn${sending ? ' is-stop' : ''}`}
-          onClick={sending ? onStop : onSend}
-          disabled={!sending && !value.trim()}
-          title={sending ? 'Stop the reply (Esc)' : 'Send (Enter)'}
-          aria-label={sending ? 'Stop' : 'Send'}
-        >
-          <Icon name={sending ? 'stop' : 'arrow-up'} size={sending ? 12 : 16} />
-        </button>
       </div>
       <div className="composer-foot">
         {onAttach && (
@@ -193,6 +207,24 @@ export default function Composer(props: Props) {
             <Icon name="paperclip" size={14} />
           </button>
         )}
+        <ApprovalMenu />
+        <div className="composer-tools">
+          {approval.GROUPS.map((group) => (
+            <button
+              key={group.id}
+              type="button"
+              className="tool-chip"
+              aria-pressed={toolsOn && groups.includes(group.id)}
+              disabled={!toolsOn}
+              onClick={() => toggleGroup(group.id)}
+              title={toolsOn ? group.hint : 'Tools are off for this chat — /tools turns them back on'}
+            >
+              {group.label}
+            </button>
+          ))}
+        </div>
+        <span className="composer-hint">Tab mode · / commands · @ mention</span>
+        {modelChip}
         {onDictate && (
           <button
             className={`composer-icon ${dictation === 'recording' ? 'recording' : ''}`}
@@ -205,13 +237,15 @@ export default function Composer(props: Props) {
             <Icon name="mic" size={14} />
           </button>
         )}
-        {modelChip}
-        <span
-          className={`tools-dot${toolsOn ? ' is-on' : ''}`}
-          title={toolsOn ? 'Tools are on — /tools to change' : 'Tools are off — /tools to change'}
-          aria-label={toolsOn ? 'Tools on' : 'Tools off'}
-        />
-        <span className="composer-hint">Tab mode · / commands · @ mention</span>
+        <button
+          className={`send-btn${sending ? ' is-stop' : ''}`}
+          onClick={sending ? onStop : onSend}
+          disabled={!sending && !value.trim()}
+          title={sending ? 'Stop the reply (Esc)' : 'Send (Enter)'}
+          aria-label={sending ? 'Stop' : 'Send'}
+        >
+          <Icon name={sending ? 'stop' : 'arrow-up'} size={sending ? 12 : 16} />
+        </button>
       </div>
     </div>
   );

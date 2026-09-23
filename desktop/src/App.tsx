@@ -13,6 +13,8 @@ import { useRecipeScheduler, useEvalScheduler } from './schedulers';
 import LocalTree from './components/LocalTree';
 import LocalTerminal from './components/LocalTerminal';
 import SessionManager from './components/SessionManager';
+import Workbench from './components/Workbench';
+import './workbench.js';
 import { chatStoreBackend, chatStoreSetAside, onAppQuitting, quitReady, hasShell, launchTakePath, onDeepLink, onOpenPath, pickFolder, quickHotkeySet, secretDelete, secretGet, secretSet, selectionHotkeySet } from './bridge';
 import { QUICK_HANDOFF_KEY } from './screens/QuickAsk';
 import { QUICK_HOTKEY_KEY, SELECTION_HOTKEY_KEY } from './components/ShortcutsCard';
@@ -45,6 +47,10 @@ const onboarding: typeof import('./onboarding.js') = (globalThis as any).FreeAI4
 const chatCommands: typeof import('./commands.js') = (globalThis as any).FreeAI4UCommands;
 const keymap: typeof import('../../shared/keymap.js') = (globalThis as any).FreeAI4UKeymap;
 const diagnostics: typeof import('./diagnostics.js') = (globalThis as any).FreeAI4UDiagnostics;
+// The rails' memory: which of the two is pinned, and which tool the right one
+// is showing. The rules are in workbench.js so the damaged-storage cases are
+// tested without a DOM; this file only holds the answers in state.
+const rails: typeof import('./workbench.js') = (globalThis as any).FreeAI4UWorkbench;
 
 // Chat is the default view and stays in the first bundle. The heavy screens
 // are fetched the first time they are opened, so the window paints sooner.
@@ -105,6 +111,11 @@ export default function App() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [rightPanel, setRightPanel] = useState<RightPanel>('none');
+  // Both rails peek open on hover; a pin keeps one open and takes it out of
+  // overlay, which is a decision about the workspace and so survives a restart.
+  const [leftPinned, setLeftPinned] = useState(() => rails.readPinned(rails.LEFT_KEY));
+  const [rightPinned, setRightPinned] = useState(() => rails.readPinned(rails.RIGHT_KEY));
+  const [tool, setTool] = useState(() => rails.readTool());
   const [localRoot, setLocalRoot] = useState<string>(readLocalRoot);
   const [localCwd, setLocalCwd] = useState('');
   // What the engine said, and how the shell should react to it. The decision
@@ -340,6 +351,25 @@ export default function App() {
     else toggleRightPanel(key);
   };
 
+  const toggleLeftRail = useCallback(() => {
+    setLeftPinned((on) => {
+      rails.writePinned(rails.LEFT_KEY, !on);
+      return !on;
+    });
+  }, []);
+
+  const toggleRightRail = useCallback(() => {
+    setRightPinned((on) => {
+      rails.writePinned(rails.RIGHT_KEY, !on);
+      return !on;
+    });
+  }, []);
+
+  const pickTool = useCallback((id: import('./workbench.js').ToolId) => {
+    rails.writeTool(id);
+    setTool(id);
+  }, []);
+
   // Choosing a folder is a native dialog through the shell; a browser build has
   // no picker, so it says so instead of failing quietly.
   const openFolder = useCallback(() => {
@@ -516,6 +546,8 @@ export default function App() {
           onOpenPalette={openPalette}
           onTogglePanel={togglePanel}
           panels={panels}
+          pinned={leftPinned}
+          onTogglePin={toggleLeftRail}
         />
         <main className="main">
           {updateInfo && (
@@ -648,6 +680,20 @@ export default function App() {
             )}
           </div>
         </main>
+        {/* The right rail is a sibling of the floor, not a child of it: unpinned
+            it overlays, and the stylesheet gives the floor a rail's margin so
+            nothing ends up underneath. It is mounted whatever the centre column
+            is showing, so the floor never changes width under the pointer. */}
+        <Workbench
+          tool={tool}
+          onPickTool={pickTool}
+          pinned={rightPinned}
+          onTogglePin={toggleRightRail}
+          localRoot={localRoot}
+          onOpenFolder={openFolder}
+          onOpenFile={() => setView('local')}
+          onOpenScreen={navigate}
+        />
         {/* The docks are mounted whether or not they are shown: a terminal that
             forgets its scrollback the moment you look at Chat is not a dock.
             The folder tree is cheap to re-read, so it is not kept. */}
