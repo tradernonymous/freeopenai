@@ -78,7 +78,7 @@ import com.neura.os.app.data.ChatMessage
 import com.neura.os.app.data.Conversation
 import com.neura.os.app.data.TaskItem
 import com.neura.os.app.data.actionTicketFromJson
-import com.neura.os.app.data.canvasReplies
+import com.neura.os.app.data.canvasEntries
 import com.neura.os.app.data.canvasWorthy
 import com.neura.os.app.data.looksLikePlan
 import com.neura.os.app.data.openAction
@@ -230,7 +230,10 @@ fun AssistantTurn(
     onBuild: (() -> Unit)? = null,
 ) {
     var canvas by remember { mutableStateOf(false) }
-    val worthy = remember(turn.text) { canvasWorthy(turn.text) }
+    // The chat's answers with their versions (Regenerate keeps the old ones);
+    // a reply with versions opens in the canvas even when it is short.
+    val entries = remember(turn.text, vm.currentChatId) { vm.currentChatId?.let { vm.conversation(it) }?.messages.orEmpty().let(::canvasEntries) }
+    val worthy = remember(turn.text, entries) { canvasWorthy(turn.text) || entries.any { it.size > 1 && it.last() == turn.text } }
     Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
         if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty(), turn.thoughtMs)
@@ -285,9 +288,8 @@ fun AssistantTurn(
             ActionRow(turn, isLast, platform, onRegenerate, onBranch, onCanvas = if (worthy) ({ canvas = true }) else null)
         }
         if (canvas) {
-            val replies = remember(turn.text) { vm.currentChatId?.let { vm.conversation(it) }?.messages.orEmpty().let(::canvasReplies) }
-            val all = replies.ifEmpty { listOf(turn.text) }
-            CanvasSheet(all, all.lastIndexOf(turn.text).takeIf { it >= 0 } ?: all.lastIndex, platform) { canvas = false }
+            val all = entries.ifEmpty { listOf(listOf(turn.text)) }
+            CanvasSheet(all, all.indexOfLast { it.last() == turn.text }.takeIf { it >= 0 } ?: all.lastIndex, platform) { canvas = false }
         }
         if (isLast && !streaming && !turn.error && turn.text.isNotEmpty()) ContextMeter(vm)
         // A reply that reads like a plan can be handed to the server to build.

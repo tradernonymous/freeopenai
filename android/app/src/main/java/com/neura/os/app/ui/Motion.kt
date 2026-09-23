@@ -211,12 +211,18 @@ val LocalSharedScope = androidx.compose.runtime.compositionLocalOf<androidx.comp
 /** A title that travels: the card you tap grows into the page it opens,
  * matched by [key] (docs/android-master-plan.md §2.2). Does nothing outside
  * the navigation host. */
+@Composable
+fun Modifier.sharedTitle(key: String): Modifier = sharedPiece("title:$key")
+
+/** Any piece that appears on two pages and travels between them, matched by
+ * [key] -- a build card's status pill and outline growing into the build
+ * page (§2.2). Does nothing outside the navigation host. */
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @Composable
-fun Modifier.sharedTitle(key: String): Modifier {
+fun Modifier.sharedPiece(key: String): Modifier {
     val shared = LocalSharedScope.current ?: return this
     val animated = androidx.navigation3.ui.LocalNavAnimatedContentScope.current
     return with(shared) {
-        this@sharedTitle.sharedBounds(rememberSharedContentState("title:$key"), animated)
+        this@sharedPiece.sharedBounds(rememberSharedContentState(key), animated)
     }
 }

@@ -22,6 +22,9 @@ sealed interface UiSpec {
 
     /** A summary card, with up to four suggested replies. */
     data class Card(val title: String, val body: String, val actions: List<String>) : UiSpec
+
+    /** A chart, the same spec a ```chart block takes (data/ChartSpec.kt). */
+    data class Chart(val chart: ChartSpec) : UiSpec
 }
 
 enum class FieldKind { TEXT, NUMBER, DATE, TIME, SELECT }
@@ -40,7 +43,8 @@ const val UI_FORMAT_HINT =
     "Interactive answers: when the person must pick or fill something in, you may add one fenced block tagged ui holding JSON, one of " +
         "{\"type\":\"choices\",\"prompt\":\"...\",\"options\":[\"...\"]}, " +
         "{\"type\":\"form\",\"title\":\"...\",\"fields\":[{\"id\":\"...\",\"label\":\"...\",\"kind\":\"text|number|date|time|select\",\"options\":[...],\"required\":true}],\"submit\":\"...\"}, " +
-        "{\"type\":\"table\",\"columns\":[...],\"rows\":[[...]]} or {\"type\":\"card\",\"title\":\"...\",\"body\":\"...\",\"actions\":[\"...\"]}; " +
+        "{\"type\":\"table\",\"columns\":[...],\"rows\":[[...]]}, {\"type\":\"card\",\"title\":\"...\",\"body\":\"...\",\"actions\":[\"...\"]} " +
+        "or {\"type\":\"chart\",\"chart\":{a chart spec as above}}; " +
         "the app draws it and sends the person's choice back as their next message."
 
 private fun String.clip(): String = trim().replace(Regex("\\s+"), " ").take(UI_TEXT_MAX)
@@ -103,6 +107,7 @@ fun parseUiSpec(json: String): UiSpec? = try {
                 UiSpec.Table(columns, rows)
             }
         }
+        "chart" -> obj.optJSONObject("chart")?.let { parseChartSpec(it.toString()) }?.let { UiSpec.Chart(it) }
         "card" -> {
             val title = obj.optString("title", "").clip()
             val body = obj.optString("body", "").trim().take(UI_TEXT_MAX * 3)

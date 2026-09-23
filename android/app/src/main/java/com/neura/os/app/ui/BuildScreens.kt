@@ -104,11 +104,11 @@ private fun statusColor(status: String): Color = when (status) {
 }
 
 @Composable
-private fun StatusPill(status: String) {
+private fun StatusPill(status: String, modifier: Modifier = Modifier) {
     val color = statusColor(status)
     val pulse = rememberInfiniteTransition(label = "pill")
     val dotAlpha by pulse.animateFloat(1f, 0.35f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "dot")
-    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
+    Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50), modifier = modifier) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(7.dp).alpha(if (status == "running" || status == "queued") dotAlpha else 1f)
@@ -185,11 +185,13 @@ private fun BuildRow(session: BuildSession, onClick: () -> Unit) {
     val total = session.steps.size
     Card(
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
-        modifier = Modifier.fillMaxWidth().enterUp().pressScale(0.98f).clickable(onClick = onClick),
+        // The card grows into the build page's header, its status pill
+        // travelling with it (master plan v2, §2.2).
+        modifier = Modifier.fillMaxWidth().enterUp().sharedPiece("build-card:" + session.id).pressScale(0.98f).clickable(onClick = onClick),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusPill(session.status)
+                StatusPill(session.status, Modifier.sharedPiece("build-status:" + session.id))
                 Spacer(Modifier.weight(1f))
                 Text(relativeTime(session.startedAt), color = Palette.muted, fontSize = 12.sp)
             }
@@ -307,8 +309,8 @@ private fun BuildTimelinePane(builds: RemoteBuilds, session: BuildSession, modif
         modifier = modifier,
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusPill(session.status)
+            Row(Modifier.sharedPiece("build-card:" + session.id), verticalAlignment = Alignment.CenterVertically) {
+                StatusPill(session.status, Modifier.sharedPiece("build-status:" + session.id))
                 Spacer(Modifier.width(8.dp))
                 Text(
                     listOf(session.repo, session.model.substringAfterLast('/'), relativeTime(session.startedAt)).filter { it.isNotEmpty() }.joinToString(" · "),

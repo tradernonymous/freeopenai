@@ -61,6 +61,41 @@ class AnatomyTest {
             ChatMessage("assistant", " "),
             ChatMessage("assistant", "two"),
         )
-        assertEquals(listOf("one", "two"), canvasReplies(chat))
+        assertEquals(listOf(listOf("one"), listOf("two")), canvasEntries(chat))
+    }
+
+    @Test fun `regenerating keeps the answer it replaces as an earlier version`() {
+        val chat = listOf(
+            ChatMessage("user", "q1"), ChatMessage("assistant", "a1"),
+            ChatMessage("user", "q2"), ChatMessage("assistant", "thinking…", toolCalls = listOf(ToolCall("c", "web_search", "{}"))),
+            ChatMessage("tool", "result", toolCallId = "c"), ChatMessage("assistant", "a2"),
+        )
+        val again = keepEarlierReply(chat, lastUser = 2)
+        assertEquals(3, again.size)
+        assertEquals(listOf("a2"), again[2].earlierReplies)
+        // The canvas shows the versions on the newest answer to that question.
+        val answered = again + ChatMessage("assistant", "a2 again")
+        assertEquals(listOf(listOf("a1"), listOf("a2", "a2 again")), canvasEntries(answered))
+    }
+
+    @Test fun `a failed answer is not kept, and only the newest versions are`() {
+        val failed = listOf(ChatMessage("user", "q"), ChatMessage("assistant", "boom", error = true))
+        assertTrue(keepEarlierReply(failed, lastUser = 0).single().earlierReplies.isEmpty())
+        var chat = listOf(ChatMessage("user", "q"), ChatMessage("assistant", "v0"))
+        for (n in 1..6) chat = keepEarlierReply(chat, lastUser = 0) + ChatMessage("assistant", "v$n")
+        assertEquals(listOf("v2", "v3", "v4", "v5"), chat[0].earlierReplies)
+        assertEquals(MAX_REPLY_VERSIONS, canvasEntries(chat).single().size)
+    }
+
+    @Test fun `earlier versions survive a save and a load`() {
+        val message = ChatMessage("user", "q", earlierReplies = listOf("a", "b"))
+        assertEquals(listOf("a", "b"), chatMessageFromJson(message.toJson()).earlierReplies)
+        assertTrue(chatMessageFromJson(org.json.JSONObject().put("role", "user")).earlierReplies.isEmpty())
+    }
+
+    @Test fun `earlier versions are never sent to a model`() {
+        val body = buildChatBody("m", "", listOf(ChatMessage("user", "q", earlierReplies = listOf("OLD-ANSWER"))))
+        assertTrue(body.contains("\"q\""))
+        assertTrue(!body.contains("OLD-ANSWER"))
     }
 }

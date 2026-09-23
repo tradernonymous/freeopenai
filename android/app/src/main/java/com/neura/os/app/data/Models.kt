@@ -46,6 +46,10 @@ data class ChatMessage(
     /** How long the model reasoned before its first word of answer, for
      * "Thought for 12 s" (data/Anatomy.kt). 0 when unknown. */
     val thoughtMs: Long = 0L,
+    /** On a question: answers it had before Regenerate replaced them, oldest
+     * first (data/Anatomy.kt keepEarlierReply). For the canvas only; never
+     * sent to a model. */
+    val earlierReplies: List<String> = emptyList(),
 )
 
 data class Conversation(
@@ -117,6 +121,7 @@ fun ChatMessage.toJson(): JSONObject = JSONObject()
     .put("compareGroup", compareGroup)
     .put("cached", cached)
     .put("thoughtMs", thoughtMs)
+    .apply { if (earlierReplies.isNotEmpty()) put("earlierReplies", JSONArray(earlierReplies)) }
 
 fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     role = obj.optString("role", "user"),
@@ -138,6 +143,9 @@ fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     compareGroup = obj.optString("compareGroup", ""),
     cached = obj.optBoolean("cached", false),
     thoughtMs = obj.optLong("thoughtMs", 0L).coerceAtLeast(0L),
+    earlierReplies = obj.optJSONArray("earlierReplies")?.let { list ->
+        (0 until list.length()).mapNotNull { list.optString(it, "").takeIf { text -> text.isNotBlank() } }.takeLast(MAX_REPLY_VERSIONS - 1)
+    } ?: emptyList(),
 )
 
 fun Conversation.toJson(): JSONObject {

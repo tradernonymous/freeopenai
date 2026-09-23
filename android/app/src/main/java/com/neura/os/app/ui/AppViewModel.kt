@@ -90,6 +90,7 @@ import com.neura.os.app.data.systemPrompt
 import com.neura.os.app.data.toolBudget
 import com.neura.os.app.data.toolsForMode
 import com.neura.os.app.data.deriveTitle
+import com.neura.os.app.data.keepEarlierReply
 import com.neura.os.app.data.personaFor
 import com.neura.os.app.ReplyService
 import com.neura.os.app.normalizeBaseUrl
@@ -826,7 +827,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if (streamingId != null) return
         val lastUser = chat.messages.indexOfLast { it.role == "user" }
         if (lastUser < 0) return
-        val trimmed = chat.copy(messages = chat.messages.subList(0, lastUser + 1), updatedAt = System.currentTimeMillis())
+        // The answer being replaced stays as an earlier version the canvas
+        // can show (data/Anatomy.kt keepEarlierReply); it is never re-sent.
+        val trimmed = chat.copy(messages = keepEarlierReply(chat.messages, lastUser), updatedAt = System.currentTimeMillis())
         replace(trimmed)
         runReply(trimmed)
     }

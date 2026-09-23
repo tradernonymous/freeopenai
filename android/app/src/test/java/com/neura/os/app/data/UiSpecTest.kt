@@ -62,4 +62,12 @@ class UiSpecTest {
         assertEquals("09:05", pickedTime(9, 5))
         assertEquals("23:59", pickedTime(24, 75))
     }
+
+    @Test fun `a chart rides in a ui block, checked by the chart parser`() {
+        val spec = parseUiSpec("""{"type":"chart","chart":{"type":"bar","title":"Sales","labels":["Q1","Q2"],"series":[{"name":"2026","values":[3,5]}]}}""") as UiSpec.Chart
+        assertEquals(ChartType.BAR, spec.chart.type)
+        assertEquals(listOf(3.0, 5.0), spec.chart.series.single().values)
+        assertNull(parseUiSpec("""{"type":"chart","chart":{"type":"pie","labels":[],"series":[]}}"""))
+        assertNull(parseUiSpec("""{"type":"chart"}"""))
+    }
 }

@@ -71,6 +71,7 @@ fun UiBlock(spec: UiSpec, onAnswer: ((String) -> Unit)?) {
             is UiSpec.Form -> Form(spec, onAnswer)
             is UiSpec.Table -> Table(spec)
             is UiSpec.Card -> Card(spec, onAnswer)
+            is UiSpec.Chart -> ChartView(spec.chart)
         }
     }
 }

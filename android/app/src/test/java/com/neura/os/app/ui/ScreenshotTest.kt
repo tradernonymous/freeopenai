@@ -188,18 +188,35 @@ class ScreenshotTest {
     /** A reply's ```ui blocks drawn natively (V8): choices, a form, a table, a card. */
     @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun genui_phone() {
-        val sample: @Composable () -> Unit = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        shot("genui_phone", dark = true) { GenUiSample() }
+        shot("genui_phone", dark = false) { GenUiSample() }
+    }
+
+    /** The same blocks at tablet width. */
+    @Test @Config(qualifiers = "w840dp-h1200dp-xhdpi")
+    fun genui_tablet() {
+        shot("genui_tablet", dark = true) { GenUiSample() }
+        shot("genui_tablet", dark = false) { GenUiSample() }
+    }
+
+    /** A space at tablet width, the dock under it. */
+    @Test @Config(qualifiers = "w840dp-h1200dp-xhdpi")
+    fun space_tablet() {
+        shot("space_tablet", dark = true) { SpaceSample() }
+        shot("space_tablet", dark = false) { SpaceSample() }
+    }
+
+    @Composable
+    private fun GenUiSample() {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 listOf(
                     """{"type":"choices","prompt":"Which city?","options":["Paris","Rome","Lisbon"]}""",
                     """{"type":"form","title":"Book a table","fields":[{"id":"when","label":"Date","kind":"date","required":true},{"id":"size","label":"Size","kind":"select","options":["2","4","6"]}],"submit":"Book"}""",
                     """{"type":"table","columns":["Plan","Price"],"rows":[["Free","0"],["Pro","9"]]}""",
                     """{"type":"card","title":"Trip ready","body":"3 days in Rome, 2 museums booked.","actions":["Show plan"]}""",
+                    """{"type":"chart","chart":{"type":"line","title":"Visitors","labels":["Mon","Tue","Wed","Thu"],"series":[{"name":"Rome","values":[3,5,4,7]}]}}""",
                 ).forEach { json -> com.neura.os.app.data.parseUiSpec(json)?.let { UiBlock(it) {} } }
-            }
         }
-        shot("genui_phone", dark = true, sample)
-        shot("genui_phone", dark = false, sample)
     }
 
     /** The voice waveform pill (V6 gap): listening, speaking, paused. */

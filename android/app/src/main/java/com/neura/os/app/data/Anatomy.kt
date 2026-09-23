@@ -82,7 +82,46 @@ fun canvasWorthy(text: String): Boolean {
     }
 }
 
-/** The replies the canvas steps through: this chat's finished assistant
- * answers, oldest first -- no failures, no blank tool-call turns. */
-fun canvasReplies(messages: List<ChatMessage>): List<String> =
-    messages.filter { it.role == "assistant" && !it.error && it.content.isNotBlank() }.map { it.content }
+/** Versions of one answer the canvas can step through: the current one and
+ * up to four it replaced (Regenerate). */
+const val MAX_REPLY_VERSIONS = 5
+
+private fun ChatMessage.finishedAnswer(): Boolean = role == "assistant" && !error && content.isNotBlank()
+
+/** What the canvas steps through: this chat's finished answers, oldest
+ * first -- no failures, no blank tool-call turns. Each entry is that
+ * answer's versions, oldest first and the current one last; an answer has
+ * earlier versions when it is the last one to its question and that question
+ * was asked again (they ride on the question, see [keepEarlierReply]). */
+fun canvasEntries(messages: List<ChatMessage>): List<List<String>> {
+    // One pass from the end marks the last finished answer of each question.
+    val lastOfTurn = BooleanArray(messages.size)
+    var seen = false
+    for (index in messages.indices.reversed()) {
+        val message = messages[index]
+        if (message.role == "user") seen = false
+        else if (message.finishedAnswer() && !seen) { lastOfTurn[index] = true; seen = true }
+    }
+    val entries = mutableListOf<List<String>>()
+    var question: ChatMessage? = null
+    messages.forEachIndexed { index, message ->
+        if (message.role == "user") question = message
+        if (!message.finishedAnswer()) return@forEachIndexed
+        val earlier = if (lastOfTurn[index]) question?.earlierReplies.orEmpty() else emptyList()
+        entries += earlier + message.content
+    }
+    return entries
+}
+
+/** Regenerate: the chat up to and including the question at [lastUser],
+ * with the answer being replaced added to that question's earlier versions
+ * (newest kept, at most [MAX_REPLY_VERSIONS] - 1). A failed or empty answer
+ * is not worth keeping. Earlier versions are never sent to a model. */
+fun keepEarlierReply(messages: List<ChatMessage>, lastUser: Int): List<ChatMessage> {
+    val question = messages.getOrNull(lastUser) ?: return messages
+    val replaced = messages.drop(lastUser + 1).lastOrNull { it.finishedAnswer() }?.content
+    val kept = messages.subList(0, lastUser + 1)
+    if (replaced == null) return kept
+    val earlier = (question.earlierReplies + replaced).takeLast(MAX_REPLY_VERSIONS - 1)
+    return kept.dropLast(1) + question.copy(earlierReplies = earlier)
+}
