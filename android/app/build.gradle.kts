@@ -1,3 +1,12 @@
+// For printScreenshotSheet at the bottom: inside this script `java` is the
+// Java plugin's extension, so these packages must be imported by name.
+import java.awt.Color as AwtColor
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import java.util.Base64
+import javax.imageio.ImageIO
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -214,25 +223,25 @@ tasks.register("printScreenshotSheet") {
         val columns = 4
         val rows = (files.size + columns - 1) / columns
         val labels = 18
-        val sheet = java.awt.image.BufferedImage(columns * cell, rows * (cell * 2 + labels), java.awt.image.BufferedImage.TYPE_INT_RGB)
+        val sheet = BufferedImage(columns * cell, rows * (cell * 2 + labels), BufferedImage.TYPE_INT_RGB)
         val g = sheet.createGraphics()
-        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g.color = java.awt.Color(128, 128, 128)
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.color = AwtColor(128, 128, 128)
         g.fillRect(0, 0, sheet.width, sheet.height)
         files.forEachIndexed { i, f ->
-            val img = javax.imageio.ImageIO.read(f)
+            val img = ImageIO.read(f)
             val x = (i % columns) * cell
             val y = (i / columns) * (cell * 2 + labels)
             val scale = minOf(cell.toDouble() / img.width, (cell * 2).toDouble() / img.height)
             g.drawImage(img, x, y + labels, (img.width * scale).toInt(), (img.height * scale).toInt(), null)
-            g.color = java.awt.Color.WHITE
+            g.color = AwtColor.WHITE
             g.drawString(f.nameWithoutExtension, x + 4, y + 13)
         }
         g.dispose()
-        val out = java.io.ByteArrayOutputStream()
-        javax.imageio.ImageIO.write(sheet, "jpg", out)
+        val out = ByteArrayOutputStream()
+        ImageIO.write(sheet, "jpg", out)
         println("NEURA-SHEET-BEGIN " + files.size)
-        java.util.Base64.getMimeEncoder(76, "\n".toByteArray()).encodeToString(out.toByteArray()).lines().forEach { println(it) }
+        Base64.getMimeEncoder(76, "\n".toByteArray()).encodeToString(out.toByteArray()).lines().forEach { println(it) }
         println("NEURA-SHEET-END")
     }
 }
