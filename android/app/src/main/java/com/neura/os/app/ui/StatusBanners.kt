@@ -26,6 +26,12 @@ import androidx.compose.ui.unit.sp
 import com.neura.os.app.data.Outbox
 import com.neura.os.app.data.outboxNotice
 import kotlinx.coroutines.delay
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.Flow
 
 /** Above the composer while this chat's reply is queued for a retry: the
  * Outbox always retried, but silently, so a turn lost to a dropped
@@ -52,4 +58,21 @@ fun OutboxBanner(outbox: Outbox, chatId: String, canRetry: Boolean, onRetry: () 
             if (canRetry) TextButton(onRetry) { Text("Retry now") }
         }
     }
+}
+
+/** The one place notices appear (docs/android-master-plan.md, V3): at the app
+ * root, over whatever page is open, one at a time, in the order they were
+ * raised. Collects only while the app is on screen, so a notice raised in
+ * the background waits for the person to come back instead of flashing past
+ * unseen. */
+@Composable
+fun NoticeHost(notices: Flow<String>, modifier: Modifier = Modifier) {
+    val host = remember { SnackbarHostState() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(notices, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            notices.collect { host.showSnackbar(it) }
+        }
+    }
+    SnackbarHost(host, modifier)
 }

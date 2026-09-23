@@ -42,6 +42,10 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
+import com.neura.os.app.ui.NoticeHost
 import androidx.compose.ui.Modifier
 import android.Manifest
 import android.annotation.SuppressLint
@@ -276,6 +280,14 @@ class NativeActivity : ComponentActivity(), Platform {
                                 }
                             }
                         }
+                    }
+                    if (vm.signedIn && !locked) {
+                        NoticeHost(
+                            vm.notices,
+                            Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
+                                .imePadding()
+                                .padding(bottom = 88.dp),
+                        )
                     }
                     viewer?.let { (id, bytes, mime) ->
                         ImageViewer(bytes, onClose = { viewer = null }, onSave = { saveImage("neuraos-" + id.take(8) + ext(mime), mime, bytes) }, onShare = { shareImage("neuraos-" + id.take(8) + ext(mime), mime, bytes) })

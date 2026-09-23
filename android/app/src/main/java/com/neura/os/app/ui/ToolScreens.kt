@@ -419,7 +419,7 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
             modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp),
         )
         AnimatedVisibility(instructions != vm.library.instructions) {
-            TextButton({ vm.saveInstructions(instructions); vm.notice = "Saved" }) { Text("Save") }
+            TextButton({ vm.saveInstructions(instructions); vm.showNotice("Saved") }) { Text("Save") }
         }
         // Read-only: the default is set with "Default" in a chat's model picker.
         SettingRow("Default model", shortModel(vm.library.defaultModel).ifEmpty { "Auto" }, onClick = null)
@@ -493,11 +493,11 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SectionTitle("App")
         ThemePicker(vm.themeMode) { vm.setTheme(it) }
         SettingRow("Check for updates", null) { platform.checkUpdates() }
-        SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.notice = "No crash recorded" }
+        SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.showNotice("No crash recorded") }
         val problems = vm.failures.items.size
         SettingRow("Copy diagnostics", if (problems == 0) "No problems yet" else "$problems recent") {
             platform.copy(diagnosticsText(vm, platform))
-            vm.notice = "Diagnostics copied -- no chats, keys or passwords in it."
+            vm.showNotice("Diagnostics copied -- no chats, keys or passwords in it.")
         }
         SettingRow("Version", platform.version, onClick = null)
         SettingRow("Sign out", null, danger = true) { confirmSignOut = true }

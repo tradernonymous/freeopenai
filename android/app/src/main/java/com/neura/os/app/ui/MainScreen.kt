@@ -404,13 +404,6 @@ private fun DrawerRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation, onMenu: () -> Unit) {
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(vm.notice) {
-        vm.notice?.let {
-            snackbar.showSnackbar(it)
-            vm.notice = null
-        }
-    }
     var modelSheet by remember { mutableStateOf(false) }
     var sessionSheet by remember { mutableStateOf(false) }
     var workspaceSheet by remember { mutableStateOf(false) }
@@ -424,7 +417,6 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
     }
     Scaffold(
         containerColor = Palette.background,
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             Column {
                 TopAppBar(

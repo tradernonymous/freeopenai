@@ -1,5 +1,12 @@
 package com.neura.os.app.ui
 
+import androidx.lifecycle.viewModelScope
+import com.neura.os.app.data.NoticeQueue
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import android.app.Application
 import com.neura.os.app.data.ImageIntelligence
 import com.neura.os.app.data.FileGenerator
@@ -103,21 +110,22 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     // would otherwise end the process (a full disk on save, a Keystore fault),
     // and a block posted after the pool is shut down would throw on main.
     private val pool = Executors.newFixedThreadPool(3)
-    private val io = Executor { block ->
-        try {
-            pool.execute {
-                try {
-                    block.run()
-                } catch (e: Exception) {
-                    val reason = e.message ?: e.javaClass.simpleName
-                    recordFailure("app", reason)
-                    main.post { notice = "Something went wrong: $reason" }
-                }
-            }
-        } catch (e: RejectedExecutionException) {
-            // The screen is gone; there is nobody to do this for.
-        }
+    // Background work has an owner (docs/android-master-plan.md, V3): every
+    // io block is a child job of viewModelScope on this pool, so clearing the
+    // view model cancels what is still queued, and a failure lands in
+    // [ioFailures] -- the same failure ring and notice the old executor
+    // guard produced -- instead of ending the process.
+    private val ioDispatcher = pool.asCoroutineDispatcher()
+    private val ioFailures = CoroutineExceptionHandler { _, e ->
+        val reason = e.message ?: e.javaClass.simpleName
+        recordFailure("app", reason)
+        showNotice("Something went wrong: $reason")
     }
+
+    /** Runs [block] off the main thread as a job this view model owns. */
+    private fun launchIo(block: () -> Unit): Job = viewModelScope.launch(ioDispatcher + ioFailures) { block() }
+
+    private val io = Executor { block -> launchIo { block.run() } }
     private val main = Handler(Looper.getMainLooper())
     private val activeStream = AtomicReference<HttpURLConnection?>(null)
     private val context = app.applicationContext
@@ -188,7 +196,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         private set
 
     /** One-shot messages for a snackbar. */
-    var notice by mutableStateOf<String?>(null)
+    private val noticeQueue = NoticeQueue()
+
+    /** One-shot snackbar messages, shown once each, in order, by the app
+     * root's NoticeHost -- whatever page is on screen (data/Notices.kt). */
+    val notices: Flow<String> get() = noticeQueue.notices
+
+    /** Queues a snackbar message. Safe from any thread. */
+    fun showNotice(text: String?) {
+        noticeQueue.post(text)
+    }
 
     /** The failures this run has shown, newest first, for Settings -> "Copy
      * diagnostics" (see data/Diagnostics.kt). Memory only: redacted and
@@ -381,14 +398,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** Hands [plan] (a Plan-mode reply) to the server and opens the build. */
     fun startRemoteBuild(plan: String) {
         if (builds.actionBusy) return
-        notice = "Starting the build on the server…"
+        showNotice("Starting the build on the server…")
         builds.start(
             currentChatId ?: "",
             plan,
             onStarted = { push(Route.Build) },
             onFailed = { message ->
                 recordFailure("build", message)
-                notice = "Build not started: $message"
+                showNotice("Build not started: $message")
             },
         )
     }
@@ -543,7 +560,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val list = reauthing { if (provider == PUTER_PROVIDER) api.puterModels() else api.models(provider) }
             main.post { models[provider] = list }
         } catch (e: ApiException) {
-            main.post { notice = e.message }
+            main.post { showNotice(e.message) }
         }
     }
 
@@ -781,7 +798,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if ((trimmed.isEmpty() && images.isEmpty()) || streamingId != null) return false
         if (images.isEmpty() && handleCommand(id, trimmed)) return true
         if (chat.provider.isEmpty() || chat.model.isEmpty()) {
-            notice = "Pick a model first (tap the model name at the top)."
+            showNotice("Pick a model first (tap the model name at the top).")
             return false
         }
         val now = System.currentTimeMillis()
@@ -848,10 +865,15 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         currentChatId = copy.id
     }
 
-    @Volatile private var stopRequested = false
+    /** The reply streaming now (runReply or runCompareReply). Stop cancels
+     * it; the loop checks [replyStopped] between steps, and closing the
+     * connection ends the blocking read it may be inside. */
+    @Volatile private var replyJob: Job? = null
+
+    private fun replyStopped(): Boolean = replyJob?.isCancelled == true
 
     fun stop() {
-        stopRequested = true
+        replyJob?.cancel()
         activeStream.getAndSet(null)?.let { connection -> io.execute { connection.disconnect() } }
         ReplyService.stop(context)
     }
@@ -880,11 +902,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         when (match) {
             is SlashMatch.Skill -> {
                 pinSkills(chat, listOf(match.name))
-                notice = "Using ${match.name} for this chat."
+                showNotice("Using ${match.name} for this chat.")
             }
             is SlashMatch.Chain -> {
                 pinSkills(chat, match.names)
-                notice = "Using " + match.names.joinToString(", ") + "."
+                showNotice("Using " + match.names.joinToString(", ") + ".")
             }
             is SlashMatch.Known -> runKnownCommand(chat, match.name, match.args)
         }
@@ -903,7 +925,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun pinSkillToCurrentChat(name: String) {
         val chat = currentOrNew()
         pinSkills(chat, listOf(name))
-        notice = "Pinned $name to this chat."
+        showNotice("Pinned $name to this chat.")
     }
 
     /** Pin skills to a chat, fetching each SKILL.md once for its prompt. */
@@ -920,7 +942,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val skill = name.lowercase()
         if (skill !in chat.skills) return
         replace(chat.copy(skills = chat.skills - skill, updatedAt = System.currentTimeMillis()))
-        notice = "Stopped using $skill."
+        showNotice("Stopped using $skill.")
     }
 
     private fun runKnownCommand(chat: Conversation, name: String, args: String) {
@@ -938,29 +960,29 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     arg.lowercase().startsWith("off ") -> {
                         val skill = arg.substring(4).trim().lowercase()
                         replace(chat.copy(skills = chat.skills - skill))
-                        notice = "Stopped using $skill."
+                        showNotice("Stopped using $skill.")
                     }
                     else -> {
                         val skill = arg.split(Regex("\\s+")).first().lowercase()
                         pinSkills(chat, listOf(skill))
-                        notice = "Using $skill for this chat."
+                        showNotice("Using $skill for this chat.")
                     }
                 }
             }
             "mode" -> when (args.lowercase()) {
-                "chat" -> { setMode(chat.id, "chat"); notice = "Chat mode." }
-                "plan" -> { setMode(chat.id, "plan"); notice = "Plan mode." }
-                "build" -> { setMode(chat.id, "build"); notice = "Build mode: light edits to this chat's own files. Ask for a plan and tap \"Build remotely\" for anything bigger." }
-                else -> notice = "Usage: /mode chat | plan | build"
+                "chat" -> { setMode(chat.id, "chat"); showNotice("Chat mode.") }
+                "plan" -> { setMode(chat.id, "plan"); showNotice("Plan mode.") }
+                "build" -> { setMode(chat.id, "build"); showNotice("Build mode: light edits to this chat's own files. Ask for a plan and tap \"Build remotely\" for anything bigger.") }
+                else -> showNotice("Usage: /mode chat | plan | build")
             }
             "clear" -> {
                 newChat()
-                notice = "New chat started."
+                showNotice("New chat started.")
             }
             "compact" -> when (args.lowercase()) {
-                "on" -> { replace(chat.copy(compact = true)); notice = "Sending a shorter history." }
-                "off" -> { replace(chat.copy(compact = false)); notice = "Sending the full history." }
-                else -> notice = if (chat.compact) "Compact is on." else "Compact is off."
+                "on" -> { replace(chat.copy(compact = true)); showNotice("Sending a shorter history.") }
+                "off" -> { replace(chat.copy(compact = false)); showNotice("Sending the full history.") }
+                else -> showNotice(if (chat.compact) "Compact is on." else "Compact is off.")
             }
             "doctor" -> commandInfo = doctorReport(chat)
         }
@@ -1006,14 +1028,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private fun runReply(start: Conversation) {
         streamingId = start.id
         streamStartedAt = System.currentTimeMillis()
-        stopRequested = false
         // Any earlier connectivity failure for this chat is superseded by
         // this attempt, whether it came from the user or from drainOutbox
         // itself -- it will be re-queued below if this attempt fails too.
         if (outbox.entries.any { it.chatId == start.id }) updateOutbox(outbox.acked(start.id))
         val lib = library
         ReplyService.start(context, start.id, start.title)
-        io.execute {
+        replyJob = launchIo {
           try {
             var chat = start
             var useTools = true
@@ -1023,13 +1044,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             var authRetried = false
             var queueForRetry = false
             val seenCalls = HashMap<String, Int>()
-            while (round <= MAX_TOOL_ROUNDS && !stopRequested) {
+            while (round <= MAX_TOOL_ROUNDS && !replyStopped()) {
                 val persona = personaFor(lib, chat.personaId)
                 val skillTexts = chat.skills.mapNotNull { skillBodies[it] ?: skillBody(it) }
                 // A pinned skill whose text the server has not got is a skill
                 // that is not applying, which is invisible from the chip alone.
                 if (skillTexts.size < chat.skills.size && round == 0) {
-                    main.post { notice = "Some pinned skills could not be loaded, so they are not applying." }
+                    main.post { showNotice("Some pinned skills could not be loaded, so they are not applying.") }
                 }
                 // Universal Image Vision: auto-describe images for text-only models
                 if (round == 0) {
@@ -1119,7 +1140,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     useTools = false
                     continue
                 }
-                if (stopRequested && content.isEmpty() && calls.isEmpty()) {
+                if (replyStopped() && content.isEmpty() && calls.isEmpty()) {
                     chat = base
                     break
                 }
@@ -1148,7 +1169,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 if (error != null || calls.isEmpty()) break
                 publishChat(chat, persist = false)
                 for (call in calls) {
-                    if (stopRequested) break
+                    if (replyStopped()) break
                     // Per-turn budget: a model that keeps calling tools is cut
                     // off here rather than spending the whole allowance.
                     if (toolBudget(stepsTaken) == 0) {
@@ -1216,17 +1237,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private fun runCompareReply(start: Conversation, primary: CompareTarget, secondary: CompareTarget) {
         streamingId = start.id
         streamStartedAt = System.currentTimeMillis()
-        stopRequested = false
         val lib = library
         ReplyService.start(context, start.id, start.title)
-        io.execute {
+        replyJob = launchIo {
           try {
             val groupId = UUID.randomUUID().toString()
             val persona = personaFor(lib, start.personaId)
             val prompt = systemPrompt(persona.systemPrompt, lib.instructions, "chat")
             var chat = start
             for ((sideIndex, target) in listOf(primary, secondary).withIndex()) {
-                if (stopRequested) break
+                if (replyStopped()) break
                 val body = buildChatBody(target.model, prompt, start.messages)
                 val started = System.currentTimeMillis()
                 val content = StringBuilder()
@@ -1383,7 +1403,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         start { result ->
             puterSigningIn = false
             if (result.isFailure) recordFailure("puter", result.exceptionOrNull()?.message)
-            notice = if (result.isSuccess) "Signed in to Puter." else "Puter sign-in: " + (result.exceptionOrNull()?.message ?: "failed")
+            showNotice(if (result.isSuccess) "Signed in to Puter." else "Puter sign-in: " + (result.exceptionOrNull()?.message ?: "failed"))
         }
     }
 
@@ -1471,7 +1491,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val state = api.review(repo, number, event, text)
                 main.post {
                     reviewBusy = false
-                    notice = "Review sent to #$number" + (if (state.isEmpty()) "." else ": " + state.lowercase().replace('_', ' ') + ".")
+                    showNotice("Review sent to #$number" + (if (state.isEmpty()) "." else ": " + state.lowercase().replace('_', ' ') + "."))
                     onSent()
                 }
             } catch (e: ApiException) {
@@ -1511,7 +1531,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 api.githubAuthorizeUrl(api.githubHandoff(), adding)
             } catch (e: Exception) {
                 recordFailure("github", e.message)
-                main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
+                main.post { githubConnecting = false; showNotice("GitHub connect: " + (e.message ?: "failed")) }
                 return@execute
             }
             main.post { launch(url) }
@@ -1529,11 +1549,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 main.post {
                     githubConnecting = false
                     githubLogins = logins
-                    notice = "Connected to GitHub as " + login.ifEmpty { "your account" } + "."
+                    showNotice("Connected to GitHub as " + login.ifEmpty { "your account" } + ".")
                 }
             } catch (e: Exception) {
                 recordFailure("github", e.message)
-                main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
+                main.post { githubConnecting = false; showNotice("GitHub connect: " + (e.message ?: "failed")) }
             }
         }
     }
@@ -1602,7 +1622,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 recordFailure("puter", "image: $lastReason")
                 main.post {
                     puterImages = false
-                    notice = "Puter off: $lastReason. Using free server images."
+                    showNotice("Puter off: $lastReason. Using free server images.")
                 }
             }
         }
