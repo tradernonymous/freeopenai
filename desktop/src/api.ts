@@ -353,6 +353,22 @@ export const api = {
     quality?: string;
     n?: number;
   }) => request('/api/llm/images/generations', { method: 'POST', body: JSON.stringify(body) }),
+  // The same fields plus the picture being changed. `image` is a data: URL or an
+  // http(s) link -- the engine reads the bytes itself (imageBytesFor) so the far
+  // side is never asked to fetch from a host it may not reach. A `mask` only
+  // reaches a service that takes file parts; the engine drops one it cannot send
+  // and says so in `notes`.
+  imageEdit: (body: {
+    prompt: string;
+    image: string;
+    mask?: string;
+    provider?: string;
+    preferProvider?: string;
+    model?: string;
+    size?: string;
+    quality?: string;
+    n?: number;
+  }) => request('/api/llm/images/edits', { method: 'POST', body: JSON.stringify(body) }),
 
   // design
   designTemplates: () => request('/api/design/templates'),

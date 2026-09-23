@@ -1,0 +1,239 @@
+===============================================================================
+NEURAOS -- EVERYTHING OPEN, AND THE ORDER I WOULD BUILD IT
+Written 2026-09-23. Live tracker: docs/BACKLOG.md (this file is the plan; that
+file is the truth about what is open).
+===============================================================================
+
+HOW TO READ THIS
+  Each phase says: what lands, which NEURA ids it closes, what you have to do
+  yourself, which app or service is involved, and how it is verified. "Green
+  EXE" always means the Desktop workflow finishing with Installer + MSI +
+  Portable artifacts, after cargo test and the node suite have passed.
+
+  The standing loop for every phase, unchanged:
+    1. git pull --rebase
+    2. build it
+    3. node --test  +  npm run lint  +  npx tsc --noEmit  +  npx vite build
+    4. node scripts/run-evals.js   (must stay 48/48)
+    5. git add only the intended files, commit, push origin HEAD:main
+    6. watch the Desktop run to green; a red build gets a NEW fix commit,
+       never a force-push
+    7. report what changed
+
+
+-------------------------------------------------------------------------------
+PART 1 -- WHAT IS ALREADY DONE (so nothing gets rebuilt by mistake)
+-------------------------------------------------------------------------------
+  NEURA-049  cargo test runs in CI before the bundle is made
+  NEURA-050  Mica, guarded, plus the darker glossy green
+  NEURA-051  status bar reads /health and /slots from the local runtime
+  NEURA-052  .freeai4u.json per-project agent settings
+  NEURA-053  one-click skill install from the Hugging Face catalogue
+  NEURA-054  BYOK endpoints, key in Credential Manager, request issued in Rust
+  NEURA-055  local models use their own GGUF chat template (jinja)
+  NEURA-056  project-scout index + find_symbol
+  NEURA-057  evals run on every push (48/48, threshold checked in)
+  NEURA-058  real PTY terminal (portable-pty + xterm.js)
+  NEURA-059  local image generation through sd-server
+  NEURA-069  the shell redesign: rails, gold rule, Unsloth composer row
+  plus       Hugging Face lookup + nested-file download + file sizes
+  plus       a turn never ends in silence (the "master plan" bug)
+
+  ON DISK AND WORKING, NOT YET SELECTED IN THE APP:
+    whisper-cli  D:\NeuraOS EXE\whisper\Release\whisper-cli.exe
+    models       D:\NeuraOS EXE\whisper\models\ggml-base.en.bin       (use this)
+                 D:\NeuraOS EXE\whisper\models\ggml-large-v3-turbo-q5_0.bin
+                 (turbo took 49s of CPU for 1s of audio on this machine --
+                  base.en is the one to use for dictation)
+    sd-server    D:\NeuraOS EXE\sd\sd-server.exe        (Vulkan build)
+    image model  D:\NeuraOS EXE\sd\models\v1-5-pruned-emaonly.safetensors
+                 (verified: 8 steps, ~3s per step, real image produced)
+
+
+-------------------------------------------------------------------------------
+PART 2 -- YOURS, NOT MINE (5 items, none of them code)
+-------------------------------------------------------------------------------
+NEURA-001  CODE SIGNING                          service: Azure, or any CA
+  Why: without it Windows SmartScreen warns every person who installs.
+  Either: a .pfx file -> repository secrets WINDOWS_CERTIFICATE (base64) and
+  WINDOWS_CERTIFICATE_PASSWORD.
+  Or: Azure Trusted Signing (about US$10/month) -> secrets AZURE_TENANT_ID,
+  AZURE_CLIENT_ID, AZURE_CLIENT_SECRET and variables TRUSTED_SIGNING_ACCOUNT,
+  TRUSTED_SIGNING_PROFILE, TRUSTED_SIGNING_ENDPOINT.
+  CI already handles both paths. Full steps: docs/desktop.md -> Signing.
+
+NEURA-002  HUGGING FACE OAUTH APP                service: huggingface.co
+  Register at huggingface.co/settings/applications/new
+    redirect  http://127.0.0.1:47823/hf/callback
+    scopes    openid profile read-repos inference-api
+  Then:  gh variable set NEURAOS_HF_CLIENT_ID --body <client-id>
+  (or paste the id in Settings -> Connectors). Turns sign-in from "paste a
+  token" into one click.
+
+NEURA-003  UPDATE-SIGNING KEY                    service: none, local
+  The four commands in docs/desktop.md -> Update signing. I am blocked from
+  writing into your key folder, so these are yours to run. Back up the key and
+  its password. Until then updates are checked by sha256 only.
+
+NEURA-004  LOGO FILE                             app: any image editor
+  assets/branding/neuraos-logo.png -- emblem only, no text, no background,
+  square, 512px or larger. One file replaces the icon everywhere: web, APK,
+  desktop, tray.
+
+NEURA-042  PICK THE WHISPER PATHS                app: NeuraOS -> Settings
+  The binary and models are on D: already (Part 1). Settings -> Dictation,
+  choose Release\whisper-cli.exe and ggml-base.en.bin. Nothing to download.
+
+
+-------------------------------------------------------------------------------
+PART 3 -- VERIFY IN THE INSTALLED APP (about 30 minutes, all of it clicking)
+-------------------------------------------------------------------------------
+  Install the newest build first (Installer artifact from the green Desktop
+  run), then walk these. Anything that fails, tell me the id and what you saw.
+
+  NEURA-065  the new shell: rails peek on hover and stay on a pin, the centre
+             column does NOT shift when a rail opens, gold appears on exactly
+             one thing at a time, Mica shows on Windows 11 (Settings ->
+             Appearance says so), and the window is solid where it cannot.
+  NEURA-066  the real terminal: a REPL, git rebase -i, Ctrl+C, resize, and no
+             orphaned shell in Task Manager after closing the screen.
+  NEURA-067  local images: pick sd-server + the SD 1.5 file, generate, watch
+             the queue position, cancel mid-draw, and confirm Quit stops the
+             server.
+  NEURA-068  BYOK: add an endpoint, chat through it, confirm the key is in
+             Credential Manager (Windows -> Credential Manager -> Generic) and
+             in no log, then delete the endpoint and confirm the credential is
+             gone too.
+  NEURA-010  scripts inside srcdoc frames run in the packaged app (HTML
+             Preview, Design canvas, MCP Apps) -- the CSP could block them.
+  NEURA-011  chats move into the encrypted store on first start, History still
+             lists them, and a tray Quit right after typing keeps the last edit.
+  NEURA-012  accent hue, floating panes and Reduce motion look right in both
+             themes.
+  NEURA-013  Monaco opens a local file, Ctrl+S saves, Docker sandbox runs a
+             quoted command (needs Docker Desktop up).
+  NEURA-014  quoted commands survive: git commit -m "msg" from the terminal.
+  NEURA-015  one-click HF sign-in (after NEURA-002).
+  NEURA-016  double-click a .gguf, and Explorer's "Open in NeuraOS" on a folder
+             (needs a fresh install from the NSIS installer).
+  NEURA-043  /research end to end: sources, citations, graph, Markdown and PDF
+             export, and the no-search fallback.
+  NEURA-044  local dictation after picking the paths, including that -of writes
+             <name>.txt (already proven on the command line, not yet in-app).
+  NEURA-045  Design: insert a component, export React / Flutter / SwiftUI, and
+             a PPTX that carries a slide's pictures.
+  NEURA-046  a scheduled recipe that needs approval notifies, waits, resumes on
+             Allow; Diagnostics shows the three startup marks.
+
+
+-------------------------------------------------------------------------------
+PART 4 -- THE PHASES I WOULD BUILD NEXT, IN ORDER
+-------------------------------------------------------------------------------
+
+PHASE A -- FINISH THE SHELL           size: S+M, one sitting
+  Closes: the rest of NEURA-069, NEURA-047, NEURA-048
+  Apps/services: none beyond the repo. Verified in the dev browser preview and
+  then in the EXE.
+  What lands:
+    - Changes tab: a real read-only git status/diff in the right rail. Today it
+      is an honest empty state pointing at Parallel, because the only git
+      surface in the app runs `git add -A` first, which is a write and wrong
+      for a passive panel. Needs a read-only status command in local.rs.
+    - Fold the old right-hand panel (Builds / Knowledge) into the workbench
+      rail, so there is one right-hand surface instead of two.
+    - Lazy-load Settings, Connect, Local and Code screens (NEURA-047): the
+      entry bundle is still carrying about 490 kB of Chat's own code.
+    - Warn in Diagnostics when startup misses 2s on this machine, naming the
+      biggest chunk (NEURA-048).
+  Verify: green EXE, plus NEURA-065 walked by you.
+
+PHASE B -- THE DESIGN TAB             size: M-L, the one you care about
+  Closes: NEURA-070
+  Apps/services: your printezy247/viralai repo (read first), the model provider
+  you pick for generation, and optionally sd-server for local mockup imagery.
+  What lands:
+    - Read viralai and say plainly what transfers: the mockup generator, and
+      whatever else earns its place. No licensing work now, by your call --
+      that gets revisited before anything is sold.
+    - Mockups inside the Design canvas: generate, iterate, export.
+    - The Design tab becomes a first-class workspace rather than a link from
+      the rail.
+  Verify: generate a mockup end to end in the EXE; green EXE.
+
+PHASE C -- THE AGENT GETS SHARPER     size: M
+  Closes: NEURA-060, NEURA-061, NEURA-063, NEURA-064, NEURA-025, NEURA-062
+  Apps/services: none new.
+    - NEURA-060  a session remembers {provider, model} only, so two BYOK
+                 endpoints serving the same model id are indistinguishable.
+                 The session needs the endpoint id.
+    - NEURA-061  the project index is ~443 kB of JSON in localStorage for this
+                 repo; a monorepo passes the 5 MB ceiling and then silently
+                 never persists. Drop symbols for files that export nothing.
+    - NEURA-063  the freshness walk costs ~100ms before the first model call of
+                 every run; check the root and top areas first, defer the rest.
+    - NEURA-064  reasoning_effort is not sent to BYOK endpoints, so /reasoning
+                 silently does nothing there.
+    - NEURA-062  Remove for an installed skill (needs a delete command on the
+                 Rust side; today Install has no opposite).
+    - NEURA-025  pick a real, maintained LSP-over-MCP package to replace the
+                 placeholder preset.
+  Verify: green EXE; the BYOK duplicate case reproduced, then fixed.
+
+PHASE D -- EDITOR INTELLIGENCE        size: L
+  Closes: NEURA-034
+  Apps/services: whichever language server the Phase C decision lands on.
+    - Go-to-definition and diagnostics in Monaco through an LSP MCP server.
+      The largest remaining desktop feature, and it depends on NEURA-025.
+
+PHASE E -- THE OTHER TWO SURFACES     size: M each, the other session's work
+  Closes: NEURA-037 (web), NEURA-039 (Android), NEURA-038 (engine)
+    - NEURA-037  slash registry, tool schemas and tool renderers into shared/,
+                 loaded by the web app too (ADR 0002 steps 2-4).
+    - NEURA-039  Android parity: MCP Apps, scheduled recipes, Evals history,
+                 research mode -- decide which of those fit a phone at all.
+    - NEURA-038  the /api/mcp/* rate limit counts per engine process; move it
+                 to shared storage if the engine ever runs as several instances.
+
+PHASE F -- SHIPPABLE                  size: S, but gated on you
+  Closes: NEURA-001, NEURA-003
+    - A signed installer, signed update manifests, and a release that installs
+      with no SmartScreen warning. Nothing here is code: it waits on the
+      certificate and the update key from Part 2.
+
+
+-------------------------------------------------------------------------------
+PART 5 -- APPS AND SERVICES IN PLAY, AND WHAT EACH IS FOR
+-------------------------------------------------------------------------------
+  GitHub Actions      every build. The Desktop workflow makes the EXE; CI runs
+                      the node suite, the smoke and the evals.
+  gh CLI              downloads artifacts, reads failing logs, sets the
+                      NEURAOS_HF_CLIENT_ID variable.
+  Hugging Face        model catalogue, GGUF downloads, inference, skills, and
+                      the whisper/SD weights. Token lives in Credential Manager.
+  Railway             the engine this app talks to
+                      (freeopenai-production.up.railway.app).
+  Ollama              local text models it manages itself (127.0.0.1:11434).
+  llama-server        local GGUF models the app starts (Unsloth's binary).
+  whisper.cpp         local dictation. Binary + model on D:, see Part 1.
+  stable-diffusion.cpp local image generation via sd-server. On D:, Vulkan.
+  Docker Desktop      the optional sandbox behind "Run in the sandbox".
+  Azure Trusted Signing (or a .pfx) -- the only paid piece, and only for Part 2.
+
+
+-------------------------------------------------------------------------------
+PART 6 -- KNOWN LIMITS, SAID PLAINLY
+-------------------------------------------------------------------------------
+  - Flux and Qwen-Image do not fit 4 GB of VRAM. Even at Q4 they need roughly
+    12 GB across the weights and a separate text encoder; they will run by
+    offloading to RAM, at minutes per image. SD 1.5 is the model that actually
+    works on this machine.
+  - The turbo whisper model is too slow on this CPU (49s of encode for 1s of
+    audio). base.en is the right choice here.
+  - The approval menu governs the CODING AGENT. A chat turn's own gate is a
+    static per-tool rule in tools.js and does not consult that setting yet --
+    worth unifying, and not yet done.
+  - Remote MCP apps get the tool result as text only.
+  - Maestro (the Android UI tests) is non-blocking in CI by design.
+  - 106 lint warnings, 0 errors. They are unused catch bindings and the like,
+    inherited, and none of them is a bug.
+===============================================================================

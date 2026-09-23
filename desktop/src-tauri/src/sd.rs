@@ -29,6 +29,13 @@
 //                                  "prompt", "negative_prompt", "width",
 //                                  "height", "seed", "batch_count" and the
 //                                  nested "sample_params": {"sample_steps"}.
+//                                  Editing a picture is the SAME endpoint --
+//                                  sd.cpp serves no edit route of its own --
+//                                  with "init_image" (a raw base64 string or a
+//                                  data: URL) and "strength", the documented
+//                                  image-to-image pair. "mask_image" exists
+//                                  too and is not sent: it wants one channel,
+//                                  and nothing in this app paints one.
 //   GET  /sdcpp/v1/jobs/{id}    -- {"status": queued|generating|completed|
 //                                  failed|cancelled, "queue_position", and on
 //                                  completion "result": {"output_format",
@@ -56,6 +63,10 @@ pub const RELEASES_URL: &str = "https://github.com/leejet/stable-diffusion.cpp/r
 pub const MODELS_URL: &str = "https://huggingface.co/models?library=gguf&other=stable-diffusion";
 /// Loading a diffusion model off a cold disk is slow, but not endless.
 pub const START_TIMEOUT_SECS: u64 = 300;
+/// The longest source picture an edit may carry, in characters of base64.
+/// Roughly 18 MB of image: enough for anything a person edits by hand, and a
+/// ceiling so a page cannot hand this process an unbounded string.
+const MAX_INIT_IMAGE_CHARS: usize = 24 * 1024 * 1024;
 /// The file extensions sd.cpp loads as a model.
 const MODEL_EXTENSIONS: [&str; 4] = ["safetensors", "ckpt", "gguf", "sft"];
 
@@ -612,6 +623,8 @@ pub fn job_body(
     height: u32,
     steps: Option<u32>,
     seed: Option<i64>,
+    init_image: Option<&str>,
+    strength: Option<f64>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
         "prompt": prompt,
@@ -626,7 +639,59 @@ pub fn job_body(
     if let Some(seed) = seed {
         body["seed"] = serde_json::json!(seed);
     }
+    // A strength without a picture to apply it to would be a field about
+    // nothing, so the pair travels together or not at all.
+    if let Some(image) = init_image {
+        body["init_image"] = serde_json::json!(image);
+        body["strength"] =
+            serde_json::json!(strength.unwrap_or(DEFAULT_EDIT_STRENGTH).clamp(0.0, 1.0));
+    }
     body
+}
+
+/// How much of the source an edit is allowed to leave behind when the caller
+/// does not say. sd.cpp's own example uses 0.75; this asks for less, because
+/// the request is "change this picture" rather than "start from it".
+const DEFAULT_EDIT_STRENGTH: f64 = 0.6;
+
+/// The source picture for an edit. sd.cpp accepts a raw base64 string or a
+/// data: URL and nothing else -- in particular not a path, because a path
+/// would be this process reading whatever file a page named.
+fn valid_init_image(raw: &str) -> Result<String, String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Err("The picture to change arrived empty.".to_string());
+    }
+    if text.len() > MAX_INIT_IMAGE_CHARS {
+        return Err("That picture is too large to edit here.".to_string());
+    }
+    let payload = match text.strip_prefix("data:") {
+        Some(rest) => match rest.split_once(";base64,") {
+            Some((kind, data)) if kind.starts_with("image/") => data,
+            _ => {
+                return Err(
+                    "The picture must be base64 image bytes, or a data: URL carrying them."
+                        .to_string(),
+                )
+            }
+        },
+        None => text,
+    };
+    let letters = payload.as_bytes();
+    let looks_base64 = letters.iter().any(|b| b.is_ascii_alphanumeric())
+        && letters.iter().all(|b| {
+            b.is_ascii_alphanumeric()
+                || *b == b'+'
+                || *b == b'/'
+                || *b == b'='
+                || b.is_ascii_whitespace()
+        });
+    if !looks_base64 {
+        return Err(
+            "The picture must be base64 image bytes, or a data: URL carrying them.".to_string(),
+        );
+    }
+    Ok(text.to_string())
 }
 
 /// The size sd.cpp will draw: a multiple of 64, and nothing absurd. A page
@@ -661,6 +726,10 @@ pub async fn sd_generate(
     height: u32,
     steps: Option<u32>,
     seed: Option<i64>,
+    // An edit is the same job with the picture being changed attached. Absent,
+    // this is the draw it has always been.
+    init_image: Option<String>,
+    strength: Option<f64>,
 ) -> Result<serde_json::Value, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
@@ -670,6 +739,10 @@ pub async fn sd_generate(
     let height = valid_side(height, "height")?;
     let port = running_port()
         .ok_or_else(|| "The local image server is not running: start it first.".to_string())?;
+    let init = match init_image {
+        Some(raw) => Some(valid_init_image(&raw)?),
+        None => None,
+    };
     let body = job_body(
         &prompt,
         negative_prompt.unwrap_or_default().trim(),
@@ -677,6 +750,8 @@ pub async fn sd_generate(
         height,
         steps,
         seed,
+        init.as_deref(),
+        strength,
     )
     .to_string();
     let url = format!("{}/sdcpp/v1/img_gen", base_url(port));
@@ -801,7 +876,7 @@ mod tests {
 
     #[test]
     fn the_job_body_is_the_documented_one() {
-        let body = job_body("a cat", "", 512, 768, Some(20), Some(7));
+        let body = job_body("a cat", "", 512, 768, Some(20), Some(7), None, None);
         assert_eq!(body["prompt"], "a cat");
         assert_eq!(body["negative_prompt"], "");
         assert_eq!(body["width"], 512);
@@ -810,9 +885,38 @@ mod tests {
         assert_eq!(body["sample_params"]["sample_steps"], 20);
         assert_eq!(body["seed"], 7);
         // Nothing is invented when nothing was asked for.
-        let bare = job_body("a cat", "", 512, 512, None, None);
+        let bare = job_body("a cat", "", 512, 512, None, None, None, None);
         assert!(bare.get("sample_params").is_none());
         assert!(bare.get("seed").is_none());
+        // A draw never carries the edit pair.
+        assert!(bare.get("init_image").is_none());
+        assert!(bare.get("strength").is_none());
+    }
+
+    #[test]
+    fn an_edit_is_the_same_job_with_the_picture_attached() {
+        let edit = job_body("bluer", "", 512, 512, None, None, Some("QUJD"), None);
+        assert_eq!(edit["init_image"], "QUJD");
+        assert_eq!(edit["strength"], DEFAULT_EDIT_STRENGTH);
+        // A mask is never sent: sd.cpp wants one channel and nothing here
+        // paints one.
+        assert!(edit.get("mask_image").is_none());
+        // A strength nobody could mean is clamped rather than refused upstream.
+        let strong = job_body("bluer", "", 512, 512, None, None, Some("QUJD"), Some(9.0));
+        assert_eq!(strong["strength"], 1.0);
+    }
+
+    #[test]
+    fn a_source_picture_is_base64_or_it_is_refused() {
+        assert_eq!(valid_init_image(" QUJD ").unwrap(), "QUJD");
+        let url = "data:image/png;base64,QUJD";
+        assert_eq!(valid_init_image(url).unwrap(), url);
+        // Not a picture, not a path, not a link this process would go and read.
+        assert!(valid_init_image("data:text/plain;base64,QUJD").is_err());
+        assert!(valid_init_image("C:\\Users\\me\\secret.png").is_err());
+        assert!(valid_init_image("example.com/holiday.png").is_err());
+        assert!(valid_init_image("   ").is_err());
+        assert!(valid_init_image(&"A".repeat(MAX_INIT_IMAGE_CHARS + 1)).is_err());
     }
 
     #[test]

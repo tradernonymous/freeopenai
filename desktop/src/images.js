@@ -336,6 +336,161 @@
     return body;
   }
 
+  // ---- editing an existing picture ---------------------------------------
+  //
+  // The same three services, asked to change a picture instead of invent one.
+  // The rules that differ from a draw are all here rather than in the screen:
+  //
+  //   * not every service can. The engine's report says what each one takes --
+  //     'mask' for the ones that accept file parts, 'reference' for the ones
+  //     that take the picture as an input beside the words, 'none' for a
+  //     service that would draw a NEW picture from the words alone and have it
+  //     presented as the change that was asked for.
+  //   * the model comes from modelsFor('edit'), not the generate chain: a
+  //     generation-leaning model on an edit is how an edit drifts away from its
+  //     source (see the chains at the top of this file).
+  //   * a mask is a file part or it is nothing, which is the engine's own rule
+  //     (server.js drops one it cannot send and says so). Rather than let the
+  //     user watch a region they supplied be ignored, it is dropped here with
+  //     the same sentence.
+
+  // What each service does with the picture, from the engine's report
+  // vocabulary ('mask' | 'reference' | 'none'), plus the two spellings this
+  // file uses for its own rows.
+  var EDIT_WITH_MASK = ['mask', 'multipart'];
+  var EDIT_WHOLE = ['reference', 'references', 'parts'];
+
+  /**
+   * How much of the source survives a local edit. sd.cpp documents 0.75; this
+   * asks for less, because the request here is "change this picture", not
+   * "start from this picture" -- a higher number walks away from the original.
+   */
+  var LOCAL_EDIT_STRENGTH = 0.6;
+
+  /** Can this service be handed a picture to change? */
+  function canEdit(choice) {
+    var row = choice || {};
+    if (row.kind === 'local') return true;
+    var mode = String(row.edits || '');
+    return EDIT_WITH_MASK.indexOf(mode) >= 0 || EDIT_WHOLE.indexOf(mode) >= 0;
+  }
+
+  /** Can this service be handed a mask as well, or only the whole picture? */
+  function canMask(choice) {
+    var row = choice || {};
+    return EDIT_WITH_MASK.indexOf(String(row.edits || '')) >= 0;
+  }
+
+  /** Empty when it can edit; otherwise the sentence saying why it cannot. */
+  function editReason(choice) {
+    var row = choice || {};
+    if (!row.id && !row.kind) return 'Pick a service that can change a picture.';
+    if (canEdit(row)) return '';
+    return (row.label || 'That service') + ' can only draw a new picture, not change one. Pick another service.';
+  }
+
+  /** A source the engine will accept: its own rule, applied before the send. */
+  function usableSource(value) {
+    var text = String(value || '').trim();
+    if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(text)) return text;
+    if (/^https?:\/\//i.test(text)) return text;
+    return '';
+  }
+
+  /**
+   * The one request an edit becomes, for whichever of the three services is
+   * doing it. PURE: it reads a choice and a request and returns what to send,
+   * or the reason nothing should be sent. Nothing here touches the network, so
+   * a source picture cannot leave this machine by calling it.
+   *
+   *   { route: 'server', body }  -> the engine's POST /api/llm/images/edits
+   *   { route: 'browser', body } -> puter.draw(prompt, body)
+   *   { route: 'local', body }   -> the shell's sd_generate, with an init image
+   *   { error }                  -> say this instead, and send nothing
+   */
+  function editRequest(choice, request) {
+    var row = choice || {};
+    var req = request || {};
+    var refused = editReason(row);
+    if (refused) return { error: refused };
+    var prompt = String(req.prompt || '').trim();
+    if (!prompt) return { error: 'Say what to change about the picture.' };
+    var source = usableSource(req.source);
+    if (!source) {
+      return { error: req.source
+        ? 'That source is not a picture this can read — choose an image file, or a link to one.'
+        : 'Choose a picture to change first.' };
+    }
+    var notes = [];
+    var mask = usableSource(req.mask);
+    if (req.mask && !mask) return { error: 'That mask is not a picture this can read — choose an image file, or a link to one.' };
+    if (mask && !canMask(row)) {
+      // The engine drops a mask it cannot send and says so; a mask for sd.cpp
+      // would have to be one channel, which nothing in this app paints. Either
+      // way the user hears it rather than watching their mask be ignored.
+      notes.push(row.kind === 'local'
+        ? 'the mask was left out — sd.cpp wants a one-channel mask, which this app does not paint'
+        : 'the mask was left out — ' + (row.label || 'this service') + ' changes the whole picture only');
+      mask = '';
+    }
+    var model = String(req.model || '').trim() || modelFor(row, 'edit');
+
+    if (row.kind === 'local') {
+      // This machine fetches nothing. The engine can go and read a link
+      // (server.js imageBytesFor); sd-server here is handed bytes or nothing,
+      // because a link would mean this app reaching out on a page's say-so.
+      if (source.indexOf('data:') !== 0) {
+        return { error: 'This PC needs the picture itself — choose an image file rather than a link.' };
+      }
+      // sd.cpp has no edit endpoint: an edit is the same img_gen job with an
+      // init image and a strength (examples/server/api.md). The shape follows
+      // the source rather than the preset, because resizing a picture the user
+      // asked to CHANGE is a change nobody asked for.
+      var width = localSide(Number(req.sourceWidth) > 0 ? req.sourceWidth : preset(req.size).width);
+      var height = localSide(Number(req.sourceHeight) > 0 ? req.sourceHeight : preset(req.size).height);
+      return {
+        route: 'local',
+        model: row.model || '',
+        notes: notes,
+        body: {
+          prompt: prompt,
+          negativePrompt: String(req.negativePrompt || '').trim(),
+          width: width,
+          height: height,
+          steps: Number(req.steps) > 0 ? Math.round(Number(req.steps)) : LOCAL_STEPS,
+          initImage: source,
+          strength: LOCAL_EDIT_STRENGTH,
+        },
+      };
+    }
+
+    if (row.kind === 'browser') {
+      // Puter takes the picture beside the words (txt2img's input_images), so
+      // there is no mask path here at all -- only a whole-picture change.
+      var shape = preset(req.size);
+      return {
+        route: 'browser',
+        model: model,
+        notes: notes,
+        body: {
+          prompt: prompt,
+          model: model,
+          ratio: shape.ratio,
+          quality: QUALITY,
+          source: source,
+        },
+      };
+    }
+
+    // The engine's edits route reads `image` and `mask` beside the same fields
+    // a draw sends (server.js llmImage): prompt, provider, model, size,
+    // quality. The service is named for the same reason it is on a draw.
+    var body = serverBody(row, { prompt: prompt, size: req.size, kind: 'edit', model: model });
+    body.image = source;
+    if (mask) body.mask = mask;
+    return { route: 'server', model: body.model || '', notes: notes, body: body };
+  }
+
   /** The size a request ends up with, for the caption. */
   function sizeLabel(id) {
     var shape = preset(id);
@@ -405,6 +560,11 @@
     chosen: chosen,
     modelFor: modelFor,
     serverBody: serverBody,
+    LOCAL_EDIT_STRENGTH: LOCAL_EDIT_STRENGTH,
+    canEdit: canEdit,
+    canMask: canMask,
+    editReason: editReason,
+    editRequest: editRequest,
     sizeLabel: sizeLabel,
     attribution: attribution,
     describePuterError: describePuterError,

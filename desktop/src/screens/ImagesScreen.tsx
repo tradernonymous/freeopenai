@@ -28,6 +28,12 @@ const puter: typeof import('../puter.js') = (globalThis as any).FreeAI4UPuter;
 //     shape sent, to whichever service answered.
 //   * Every card says who drew it -- the engine reports the service it used --
 //     and a failure says what was tried and what to do next.
+//   * A picture can be CHANGED, not only made. The same three services do it,
+//     with the edit chain rather than the generate one (images.modelsFor('edit')
+//     -- a generation-leaning model on an edit drifts away from its source),
+//     and the rule for what to send lives in images.editRequest, which is pure
+//     and is what Chat will call. The source picture is read in this window and
+//     goes nowhere until the button is pressed.
 //   * "This PC" is a third row: the user's own sd-server (sd.rs), started on
 //     127.0.0.1 when they draw and stopped when they quit. It is slow, so it
 //     reports what the server actually says -- queued, drawing, and for how
@@ -41,6 +47,16 @@ interface Job {
   who: string;
   notes: string[];
   ts: number;
+  /** The picture this one was made FROM, when it was a change rather than a draw. */
+  from?: string;
+}
+
+/** A picture the user chose to change: its bytes, its name, and its own shape. */
+interface Source {
+  url: string;
+  name: string;
+  width: number;
+  height: number;
 }
 
 type SdFacts = import('../images.js').SdFacts;
@@ -63,6 +79,14 @@ export default function ImagesScreen() {
   const [model, setModel] = useState('');
   const [size, setSize] = useState(images.SIZE_PRESETS[0].id);
   const [prompt, setPrompt] = useState('');
+  // Make a picture, or change one. Two tasks rather than two screens: the
+  // service, model and shape decisions are the same ones either way.
+  const [mode, setMode] = useState<'generate' | 'edit'>('generate');
+  const [source, setSource] = useState<Source | null>(null);
+  const [mask, setMask] = useState<Source | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const sourceInput = useRef<HTMLInputElement>(null);
+  const maskInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<null | { summary: string; upstream: string; walk: string; advice: string }>(null);
   const [gallery, setGallery] = useState<Job[]>([]);
@@ -140,11 +164,73 @@ export default function ImagesScreen() {
   // next, which is exactly how a draw used to land on the wrong model. The list
   // is what the service itself reports it can be asked for -- several rows on a
   // gateway with more than one image model, one on a service that serves one.
-  const modelChoices = useMemo(() => images.modelsForChoice(choice || {}, 'generate'), [choice]);
+  //
+  // And it follows the TASK too: an edit is offered the edit chain, because a
+  // model picked for making things up is how an edit stops looking like the
+  // picture it started from.
+  const modelChoices = useMemo(
+    () => (mode === 'edit'
+      ? images.modelsForChoice(choice || {}, 'edit')
+      : images.modelsForChoice(choice || {}, 'generate')),
+    [choice, mode],
+  );
   useEffect(() => {
     if (!choice) { setModel(''); return; }
-    setModel(images.modelFor(choice, 'generate'));
-  }, [choice?.id, choice?.kind]);
+    setModel(images.modelFor(choice, mode === 'edit' ? 'edit' : 'generate'));
+  }, [choice?.id, choice?.kind, mode]);
+
+  // Reading a picture the user pointed at. It is read in this window and held
+  // in this component: nothing is uploaded here, and nothing is sent anywhere
+  // until they press the button below.
+
+  /** The shape of a picture, so a change on this PC can keep it. */
+  const measure = (url: string, name: string) => new Promise<Source>((resolve, reject) => {
+    const probe = new Image();
+    probe.onload = () => resolve({ url, name, width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.onerror = () => reject(new Error(`${name} is not a picture this window can open.`));
+    probe.src = url;
+  });
+
+  const readPicture = (file: File) => new Promise<Source>((resolve, reject) => {
+    if (!/^image\//.test(file.type)) {
+      reject(new Error(`${file.name} is not a picture.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onload = () => measure(String(reader.result || ''), file.name).then(resolve, reject);
+    reader.readAsDataURL(file);
+  });
+
+  const takeSource = async (file: File) => {
+    try {
+      setSource(await readPicture(file));
+      setMode('edit');
+      setError(null);
+    } catch (e) {
+      setError({ summary: 'That picture was not used', upstream: (e as Error).message, walk: '', advice: 'Choose a PNG, JPEG or WebP file.' });
+    }
+  };
+
+  const takeMask = async (file: File) => {
+    try {
+      setMask(await readPicture(file));
+    } catch (e) {
+      setError({ summary: 'That mask was not used', upstream: (e as Error).message, walk: '', advice: 'Choose a PNG where white marks the part to change.' });
+    }
+  };
+
+  /** Change a picture that is already in the gallery, without saving it first. */
+  const changeThis = async (job: Job) => {
+    try {
+      setSource(await measure(job.url, 'that picture'));
+      setMode('edit');
+      setPrompt('');
+      setError(null);
+    } catch (e) {
+      setError({ summary: 'That picture cannot be changed here', upstream: (e as Error).message, walk: '', advice: 'Save it, then choose the file.' });
+    }
+  };
 
   const connectPuter = () => {
     setPuterMsg('');
@@ -163,14 +249,18 @@ export default function ImagesScreen() {
   };
 
   /**
-   * Draw on this machine: make sure sd-server is up, submit the job, then poll
-   * it. Everything is awaited in small steps, so the window keeps painting
-   * through the minutes an image takes, and every step reports what the server
-   * itself said.
+   * One job on this machine, whether it draws a picture or changes one: make
+   * sure sd-server is up, submit the request, then poll it. Everything is
+   * awaited in small steps, so the window keeps painting through the minutes an
+   * image takes, and every step reports what the server itself said.
+   *
+   * Both callers hand it a body built by images.js -- localRequest for a draw,
+   * editRequest for a change -- so the fields sd-server sees are decided in one
+   * tested place rather than here.
    *
    * Returns the data: URL, or '' when the user cancelled.
    */
-  const drawHere = async (text: string): Promise<string> => {
+  const runHere = async (request: any): Promise<string> => {
     stopPolling.current = false;
     let status = await call<SdStatus>('sd_status');
     if (status.state !== 'ready') {
@@ -180,7 +270,6 @@ export default function ImagesScreen() {
     }
     if (stopPolling.current) { setLocalJob(null); return ''; }
 
-    const request = images.localRequest({ prompt: text, size });
     const submitted = await call<any>('sd_generate', request);
     const id = String(submitted?.id || '');
     if (!id) throw new Error('The local server accepted the job without an id.');
@@ -201,6 +290,9 @@ export default function ImagesScreen() {
       setSdStatus(await call<SdStatus>('sd_status').catch(() => null as any));
     }
   };
+
+  /** The draw this screen has always done, through the job runner above. */
+  const drawHere = (text: string) => runHere(images.localRequest({ prompt: text, size }));
 
   /** Stop the job the user started. The server stays up: the model is loaded. */
   const cancelHere = async () => {
@@ -278,10 +370,83 @@ export default function ImagesScreen() {
     }
   };
 
+  /**
+   * Change the chosen picture. What to send is decided by images.editRequest --
+   * pure, testable, and the same call Chat will make -- so this function only
+   * carries out the plan and says what came back.
+   */
+  const applyEdit = async () => {
+    if (busy || !choice) return;
+    const plan = images.editRequest(choice, {
+      prompt: prompt.trim(),
+      source: source?.url || '',
+      mask: mask?.url || '',
+      size,
+      model,
+      sourceWidth: source?.width,
+      sourceHeight: source?.height,
+    });
+    // A refusal is the whole answer: nothing is sent, and the reason is the
+    // sentence the plan gave rather than one invented here.
+    if (!plan.route) {
+      setError({ summary: 'Nothing was sent', upstream: '', walk: '', advice: plan.error });
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setPuterMsg('');
+    const text = plan.body.prompt;
+    const from = source?.url || '';
+    try {
+      let url = '';
+      let who = '';
+      let notes = plan.notes.slice();
+      if (plan.route === 'local') {
+        const changed = await runHere(plan.body);
+        if (!changed) return;
+        url = changed;
+        who = `This PC · ${choice.model || 'sd-server'}`;
+      } else if (plan.route === 'browser') {
+        if (!puter.isSignedIn()) throw new Error('Sign in to Puter first.');
+        url = await puter.draw(text, plan.body);
+        who = `${choice.label} · ${plan.body.model}`;
+      } else {
+        const data: any = await api.imageEdit(plan.body);
+        url = imageUrlFrom(data) || '';
+        const told = images.attribution(data);
+        who = told.who || choice.label;
+        notes = notes.concat(told.notes);
+        if (!url) throw new Error((data && data.error) || 'The service answered without a changed picture.');
+      }
+      setGallery((prev) => [{ prompt: text, url, size, who, notes, ts: Date.now(), from }, ...prev].slice(0, 60));
+      setPrompt('');
+    } catch (err) {
+      const e = err as any;
+      const message = images.describePuterError(e) || (e && e.message) || String(e);
+      if (plan.route === 'local') {
+        setError({ summary: 'This PC could not change that picture', upstream: message, walk: '', advice: images.localAdvice(message) });
+      } else if (plan.route === 'browser') {
+        setError({ summary: 'Puter could not change that picture', upstream: message, walk: '', advice: images.puterAdvice(message) });
+        setPuterMsg(message);
+      } else {
+        const told = failure.attributeImage({
+          error: message,
+          tried: Array.isArray(e?.tried) ? e.tried : [],
+          asked: choice.label,
+        });
+        setError({ summary: told.summary, upstream: told.upstream, walk: told.walk, advice: told.advice });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = () => { if (mode === 'edit') applyEdit(); else draw(); };
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      draw();
+      submit();
     }
   };
 
@@ -296,7 +461,20 @@ export default function ImagesScreen() {
   };
 
   const readyCount = rows.filter((r) => r.kind === 'server' && r.ready).length;
-  const blocked = !choice || (isBrowser ? !signedIn : !choice.ready);
+  const editable = images.canEdit(choice || {});
+  const blocked = !choice
+    || (isBrowser ? !signedIn : !choice.ready)
+    || (mode === 'edit' && (!editable || !source));
+  // Who pays, said before the button rather than after the bill. An edit is a
+  // request like any other: on the engine it spends the operator's key, on
+  // Puter the signed-in account's credits, and on this PC nothing but minutes.
+  const cost = !choice
+    ? ''
+    : isLocal
+      ? 'Runs on this PC: no account, no network, a few minutes of this machine.'
+      : isBrowser
+        ? 'Puter charges the account that is signed in, the same as a draw.'
+        : `Runs on the engine's ${choice.label} key — a change costs what a draw costs.`;
 
   return (
     <div className="screen images">
@@ -309,10 +487,20 @@ export default function ImagesScreen() {
           {signedIn ? ' · Puter signed in' : ''}
         </span>
         <div className="header-actions">
-          {/* Three pills instead of three native dropdowns: a <select> opens an
+          {/* Pills instead of native dropdowns: a <select> opens an
               OS-styled menu, which is the one thing in a hand-styled window
               that still looked like a web page. Each pill names its current
               value and explains every other one. */}
+          <SelectPill
+            label="Task"
+            title="Make a picture, or change one"
+            value={mode}
+            options={[
+              { value: 'generate', label: 'Make a picture', note: 'from your words alone' },
+              { value: 'edit', label: 'Change a picture', note: 'start from one you choose' },
+            ]}
+            onPick={(id) => setMode(id === 'edit' ? 'edit' : 'generate')}
+          />
           <SelectPill
             label="Service"
             title="Which service draws"
@@ -321,7 +509,12 @@ export default function ImagesScreen() {
               ? rows.map((r) => ({
                 value: r.id,
                 label: r.label,
-                note: r.kind === 'browser' ? 'your browser' : r.ready ? '' : (r.reason || 'not ready'),
+                // In the edit task a service that only draws is shown greyed
+                // with the reason, rather than offered and then refused.
+                disabled: mode === 'edit' && !images.canEdit(r),
+                note: mode === 'edit' && !images.canEdit(r)
+                  ? 'draws only, cannot change a picture'
+                  : r.kind === 'browser' ? 'your browser' : r.ready ? '' : (r.reason || 'not ready'),
               }))
               : [{ value: '', label: 'no service reported' }]}
             onPick={(id) => setChoiceId(id)}
@@ -358,11 +551,74 @@ export default function ImagesScreen() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={onKey}
-            placeholder={isBrowser
-              ? 'Describe the image. Puter draws it in your browser, on your account.'
-              : 'Describe the image. Free FLUX draws first; pick another service above to change that.'}
+            placeholder={mode === 'edit'
+              ? 'Say what to change about the picture below — for example, make the sky clear and blue.'
+              : isBrowser
+                ? 'Describe the image. Puter draws it in your browser, on your account.'
+                : 'Describe the image. Free FLUX draws first; pick another service above to change that.'}
             rows={3}
           />
+
+          {/* The picture being changed. It is read in this window and stays
+              here: it is sent only when the button below is pressed, and only
+              to the service named on the row. */}
+          {mode === 'edit' && (
+            <div className="images-source">
+              <div
+                className={`dropzone${dragging ? ' dragging' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) takeSource(f);
+                }}
+                onClick={() => sourceInput.current?.click()}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') sourceInput.current?.click(); }}
+              >
+                <input
+                  ref={sourceInput}
+                  type="file"
+                  hidden
+                  accept="image/*"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) takeSource(f); e.currentTarget.value = ''; }}
+                />
+                {source
+                  ? <img src={source.url} alt={source.name} style={{ maxHeight: 120, borderRadius: 6 }} />
+                  : <span>Drop the picture to change — or click to choose one</span>}
+              </div>
+              {source && (
+                <div className="dictation-row">
+                  <span className="chip ok">{source.name}</span>
+                  <span className="settings-hint">{source.width}×{source.height}</span>
+                  <button onClick={() => { setSource(null); setMask(null); }}>Remove</button>
+                </div>
+              )}
+              {/* A mask is a picture, not a brush: this app paints nothing.
+                  White marks what may change, black what must stay. It is only
+                  offered to a service that can actually be handed one. */}
+              {source && images.canMask(choice || {}) && (
+                <div className="dictation-row">
+                  <span className="chip">{mask ? mask.name : 'No mask'}</span>
+                  <span className="settings-hint">
+                    Optional: a black-and-white picture, white where {choice?.label || 'the service'} may change things.
+                  </span>
+                  <input
+                    ref={maskInput}
+                    type="file"
+                    hidden
+                    accept="image/*"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) takeMask(f); e.currentTarget.value = ''; }}
+                  />
+                  <button onClick={() => maskInput.current?.click()}>Choose mask…</button>
+                  {mask && <button onClick={() => setMask(null)}>Clear</button>}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Puter is a service, so its sign-in is always on screen -- not
               only when it is the service selected. Someone who wants it should
@@ -392,8 +648,12 @@ export default function ImagesScreen() {
           </div>
 
           <div className="images-actions">
-            <button className="primary send-btn-wide" onClick={draw} disabled={busy || !prompt.trim() || blocked}>
-              {busy ? 'Drawing…' : isBrowser && !signedIn ? 'Sign in to draw' : 'Draw'}
+            <button className="primary send-btn-wide" onClick={submit} disabled={busy || !prompt.trim() || blocked}>
+              {busy
+                ? (mode === 'edit' ? 'Changing…' : 'Drawing…')
+                : isBrowser && !signedIn
+                  ? (mode === 'edit' ? 'Sign in to change it' : 'Sign in to draw')
+                  : mode === 'edit' ? 'Change the picture' : 'Draw'}
             </button>
             {/* A job on this PC is minutes of this machine's own work, so it
                 says what the server said and can be stopped -- the one thing a
@@ -407,16 +667,23 @@ export default function ImagesScreen() {
               </>
             )}
             {blocked && !isBrowser && !busy && (
-              <span className="settings-hint">{choice?.reason || 'Pick a service that is ready.'}</span>
+              <span className="settings-hint">
+                {mode === 'edit' && !editable
+                  ? images.editReason(choice || {})
+                  : mode === 'edit' && !source
+                    ? 'Choose the picture to change first.'
+                    : (choice?.reason || 'Pick a service that is ready.')}
+              </span>
             )}
           </div>
+          {mode === 'edit' && cost && <div className="chip-note">{cost}</div>}
           {puterMsg && <div className="chip-note">{puterMsg}</div>}
 
           {error && (
             <div className="failure-card">
               <div className="failure-head">
                 <strong>{error.summary}</strong>
-                <button onClick={draw} disabled={busy}>Retry</button>
+                <button onClick={submit} disabled={busy}>Retry</button>
               </div>
               {error.upstream && <div className="failure-upstream">{error.upstream}</div>}
               {error.walk && <div className="failure-note">{error.walk}</div>}
@@ -459,7 +726,11 @@ export default function ImagesScreen() {
             <div className="empty-state">
               <div className="empty-icon"><Icon name="image" size={28} /></div>
               <h2>No images yet</h2>
-              <p>Describe something above — the service, model and shape are on the row.</p>
+              <p>
+                {mode === 'edit'
+                  ? 'Choose a picture and say what to change — the service, model and shape are on the row.'
+                  : 'Describe something above — the service, model and shape are on the row.'}
+              </p>
             </div>
           )}
           {gallery.map((job) => (
@@ -473,7 +744,14 @@ export default function ImagesScreen() {
                   </span>
                   <span className="image-size">{images.sizeLabel(job.size)}</span>
                   <button onClick={() => save(job.url)}>Save</button>
+                  {/* Change this one next, without saving it and finding it
+                      again: it becomes the source in the composer, where it
+                      sits beside whatever comes back. */}
+                  <button onClick={() => changeThis(job)}>Change this</button>
                 </span>
+                {job.from && (
+                  <span className="image-notes">Changed from a picture you chose</span>
+                )}
                 {job.notes.length > 0 && (
                   <span className="image-notes">{job.notes.join(' · ')}</span>
                 )}
