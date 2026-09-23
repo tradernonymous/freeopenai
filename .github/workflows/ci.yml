@@ -15,6 +15,14 @@ jobs:
         with:
           node-version: '24'
       - run: npm install
+      # The desktop's own dependencies (@huggingface/jinja among them) live in
+      # desktop/package.json and the suite requires them from desktop/src. A
+      # root-only install leaves them out, so every chat-template test fails
+      # with "the template engine is not loaded" -- exactly what the Desktop
+      # job never saw, because it installs desktop/ first. Mirror it here.
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install
       - run: npm run lint
       - run: npm test
       # NEURA-057. A step in this job rather than a job of its own: the harness

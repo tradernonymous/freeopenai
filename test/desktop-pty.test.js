@@ -22,7 +22,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
+// CRLF-agnostic (as in desktop-chat-template.test.js): the body-boundary
+// search below matches on \n, which a Windows checkout would never find.
+const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
 const pty = () => read('desktop', 'src-tauri', 'src', 'pty.rs');
 const local = () => read('desktop', 'src-tauri', 'src', 'local.rs');
