@@ -236,7 +236,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
      * arrives rather than after it. */
     fun chat(body: String, onDelta: (String) -> Unit, done: (String?) -> Unit) {
         if (baseUrl().isEmpty()) {
-            done("not signed in")
+            done("sign in to the app first: the Puter page comes from your NeuraOS server")
             return
         }
         load { result ->
@@ -244,7 +244,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             if (result.isFailure) {
                 done(result.exceptionOrNull()?.message ?: "could not open the Puter page")
             } else if (view == null) {
-                done("no WebView")
+                done("the Puter page could not be created on this phone")
             } else {
                 val job = "c" + System.nanoTime()
                 view.evaluateJavascript("window.fa4uChat && window.fa4uChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
@@ -278,17 +278,17 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                         if (state == "pending") followChat(view, job, now, 0, onDelta, done)
                         else {
                             view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
-                            done(if (state == "done") null else status.optString("error", "Puter failed"))
+                            done(if (state == "done") null else status.optString("error", "Puter stopped without saying why"))
                         }
                     }
                     return@evaluateJavascript
                 }
                 when {
                     state == "pending" && tries < 600 -> followChat(view, job, read, tries + 1, onDelta, done)
-                    state == "pending" -> done("Puter timed out")
+                    state == "pending" -> done("Puter sent nothing new for 3 minutes, so the reply was stopped")
                     else -> {
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
-                        done(if (state == "done") null else status.optString("error", "Puter failed"))
+                        done(if (state == "done") null else status.optString("error", "Puter stopped without saying why"))
                     }
                 }
             }
@@ -306,7 +306,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         done: (Result<Pair<String, ByteArray>>) -> Unit,
     ) {
         if (baseUrl().isEmpty()) {
-            done(Result.failure(IllegalStateException("not signed in")))
+            done(Result.failure(IllegalStateException("sign in to the app first: the Puter page comes from your NeuraOS server")))
             return
         }
         load { result ->
@@ -314,7 +314,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             if (result.isFailure) {
                 done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("could not open the Puter page")))
             } else if (view == null) {
-                done(Result.failure(IllegalStateException("no WebView")))
+                done(Result.failure(IllegalStateException("the Puter page could not be created on this phone")))
             } else {
                 val options = JSONObject()
                 if (model.isNotEmpty()) options.put("model", model)
@@ -343,7 +343,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             if (result.isFailure) {
                 done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("could not open the Puter page")))
             } else if (view == null) {
-                done(Result.failure(IllegalStateException("no WebView")))
+                done(Result.failure(IllegalStateException("the Puter page could not be created on this phone")))
             } else {
                 val job = "s" + System.nanoTime()
                 currentSignInJob = job
@@ -451,7 +451,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     // Cancel and Back, so a long budget strands nobody.
                     "pending" -> if (tries < 700) pollSignIn(view, job, tries + 1, done) else {
                         currentSignInJob = null
-                        failWithDiagnosis(view, withConsole("timed out")) {
+                        failWithDiagnosis(view, withConsole("the Puter sign-in was still open after 3.5 minutes, so it was stopped")) {
                             done(Result.failure(IllegalStateException(it)))
                         }
                     }
@@ -469,7 +469,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     else -> {
                         currentSignInJob = null
                         view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
-                        failWithDiagnosis(view, withConsole(status.optString("error", "Puter failed"))) {
+                        failWithDiagnosis(view, withConsole(status.optString("error", "Puter stopped without saying why"))) {
                             done(Result.failure(IllegalStateException(it)))
                         }
                     }
@@ -513,12 +513,12 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     JSONObject().put("state", "missing")
                 }
                 when (status.optString("state")) {
-                    "pending" -> if (tries < 300) poll(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("timed out")))
+                    "pending" -> if (tries < 300) poll(view, job, tries + 1, done) else done(Result.failure(IllegalStateException("Puter took longer than 2.5 minutes to draw, so it was stopped")))
                     "done" -> readChunks(view, job, status.optInt("length"), StringBuilder(), done)
                     "missing" -> failWithDiagnosis(view, "Puter did not load") {
                         done(Result.failure(IllegalStateException(it)))
                     }
-                    else -> done(Result.failure(IllegalStateException(status.optString("error", "Puter failed"))))
+                    else -> done(Result.failure(IllegalStateException(status.optString("error", "Puter stopped without saying why"))))
                 }
             }
         }, 500)
@@ -528,14 +528,14 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         if (out.length >= length) {
             view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
             val decoded = decodeDataUrl(out.toString())
-            if (decoded == null) done(Result.failure(IllegalStateException("no picture")))
+            if (decoded == null) done(Result.failure(IllegalStateException("Puter answered, but not with a picture this app can read")))
             else done(Result.success(decoded))
             return
         }
         view.evaluateJavascript("window.fa4uChunk(" + JSONObject.quote(job) + "," + out.length + "," + CHUNK + ")") { raw ->
             val piece = unquote(raw)
             if (piece.isEmpty()) {
-                done(Result.failure(IllegalStateException("picture read failed")))
+                done(Result.failure(IllegalStateException("the picture from Puter could not be read back in full")))
             } else {
                 out.append(piece)
                 readChunks(view, job, length, out, done)

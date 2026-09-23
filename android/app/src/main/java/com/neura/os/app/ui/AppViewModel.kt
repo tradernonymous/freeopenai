@@ -44,6 +44,7 @@ import com.neura.os.app.data.imageRatio
 import com.neura.os.app.data.ModelInfo
 import com.neura.os.app.data.NativeApi
 import com.neura.os.app.data.Outbox
+import com.neura.os.app.data.FailureRing
 import com.neura.os.app.data.Persona
 import com.neura.os.app.data.PromptTemplate
 import com.neura.os.app.data.PUTER_PROVIDER
@@ -98,7 +99,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 try {
                     block.run()
                 } catch (e: Exception) {
-                    main.post { notice = "Something went wrong: " + (e.message ?: e.javaClass.simpleName) }
+                    val reason = e.message ?: e.javaClass.simpleName
+                    recordFailure("app", reason)
+                    main.post { notice = "Something went wrong: $reason" }
                 }
             }
         } catch (e: RejectedExecutionException) {
@@ -173,6 +176,19 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     /** One-shot messages for a snackbar. */
     var notice by mutableStateOf<String?>(null)
+
+    /** The failures this run has shown, newest first, for Settings -> "Copy
+     * diagnostics" (see data/Diagnostics.kt). Memory only: redacted and
+     * clipped on the way in, never written to disk, gone on restart. */
+    var failures by mutableStateOf(FailureRing())
+        private set
+
+    /** Safe from any thread: the ring is Compose state, so the write is
+     * always posted to the main thread. */
+    fun recordFailure(where: String, reason: String?) {
+        val at = System.currentTimeMillis()
+        main.post { failures = failures.record(at, where, reason) }
+    }
 
     /** Bumped from NativeActivity.onResume, so a composable can key a
      * LaunchedEffect on it to re-check something Android controls outside
@@ -310,7 +326,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             currentChatId ?: "",
             plan,
             onStarted = { push(Route.Build) },
-            onFailed = { message -> notice = "Build not started: $message" },
+            onFailed = { message ->
+                recordFailure("build", message)
+                notice = "Build not started: $message"
+            },
         )
     }
 
@@ -446,6 +465,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val preferred = library.defaultProvider.takeIf { id -> list.any { it.id == id } } ?: list.firstOrNull()?.id
                 if (preferred != null) loadModelsBlocking(preferred)
             } catch (e: ApiException) {
+                recordFailure("providers", e.message)
                 main.post {
                     catalogueBusy = false
                     catalogueError = e.message
@@ -995,6 +1015,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     chat = base.copy(messages = base.messages + ChatMessage("assistant", why, reasoning.toString(), started, error = true, model = chat.model))
                     break
                 }
+                if (error != null) recordFailure("chat", chat.provider + "/" + chat.model + ": " + error)
                 val assistant = draft(error).copy(toolCalls = if (error == null) calls else emptyList())
                 chat = base.copy(messages = base.messages + assistant)
                 finalText = assistant.content
@@ -1227,6 +1248,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         puterSigningIn = true
         start { result ->
             puterSigningIn = false
+            if (result.isFailure) recordFailure("puter", result.exceptionOrNull()?.message)
             notice = if (result.isSuccess) "Signed in to Puter." else "Puter sign-in: " + (result.exceptionOrNull()?.message ?: "failed")
         }
     }
@@ -1261,6 +1283,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val url = try {
                 api.githubAuthorizeUrl(api.githubHandoff(), adding)
             } catch (e: Exception) {
+                recordFailure("github", e.message)
                 main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
                 return@execute
             }
@@ -1282,6 +1305,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     notice = "Connected to GitHub as " + login.ifEmpty { "your account" } + "."
                 }
             } catch (e: Exception) {
+                recordFailure("github", e.message)
                 main.post { githubConnecting = false; notice = "GitHub connect: " + (e.message ?: "failed") }
             }
         }
@@ -1323,7 +1347,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             // same order the web app's txt2img loop uses.
             val candidates = (listOf(model) + imageModelsFor(editSource != null)).distinct().filter { it.isNotEmpty() }
             val ratio = imageRatio(size)
-            var lastReason = "timed out"
+            var lastReason = "no picture from Puter within 150 s"
             for (candidate in candidates) {
                 val latch = java.util.concurrent.CountDownLatch(1)
                 var outcome: Result<Pair<String, ByteArray>>? = null
@@ -1342,12 +1366,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 // 150s stall by the candidate count. Only a prompt refusal (a
                 // definite result within the window) is worth trying past.
                 if (!finished) {
-                    lastReason = "timed out"
+                    lastReason = "no picture from Puter within 150 s"
                     break
                 }
                 lastReason = result?.exceptionOrNull()?.message ?: lastReason
             }
             if (bytes == null) {
+                recordFailure("puter", "image: $lastReason")
                 main.post {
                     puterImages = false
                     notice = "Puter off: $lastReason. Using free server images."
@@ -1419,6 +1444,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 drawBlocking(text, size, model, provider, editSource)
                 main.post { imageBusy = false }
             } catch (e: Exception) {
+                recordFailure("image", e.message ?: "Image failed.")
                 main.post {
                     imageBusy = false
                     imageError = e.message ?: "Image failed."

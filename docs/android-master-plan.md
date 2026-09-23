@@ -218,7 +218,7 @@ against that branch (`workflow_dispatch`), not by a local build.
 | :-- | :-- | :-- |
 | NEURA-004 | Adaptive icon: `mipmap-anydpi-v26` with foreground and background layers plus a `monochrome` layer for themed icons. | **done.** Built from the existing vector, art scaled to the 72dp safe zone. The emblem below replaces the foreground layer alone when it arrives. |
 | NEURA-020 | The three provider-dependent flows carry `needs-provider`; `maestro-smoke.sh` runs `--exclude-tags=needs-provider`. | **was already done** in `fbbe32a`; the stale backlog row is corrected. |
-| NEURA-040 | `TODO(NEURA-xxx)` markers at the Android code sites, plus the test that every marker names an open ID. | **not done** — no markers and no test exist yet. Carried forward; it is small and unblocked. |
+| NEURA-040 | `TODO(NEURA-xxx)` markers at the Android code sites, plus the test that every marker names an open ID. | **done** — by the desktop session's `test/backlog.test.js`, which scans every source including Android; Phase 2 added `test/android-backlog.test.js` so Android also carries no bare TODO. |
 | cleanup | Drop the dead `leakcanary` entry from `libs.versions.toml`. | **done.** |
 
 ### Phase 1 — Modern toolchain and Android 16 · **done**
@@ -245,7 +245,7 @@ keyboard open, `ReplyService` surviving a long streaming reply in the background
 and the release APK size before/after with an `r8-analyzer` pass on
 `proguard-rules.pro`.
 
-### Phase 2 — Nothing fails silently · **next**
+### Phase 2 — Nothing fails silently · **done**
 
 New phase, and the highest-value one in this document. §2.4 is the argument; this
 is the work. The principle: **every failure the user can see must carry the one
@@ -280,6 +280,8 @@ fact that names its cause**, and that fact must be copyable off the phone.
    markers at the Android code sites plus the test that every marker names an open
    ID. Same principle at source level — a known gap that does not say which one it
    is costs a search every time someone meets it.
+
+**Shipped (2026-09-23):** `data/Diagnostics.kt` (report + redaction + the ring, 7 JVM tests) · Settings → App → **Copy diagnostics** · failures recorded at the io guard, every chat turn that ends in an error, images, the provider catalogue, Puter sign-in and Puter images, GitHub connect and remote builds · the bare Puter messages ("no WebView", "timed out", "no picture", "Puter failed") now say what was being tried and for how long · item 4 was already true of the only embedded page (§2.4) · item 5 done as above. Still owed: the stop condition below, on a real phone.
 
 **Stop condition, in addition to the usual three:** take one real failure — a
 provider turned off, airplane mode, a bad server URL — and confirm the copied block

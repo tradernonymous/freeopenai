@@ -2,6 +2,8 @@ package com.neura.os.app.ui
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import com.neura.os.BuildConfig
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -85,7 +87,9 @@ import com.neura.os.app.data.IMAGE_SIZES
 import com.neura.os.app.data.Persona
 import com.neura.os.app.data.PromptTemplate
 import com.neura.os.app.data.Skill
+import com.neura.os.app.data.DiagnosticsInput
 import com.neura.os.app.data.allPersonas
+import com.neura.os.app.data.buildDiagnostics
 import com.neura.os.app.data.allPrompts
 import com.neura.os.app.data.imageModelsFor
 import com.neura.os.app.data.imageSizeById
@@ -486,6 +490,11 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SectionTitle("App")
         SettingRow("Check for updates", null) { platform.checkUpdates() }
         SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.notice = "No crash recorded" }
+        val problems = vm.failures.items.size
+        SettingRow("Copy diagnostics", if (problems == 0) "No problems yet" else "$problems recent") {
+            platform.copy(diagnosticsText(vm, platform))
+            vm.notice = "Diagnostics copied -- no chats, keys or passwords in it."
+        }
         SettingRow("Version", platform.version, onClick = null)
         SettingRow("Sign out", null, danger = true) { confirmSignOut = true }
         Spacer(Modifier.height(32.dp))
@@ -514,6 +523,28 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         )
     }
 }
+
+/** What "Copy diagnostics" puts on the clipboard: gathered here, formatted
+ * and redacted in data/Diagnostics.kt where the JVM tests can prove it. */
+private fun diagnosticsText(vm: AppViewModel, platform: Platform): String = buildDiagnostics(
+    DiagnosticsInput(
+        version = platform.version,
+        versionCode = BuildConfig.VERSION_CODE,
+        androidRelease = Build.VERSION.RELEASE,
+        sdkInt = Build.VERSION.SDK_INT,
+        device = (Build.MANUFACTURER + " " + Build.MODEL).trim(),
+        server = vm.serverUrl,
+        signedIn = vm.signedIn,
+        providers = vm.providers,
+        catalogueError = vm.catalogueError,
+        outboxDepth = vm.outbox.entries.size,
+        deviceControl = platform.deviceControlEnabled(),
+        puterImages = vm.puterImages,
+        startupMs = null,
+        failures = vm.failures.items,
+        now = System.currentTimeMillis(),
+    ),
+)
 
 @Composable
 private fun SettingRow(title: String, value: String?, danger: Boolean = false, onClick: (() -> Unit)?) {
