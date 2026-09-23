@@ -176,9 +176,46 @@ export async function streamLocalChat(
     throw new ApiError(0, `The local model server at ${origin} is not answering. Start it in Settings → Local models.`);
   }
   if (!res.ok) {
-    throw new ApiError(res.status, `The local model server answered ${res.status}.`);
+    throw new ApiError(res.status, await localFailure(res, messages));
   }
   return readStream(res, onFrame);
+}
+
+/**
+ * Why the local server refused, in its own words.
+ *
+ * It used to say only "answered 500", which is a status code, not a reason --
+ * and llama-server always sends one, in the body. The commonest 500 by far is
+ * a picture sent to a model that cannot see: a GGUF without its mmproj
+ * projector has no vision at all, and the server rejects the multimodal
+ * content rather than ignoring it. That case is named outright, because the
+ * fix (a vision model, or send the text alone) is not obvious from the
+ * server's own wording.
+ */
+async function localFailure(
+  res: Response,
+  messages: Array<{ role: string; content: any }>,
+): Promise<string> {
+  let detail = '';
+  try {
+    const body = await res.text();
+    const parsed = body ? JSON.parse(body) : null;
+    detail = String(parsed?.error?.message || parsed?.message || body || '').trim();
+  } catch {
+    // A body that is not JSON is still worth nothing here; the status stands.
+  }
+  if (detail.length > 400) detail = `${detail.slice(0, 400)}…`;
+
+  const sentPictures = messages.some(
+    (m) => Array.isArray(m?.content) && m.content.some((part: any) => part?.type === 'image_url'),
+  );
+  if (sentPictures) {
+    return `This local model cannot read pictures, so the server refused the message${detail ? ` (${detail})` : ''}. `
+      + 'Use a vision model with its mmproj file, or send the text without the picture.';
+  }
+  return detail
+    ? `The local model server answered ${res.status}: ${detail}`
+    : `The local model server answered ${res.status} without saying why.`;
 }
 
 /** One SSE reader for both transports: engine and local server. */
