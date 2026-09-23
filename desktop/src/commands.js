@@ -26,6 +26,14 @@
     { id: 'go-chat', group: 'Go to', title: 'Chat', hint: 'Talk to a model', palette: 'chat' },
     { id: 'go-code', group: 'Go to', title: 'Code', hint: 'The coding agent on a local folder', palette: 'code' },
     { id: 'go-images', group: 'Go to', title: 'Images', hint: 'Generate a picture', palette: 'images' },
+    // Pictures without leaving the chat: the same /image and /edit the
+    // composer runs, on the Images screen's service, model and shape. They
+    // open Chat and hand it the command (`command`), which waits there for the
+    // words. `rank` keeps the Images screen the first answer to a loose query
+    // like "gen pic" -- the screen is where pictures live -- while the action's
+    // own title still finds the action.
+    { id: 'image-generate', group: 'Images', title: 'Generate a picture', hint: 'In the chat, with the service, model and shape Images uses', palette: 'chat', command: '/image', rank: -20 },
+    { id: 'image-edit', group: 'Images', title: 'Edit the last picture', hint: 'Change the latest picture in the chat with /edit', palette: 'chat', command: '/edit', rank: -20 },
     { id: 'go-build', group: 'Go to', title: 'Builds', hint: 'Remote build sessions and approvals', palette: 'build' },
     { id: 'go-local', group: 'Go to', title: 'Local', hint: 'Your own folder: tree, viewer, terminal', palette: 'local' },
     { id: 'go-design', group: 'Go to', title: 'Design', hint: 'Brand + anti-slop review', palette: 'design' },
@@ -76,6 +84,8 @@
       else total += 5;
       total -= Math.min(at, 20) / 10;
     }
+    // A ranked-down row still matches -- it only yields the top place.
+    if (Number(command.rank) < 0) total = Math.max(total + Number(command.rank), 0.5);
     return total;
   }
 

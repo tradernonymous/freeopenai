@@ -20,7 +20,7 @@ export interface SlashCommand {
 }
 
 export interface MentionSource {
-  kind: 'model' | 'file' | 'mcp' | 'skill';
+  kind: 'model' | 'file' | 'picture' | 'mcp' | 'skill';
   id: string;
   label: string;
   hint?: string;
@@ -42,3 +42,28 @@ export declare function mentionMenu(query: string, sources: MentionSource[], lim
 export declare function completeMention(text: string, start: number, caret: number, insert: string): { text: string; caret: number };
 export declare function threadMarkdown(session: any): string;
 export declare function lastUserText(messages: Array<{ role: string; content: string }>): string;
+
+/** A picture in the thread: which message, which of its pictures, and who put it there. */
+export interface PictureRef {
+  url: string;
+  index: number;
+  slot: number;
+  role: 'user' | 'assistant';
+}
+export interface PictureTarget {
+  url: string;
+  /** attached: on this message; picked: a picture's Edit button; latest: the newest in the thread. */
+  from: 'attached' | 'picked' | 'latest';
+  index?: number;
+  slot?: number;
+  role?: 'user' | 'assistant';
+}
+export declare function latestPicture(messages: Array<{ role: string; images?: string[] }>): PictureRef | null;
+export declare function pictureTarget(input: {
+  attached?: string[];
+  pinned?: { url: string; index: number; slot: number } | null;
+  messages: Array<{ role: string; images?: string[] }>;
+}): PictureTarget | null;
+export declare function targetLabel(target: PictureTarget | null): string;
+export declare function stripPictureMention(text: string): string;
+export declare function lastPictureRun<P extends { prompt: string }>(messages: Array<{ picture?: P }>): { index: number; picture: P } | null;

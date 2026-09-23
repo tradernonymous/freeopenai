@@ -157,10 +157,12 @@ test('a drawn picture says which service drew it', () => {
 });
 
 test('the screen sends the service it chose, not a bare model id', () => {
-  const screen = read('desktop', 'src', 'screens', 'ImagesScreen.tsx');
-  assert.match(screen, /images\.serverBody\(choice, \{/);
+  // The screen's draw is planned and sent by image-run.js, which Chat shares.
+  const screen = read('desktop', 'src', 'screens', 'ImagesScreen.tsx') + read('desktop', 'src', 'image-run.js');
+  assert.match(screen, /images\.serverBody\(row, \{/);
+  assert.match(screen, /imageRun\.drawPlan\(choice, \{ prompt: text, size, model \}\)/);
   // The model on screen rides the request, not just the service.
-  assert.match(screen, /kind: 'generate',\s*\n\s*model,/);
+  assert.match(screen, /kind: 'generate', model: req\.model/);
   assert.match(screen, /images\.modelsForChoice\(choice \|\| \{\}, 'generate'\)/);
   // Puter's sign-in is on screen whoever is selected -- not only when Puter is,
   // which is how it was impossible to find before choosing it.
@@ -168,7 +170,8 @@ test('the screen sends the service it chose, not a bare model id', () => {
   assert.ok(!/\{isBrowser && \(\s*<div className="puter-strip"/.test(screen), 'the Puter row is not conditional on the selection');
   assert.match(screen, /images\.providerChoices\(data\)/);
   // Puter is drawn in the browser, through the SDK bridge, only when chosen.
-  assert.match(screen, /puter\.draw\(text, \{ model, ratio: shape\.ratio/);
+  assert.match(screen, /model: model, ratio: images\.preset\(req\.size\)\.ratio/);
+  assert.match(screen, /puter\.draw\(plan\.body\.prompt, plan\.body\)/);
   assert.match(screen, /Sign in to Puter/);
   assert.match(screen, /puter\.signIn\(/);
   // The picture says who drew it, and the failure says what was tried.

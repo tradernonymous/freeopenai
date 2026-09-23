@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, lazy, Suspen
 import { api } from './api';
 import Sidebar, { destinationOf, navForKey, navKeys, tabsOf, NAVIGATE_EVENT, type NavId, type ViewId } from './Sidebar';
 import TitleBar from './TitleBar';
-import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT, MODEL_PICK_EVENT, TOOL_CARDS_EVENT } from './screens/ChatScreen';
+import ChatScreen, { OPEN_CHAT_EVENT, NEW_CHAT_EVENT, MODEL_PICK_EVENT, TOOL_CARDS_EVENT, PENDING_COMMAND_KEY, RUN_COMMAND_EVENT } from './screens/ChatScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ConnectScreen from './screens/ConnectScreen';
 import LocalScreen from './screens/LocalScreen';
@@ -405,6 +405,17 @@ export default function App() {
   }, [skillEntries]);
 
   const runCommand = (entry: PaletteEntry) => {
+    // A palette entry that names a chat command ("Generate a picture" ->
+    // /image) hands it to Chat the way Agents and Recipes already do: it waits
+    // in sessionStorage and Chat picks it up once mounted. Checked before
+    // `palette`, because these entries also name Chat as their screen and the
+    // early return below would otherwise open Chat and fill in nothing.
+    if (entry.command) {
+      setView('chat');
+      try { sessionStorage.setItem(PENDING_COMMAND_KEY, entry.command); } catch { /* Chat opens; the person types it */ }
+      setTimeout(() => window.dispatchEvent(new Event(RUN_COMMAND_EVENT)), 50);
+      return;
+    }
     if (entry.palette) { setView(entry.palette as View); return; }
     if (entry.chat) {
       setView('chat');

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, lazy, Suspense, type ComponentType } from 'react';
-import { api, streamChat, streamLocalChat, type StreamFrame } from '../api';
+import { api, imageUrlFrom, streamChat, streamLocalChat, type StreamFrame } from '../api';
 import { byokStream, hasShell, listLocalDir, localModelStatus, mcpStdioList, notifyUser, openUrl, readLocalFile } from '../bridge';
 import { renderMarkdown } from '../markdown';
 import { renderMermaid } from '../diagram';
@@ -36,9 +36,25 @@ import '../hf-auth.js';
 import '../hf-inference.js';
 import '../threads.js';
 import '../research.js';
+import '../images.js';
+import '../puter.js';
+import '../image-run.js';
+// The shell's command bridge, for this PC's image server (sd_find, sd_cancel).
+import { call } from '../bridge';
 import { saveFile } from '../files/save';
 
 const chats: typeof import('../chats.js') = (globalThis as any).FreeAI4UChats;
+// /image, /edit, /redo: the Images screen's rules (images.js) and its runner
+// (image-run.js) -- the same calls, so a picture drawn here is the one the
+// Images screen would have drawn.
+const imagesLib: typeof import('../images.js') = (globalThis as any).FreeAI4UImages;
+const puter: typeof import('../puter.js') = (globalThis as any).FreeAI4UPuter;
+const imageRun: typeof import('../image-run.js') = (globalThis as any).FreeAI4UImageRun;
+type ImagePlan = import('../image-run.js').ImagePlan;
+type PictureTarget = import('../composer.js').PictureTarget;
+// Who pays is said once per service per run of the app, before its first
+// picture -- not on every picture, which would be noise nobody reads.
+const costSaid = new Set<string>();
 // /research: the pure parts (plan, sources, citations, graph, export).
 const research: typeof import('../research.js') = (globalThis as any).FreeAI4UResearch;
 type ResearchSource = import('../research.js').ResearchSource;
@@ -146,6 +162,24 @@ export interface Msg {
   sources?: ResearchSource[];
   /** /research: what was asked and when, what the citation check found, and the graph once drawn. */
   research?: { question: string; date: number; noSources?: boolean; uncited?: number; graph?: ResearchGraph };
+  /** /image or /edit: what was asked of which service, so /redo can ask again. */
+  picture?: PictureRun;
+}
+
+/**
+ * A drawn reply's recipe. The source of an edit is a pointer into the thread
+ * ([message, picture]) rather than a second copy of its bytes: a copy here
+ * would dodge the picture-trimming saveSessions does for browser storage and
+ * could push a whole chat over the quota.
+ */
+export interface PictureRun {
+  kind: 'generate' | 'edit';
+  prompt: string;
+  choice: string;
+  model: string;
+  size: string;
+  who?: string;
+  sourceAt?: [number, number];
 }
 
 export interface ChatSession {
@@ -252,6 +286,7 @@ const HELP = [
   '- **@** — switch model, attach a file from the open folder, point at an MCP server.',
   '- **Up** in an empty box brings back the last message. **Ctrl+N** new chat, **Ctrl+M** model, **Ctrl+T** tool cards, **Ctrl+K** everything else.',
   '- Workflow: `/interview` → `/plan` → `/implement` → `/review` — each reply offers the next step.',
+  '- Pictures: `/image` draws with the Images service, model and shape; `/edit` changes the picture attached here or the latest one; `/redo` asks again with a new seed. **@picture** attaches the latest picture. Hover a picture to edit it, open it in Images, or save it.',
 ].join('\n');
 
 interface ProviderRow {
@@ -366,6 +401,10 @@ export default function ChatScreen() {
   const busyChat = useRef<string | null>(null);
   const [attached, setAttached] = useState<string>('');
   const [images, setImages] = useState<string[]>([]);
+  // The picture a picture's Edit button pointed at, for the /edit that follows.
+  const [pinnedPicture, setPinnedPicture] = useState<{ url: string; index: number; slot: number } | null>(null);
+  // Which picture's actions are showing (message:picture), by hover or focus.
+  const [pictureHover, setPictureHover] = useState('');
   const [dictation, setDictation] = useState<'idle' | 'recording' | 'working'>('idle');
   const recording = useRef<Recording | null>(null);
   // Right-click on a reply opens the actions for what is under the pointer.
@@ -1009,6 +1048,228 @@ export default function ChatScreen() {
     pushToast('info', 'In the print dialog, choose “Microsoft Print to PDF” (or Save as PDF).');
   };
 
+  // ---- pictures (/image, /edit, /redo) ----------------------------------------
+  //
+  // The request is built by the same pure functions the Images screen uses
+  // (image-run.drawPlan, images.editRequest) from the choice that screen keeps,
+  // and carried out by the same runner (image-run.runImage). Building it sends
+  // nothing: a refusal becomes a note and the thread gets no turn. A picture
+  // leaves this machine only when the person has run the command.
+  //
+  // The reply is an ordinary message with the picture in `images`, so it is
+  // saved with the chat like any attachment -- including the trimming
+  // saveSessions applies in browser storage.
+
+  /** The services Images offers, read fresh: the engine's report plus this PC. */
+  const imageRows = async () => {
+    const facts = hasShell() ? await call<any>('sd_find').catch(() => null) : null;
+    const report = await api.imageProviders().catch(() => null);
+    return imagesLib.withLocal(imagesLib.providerChoices(report || {}), facts);
+  };
+
+  /** A note from the app that is not a turn; the draft is left for the person to fix. */
+  const pictureNote = (content: string) => {
+    if (!active) return;
+    patchSession(active.id, { messages: [...active.messages, { role: 'assistant', content, note: true, model: 'NeuraOS', ts: Date.now() }] });
+  };
+
+  /** Where a picture already sits in the thread, so an edit can point at it instead of copying it. */
+  const pictureAt = (messages: Msg[], url: string): [number, number] | undefined => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const j = (messages[i].images || []).lastIndexOf(url);
+      if (j >= 0) return [i, j];
+    }
+    return undefined;
+  };
+
+  /**
+   * Draw or change a picture in the thread. `typed` is what the person ran (it
+   * becomes their turn); `again` is the recipe of a reply being redone.
+   */
+  const runPicture = async (kind: 'generate' | 'edit', words: string, typed: string, target?: PictureTarget | null, again?: PictureRun) => {
+    if (!active || sending) return;
+    const sid = active.id;
+    const history = active.messages;
+    const kept = imageRun.readChoice();
+    const rows = await imageRows();
+    const choice = imagesLib.chosen(again ? again.choice : kept.choiceId, rows);
+    const size = again?.size
+      || (imagesLib.SIZE_PRESETS.some((p) => p.id === kept.size) ? kept.size : imagesLib.SIZE_PRESETS[0].id);
+    const model = again ? again.model : imageRun.modelFor(choice, kind, kept);
+    const sourceUrl = target?.url || '';
+
+    let plan: ImagePlan;
+    if (kind === 'edit') {
+      // The shape of the source, so a change on this PC keeps it. A picture
+      // this window cannot open is left to editRequest to refuse in words.
+      const dims = sourceUrl ? await imageRun.measurePicture(sourceUrl).catch(() => null) : null;
+      plan = imagesLib.editRequest(choice, {
+        prompt: words,
+        source: sourceUrl,
+        size,
+        model,
+        sourceWidth: dims?.width,
+        sourceHeight: dims?.height,
+      });
+    } else {
+      plan = imageRun.drawPlan(choice, { prompt: words, size, model });
+    }
+    if (again) plan = imageRun.withSeed(plan);
+    if (!plan.route || !choice) {
+      pictureNote(`**Nothing was sent.** ${plan.error || 'No image service is available.'}`);
+      return;
+    }
+
+    // The person's turn. A picture attached to it rides on it, unless it is
+    // one already in the thread (@picture), which is pointed at, not copied.
+    const ts = Date.now();
+    const own = target?.from === 'attached' ? images : [];
+    const fresh = own.filter((url) => !pictureAt(history, url));
+    const cost = imageRun.costNote(choice);
+    const sayCost = !!cost && !costSaid.has(choice.id);
+    if (sayCost) costSaid.add(choice.id);
+    const lead: Msg[] = sayCost ? [{ role: 'assistant', content: cost, note: true, model: 'NeuraOS', ts }] : [];
+    const userMsg: Msg = { role: 'user', content: typed, ...(fresh.length ? { images: fresh } : {}), ts };
+    const userAt = history.length + lead.length;
+    const replyAt = userAt + 1;
+    let sourceAt: [number, number] | undefined;
+    if (kind === 'edit') {
+      sourceAt = pictureAt(history, sourceUrl);
+      if (!sourceAt && fresh.includes(sourceUrl)) sourceAt = [userAt, fresh.indexOf(sourceUrl)];
+    }
+    const recipe: PictureRun = {
+      kind,
+      prompt: plan.body.prompt,
+      choice: choice.id,
+      model: plan.model,
+      size,
+      ...(sourceAt ? { sourceAt } : {}),
+    };
+    const reply: Msg = {
+      role: 'assistant',
+      content: kind === 'edit' ? `${grammar.targetLabel(target || null)}…` : 'Drawing…',
+      providerLabel: choice.label,
+      model: plan.model || choice.model || choice.label,
+      ts,
+      picture: recipe,
+    };
+    patchSession(sid, {
+      messages: [...history, ...lead, userMsg, reply],
+      draft: '',
+      title: history.length === 0 ? threads.autoTitle(words) : active.title,
+    });
+    if (own.length) setImages([]);
+    setPinnedPicture(null);
+    setSending(true);
+    stickToBottom.current = true;
+
+    // Stop cancels a job on this PC (sd_cancel). A request already with a
+    // service or Puter cannot be taken back; its picture still lands.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let jobId = '';
+    controller.signal.addEventListener('abort', () => {
+      if (jobId) call('sd_cancel', { id: jobId }).catch(() => undefined);
+    });
+    const settle = (patch: Partial<Msg>) => setSessions((prev) => {
+      const next = prev.map((s) => {
+        if (s.id !== sid || !s.messages[replyAt]) return s;
+        const msgs = s.messages.slice();
+        msgs[replyAt] = { ...msgs[replyAt], ...patch };
+        return { ...s, messages: msgs, updatedAt: Date.now() };
+      });
+      saveSessions(next);
+      return next;
+    });
+    try {
+      const done = await imageRun.runImage(kind, choice, plan, {
+        api,
+        imageUrlFrom,
+        puter,
+        call,
+        stopped: () => controller.signal.aborted,
+        onJob: (job) => {
+          if (job?.id) jobId = job.id;
+          if (job) patchMsgAt(sid, replyAt, () => ({ content: `${job.label}…` }));
+        },
+      });
+      if (!done) {
+        settle({ content: 'Stopped. No picture was made.', picture: undefined });
+        return;
+      }
+      const said = kind === 'edit' ? `Changed the picture: ${recipe.prompt}` : `Drew: ${recipe.prompt}`;
+      settle({
+        content: done.notes.length ? `${said}
+
+_${done.notes.join(' · ')}_` : said,
+        images: [done.url],
+        model: done.who || reply.model,
+        providerLabel: undefined,
+        picture: { ...recipe, who: done.who },
+      });
+    } catch (err) {
+      const told = imageRun.failureView(kind, plan.route, choice, err);
+      settle({
+        content: '',
+        error: true,
+        failure: {
+          kind: 'image',
+          label: 'Failed',
+          asked: `${choice.label}${plan.model ? ` · ${plan.model}` : ''}`,
+          summary: told.summary,
+          upstream: told.upstream,
+          advice: told.walk ? `${told.walk} ${told.advice}` : told.advice,
+          retryable: true,
+        },
+      });
+    } finally {
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  };
+
+  /** /redo, or a failed picture's Try again: the same recipe, a new seed. */
+  const redoPicture = (recipe?: PictureRun) => {
+    if (!active) return;
+    const last = recipe ? { picture: recipe } : grammar.lastPictureRun(active.messages);
+    if (!last) {
+      pictureNote('Nothing to redo yet. Draw a picture with `/image`, or change one with `/edit`, first.');
+      return;
+    }
+    const run = last.picture as PictureRun;
+    if (run.kind === 'generate') { runPicture('generate', run.prompt, '/redo', null, run); return; }
+    const [at, slot] = run.sourceAt || [-1, -1];
+    const url = active.messages[at]?.images?.[slot] || '';
+    if (!url) {
+      // Browser storage keeps pictures only on a chat's last few messages; the
+      // source may have been one of the ones it let go.
+      pictureNote('The picture that edit started from is no longer in this chat, so it cannot be changed again. Attach it and run `/edit`.');
+      return;
+    }
+    runPicture('edit', run.prompt, '/redo', { url, from: 'picked', index: at, slot }, run);
+  };
+
+  /** What /edit will change right now, for the chip above the composer and the run. */
+  const editTarget = () => (active
+    ? grammar.pictureTarget({ attached: images, pinned: pinnedPicture, messages: active.messages })
+    : null);
+
+  /** Hover action: Open in Images, with this picture as the source of a change. */
+  const openInImages = (url: string) => {
+    imageRun.handOff(url, (event) => {
+      window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: { view: 'images' } }));
+      window.dispatchEvent(new Event(event));
+    });
+  };
+
+  /** Hover action: Edit -- the composer gets `/edit ` and this picture is the target. */
+  const editPicture = (url: string, index: number, slot: number) => {
+    if (!active) return;
+    setPinnedPicture({ url, index, slot });
+    patchSession(active.id, { draft: '/edit ' });
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const send = async () => {
     if (!active || sending) return;
     const text = (active.draft || '').trim();
@@ -1021,6 +1282,13 @@ export default function ChatScreen() {
       sendToDesign(text);
       patchSession(active.id, { draft: '' });
       setTransient(null);
+      return;
+    }
+    // The send button, not only Enter, runs a picture command: typed out in
+    // full, `/image a cat` is a command whichever way it is sent.
+    const pictureCommand = grammar.parseSlash(text);
+    if (pictureCommand && ['image', 'edit', 'redo'].includes(pictureCommand.command.id)) {
+      onCommand(pictureCommand.command, pictureCommand.arg);
       return;
     }
     if (active.mode === 'build') {
@@ -1565,6 +1833,25 @@ export default function ChatScreen() {
         return;
       }
       case 'research': clear(); runResearch(arg); return;
+      case 'image': {
+        // From the menu there is nothing to draw yet: the composer waits for it.
+        if (!arg) { patchSession(active.id, { draft: '/image ' }); requestAnimationFrame(() => inputRef.current?.focus()); return; }
+        runPicture('generate', grammar.stripPictureMention(arg), `/image ${arg}`);
+        return;
+      }
+      case 'edit': {
+        // Without words, the chip above the composer says which picture this
+        // will change before anything is sent.
+        if (!arg) { patchSession(active.id, { draft: '/edit ' }); requestAnimationFrame(() => inputRef.current?.focus()); return; }
+        const target = editTarget();
+        if (!target) {
+          pictureNote('There is no picture to edit yet. Attach one with the paperclip or `/attach`, paste one with Ctrl+V, or draw one with `/image` — then run `/edit` again.');
+          return;
+        }
+        runPicture('edit', grammar.stripPictureMention(arg), `/edit ${arg}`, target);
+        return;
+      }
+      case 'redo': clear(); redoPicture(); return;
       case 'recipe': {
         clear();
         const id = agentsLib.parseCommand(arg).id;
@@ -1618,10 +1905,12 @@ export default function ChatScreen() {
       .then((listing: any) => setFolderFiles((listing?.entries || []).filter((e: any) => !e.dir).map((e: any) => String(e.name)).slice(0, 200)))
       .catch(() => setFolderFiles([]));
   }, [root]);
+  const latestPicture = active ? grammar.latestPicture(active.messages) : null;
   const mentionSources: MentionSource[] = [
     ...models.map((m) => ({ kind: 'model' as const, id: m.id, label: m.id, hint: 'switch to this model', provider: active?.provider })),
     ...choices.filter((c) => c.id !== active?.provider).map((c) => ({ kind: 'model' as const, id: `provider:${c.id}`, label: c.label, hint: 'switch service', provider: c.id })),
     ...folderFiles.map((f) => ({ kind: 'file' as const, id: f, label: f, hint: 'attach from the open folder' })),
+    ...(latestPicture ? [{ kind: 'picture' as const, id: 'picture', label: 'picture', hint: 'attach the latest picture in this chat' }] : []),
     ...toolsLib.mcpServers().map((sv) => ({ kind: 'mcp' as const, id: sv.name, label: sv.name, hint: `${sv.tools.length} tools` })),
   ];
   const onMention = (source: MentionSource): string => {
@@ -1631,6 +1920,13 @@ export default function ChatScreen() {
       else patchSession(active.id, { model: source.id });
       pushToast('info', `Now on ${source.label}.`);
       return '';
+    }
+    // @picture attaches the newest picture the way @file attaches a file: it
+    // rides this message, and /edit reads an attached picture first.
+    if (source.kind === 'picture') {
+      if (!latestPicture) return '';
+      if (!images.includes(latestPicture.url)) addImage(latestPicture.url);
+      return '@picture';
     }
     if (source.kind === 'file') {
       readLocalFile(root, source.id)
@@ -1838,7 +2134,39 @@ export default function ChatScreen() {
             </div>
             {msg.images && msg.images.length > 0 && (
               <div className="message-images">
-                {msg.images.map((url, j) => <img key={j} src={url} alt={`Picture ${j + 1} sent with this message`} />)}
+                {msg.images.map((url, j) => {
+                  const key = `${i}:${j}`;
+                  const shown = pictureHover === key;
+                  return (
+                    // Hover or keyboard focus shows the picture's actions. Styled
+                    // inline: they sit on the picture, not in the page's flow.
+                    <span
+                      key={j}
+                      style={{ position: 'relative', display: 'inline-block' }}
+                      onMouseEnter={() => setPictureHover(key)}
+                      onMouseLeave={() => setPictureHover((k) => (k === key ? '' : k))}
+                      onFocus={() => setPictureHover(key)}
+                      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setPictureHover((k) => (k === key ? '' : k)); }}
+                    >
+                      <img
+                        src={url}
+                        alt={msg.picture ? `Picture: ${msg.picture.prompt}` : `Picture ${j + 1} sent with this message`}
+                        tabIndex={0}
+                      />
+                      <span
+                        className="picture-actions"
+                        style={{
+                          position: 'absolute', left: 4, right: 4, bottom: 8, display: 'flex', gap: 4, flexWrap: 'wrap',
+                          opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none', transition: 'opacity 120ms',
+                        }}
+                      >
+                        <button onClick={() => editPicture(url, i, j)} disabled={sending} title="Put /edit in the composer, aimed at this picture">Edit</button>
+                        <button onClick={() => openInImages(url)} title="Change it in the Images screen">Open in Images</button>
+                        <button onClick={() => imageRun.savePicture(url)} title="Save it to a file">Save</button>
+                      </span>
+                    </span>
+                  );
+                })}
               </div>
             )}
             {msg.role === 'assistant'
@@ -1911,8 +2239,10 @@ export default function ChatScreen() {
                 <div className="failure-actions">
                   {msg.research
                     ? <button onClick={() => rerunResearch(i)} disabled={sending}>Retry research</button>
-                    : <button onClick={() => retry()} disabled={sending}>Retry {msg.model}</button>}
-                  {models.length > 1 && !msg.research && (
+                    : msg.picture
+                      ? <button onClick={() => redoPicture(msg.picture)} disabled={sending}>Try again</button>
+                      : <button onClick={() => retry()} disabled={sending}>Retry {msg.model}</button>}
+                  {models.length > 1 && !msg.research && !msg.picture && (
                     <button
                       onClick={() => retry(failure.nextModel(msg.model || '', models))}
                       disabled={sending}
@@ -2042,6 +2372,24 @@ export default function ChatScreen() {
                 </button>
               </div>
             )}
+            {/^\/edit(\s|$)/i.test(active.draft || '') && (() => {
+              // Said before sending: which picture /edit will change, or that
+              // there is none and nothing will be sent.
+              const target = editTarget();
+              return (
+                <div className="attach-chip">
+                  <span className="attach-label">
+                    {target && <img src={target.url} alt="" style={{ height: 28, width: 28, objectFit: 'cover', borderRadius: 4, verticalAlign: 'middle', marginRight: 6 }} />}
+                    {target ? grammar.targetLabel(target) : 'No picture to edit — attach one, paste one, or draw one with /image first'}
+                  </span>
+                  {target?.from === 'picked' && (
+                    <button onClick={() => setPinnedPicture(null)} title="Edit the latest picture instead" aria-label="Forget the picked picture">
+                      <Icon name="close" size={13} />
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
             {images.length > 0 && (
               <div className="attach-images">
                 {images.map((url, i) => (

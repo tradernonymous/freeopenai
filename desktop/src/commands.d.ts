@@ -11,6 +11,10 @@ export interface CommandEntry {
   chat?: string;
   /** A skill id to show. */
   skill?: string;
+  /** A composer command for Chat to run once it is open ('/image', '/edit'). */
+  command?: string;
+  /** Added to a match's score (negative only): the row yields the top place without leaving the list. */
+  rank?: number;
 }
 export declare const COMMANDS: CommandEntry[];
 export declare const MAX_RESULTS: number;

@@ -18,6 +18,8 @@ export interface PaletteEntry {
   palette?: string;
   chat?: string;
   skill?: string;
+  /** A chat command to hand to Chat, e.g. "/image" -- App routes it there. */
+  command?: string;
 }
 
 interface Props {

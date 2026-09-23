@@ -23,6 +23,9 @@ const ROOT = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 const sdRs = () => read('desktop', 'src-tauri', 'src', 'sd.rs');
 const screen = () => read('desktop', 'src', 'screens', 'ImagesScreen.tsx');
+// The screen's dispatch moved to image-run.js (shared with Chat's /image and
+// /edit), so what it sends is read from the screen and its runner together.
+const runner = () => read('desktop', 'src', 'image-run.js');
 const card = () => read('desktop', 'src', 'components', 'LocalImagesCard.tsx');
 
 const FACTS = {
@@ -199,7 +202,8 @@ test('the screen offers Cancel while a local job runs, and stops polling', () =>
   assert.match(source, /onClick=\{cancelHere\}/);
   assert.match(source, /stopPolling\.current = true;/);
   // Polling is awaited in small steps, so the window keeps painting.
-  assert.match(source, /await wait\(\d+\);/);
+  assert.match(source, /stopped: \(\) => stopPolling\.current/);
+  assert.match(runner(), /pause\(\d+\)\.then/);
   assert.ok(!/while \(true\) \{\s*const/.test(source), 'no tight loop');
 });
 
@@ -308,12 +312,14 @@ test('a completed job becomes a data: URL in the format the server named', () =>
 
 test('the screen only adds a card once it has the bytes, and saves the way it already does', () => {
   const source = screen();
-  const draw = source.slice(source.indexOf('const drawHere'), source.indexOf('const onKey'));
-  assert.match(draw, /const drawn = await drawHere\(text\);\s*\n\s*if \(!drawn\) return;/);
-  assert.match(draw, /setGallery\(\(prev\) => \[\{ prompt: text, url,/);
+  const draw = source.slice(source.indexOf('const run = async'), source.indexOf('const onKey'));
+  assert.match(draw, /const done = await imageRun\.runImage\(kind, choice, plan, runDeps\(\)\);\s*\n\s*if \(!done\) return;/);
+  assert.match(draw, /url: done\.url,/);
+  assert.match(draw, /setGallery\(\(prev\) => \[/);
   // The image goes into the same gallery, with the same Save button, that
   // every other service's image goes into: no new folder was invented.
-  assert.match(source, /a\.download = `freeai4u-\$\{Date\.now\(\)\}\.png`/);
+  assert.match(source, /imageRun\.savePicture\(url\)/);
+  assert.match(runner(), /a\.download = 'freeai4u-' \+ Date\.now\(\) \+ '\.png'/);
   assert.ok(!/sd_save|writeLocalFile|save_file_dialog/.test(source), 'no second place for images');
   assert.ok(!/std::fs::write/.test(sdRs().slice(sdRs().indexOf('pub async fn sd_generate'))), 'the shell writes no image files');
 });

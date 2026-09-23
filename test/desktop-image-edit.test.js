@@ -25,6 +25,9 @@ const serverJs = () => read('server.js');
 const screen = () => read('desktop', 'src', 'screens', 'ImagesScreen.tsx');
 const apiTs = () => read('desktop', 'src', 'api.ts');
 const sdRs = () => read('desktop', 'src-tauri', 'src', 'sd.rs');
+// The screen's dispatch moved to image-run.js (shared with Chat's /image and
+// /edit), so what it sends is read from the screen and its runner together.
+const runner = () => read('desktop', 'src', 'image-run.js');
 
 // A one-pixel PNG is a real data URL without dragging a fixture file in.
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -156,7 +159,7 @@ test('an edit is offered the edit models, never the generate ones', () => {
   // And that chain is what the screen puts in the picker for an edit.
   const source = screen();
   assert.match(source, /images\.modelsForChoice\(choice \|\| \{\}, 'edit'\)/);
-  assert.match(source, /images\.modelFor\(choice, mode === 'edit' \? 'edit' : 'generate'\)/);
+  assert.match(source, /(?:images|imageRun)\.modelFor\(choice, mode === 'edit' \? 'edit' : 'generate'/);
   // A model the user picked still wins over the chain's head.
   const picked = images.editRequest(puter, { prompt: 'x', source: PNG, model: images.PUTER_EDIT_MODELS[1] });
   assert.equal(picked.body.model, images.PUTER_EDIT_MODELS[1]);
@@ -208,13 +211,16 @@ test('the shell sends the fields stable-diffusion.cpp documents for an edit', ()
 // ---- the screen ---------------------------------------------------------
 
 test('the screen edits through the pure plan, and never sends what it was not given', () => {
-  const source = screen();
-  // One decision point: the screen asks images.editRequest and carries it out.
-  assert.match(source, /const plan = images\.editRequest\(choice, \{/);
+  const source = screen() + runner();
+  // One decision point: the screen asks images.editRequest and the shared
+  // runner carries it out.
+  assert.match(source, /images\.editRequest\(choice, \{/);
   assert.match(source, /if \(!plan\.route\) \{/, 'a refusal stops before anything is sent');
-  assert.match(source, /api\.imageEdit\(plan\.body\)/);
-  assert.match(source, /puter\.draw\(text, plan\.body\)/);
-  assert.match(source, /runHere\(plan\.body\)/);
+  assert.match(source, /imageRun\.runImage\(kind, choice, plan, /);
+  assert.match(runner(), /kind === 'edit' \? d\.api\.imageEdit : d\.api\.imageGenerate/);
+  assert.match(runner(), /send\(plan\.body\)/);
+  assert.match(runner(), /puter\.draw\(plan\.body\.prompt, plan\.body\)/);
+  assert.match(runner(), /runLocal\(plan\.body, d\)/);
   // The picture is read in this window, not uploaded to anything on the way.
   assert.match(source, /readAsDataURL/);
   assert.ok(!/fetch\(\s*['"`]http/.test(source), 'the page must not talk to a server directly');

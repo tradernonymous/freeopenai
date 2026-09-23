@@ -8,7 +8,8 @@
 //     insert. Skills join it as /skill:<name>. Interview -> Plan -> Implement
 //     -> Review is a flow: each step names the next, and the chat offers it.
 //   * The `@` menu is one ranked list over whatever sources the caller has
-//     (models, files in the open folder, MCP servers, skills).
+//     (models, files in the open folder, the latest picture, MCP servers,
+//     skills).
 (function (root, factory) {
   var api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -68,6 +69,14 @@
     { id: 'agent', aliases: ['agents'], hint: 'Run a sub-agent — /agent file-picker find the router code' },
     { id: 'recipe', aliases: ['recipes'], hint: 'Run a saved recipe — /recipe daily-brief topic=rust' },
     { id: 'research', hint: 'Search the web, read the sources, answer with citations — /research how do heat pumps work' },
+    // Pictures in the chat, on the Images screen's service, model and shape
+    // (image-run.js keeps that choice) -- so a picture here is the one the
+    // Images screen would have drawn, not a second set of settings. /attach
+    // keeps `image` as an alias for the menu, but a typed `/image` is this row:
+    // parseSlash takes the first name that matches, and an id comes first here.
+    { id: 'image', aliases: ['draw'], hint: 'Draw a picture with the Images service, model and shape — /image a lighthouse at dusk' },
+    { id: 'edit', hint: 'Change the picture attached here, or the latest one in the chat — /edit make the sky clear' },
+    { id: 'redo', hint: 'Draw the last /image or /edit again with a new seed' },
     { id: 'model', aliases: ['models'], hint: 'Pick the model', keys: 'Ctrl+M' },
     { id: 'tools', hint: 'Tools and connectors (Settings)' },
     { id: 'mcp', hint: 'MCP servers (Settings)' },
@@ -154,7 +163,7 @@
     return { start: end - m[2].length - 1, query: m[2] };
   }
 
-  var KIND_ORDER = { model: 0, file: 1, mcp: 2, skill: 3 };
+  var KIND_ORDER = { model: 0, file: 1, picture: 1, mcp: 2, skill: 3 };
 
   /** Rank sources for an `@` query. A source is { kind, id, label, hint? }. */
   function mentionMenu(query, sources, limit) {
@@ -183,6 +192,74 @@
     var tail = t.slice(caret);
     var piece = insert ? insert + (tail.charAt(0) === ' ' ? '' : ' ') : '';
     return { text: head + piece + tail, caret: head.length + piece.length };
+  }
+
+  // ---- pictures in the thread ---------------------------------------------
+  //
+  // A picture in the chat is a user attachment or a drawn reply: both are
+  // `images` on a message, so "the latest picture" is simply the last one of
+  // those, newest message first. Which one /edit changes is decided here, pure,
+  // so the rule can be tested and the screen only asks.
+
+  /** The newest picture in the thread: { url, index, slot, role } or null. */
+  function latestPicture(messages) {
+    var list = messages || [];
+    for (var i = list.length - 1; i >= 0; i -= 1) {
+      var imgs = list[i] && Array.isArray(list[i].images) ? list[i].images : [];
+      for (var j = imgs.length - 1; j >= 0; j -= 1) {
+        if (imgs[j]) return { url: String(imgs[j]), index: i, slot: j, role: list[i].role };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The picture /edit changes. In order: one attached to THIS message (it is
+   * what the person is pointing at right now), then one they picked with a
+   * picture's Edit button, then the newest in the thread. A picked picture that
+   * is no longer in the thread (a new chat, a retry that cut it) is ignored
+   * rather than edited from a stale copy. Null means there is nothing to edit,
+   * and nothing is sent.
+   */
+  function pictureTarget(input) {
+    var req = input || {};
+    var attached = Array.isArray(req.attached) ? req.attached.filter(Boolean) : [];
+    if (attached.length) return { url: String(attached[attached.length - 1]), from: 'attached' };
+    var messages = req.messages || [];
+    var pinned = req.pinned;
+    if (pinned && pinned.url) {
+      var at = messages[pinned.index];
+      if (at && Array.isArray(at.images) && at.images[pinned.slot] === pinned.url) {
+        return { url: String(pinned.url), from: 'picked', index: pinned.index, slot: pinned.slot, role: at.role };
+      }
+    }
+    var latest = latestPicture(messages);
+    if (!latest) return null;
+    return { url: latest.url, from: 'latest', index: latest.index, slot: latest.slot, role: latest.role };
+  }
+
+  /** The sentence naming which picture an /edit will change. */
+  function targetLabel(target) {
+    if (!target) return 'No picture to edit';
+    if (target.from === 'attached') return 'Editing the picture attached to this message';
+    if (target.from === 'picked') return 'Editing the picture you picked';
+    return target.role === 'assistant'
+      ? 'Editing the latest picture drawn in this chat'
+      : 'Editing the latest picture you sent in this chat';
+  }
+
+  /** The words of an /image or /edit, without the `@picture` that pointed at it. */
+  function stripPictureMention(text) {
+    return String(text || '').replace(/(^|\s)@picture(?![\w-])/gi, '$1').replace(/\s{2,}/g, ' ').trim();
+  }
+
+  /** The newest drawn reply /redo repeats: { index, picture } or null. */
+  function lastPictureRun(messages) {
+    var list = messages || [];
+    for (var i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i] && list[i].picture && list[i].picture.prompt) return { index: i, picture: list[i].picture };
+    }
+    return null;
   }
 
   /** The thread as Markdown -- tool calls and their results included. */
@@ -230,5 +307,10 @@
     completeMention: completeMention,
     threadMarkdown: threadMarkdown,
     lastUserText: lastUserText,
+    latestPicture: latestPicture,
+    pictureTarget: pictureTarget,
+    targetLabel: targetLabel,
+    stripPictureMention: stripPictureMention,
+    lastPictureRun: lastPictureRun,
   };
 });

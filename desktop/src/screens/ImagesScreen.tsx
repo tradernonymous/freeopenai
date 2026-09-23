@@ -7,11 +7,16 @@ import LocalImagesCard from '../components/LocalImagesCard';
 import '../images.js';
 import '../failure.js';
 import '../puter.js';
+import '../image-run.js';
 import { call, hasShell, puterSigninOpen } from '../bridge';
 
 const images: typeof import('../images.js') = (globalThis as any).FreeAI4UImages;
 const failure: typeof import('../failure.js') = (globalThis as any).FreeAI4UFailure;
 const puter: typeof import('../puter.js') = (globalThis as any).FreeAI4UPuter;
+// The runner Chat shares, the kept choice Chat reads, and Chat's hand-off.
+const imageRun: typeof import('../image-run.js') = (globalThis as any).FreeAI4UImageRun;
+type RunDeps = import('../image-run.js').RunDeps;
+type ImagePlan = import('../image-run.js').ImagePlan;
 
 // Images: which service draws, with which model, at which shape.
 //
@@ -75,9 +80,16 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function ImagesScreen() {
   const [rows, setRows] = useState<any[]>([]);
-  const [choiceId, setChoiceId] = useState('');
+  // The service, model and shape are kept (image-run.js CHOICE_KEY) so they
+  // survive a restart and so Chat's /image draws with exactly what is shown
+  // here. Only a pick is written: a default the screen fell back to stays a
+  // default, and Chat falls back the same way (images.chosen).
+  const kept = useMemo(() => imageRun.readChoice(), []);
+  const [choiceId, setChoiceId] = useState(kept.choiceId);
   const [model, setModel] = useState('');
-  const [size, setSize] = useState(images.SIZE_PRESETS[0].id);
+  const [size, setSize] = useState(
+    images.SIZE_PRESETS.some((p: any) => p.id === kept.size) ? kept.size : images.SIZE_PRESETS[0].id,
+  );
   const [prompt, setPrompt] = useState('');
   // Make a picture, or change one. Two tasks rather than two screens: the
   // service, model and shape decisions are the same ones either way.
@@ -176,7 +188,7 @@ export default function ImagesScreen() {
   );
   useEffect(() => {
     if (!choice) { setModel(''); return; }
-    setModel(images.modelFor(choice, mode === 'edit' ? 'edit' : 'generate'));
+    setModel(imageRun.modelFor(choice, mode === 'edit' ? 'edit' : 'generate', imageRun.readChoice()));
   }, [choice?.id, choice?.kind, mode]);
 
   // Reading a picture the user pointed at. It is read in this window and held
@@ -184,12 +196,9 @@ export default function ImagesScreen() {
   // until they press the button below.
 
   /** The shape of a picture, so a change on this PC can keep it. */
-  const measure = (url: string, name: string) => new Promise<Source>((resolve, reject) => {
-    const probe = new Image();
-    probe.onload = () => resolve({ url, name, width: probe.naturalWidth, height: probe.naturalHeight });
-    probe.onerror = () => reject(new Error(`${name} is not a picture this window can open.`));
-    probe.src = url;
-  });
+  const measure = (url: string, name: string): Promise<Source> => imageRun.measurePicture(url)
+    .then(({ width, height }) => ({ url, name, width, height }))
+    .catch(() => { throw new Error(`${name} is not a picture this window can open.`); });
 
   const readPicture = (file: File) => new Promise<Source>((resolve, reject) => {
     if (!/^image\//.test(file.type)) {
@@ -232,6 +241,23 @@ export default function ImagesScreen() {
     }
   };
 
+  // "Open in Images" from Chat: the picture waits in image-run.js's one-shot
+  // slot. It is taken on arrival (or when this screen is already open and hears
+  // the event) and becomes the source of a change -- then the slot is empty,
+  // so nothing about the picture is left behind.
+  useEffect(() => {
+    const arrive = () => {
+      const url = imageRun.takeHandoff();
+      if (!url) return;
+      measure(url, 'the picture from Chat')
+        .then((picked) => { setSource(picked); setMask(null); setMode('edit'); setPrompt(''); setError(null); })
+        .catch((e) => setError({ summary: 'That picture cannot be changed here', upstream: (e as Error).message, walk: '', advice: 'Save it from Chat, then choose the file.' }));
+    };
+    arrive();
+    window.addEventListener(imageRun.HANDOFF_EVENT, arrive);
+    return () => window.removeEventListener(imageRun.HANDOFF_EVENT, arrive);
+  }, []);
+
   const connectPuter = () => {
     setPuterMsg('');
     setBusy(true);
@@ -249,50 +275,24 @@ export default function ImagesScreen() {
   };
 
   /**
-   * One job on this machine, whether it draws a picture or changes one: make
-   * sure sd-server is up, submit the request, then poll it. Everything is
-   * awaited in small steps, so the window keeps painting through the minutes an
-   * image takes, and every step reports what the server itself said.
-   *
-   * Both callers hand it a body built by images.js -- localRequest for a draw,
-   * editRequest for a change -- so the fields sd-server sees are decided in one
-   * tested place rather than here.
-   *
-   * Returns the data: URL, or '' when the user cancelled.
+   * The runner both tasks share with Chat (image-run.js): it carries out a plan
+   * from images.js -- drawPlan for a draw, editRequest for a change -- over
+   * whichever of the three routes the plan names. This screen only hands it the
+   * means to reach the network and listens to what a local job reports.
    */
-  const runHere = async (request: any): Promise<string> => {
-    stopPolling.current = false;
-    let status = await call<SdStatus>('sd_status');
-    if (status.state !== 'ready') {
-      setLocalJob({ id: '', label: 'Loading the model…', since: Date.now() });
-      status = await call<SdStatus>('sd_start', { port: null, threads: null });
-      setSdStatus(status);
-    }
-    if (stopPolling.current) { setLocalJob(null); return ''; }
-
-    const submitted = await call<any>('sd_generate', request);
-    const id = String(submitted?.id || '');
-    if (!id) throw new Error('The local server accepted the job without an id.');
-    setLocalJob({ id, label: 'Queued', since: Date.now() });
-    try {
-      for (;;) {
-        if (stopPolling.current) return '';
-        await wait(900);
-        if (stopPolling.current) return '';
-        const view = images.localJobView(await call<any>('sd_job', { id }));
-        setLocalJob((prev) => (prev && prev.id === id ? { ...prev, label: view.label } : prev));
-        if (view.state === 'cancelled') return '';
-        if (view.error) throw new Error(view.error);
-        if (view.done) return view.url;
-      }
-    } finally {
-      setLocalJob(null);
-      setSdStatus(await call<SdStatus>('sd_status').catch(() => null as any));
-    }
-  };
-
-  /** The draw this screen has always done, through the job runner above. */
-  const drawHere = (text: string) => runHere(images.localRequest({ prompt: text, size }));
+  const runDeps = (): RunDeps => ({
+    api,
+    imageUrlFrom,
+    puter,
+    call,
+    stopped: () => stopPolling.current,
+    onJob: (job) => setLocalJob((prev) => {
+      if (!job) return null;
+      if (job.since) return { id: job.id, label: job.label, since: job.since };
+      return prev && prev.id === job.id ? { ...prev, label: job.label } : prev;
+    }),
+    onServer: (status) => setSdStatus(status),
+  });
 
   /** Stop the job the user started. The server stays up: the model is loaded. */
   const cancelHere = async () => {
@@ -302,90 +302,26 @@ export default function ImagesScreen() {
     if (id) await call('sd_cancel', { id }).catch(() => undefined);
   };
 
-  const draw = async () => {
-    const text = prompt.trim();
-    if (!text || busy || !choice) return;
-    setBusy(true);
-    setError(null);
-    setPuterMsg('');
-    const shape = images.preset(size);
-    try {
-      let url = '';
-      let who = '';
-      let notes: string[] = [];
-      if (isLocal) {
-        // Empty means cancelled: the user stopped it, which is not an error
-        // and not an image. (`finally` below puts the button back.)
-        const drawn = await drawHere(text);
-        if (!drawn) return;
-        url = drawn;
-        who = `This PC · ${choice.model || 'sd-server'}`;
-      } else if (isBrowser) {
-        if (!puter.isSignedIn()) throw new Error('Sign in to Puter first.');
-        url = await puter.draw(text, { model, ratio: shape.ratio, quality: images.QUALITY });
-        who = `${choice.label} · ${model}`;
-      } else {
-        const data: any = await api.imageGenerate(images.serverBody(choice, {
-          prompt: text,
-          size,
-          kind: 'generate',
-          model,
-        }));
-        url = imageUrlFrom(data) || '';
-        const told = images.attribution(data);
-        who = told.who || choice.label;
-        notes = told.notes;
-        if (!url) throw new Error((data && data.error) || 'The service answered without a picture.');
-      }
-      setGallery((prev) => [{ prompt: text, url, size, who, notes, ts: Date.now() }, ...prev].slice(0, 60));
-      setPrompt('');
-    } catch (err) {
-      const e = err as any;
-      const message = images.describePuterError(e) || (e && e.message) || String(e);
-      if (isLocal) {
-        setError({
-          summary: 'This PC could not draw that',
-          upstream: message,
-          walk: '',
-          advice: images.localAdvice(message),
-        });
-      } else if (isBrowser) {
-        setError({
-          summary: 'Puter could not draw that',
-          upstream: message,
-          walk: '',
-          advice: images.puterAdvice(message),
-        });
-        setPuterMsg(message);
-      } else {
-        const told = failure.attributeImage({
-          error: message,
-          tried: Array.isArray(e?.tried) ? e.tried : [],
-          asked: choice.label,
-        });
-        setError({ summary: told.summary, upstream: told.upstream, walk: told.walk, advice: told.advice });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
   /**
-   * Change the chosen picture. What to send is decided by images.editRequest --
-   * pure, testable, and the same call Chat will make -- so this function only
-   * carries out the plan and says what came back.
+   * Make or change a picture. What to send is decided by images.js (pure,
+   * testable, the same calls Chat makes) and carried out by imageRun.runImage,
+   * so this function only says what came back.
    */
-  const applyEdit = async () => {
-    if (busy || !choice) return;
-    const plan = images.editRequest(choice, {
-      prompt: prompt.trim(),
-      source: source?.url || '',
-      mask: mask?.url || '',
-      size,
-      model,
-      sourceWidth: source?.width,
-      sourceHeight: source?.height,
-    });
+  const run = async (kind: 'generate' | 'edit') => {
+    const text = prompt.trim();
+    if (busy || !choice || (kind === 'generate' && !text)) return;
+    const from = kind === 'edit' ? source?.url || '' : '';
+    const plan: ImagePlan = kind === 'edit'
+      ? images.editRequest(choice, {
+        prompt: text,
+        source: from,
+        mask: mask?.url || '',
+        size,
+        model,
+        sourceWidth: source?.width,
+        sourceHeight: source?.height,
+      })
+      : imageRun.drawPlan(choice, { prompt: text, size, model });
     // A refusal is the whole answer: nothing is sent, and the reason is the
     // sentence the plan gave rather than one invented here.
     if (!plan.route) {
@@ -395,53 +331,24 @@ export default function ImagesScreen() {
     setBusy(true);
     setError(null);
     setPuterMsg('');
-    const text = plan.body.prompt;
-    const from = source?.url || '';
+    stopPolling.current = false;
     try {
-      let url = '';
-      let who = '';
-      let notes = plan.notes.slice();
-      if (plan.route === 'local') {
-        const changed = await runHere(plan.body);
-        if (!changed) return;
-        url = changed;
-        who = `This PC · ${choice.model || 'sd-server'}`;
-      } else if (plan.route === 'browser') {
-        if (!puter.isSignedIn()) throw new Error('Sign in to Puter first.');
-        url = await puter.draw(text, plan.body);
-        who = `${choice.label} · ${plan.body.model}`;
-      } else {
-        const data: any = await api.imageEdit(plan.body);
-        url = imageUrlFrom(data) || '';
-        const told = images.attribution(data);
-        who = told.who || choice.label;
-        notes = notes.concat(told.notes);
-        if (!url) throw new Error((data && data.error) || 'The service answered without a changed picture.');
-      }
-      setGallery((prev) => [{ prompt: text, url, size, who, notes, ts: Date.now(), from }, ...prev].slice(0, 60));
+      // Null means cancelled: the user stopped it, which is not an error and
+      // not an image. (`finally` below puts the button back.)
+      const done = await imageRun.runImage(kind, choice, plan, runDeps());
+      if (!done) return;
+      const job: Job = { prompt: plan.body.prompt, url: done.url, size, who: done.who, notes: done.notes, ts: Date.now() };
+      setGallery((prev) => [kind === 'edit' ? { ...job, from } : job, ...prev].slice(0, 60));
       setPrompt('');
     } catch (err) {
-      const e = err as any;
-      const message = images.describePuterError(e) || (e && e.message) || String(e);
-      if (plan.route === 'local') {
-        setError({ summary: 'This PC could not change that picture', upstream: message, walk: '', advice: images.localAdvice(message) });
-      } else if (plan.route === 'browser') {
-        setError({ summary: 'Puter could not change that picture', upstream: message, walk: '', advice: images.puterAdvice(message) });
-        setPuterMsg(message);
-      } else {
-        const told = failure.attributeImage({
-          error: message,
-          tried: Array.isArray(e?.tried) ? e.tried : [],
-          asked: choice.label,
-        });
-        setError({ summary: told.summary, upstream: told.upstream, walk: told.walk, advice: told.advice });
-      }
+      const told = imageRun.failureView(kind, plan.route, choice, err);
+      setError({ summary: told.summary, upstream: told.upstream, walk: told.walk, advice: told.advice });
+      if (plan.route === 'browser') setPuterMsg(told.message);
     } finally {
       setBusy(false);
     }
   };
-
-  const submit = () => { if (mode === 'edit') applyEdit(); else draw(); };
+  const submit = () => { run(mode === 'edit' ? 'edit' : 'generate'); };
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -450,15 +357,9 @@ export default function ImagesScreen() {
     }
   };
 
-  const save = (url: string) => {
-    // Opening a data: URL in a new tab is blocked; an anchor download is not.
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `freeai4u-${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  };
+  // One Save for a picture, wherever it is shown (Chat's picture actions use
+  // the same one).
+  const save = (url: string) => imageRun.savePicture(url);
 
   const readyCount = rows.filter((r) => r.kind === 'server' && r.ready).length;
   const editable = images.canEdit(choice || {});
@@ -517,7 +418,7 @@ export default function ImagesScreen() {
                   : r.kind === 'browser' ? 'your browser' : r.ready ? '' : (r.reason || 'not ready'),
               }))
               : [{ value: '', label: 'no service reported' }]}
-            onPick={(id) => setChoiceId(id)}
+            onPick={(id) => { setChoiceId(id); imageRun.writeChoice({ choiceId: id, model: '', editModel: '' }); }}
           />
           <SelectPill
             label="Model"
@@ -526,7 +427,10 @@ export default function ImagesScreen() {
             mono
             filterable
             options={modelChoices.map((m: string) => ({ value: m === 'service default' ? '' : m, label: m }))}
-            onPick={(m) => setModel(m)}
+            onPick={(m) => {
+              setModel(m);
+              imageRun.writeChoice(mode === 'edit' ? { choiceId: choice?.id || '', editModel: m } : { choiceId: choice?.id || '', model: m });
+            }}
           />
           <SelectPill
             label="Shape"
@@ -537,7 +441,7 @@ export default function ImagesScreen() {
               label: p.label,
               note: `${p.width}×${p.height}`,
             }))}
-            onPick={(id) => setSize(id)}
+            onPick={(id) => { setSize(id); imageRun.writeChoice({ size: id }); }}
           />
           <button onClick={refresh} title="Re-read the engine's image services" aria-label="Refresh">
             <Icon name="refresh" size={14} />
