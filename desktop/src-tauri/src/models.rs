@@ -570,6 +570,12 @@ fn resolve_model_file(app: &tauri::AppHandle, file: &str) -> Result<PathBuf, Str
 /// `split/diffusion_models/...`. Every segment is checked, so a page cannot
 /// turn this into a request for another host or another path.
 pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
+    hub_file_url_for(Kind::Text, repo, file)
+}
+
+/// `hub_file_url` for one kind of weights: the same path rules, then that
+/// kind's formats instead of GGUF alone.
+pub fn hub_file_url_for(kind: Kind, repo: &str, file: &str) -> Result<String, String> {
     let repo = repo.trim().trim_matches('/');
     let ok_segment = |s: &str| {
         !s.is_empty()
@@ -585,10 +591,123 @@ pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
     if file_parts.is_empty() || file_parts.len() > MAX_FILE_DEPTH || !file_parts.iter().all(|p| ok_segment(p)) {
         return Err(format!("{} is not a file name this app will fetch", file));
     }
-    if !file.to_ascii_lowercase().ends_with(".gguf") {
-        return Err(format!("{} is not a .gguf file", file));
-    }
+    kind.check_file(file)?;
     Ok(format!("https://huggingface.co/{}/resolve/main/{}", repo, file))
+}
+
+/// What a download is for, which decides the folder it lands in and the
+/// formats it may be. Text is llama-server's (GGUF, <app data>/models), and
+/// is what a call that names no kind gets, so the Local models card is
+/// untouched. Image and voice land where sd.rs and whisper.rs already look,
+/// so a finished file is in their lists with nothing else to set up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Text,
+    Image,
+    Voice,
+}
+
+impl Kind {
+    pub fn parse(raw: Option<&str>) -> Result<Kind, String> {
+        let clean = raw.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+        match clean.as_str() {
+            "" | "text" => Ok(Kind::Text),
+            "image" => Ok(Kind::Image),
+            "voice" => Ok(Kind::Voice),
+            other => Err(format!("{} is not a kind of model this app downloads", other)),
+        }
+    }
+
+    /// The formats each tool loads. `.ckpt` is not among the image ones even
+    /// though sd.cpp reads it: a .ckpt is a Python pickle, and unpickling a
+    /// file from a stranger's repo can run whatever code they put in it. The
+    /// same repos almost always carry a .safetensors of the same weights.
+    pub fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Kind::Text => &["gguf"],
+            Kind::Image => &["safetensors", "gguf"],
+            Kind::Voice => &["bin"],
+        }
+    }
+
+    /// Is this repo file one this kind may fetch? The refusal says why, in
+    /// words, because "not allowed" alone reads as a bug.
+    pub fn check_file(self, file: &str) -> Result<(), String> {
+        let lower = file.to_ascii_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or("").to_string();
+        if self == Kind::Text {
+            // Exactly the rule and the words it always had.
+            if !lower.ends_with(".gguf") {
+                return Err(format!("{} is not a .gguf file", file));
+            }
+            return Ok(());
+        }
+        // A pickle is refused by name before the format rule, so the reason
+        // given is the real one rather than "wrong format". A transformers
+        // `pytorch_model.bin` is a pickle behind a .bin name.
+        let pickled = [".ckpt", ".pt", ".pth", ".pkl", ".pickle"].iter().any(|ext| lower.ends_with(ext))
+            || base.starts_with("pytorch_model")
+            || base.starts_with("training_args");
+        if pickled {
+            return Err(format!(
+                "{} is a pickled checkpoint, and loading one can run arbitrary code on this PC. Pick the .safetensors or .gguf file of the same model.",
+                file
+            ));
+        }
+        if !self.extensions().iter().any(|ext| lower.ends_with(&format!(".{}", ext))) {
+            return Err(match self {
+                Kind::Image => format!("{} is not a .safetensors or .gguf file, the formats sd-server loads", file),
+                _ => format!("{} is not a ggml .bin file, the format whisper.cpp loads", file),
+            });
+        }
+        Ok(())
+    }
+
+    /// The progress event each kind reports on. Text keeps `local-download`;
+    /// the others get their own, because the Local models card and the
+    /// Dictation card sit on one screen and each should draw only its own bar.
+    pub fn event(self) -> &'static str {
+        match self {
+            Kind::Text => "local-download",
+            Kind::Image => "image-download",
+            Kind::Voice => "voice-download",
+        }
+    }
+
+    fn dir(self, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        match self {
+            Kind::Text => models_dir(app),
+            Kind::Image => crate::sd::models_dir(app),
+            Kind::Voice => crate::whisper::models_dir(app),
+        }
+    }
+}
+
+/// The folder a component set's files share, under the image folder. A set
+/// (diffusion model, VAE, text encoders) goes in a folder of its own so its
+/// VAE and encoders are not offered one by one as models to draw with. Only
+/// images come in sets, and the name is cleaned to one plain segment.
+pub fn set_folder(kind: Kind, set: Option<&str>) -> Result<Option<String>, String> {
+    let raw = set.map(|s| s.trim()).unwrap_or("");
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if kind != Kind::Image {
+        return Err("Only image models come as sets of files".to_string());
+    }
+    Ok(Some(crate::net::sanitize_name(raw)?))
+}
+
+fn download_dir(app: &tauri::AppHandle, kind: Kind, set: Option<&str>) -> Result<PathBuf, String> {
+    let base = kind.dir(app)?;
+    match set_folder(kind, set)? {
+        None => Ok(base),
+        Some(folder) => {
+            let dir = base.join(folder);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
+            Ok(dir)
+        }
+    }
 }
 
 /// How deep a repo file path may be. The two-segment limit refused every
@@ -620,28 +739,42 @@ pub struct DownloadProgress {
     pub path: String,
 }
 
-fn emit_progress(app: &tauri::AppHandle, p: &DownloadProgress) {
-    let _ = app.emit("local-download", p);
+fn emit_progress(app: &tauri::AppHandle, kind: Kind, p: &DownloadProgress) {
+    // Text's event is spelled out here because the Local models card listens
+    // for exactly this name.
+    let _ = match kind {
+        Kind::Text => app.emit("local-download", p),
+        other => app.emit(other.event(), p),
+    };
 }
 
-/// Download one GGUF from the Hub into the models folder.
+/// Download one file from the Hub into the folder its kind runs from.
 ///
-/// Progress goes out as `local-download` events (bytes received against the
-/// total, then done/cancelled/error). The bytes land in `<name>.part` and are
+/// Progress goes out as the kind's event (`local-download` for text: bytes
+/// received against the total, then done/cancelled/error). The bytes land in `<name>.part` and are
 /// renamed only when the whole file arrived, so a listing never shows a
 /// half-file as a model; and a `.part` left by a stop or a crash is resumed
 /// with a Range request rather than fetched again. One download at a time:
 /// two 16 GB streams on one disk help nobody.
+///
+/// `kind` is text (the default: a GGUF for llama-server, into the models
+/// folder), image or voice; `set` names the folder an image component set
+/// shares. Text keeps its pause-and-resume stop. For image and voice a stop
+/// is a cancel and the `.part` goes with it: those cards offer no resume, and
+/// a half-file nobody can see is only lost disk.
 #[tauri::command(async)]
 pub async fn local_model_download(
     app: tauri::AppHandle,
     repo: String,
     file: String,
     token: Option<String>,
+    kind: Option<String>,
+    set: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let url = hub_file_url(&repo, &file)?;
+    let kind = Kind::parse(kind.as_deref())?;
+    let url = hub_file_url_for(kind, &repo, &file)?;
     let name = crate::net::sanitize_name(&file)?;
-    let dir = models_dir(&app)?;
+    let dir = download_dir(&app, kind, set.as_deref())?;
     let dest = dir.join(&name);
     let part = dir.join(format!("{}.part", name));
 
@@ -657,7 +790,7 @@ pub async fn local_model_download(
     }
     CANCEL.store(false, Ordering::SeqCst);
 
-    let result = download_into(&app, &url, &repo, &file, &dest, &part, token.as_deref()).await;
+    let result = download_into(&app, &url, &repo, &file, &dest, &part, token.as_deref(), kind).await;
 
     if let Ok(mut active) = downloading().lock() {
         *active = None;
@@ -673,12 +806,13 @@ async fn download_into(
     dest: &Path,
     part: &Path,
     token: Option<&str>,
+    kind: Kind,
 ) -> Result<serde_json::Value, String> {
     use std::io::Write;
 
     if dest.is_file() {
         let bytes = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-        emit_progress(app, &DownloadProgress {
+        emit_progress(app, kind, &DownloadProgress {
             repo: repo.to_string(),
             file: file.to_string(),
             received: bytes,
@@ -731,7 +865,7 @@ async fn download_into(
         error: String::new(),
         path: part.display().to_string(),
     };
-    emit_progress(app, &progress);
+    emit_progress(app, kind, &progress);
 
     let mut last_emit = Instant::now();
     let mut since_emit: u64 = 0;
@@ -739,9 +873,12 @@ async fn download_into(
         if CANCEL.load(Ordering::SeqCst) {
             let _ = out.flush();
             drop(out);
+            if kind != Kind::Text {
+                let _ = std::fs::remove_file(part);
+            }
             progress.received = received;
             progress.cancelled = true;
-            emit_progress(app, &progress);
+            emit_progress(app, kind, &progress);
             return Ok(serde_json::json!({ "path": part.display().to_string(), "bytes": received, "cancelled": true }));
         }
         let chunk = match response.chunk().await {
@@ -750,7 +887,7 @@ async fn download_into(
             Err(e) => {
                 progress.received = received;
                 progress.error = e.to_string();
-                emit_progress(app, &progress);
+                emit_progress(app, kind, &progress);
                 return Err(format!("download stopped after {} bytes: {}. Start it again to resume.", received, e));
             }
         };
@@ -761,7 +898,7 @@ async fn download_into(
         // first: enough to move a bar, not enough to flood the webview.
         if since_emit >= 4 * 1024 * 1024 || last_emit.elapsed() >= Duration::from_millis(250) {
             progress.received = received;
-            emit_progress(app, &progress);
+            emit_progress(app, kind, &progress);
             last_emit = Instant::now();
             since_emit = 0;
         }
@@ -772,7 +909,7 @@ async fn download_into(
     if total > 0 && received != total {
         progress.received = received;
         progress.error = format!("expected {} bytes, received {}", total, received);
-        emit_progress(app, &progress);
+        emit_progress(app, kind, &progress);
         return Err(format!("{}. Start the download again to resume.", progress.error));
     }
     std::fs::rename(part, dest).map_err(|e| format!("could not finish {}: {}", dest.display(), e))?;
@@ -780,7 +917,7 @@ async fn download_into(
     progress.total = if total > 0 { total } else { received };
     progress.done = true;
     progress.path = dest.display().to_string();
-    emit_progress(app, &progress);
+    emit_progress(app, kind, &progress);
     Ok(serde_json::json!({ "path": dest.display().to_string(), "bytes": received, "resumed": append, "already": false }))
 }
 
@@ -840,15 +977,25 @@ pub fn local_models_list(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     Ok(serde_json::json!({ "dir": dir.display().to_string(), "files": files }))
 }
 
-/// Remove one file from the models folder (its `.part` too). Only the models
-/// folder: this is not a general delete.
+/// Remove one file from a kind's folder (its `.part` too). Only those
+/// folders, and only that kind's formats: this is not a general delete. A
+/// cancelled image set uses it to take back the parts it already finished,
+/// and the set's folder goes too once it is empty.
 #[tauri::command(async)]
-pub fn local_model_delete(app: tauri::AppHandle, file: String) -> Result<serde_json::Value, String> {
+pub fn local_model_delete(
+    app: tauri::AppHandle,
+    file: String,
+    kind: Option<String>,
+    set: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let kind = Kind::parse(kind.as_deref())?;
     let name = crate::net::sanitize_name(&file)?;
-    if !name.to_ascii_lowercase().ends_with(".gguf") {
+    let lower = name.to_ascii_lowercase();
+    if !kind.extensions().iter().any(|ext| lower.ends_with(&format!(".{}", ext))) {
         return Err(format!("{} is not a model file", name));
     }
-    let dir = models_dir(&app)?;
+    let in_set = set_folder(kind, set.as_deref())?.is_some();
+    let dir = download_dir(&app, kind, set.as_deref())?;
     let mut removed = 0u32;
     for candidate in [dir.join(&name), dir.join(format!("{}.part", name))] {
         if candidate.is_file() {
@@ -856,6 +1003,11 @@ pub fn local_model_delete(app: tauri::AppHandle, file: String) -> Result<serde_j
                 .map_err(|e| format!("could not delete {}: {}", candidate.display(), e))?;
             removed += 1;
         }
+    }
+    if in_set {
+        // remove_dir takes only an empty folder, so a set folder that still
+        // holds anything else is left as it is.
+        let _ = std::fs::remove_dir(&dir);
     }
     Ok(serde_json::json!({ "removed": removed }))
 }
@@ -1044,5 +1196,72 @@ mod tests {
         assert!(hub_file_url("unsloth/x", "x.safetensors").is_err(), "not a gguf");
         assert!(hub_file_url("unsloth/x", "../x.gguf").is_err());
         assert!(hub_file_url("evil.com/x?y", "x.gguf").is_err());
+    }
+
+    #[test]
+    fn a_call_that_names_no_kind_is_text_and_text_is_unchanged() {
+        assert_eq!(Kind::parse(None).unwrap(), Kind::Text);
+        assert_eq!(Kind::parse(Some("  ")).unwrap(), Kind::Text);
+        assert_eq!(Kind::parse(Some("Image")).unwrap(), Kind::Image);
+        assert_eq!(Kind::parse(Some("voice")).unwrap(), Kind::Voice);
+        assert!(Kind::parse(Some("video")).is_err());
+        assert_eq!(
+            hub_file_url("unsloth/x", "x.safetensors").unwrap_err(),
+            "x.safetensors is not a .gguf file",
+            "text refuses with the words it always had"
+        );
+        assert_eq!(hub_file_url("unsloth/x", "x.ckpt").unwrap_err(), "x.ckpt is not a .gguf file");
+        assert_eq!(hub_file_url("a/b", "x.gguf"), hub_file_url_for(Kind::Text, "a/b", "x.gguf"));
+        assert_eq!(Kind::Text.event(), "local-download", "the Local models card still hears its own bar");
+        assert_ne!(Kind::Voice.event(), Kind::Text.event());
+        assert_ne!(Kind::Image.event(), Kind::Text.event());
+    }
+
+    #[test]
+    fn each_kind_takes_its_own_formats_and_no_others() {
+        assert!(Kind::Image.check_file("v1-5-pruned-emaonly.safetensors").is_ok());
+        assert!(Kind::Image.check_file("split/diffusion_models/qwen-image-Q4_K_M.gguf").is_ok());
+        assert!(Kind::Image.check_file("ggml-base.bin").is_err());
+        assert!(Kind::Image.check_file("model_index.json").is_err());
+        assert!(Kind::Voice.check_file("ggml-base.en.bin").is_ok());
+        assert!(Kind::Voice.check_file("ggml-base.en.gguf").is_err());
+        assert!(Kind::Voice.check_file("x.safetensors").is_err());
+        assert!(Kind::Text.check_file("x.bin").is_err());
+    }
+
+    #[test]
+    fn a_pickle_is_refused_and_the_refusal_says_why() {
+        for file in ["v1-5-pruned.ckpt", "sub/X.CKPT", "model.pt", "vae.pth"] {
+            let err = Kind::Image.check_file(file).unwrap_err();
+            assert!(err.contains("arbitrary code"), "{} was refused as: {}", file, err);
+        }
+        let err = Kind::Voice.check_file("pytorch_model.bin").unwrap_err();
+        assert!(err.contains("arbitrary code"), "a transformers .bin is a pickle too: {}", err);
+        assert!(hub_file_url_for(Kind::Image, "a/b", "x.ckpt").is_err());
+    }
+
+    #[test]
+    fn the_path_rules_are_as_strict_for_every_kind() {
+        for (kind, file) in [(Kind::Image, "x.safetensors"), (Kind::Voice, "ggml-x.bin")] {
+            assert!(hub_file_url_for(kind, "a/b", file).is_ok());
+            assert!(hub_file_url_for(kind, "a/b", &format!("../{}", file)).is_err());
+            assert!(hub_file_url_for(kind, "a/b/c", file).is_err());
+            assert!(hub_file_url_for(kind, "evil.com/x?y", file).is_err());
+            assert!(hub_file_url_for(kind, "a/b", &format!("1/2/3/4/5/6/{}", file)).is_err());
+            assert!(hub_file_url_for(kind, "a/b", &format!(".hidden/{}", file)).is_err());
+        }
+    }
+
+    #[test]
+    fn only_an_image_set_gets_a_folder_and_the_name_is_one_clean_segment() {
+        assert_eq!(set_folder(Kind::Image, None).unwrap(), None);
+        assert_eq!(set_folder(Kind::Image, Some(" ")).unwrap(), None);
+        assert_eq!(
+            set_folder(Kind::Image, Some("qwen-image-Q4_K_M")).unwrap(),
+            Some("qwen-image-Q4_K_M".to_string())
+        );
+        assert_eq!(set_folder(Kind::Image, Some("../../evil")).unwrap(), Some("evil".to_string()));
+        assert!(set_folder(Kind::Text, Some("x")).is_err());
+        assert!(set_folder(Kind::Voice, Some("x")).is_err());
     }
 }

@@ -424,14 +424,30 @@ export interface LocalDownloadProgress {
   path: string;
 }
 
-export async function localModelDownload(args: { repo: string; file: string; token?: string }): Promise<{
+/** What a download feeds: llama-server (the default), sd-server or whisper.cpp. */
+export type DownloadKind = 'text' | 'image' | 'voice';
+
+export async function localModelDownload(args: {
+  repo: string;
+  file: string;
+  token?: string;
+  kind?: DownloadKind;
+  /** The folder an image component set shares under sd-models. */
+  set?: string;
+}): Promise<{
   path: string;
   bytes: number;
   resumed?: boolean;
   already?: boolean;
   cancelled?: boolean;
 }> {
-  return call('local_model_download', { repo: args.repo, file: args.file, token: args.token ?? null });
+  return call('local_model_download', {
+    repo: args.repo,
+    file: args.file,
+    token: args.token ?? null,
+    kind: args.kind ?? null,
+    set: args.set ?? null,
+  });
 }
 
 export async function localModelDownloadCancel(): Promise<{ cancelling: boolean; file: string }> {
@@ -442,8 +458,8 @@ export async function localModelsList(): Promise<{ dir: string; files: LocalMode
   return call('local_models_list');
 }
 
-export async function localModelDelete(file: string): Promise<{ removed: number }> {
-  return call('local_model_delete', { file });
+export async function localModelDelete(file: string, opts?: { kind?: DownloadKind; set?: string }): Promise<{ removed: number }> {
+  return call('local_model_delete', { file, kind: opts?.kind ?? null, set: opts?.set ?? null });
 }
 
 export async function localModelsScan(dirs?: string[]): Promise<{ dirs: string[]; files: LocalModelFile[] }> {
@@ -477,8 +493,11 @@ async function subscribe<T>(event: string, handler: (payload: T) => void): Promi
   };
 }
 
-export function onLocalDownload(handler: (progress: LocalDownloadProgress) => void): Promise<() => void> {
-  return subscribe<LocalDownloadProgress>('local-download', handler);
+// Each kind reports on its own event (models.rs Kind::event), so two cards on
+// one screen never draw each other's bar.
+export function onLocalDownload(handler: (progress: LocalDownloadProgress) => void, kind: DownloadKind = 'text'): Promise<() => void> {
+  const event = kind === 'image' ? 'image-download' : kind === 'voice' ? 'voice-download' : 'local-download';
+  return subscribe<LocalDownloadProgress>(event, handler);
 }
 
 /** neuraos:// links handed over by the shell, as a list of URLs. */

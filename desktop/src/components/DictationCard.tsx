@@ -3,11 +3,13 @@ import { pushToast } from './Toasts';
 import SelectPill from './SelectPill';
 import { hasShell, openUrl, whisperFind, whisperPickBinary, type WhisperFacts } from '../bridge';
 import { ENGINE_KEY, LANGUAGE_KEY, MODEL_KEY, normalizeEngine, pickModel, type EngineSetting } from '../dictate';
+import { HubDownloader } from './LocalImagesCard';
 
 // Dictation, in Settings: which Whisper the mic uses. Local = the user's own
 // whisper.cpp build (whisper-cli) and a ggml model, run on this PC by the
-// shell; Hugging Face = the signed-in token. Nothing is downloaded for them:
-// the two links open the release and model pages in the browser.
+// shell; Hugging Face = the signed-in token. The binary is never downloaded
+// for them; a ggml model can be, through "Add from Hugging Face", into
+// whisper-models where whisper_find already looks.
 
 const RELEASES = 'https://github.com/ggml-org/whisper.cpp/releases/latest';
 const MODELS = 'https://huggingface.co/ggerganov/whisper.cpp/tree/main';
@@ -118,6 +120,18 @@ export default function DictationCard() {
               Put ggml models (for example ggml-base.en.bin or ggml-small.bin) in{' '}
               <span className="mono">{facts?.models_dir || '<app data>/whisper-models'}</span> or beside whisper-cli.
             </p>
+
+            <HubDownloader
+              kind="voice"
+              placeholder="ggerganov/whisper.cpp, a model page link, or a ggml .bin link"
+              onDownloaded={async (path, row) => {
+                // It lands where whisper_find looks, so it is in the list on
+                // the next read; choosing it saves the person a second click.
+                chooseModel(path);
+                await refresh();
+                pushToast('ok', `${row.label} downloaded. Dictation will use it.`);
+              }}
+            />
 
             <label className="dictation-field">
               <span>Language</span>
