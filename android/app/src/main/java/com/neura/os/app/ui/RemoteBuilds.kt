@@ -10,9 +10,13 @@ import com.neura.os.app.data.BuildList
 import com.neura.os.app.data.BuildSession
 import com.neura.os.app.data.NativeApi
 import com.neura.os.app.data.applyBuildEvent
-import java.net.HttpURLConnection
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicReference
+import com.neura.os.app.data.StreamUpdate
+import com.neura.os.app.data.resumable
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** A build is waiting on the user: shown as a notification when the app is in
  * the background. [requestId] is the dedup key, so one question notifies once. */
@@ -22,13 +26,16 @@ import java.util.concurrent.atomic.AtomicReference
 data class BuildAttention(val buildId: String, val requestId: String, val text: String, val approval: Boolean = false)
 
 /** State for remote builds, kept out of AppViewModel so the chat code stays
- * untouched. Network work runs on two single threads (one for requests, one for
- * the live stream); every Compose state write is posted to the main thread. */
-class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) -> Unit) {
-    private val io = Executors.newSingleThreadExecutor()
-    private val streamIo = Executors.newSingleThreadExecutor()
-    private val stream = AtomicReference<HttpURLConnection?>(null)
-    @Volatile private var watching: String? = null
+ * untouched. Every job is a child of [scope] (the view model's): requests hop
+ * to [io] for the blocking call and come back to write Compose state; the
+ * live stream is one [Job] that closing the screen cancels, which closes its
+ * connection (master plan v2, V3). */
+class RemoteBuilds(
+    private val api: NativeApi,
+    private val scope: CoroutineScope,
+    private val io: CoroutineDispatcher,
+) {
+    private var watchJob: Job? = null
     private var lastApplied = 0L
 
     var list by mutableStateOf<BuildList?>(null)
@@ -54,19 +61,14 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
 
     fun refresh() {
         listBusy = true
-        io.execute {
+        scope.launch {
             try {
-                val fresh = api.builds()
-                post {
-                    list = fresh
-                    listError = null
-                    listBusy = false
-                }
+                list = withContext(io) { api.builds() }
+                listError = null
             } catch (e: ApiException) {
-                post {
-                    listError = e.message
-                    listBusy = false
-                }
+                listError = e.message
+            } finally {
+                listBusy = false
             }
         }
     }
@@ -74,19 +76,15 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
     fun start(chatId: String, plan: String, onStarted: () -> Unit, onFailed: (String) -> Unit) {
         actionBusy = true
         error = null
-        io.execute {
+        scope.launch {
             try {
-                val session = api.startBuild(chatId, plan)
-                post {
-                    actionBusy = false
-                    show(session)
-                    onStarted()
-                }
+                val session = withContext(io) { api.startBuild(chatId, plan) }
+                actionBusy = false
+                show(session)
+                onStarted()
             } catch (e: ApiException) {
-                post {
-                    actionBusy = false
-                    onFailed(e.message ?: "Could not start the build.")
-                }
+                actionBusy = false
+                onFailed(e.message ?: "Could not start the build.")
             }
         }
     }
@@ -94,12 +92,11 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
     fun open(id: String) {
         error = null
         list?.sessions?.firstOrNull { it.id == id }?.let { if (current?.id != id) current = it }
-        io.execute {
+        scope.launch {
             try {
-                val session = api.build(id)
-                post { show(session) }
+                show(withContext(io) { api.build(id) })
             } catch (e: ApiException) {
-                post { error = e.message }
+                error = e.message
             }
         }
     }
@@ -110,22 +107,18 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
         val pending = session.pending ?: return
         actionBusy = true
         error = null
-        io.execute {
+        scope.launch {
             try {
-                api.answerBuild(session.id, pending.requestId, decision, text)
-                post {
-                    actionBusy = false
-                    // The stream may already have delivered the next question;
-                    // only the answered one is cleared here.
-                    val now = current
-                    if (now != null && now.pending?.requestId == pending.requestId) current = now.copy(pending = null)
-                }
+                withContext(io) { api.answerBuild(session.id, pending.requestId, decision, text) }
+                actionBusy = false
+                // The stream may already have delivered the next question;
+                // only the answered one is cleared here.
+                val now = current
+                if (now != null && now.pending?.requestId == pending.requestId) current = now.copy(pending = null)
             } catch (e: ApiException) {
-                post {
-                    actionBusy = false
-                    error = e.message
-                    open(session.id)
-                }
+                actionBusy = false
+                error = e.message
+                open(session.id)
             }
         }
     }
@@ -133,34 +126,24 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
     fun cancel() {
         val session = current ?: return
         actionBusy = true
-        io.execute {
+        scope.launch {
             try {
-                val updated = api.cancelBuild(session.id)
-                post {
-                    actionBusy = false
-                    val now = current
-                    if (now != null && now.id == updated.id) current = now.copy(status = updated.status, pending = null)
-                }
+                val updated = withContext(io) { api.cancelBuild(session.id) }
+                val now = current
+                if (now != null && now.id == updated.id) current = now.copy(status = updated.status, pending = null)
             } catch (e: ApiException) {
-                post {
-                    actionBusy = false
-                    error = e.message
-                }
+                error = e.message
+            } finally {
+                actionBusy = false
             }
         }
     }
 
     /** Stops following the build on screen (the build itself keeps running). */
     fun close() {
-        watching = null
-        stopStream()
+        watchJob?.cancel()
+        watchJob = null
         connection = ""
-    }
-
-    fun shutdown() {
-        close()
-        io.shutdownNow()
-        streamIo.shutdownNow()
     }
 
     private fun show(session: BuildSession) {
@@ -171,43 +154,21 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
         watch(session.id)
     }
 
-    private fun stopStream() {
-        val conn = stream.getAndSet(null) ?: return
-        io.execute { conn.disconnect() }
-    }
-
     // Follows the build from the first event (so the timeline is complete) and
     // reconnects from the last sequence number after a drop, with a capped,
-    // growing pause, as deepseek-harness-mobile's connection loop does.
+    // growing pause, as deepseek-harness-mobile's connection loop does
+    // (data/Streams.kt resumable). Watching another build cancels this one.
     private fun watch(id: String) {
-        stopStream()
-        watching = id
-        streamIo.execute {
-            var after = 0L
-            var failures = 0
-            while (watching == id) {
-                try {
-                    api.streamBuild(id, after, stream) { event ->
-                        after = maxOf(after, event.seq)
-                        failures = 0
-                        post { if (watching == id) apply(event) }
-                    }
-                    break
-                } catch (e: ApiException) {
-                    if (watching != id) break
-                    failures++
-                    if (failures > MAX_RECONNECTS) {
-                        post { if (watching == id) connection = "Offline. Open the build again to reconnect." }
-                        break
-                    }
-                    post { if (watching == id) connection = "Reconnecting…" }
-                    try {
-                        Thread.sleep(minOf(1000L shl (failures - 1), 15000L))
-                    } catch (interrupted: InterruptedException) {
-                        break
+        watchJob?.cancel()
+        watchJob = scope.launch {
+            resumable(MAX_RECONNECTS, positionOf = { it.seq }) { after -> api.buildEvents(id, after) }
+                .collect { update ->
+                    when (update) {
+                        is StreamUpdate.Item -> apply(update.value)
+                        is StreamUpdate.Reconnecting -> connection = "Reconnecting…"
+                        StreamUpdate.Offline -> connection = "Offline. Open the build again to reconnect."
                     }
                 }
-            }
         }
     }
 

@@ -382,6 +382,17 @@ class NativeApi(
         }
     }
 
+    /** One reply as a cold stream (master plan v2, V3): collecting it sends
+     * the request; cancelling the collector (Stop) closes the connection, and
+     * the stream then just ends. See data/Streams.kt. */
+    fun chatEvents(provider: String, body: String): kotlinx.coroutines.flow.Flow<ChatEvent> =
+        connectionFlow { handle, emit -> streamChat(provider, body, handle, emit) }
+
+    /** A build's events after [after], as a cold stream; a drop fails it with
+     * [ApiException] so [resumable] can reconnect from the last one seen. */
+    fun buildEvents(id: String, after: Long): kotlinx.coroutines.flow.Flow<BuildEvent> =
+        connectionFlow { handle, emit -> streamBuild(id, after, handle, emit) }
+
     /** Draws one picture through the server's image route. [size] is a
      * declared "WxH", [model] and [provider] are optional (the server falls
      * back to its configured default). Returns the provider that drew, the

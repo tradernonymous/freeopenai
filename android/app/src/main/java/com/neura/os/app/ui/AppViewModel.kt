@@ -2,7 +2,12 @@ package com.neura.os.app.ui
 
 import androidx.lifecycle.viewModelScope
 import com.neura.os.app.data.NoticeQueue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -88,12 +93,8 @@ import com.neura.os.app.data.deriveTitle
 import com.neura.os.app.data.personaFor
 import com.neura.os.app.ReplyService
 import com.neura.os.app.normalizeBaseUrl
-import java.net.HttpURLConnection
 import java.util.UUID
-import java.util.concurrent.Executor
 import java.util.concurrent.Executors
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.atomic.AtomicReference
 
 /** All app state for the native screens. Network and disk work runs on a
  * small pool; every state change is posted back to the main thread, which
@@ -122,12 +123,22 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         showNotice("Something went wrong: $reason")
     }
 
-    /** Runs [block] off the main thread as a job this view model owns. */
+    /** Runs [block] off the main thread as a job this view model owns: a
+     * save or a delete nobody waits for. */
     private fun launchIo(block: () -> Unit): Job = viewModelScope.launch(ioDispatcher + ioFailures) { block() }
 
-    private val io = Executor { block -> launchIo { block.run() } }
+    /** Starts work this view model owns, on the main thread, where Compose
+     * state is written; its blocking calls go through [onIo]. Clearing the
+     * view model cancels it. */
+    private fun work(block: suspend CoroutineScope.() -> Unit): Job = viewModelScope.launch(ioFailures, block = block)
+
+    /** A blocking call (network, disk) on the pool; the caller suspends until
+     * it returns and carries on on its own thread. */
+    private suspend fun <T> onIo(block: () -> T): T = withContext(ioDispatcher) { block() }
+
+    /** For blocking code already on the pool (the reply loop, drawing) that
+     * must write Compose state: posted to the main thread. */
     private val main = Handler(Looper.getMainLooper())
-    private val activeStream = AtomicReference<HttpURLConnection?>(null)
     private val context = app.applicationContext
 
     var signedIn by mutableStateOf(store.server != null && (store.session != null || store.password != null))
@@ -242,35 +253,32 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         // catch-up for whatever store.session already held when the app
         // launched. A no-op when nobody is signed in yet.
         store.server?.let { server -> WebShell.syncSessionCookie(server, store.session) }
-        io.execute {
-            val chats = repo.loadConversations()
-            val lib = repo.loadLibrary()
-            val savedOutbox = repo.loadOutbox()
-            val runs = repo.loadAutomations()
-            val savedSchedules = repo.loadSchedules()
-            // Alarms do not survive a reboot or an update; every start re-arms
-            // them, so a boot broadcast that never came costs nothing.
-            RecipeAlarms.armAll(getApplication<Application>(), savedSchedules)
-            if (store.offlineAnswers) responseCache = repo.loadResponseCache()
-            main.post {
-                // A chat started before the disk was read (a shared photo, a
-                // notification tap) is kept rather than replaced by the load.
-                val fresh = conversations.filter { open -> chats.none { it.id == open.id } }
-                conversations.clear()
-                conversations.addAll(fresh + chats)
-                library = lib
-                outbox = savedOutbox
-                automations = runs
-                schedules = savedSchedules
-                loaded = true
+        work {
+            val disk = onIo {
+                val savedSchedules = repo.loadSchedules()
+                // Alarms do not survive a reboot or an update; every start re-arms
+                // them, so a boot broadcast that never came costs nothing.
+                RecipeAlarms.armAll(getApplication<Application>(), savedSchedules)
+                if (store.offlineAnswers) responseCache = repo.loadResponseCache()
+                OnDisk(repo.loadConversations(), repo.loadLibrary(), repo.loadOutbox(), repo.loadAutomations(), savedSchedules)
             }
+            // A chat started before the disk was read (a shared photo, a
+            // notification tap) is kept rather than replaced by the load.
+            val fresh = conversations.filter { open -> disk.chats.none { it.id == open.id } }
+            conversations.clear()
+            conversations.addAll(fresh + disk.chats)
+            library = disk.library
+            outbox = disk.outbox
+            automations = disk.automations
+            schedules = disk.schedules
+            loaded = true
         }
         if (signedIn) refreshCatalogue()
     }
 
     private fun updateOutbox(next: Outbox) {
         outbox = next
-        io.execute { repo.saveOutbox(next) }
+        launchIo { repo.saveOutbox(next) }
     }
 
     /** Retries the oldest chat whose backoff has elapsed. Only one reply ever
@@ -323,14 +331,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         offlineAnswers = on
         if (!on) {
             responseCache = ResponseCache()
-            io.execute { repo.deleteResponseCache() }
+            launchIo { repo.deleteResponseCache() }
         }
     }
 
     override fun onCleared() {
-        activeStream.getAndSet(null)?.disconnect()
+        // viewModelScope is cancelled by now: the reply, the build stream and
+        // every load have stopped, and their connections are closed.
         pool.shutdownNow()
-        builds.shutdown()
         super.onCleared()
     }
 
@@ -338,7 +346,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     // The phone plans; the server builds. State and streaming live in
     // RemoteBuilds; these are the entry points the screens use.
 
-    val builds = RemoteBuilds(api) { block -> main.post(block) }
+    val builds = RemoteBuilds(api, viewModelScope, ioDispatcher)
 
     // --- Restore after Android closes the app in the background ------------------
     // Chats are already on disk; what would be lost is where you were. The
@@ -449,25 +457,21 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
         signInBusy = true
         signInError = null
-        io.execute {
+        work {
             try {
-                val cookie = ChatApi(server).login(username.trim(), password)
+                val cookie = onIo { ChatApi(server).login(username.trim(), password) }
                 if (store.server != server) store.clearSession()
                 store.server = server
                 store.username = username.trim()
                 store.password = password
                 store.session = cookie
                 WebShell.syncSessionCookie(server, cookie)
-                main.post {
-                    signInBusy = false
-                    signedIn = true
-                    refreshCatalogue()
-                }
+                signedIn = true
+                refreshCatalogue()
             } catch (e: ApiException) {
-                main.post {
-                    signInBusy = false
-                    signInError = e.message
-                }
+                signInError = e.message
+            } finally {
+                signInBusy = false
             }
         }
     }
@@ -478,7 +482,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val server = store.server ?: ""
         val cookie = store.session
         if (server.isNotEmpty()) WebShell.syncSessionCookie(server, null)
-        io.execute {
+        launchIo {
             if (server.isNotEmpty()) {
                 val client = ChatApi(server)
                 client.sessionCookie = cookie
@@ -533,60 +537,53 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if (catalogueBusy) return
         catalogueBusy = true
         catalogueError = null
-        io.execute {
+        work {
             try {
-                val served = reauthing { api.providers() }
+                val served = onIo { reauthing { api.providers() } }
                 // Puter answers in the browser on the user's own allowance, so
                 // the server has no row for it; the app adds one because the
                 // app is what can reach it.
                 val list = if (puterChat != null) served + ProviderInfo(PUTER_PROVIDER, "Puter (your account)", true, "chat") else served
-                main.post {
-                    providers = list
-                    catalogueBusy = false
-                    if (list.isEmpty()) catalogueError = "The server has no chat provider configured."
-                }
+                providers = list
+                catalogueBusy = false
+                if (list.isEmpty()) catalogueError = "The server has no chat provider configured."
                 // Warm the default provider's models so a new chat can start at once.
                 val preferred = library.defaultProvider.takeIf { id -> list.any { it.id == id } } ?: list.firstOrNull()?.id
-                if (preferred != null) loadModelsBlocking(preferred)
+                if (preferred != null) fetchModels(preferred)
             } catch (e: ApiException) {
                 recordFailure("providers", e.message)
-                main.post {
-                    catalogueBusy = false
-                    catalogueError = e.message
-                    if (e.authRequired) signedIn = false
-                }
+                catalogueBusy = false
+                catalogueError = e.message
+                if (e.authRequired) signedIn = false
             }
         }
     }
 
-    private fun loadModelsBlocking(provider: String) {
+    private suspend fun fetchModels(provider: String) {
         try {
-            val list = reauthing { if (provider == PUTER_PROVIDER) api.puterModels() else api.models(provider) }
-            main.post { models[provider] = list }
+            models[provider] = onIo { reauthing { if (provider == PUTER_PROVIDER) api.puterModels() else api.models(provider) } }
         } catch (e: ApiException) {
-            main.post { showNotice(e.message) }
+            showNotice(e.message)
         }
     }
 
     fun loadModels(provider: String) {
         if (models.containsKey(provider)) return
-        io.execute { loadModelsBlocking(provider) }
+        work { fetchModels(provider) }
     }
 
     /** Reads the server's timeouts and retry budget for the Settings screen. */
     fun loadLimits() {
-        io.execute {
-            val result = try { api.limits() } catch (e: Exception) { null }
-            main.post { result?.let { limits = it } }
+        work {
+            onIo { try { api.limits() } catch (e: Exception) { null } }?.let { limits = it }
         }
     }
 
     /** Fills the Skills screen from the server's installed catalogue. */
     fun loadSkills(force: Boolean = false) {
         if (!force && skills.isNotEmpty()) return
-        io.execute {
-            val result = try { api.skills() } catch (e: Exception) { null }
-            if (result != null) main.post { skills = result }
+        work {
+            onIo { try { api.skills() } catch (e: Exception) { null } }?.let { skills = it }
         }
     }
 
@@ -596,7 +593,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun recordAutomationRun(prompt: String) {
         val next = recordAutomation(automations, prompt, System.currentTimeMillis())
         automations = next
-        io.execute { repo.saveAutomations(next) }
+        launchIo { repo.saveAutomations(next) }
     }
 
     /** Kicks off an automation prompt through the ordinary agent pipeline:
@@ -645,16 +642,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     private fun storeSchedules(next: List<RecipeSchedule>) {
         schedules = next
-        io.execute { repo.saveSchedules(next) }
+        launchIo { repo.saveSchedules(next) }
     }
 
     /** A scheduled recipe's notification was tapped: a new chat with the
      * prompt typed in, waiting for Send. Read from disk, since a cold start
      * may not have loaded the list yet. */
     fun openScheduledRecipe(id: String) {
-        io.execute {
-            val schedule = repo.loadSchedules().firstOrNull { it.id == id }
-            main.post { if (schedule != null) newChat(draft = schedule.prompt) }
+        work {
+            val schedule = onIo { repo.loadSchedules().firstOrNull { it.id == id } }
+            if (schedule != null) newChat(draft = schedule.prompt)
         }
     }
 
@@ -664,9 +661,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     /** Fetches a skill's SKILL.md for the detail sheet off the main thread. */
     fun loadSkillInstructions(name: String) {
-        io.execute {
-            val body = skillBody(name) ?: ""
-            main.post { skillDetail = name to body }
+        work {
+            val body = onIo { skillBody(name) } ?: ""
+            skillDetail = name to body
         }
     }
 
@@ -718,7 +715,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private fun replace(updated: Conversation, persist: Boolean = true) {
         val index = conversations.indexOfFirst { it.id == updated.id }
         if (index >= 0) conversations[index] = updated else conversations.add(updated)
-        if (persist && updated.messages.isNotEmpty()) io.execute { repo.saveConversation(updated) }
+        if (persist && updated.messages.isNotEmpty()) launchIo { repo.saveConversation(updated) }
     }
 
     fun setModel(id: String, provider: String, model: String, makeDefault: Boolean) {
@@ -755,7 +752,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         conversations.removeAll { it.id == id }
         drafts.remove(id)
         if (currentChatId == id) currentChatId = null
-        io.execute { repo.deleteConversation(id) }
+        launchIo { repo.deleteConversation(id) }
     }
 
     fun deleteAllChats() {
@@ -764,7 +761,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         drafts.clear()
         currentChatId = null
         responseCache = ResponseCache()
-        io.execute {
+        launchIo {
             repo.deleteAllConversations()
             repo.deleteResponseCache()
         }
@@ -870,15 +867,19 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     }
 
     /** The reply streaming now (runReply or runCompareReply). Stop cancels
-     * it; the loop checks [replyStopped] between steps, and closing the
-     * connection ends the blocking read it may be inside. */
+     * it: the stream's collector goes away, which closes the connection
+     * (data/Streams.kt), and the loop checks [replyStopped] between steps. */
     @Volatile private var replyJob: Job? = null
 
     private fun replyStopped(): Boolean = replyJob?.isCancelled == true
 
+    /** Runs a reply loop on the pool (it is full of blocking steps: tools,
+     * skills, disk) as a job this view model owns. */
+    private fun launchReply(block: suspend CoroutineScope.() -> Unit): Job =
+        viewModelScope.launch(ioDispatcher + ioFailures, block = block)
+
     fun stop() {
         replyJob?.cancel()
-        activeStream.getAndSet(null)?.let { connection -> io.execute { connection.disconnect() } }
         ReplyService.stop(context)
     }
 
@@ -936,7 +937,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private fun pinSkills(chat: Conversation, names: List<String>) {
         val added = names.map { it.lowercase() }.distinct().filter { it !in chat.skills }
         if (added.isNotEmpty()) replace(chat.copy(skills = chat.skills + added, updatedAt = System.currentTimeMillis()))
-        added.forEach { name -> io.execute { skillBody(name) } }
+        added.forEach { name -> launchIo { skillBody(name) } }
     }
 
     /** Stops using a skill in this chat. The composer's chips call it, and so
@@ -1017,13 +1018,15 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** Puts the worker's copy of a chat on screen without losing what the user
      * changed meanwhile (pin, title, mode). */
     private fun publishChat(worker: Conversation, persist: Boolean) {
-        main.post {
-            val current = conversation(worker.id) ?: return@post
-            replace(
-                current.copy(messages = worker.messages, tasks = worker.tasks, files = worker.files, updatedAt = System.currentTimeMillis()),
-                persist = persist,
-            )
+        val write: () -> Unit = {
+            conversation(worker.id)?.let { current ->
+                replace(
+                    current.copy(messages = worker.messages, tasks = worker.tasks, files = worker.files, updatedAt = System.currentTimeMillis()),
+                    persist = persist,
+                )
+            }
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) write() else main.post { write() }
     }
 
     /** The agent loop: stream a reply, run the tools it asks for, send the
@@ -1038,7 +1041,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if (outbox.entries.any { it.chatId == start.id }) updateOutbox(outbox.acked(start.id))
         val lib = library
         ReplyService.start(context, start.id, start.title)
-        replyJob = launchIo {
+        replyJob = launchReply {
           try {
             var chat = start
             var useTools = true
@@ -1088,24 +1091,26 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 try {
                     if (chat.provider == PUTER_PROVIDER) {
                         val bridge = puterChat ?: throw ApiException("Puter is only available in the app's own window.")
-                        val finished = java.util.concurrent.CountDownLatch(1)
-                        val reason = java.util.concurrent.atomic.AtomicReference<String?>(null)
-                        main.post {
-                            bridge(body, { piece ->
-                                content.append(piece)
-                                val now = System.currentTimeMillis()
-                                if (now - lastPost > 60) {
-                                    lastPost = now
-                                    publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
-                                }
-                            }, { error ->
-                                reason.set(error)
-                                finished.countDown()
-                            })
+                        // Waits for Puter's answer without holding a thread, and
+                        // stops waiting (and stops taking pieces) on Stop.
+                        val reason = suspendCancellableCoroutine<String?> { waiting ->
+                            main.post {
+                                bridge(body, { piece ->
+                                    if (waiting.isActive) {
+                                        content.append(piece)
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastPost > 60) {
+                                            lastPost = now
+                                            publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                        }
+                                    }
+                                }, { error ->
+                                    if (waiting.isActive) waiting.resume(error)
+                                })
+                            }
                         }
-                        finished.await()
-                        reason.get()?.let { failure = it }
-                    } else api.streamChat(chat.provider, body, activeStream) { event ->
+                        reason?.let { failure = it }
+                    } else api.chatEvents(chat.provider, body).collect { event ->
                         when (event) {
                             is ChatEvent.Delta -> {
                                 content.append(event.content)
@@ -1124,6 +1129,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                             ChatEvent.Done -> Unit
                         }
                     }
+                } catch (e: CancellationException) {
+                    // Stop: what arrived so far is kept, as below. Anything else
+                    // cancelling this job (the view model going away) passes on.
+                    if (!replyStopped()) throw e
                 } catch (e: ApiException) {
                     failure = e.message
                     if (e.authRequired && !authRetried && silentSignIn()) {
@@ -1241,14 +1250,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * Deliberately does not reuse runReply's tool loop, tools-unsupported
      * retry, or outbox queuing -- Compare is a quick side-by-side reading of
      * two models, not a full agent turn, and running two tool loops at once
-     * would need more than the single activeStream/streamingId this app
+     * would need more than the single replyJob/streamingId this app
      * tracks for an in-flight reply. */
     private fun runCompareReply(start: Conversation, primary: CompareTarget, secondary: CompareTarget) {
         streamingId = start.id
         streamStartedAt = System.currentTimeMillis()
         val lib = library
         ReplyService.start(context, start.id, start.title)
-        replyJob = launchIo {
+        replyJob = launchReply {
           try {
             val groupId = UUID.randomUUID().toString()
             val persona = personaFor(lib, start.personaId)
@@ -1269,7 +1278,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
                 var failure: String? = null
                 try {
-                    api.streamChat(target.provider, body, activeStream) { event ->
+                    api.chatEvents(target.provider, body).collect { event ->
                         when (event) {
                             is ChatEvent.Delta -> {
                                 content.append(event.content)
@@ -1284,6 +1293,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                             else -> Unit
                         }
                     }
+                } catch (e: CancellationException) {
+                    if (!replyStopped()) throw e
                 } catch (e: ApiException) {
                     failure = e.message
                 } catch (e: Exception) {
@@ -1356,7 +1367,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     private fun updateLibrary(updated: Library) {
         library = updated
-        io.execute { repo.saveLibrary(updated) }
+        launchIo { repo.saveLibrary(updated) }
     }
 
     fun saveInstructions(text: String) {
@@ -1434,18 +1445,15 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     private fun reviewFailed(e: ApiException) {
         recordFailure("github", e.message)
-        main.post {
-            reviewBusy = false
-            reviewError = e.message
-            if (e.authRequired) signedIn = false
-        }
+        reviewBusy = false
+        reviewError = e.message
+        if (e.authRequired) signedIn = false
     }
 
     fun loadReviewRepos() {
-        io.execute {
+        work {
             try {
-                val names = api.githubRepoNames()
-                main.post { reviewRepos = names }
+                reviewRepos = onIo { api.githubRepoNames() }
             } catch (e: ApiException) {
                 reviewFailed(e)
             }
@@ -1456,15 +1464,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         reviewBusy = true
         reviewError = null
         reviewPull = null
-        io.execute {
+        work {
             try {
-                val list = api.pulls(repo)
-                main.post {
-                    reviewPulls = list
-                    reviewBusy = false
-                }
+                reviewPulls = onIo { api.pulls(repo) }
+                reviewBusy = false
             } catch (e: ApiException) {
-                main.post { reviewPulls = emptyList() }
+                reviewPulls = emptyList()
                 reviewFailed(e)
             }
         }
@@ -1473,13 +1478,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun openPull(repo: String, number: Int) {
         reviewBusy = true
         reviewError = null
-        io.execute {
+        work {
             try {
-                val detail = api.pull(repo, number)
-                main.post {
-                    reviewPull = detail
-                    reviewBusy = false
-                }
+                reviewPull = onIo { api.pull(repo, number) }
+                reviewBusy = false
             } catch (e: ApiException) {
                 reviewFailed(e)
             }
@@ -1495,14 +1497,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if (reviewBusy || !event.canSend(text)) return
         reviewBusy = true
         reviewError = null
-        io.execute {
+        work {
             try {
-                val state = api.review(repo, number, event, text)
-                main.post {
-                    reviewBusy = false
-                    showNotice("Review sent to #$number" + (if (state.isEmpty()) "." else ": " + state.lowercase().replace('_', ' ') + "."))
-                    onSent()
-                }
+                val state = onIo { api.review(repo, number, event, text) }
+                reviewBusy = false
+                showNotice("Review sent to #$number" + (if (state.isEmpty()) "." else ": " + state.lowercase().replace('_', ' ') + "."))
+                onSent()
             } catch (e: ApiException) {
                 reviewFailed(e)
             }
@@ -1521,10 +1521,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     fun refreshGithubLogins() {
         if (!githubConnected) { githubLogins = emptyList(); return }
-        io.execute {
-            val logins = api.githubLogins()
-            main.post { githubLogins = logins }
-        }
+        work { githubLogins = onIo { api.githubLogins() } }
     }
 
     /** Proves this session's identity over its own connection (a handoff
@@ -1535,15 +1532,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * Custom Tab with it. */
     fun startGithubConnect(adding: Boolean = false, launch: (String) -> Unit) {
         githubConnecting = true
-        io.execute {
-            val url = try {
-                api.githubAuthorizeUrl(api.githubHandoff(), adding)
-            } catch (e: Exception) {
+        work {
+            val url = onIo { runCatching { api.githubAuthorizeUrl(api.githubHandoff(), adding) } }.getOrElse { e ->
                 recordFailure("github", e.message)
-                main.post { githubConnecting = false; showNotice("GitHub connect: " + (e.message ?: "failed")) }
-                return@execute
+                githubConnecting = false
+                showNotice("GitHub connect: " + (e.message ?: "failed"))
+                return@work
             }
-            main.post { launch(url) }
+            launch(url)
         }
     }
 
@@ -1551,19 +1547,21 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * carried. Called from NativeActivity's intent handling, not from any
      * UI action directly -- the tap already happened, in the Custom Tab. */
     fun connectGithub(code: String, login: String) {
-        io.execute {
-            try {
-                store.githubSession = api.githubPickup(code)
-                val logins = api.githubLogins()
-                main.post {
-                    githubConnecting = false
-                    githubLogins = logins
-                    showNotice("Connected to GitHub as " + login.ifEmpty { "your account" } + ".")
+        work {
+            val logins = onIo {
+                runCatching {
+                    store.githubSession = api.githubPickup(code)
+                    api.githubLogins()
                 }
-            } catch (e: Exception) {
+            }.getOrElse { e ->
                 recordFailure("github", e.message)
-                main.post { githubConnecting = false; showNotice("GitHub connect: " + (e.message ?: "failed")) }
+                githubConnecting = false
+                showNotice("GitHub connect: " + (e.message ?: "failed"))
+                return@work
             }
+            githubConnecting = false
+            githubLogins = logins
+            showNotice("Connected to GitHub as " + login.ifEmpty { "your account" } + ".")
         }
     }
 
@@ -1573,7 +1571,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * convenience on top of the SSE stream that already reaches an open app,
      * never something worth interrupting the user to report on. */
     fun registerPushToken(token: String) {
-        runOnIo {
+        launchIo {
             try {
                 api.registerPush(token)
             } catch (e: Exception) {
@@ -1666,12 +1664,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         drafts.remove(id)
         replace(start)
         streamingId = id
-        io.execute {
-            val result = try {
+        work {
+            val result = onIo {
+              try {
                 val record = drawBlocking(text)
                 ChatMessage("tool", "The image is shown to the user (by ${record.provider}).", createdAt = now + 2, toolCallId = call.id, toolName = call.name, imageIds = listOf(record.id))
-            } catch (e: Exception) {
+              } catch (e: Exception) {
                 ChatMessage("tool", "Error: " + (e.message ?: "image failed"), createdAt = now + 2, toolCallId = call.id, toolName = call.name)
+              }
             }
             val failed = result.content.startsWith("Error")
             val finished = start.copy(
@@ -1680,7 +1680,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 ),
             )
             publishChat(finished, persist = true)
-            main.post { streamingId = null }
+            streamingId = null
         }
     }
 
@@ -1695,47 +1695,42 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         if (text.isEmpty() || imageBusy) return
         imageBusy = true
         imageError = null
-        io.execute {
-            try {
-                drawBlocking(text, size, model, provider, editSource)
-                main.post { imageBusy = false }
-            } catch (e: Exception) {
-                recordFailure("image", e.message ?: "Image failed.")
-                main.post {
-                    imageBusy = false
-                    imageError = e.message ?: "Image failed."
-                    if (e is ApiException && e.authRequired) signedIn = false
-                }
+        work {
+            val failure = onIo { runCatching { drawBlocking(text, size, model, provider, editSource) } }.exceptionOrNull()
+            imageBusy = false
+            if (failure != null) {
+                recordFailure("image", failure.message ?: "Image failed.")
+                imageError = failure.message ?: "Image failed."
+                if (failure is ApiException && failure.authRequired) signedIn = false
             }
         }
     }
 
     /** Reads a stored picture off the main thread. */
     fun loadImage(id: String, onLoaded: (ByteArray?) -> Unit) {
-        io.execute {
-            val bytes = repo.loadImage(id)
-            main.post { onLoaded(bytes) }
-        }
+        work { onLoaded(onIo { repo.loadImage(id) }) }
     }
 
     /** Reads and decodes a stored picture off the main thread: decoding a full
      * JPEG in the main-thread callback stuttered every scroll past an image. */
     fun loadBitmap(id: String, onLoaded: (ByteArray?, androidx.compose.ui.graphics.ImageBitmap?) -> Unit) {
-        io.execute {
-            val bytes = repo.loadImage(id)
-            val bitmap = try {
-                bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
-            } catch (e: OutOfMemoryError) {
-                null
+        work {
+            val (bytes, image) = onIo {
+                val bytes = repo.loadImage(id)
+                val bitmap = try {
+                    bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+                } catch (e: OutOfMemoryError) {
+                    null
+                }
+                bytes to bitmap?.asImageBitmap()
             }
-            val image = bitmap?.asImageBitmap()
-            main.post { onLoaded(bytes, image) }
+            onLoaded(bytes, image)
         }
     }
 
     fun deleteImage(id: String) {
         updateLibrary(library.copy(images = library.images.filter { it.id != id }))
-        io.execute { repo.deleteImage(id) }
+        launchIo { repo.deleteImage(id) }
     }
 
     // --- Status ------------------------------------------------------------------
@@ -1747,16 +1742,17 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     fun refreshHealth() {
         healthText = "Checking…"
-        io.execute {
-            val text = try {
-                val obj = org.json.JSONObject(api.health())
-                val up = obj.optLong("uptimeSeconds", 0L)
-                "Online · v" + obj.optString("version", "?") + " · commit " + obj.optString("commit", "").take(7).ifEmpty { "local" } +
-                    " · up " + (up / 3600) + "h " + (up % 3600 / 60) + "m"
-            } catch (e: Exception) {
-                "Offline: " + (e.message ?: "no answer")
+        work {
+            healthText = onIo {
+                try {
+                    val obj = org.json.JSONObject(api.health())
+                    val up = obj.optLong("uptimeSeconds", 0L)
+                    "Online · v" + obj.optString("version", "?") + " · commit " + obj.optString("commit", "").take(7).ifEmpty { "local" } +
+                        " · up " + (up / 3600) + "h " + (up % 3600 / 60) + "m"
+                } catch (e: Exception) {
+                    "Offline: " + (e.message ?: "no answer")
+                }
             }
-            main.post { healthText = text }
         }
     }
 
@@ -1764,13 +1760,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun probe(provider: String, model: String) {
         val key = "$provider/$model"
         probes[key] = "Testing…"
-        io.execute {
+        work {
             val started = System.currentTimeMillis()
             var failure: String? = null
             var got = false
             try {
                 val body = buildChatBody(model, "", listOf(ChatMessage("user", "Reply with the word OK.")))
-                api.streamChat(provider, body, AtomicReference(null)) { event ->
+                api.chatEvents(provider, body).collect { event ->
                     when (event) {
                         is ChatEvent.Delta -> if (event.content.isNotEmpty()) got = true
                         is ChatEvent.Failure -> failure = event.message
@@ -1780,16 +1776,17 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                         ChatEvent.Done -> Unit
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 failure = e.message ?: "failed"
             }
             val ms = System.currentTimeMillis() - started
-            val line = when {
+            probes[key] = when {
                 failure != null -> "✗ " + failure
                 got -> "✓ answered in ${ms} ms"
                 else -> "✗ empty reply after ${ms} ms"
             }
-            main.post { probes[key] = line }
         }
     }
 
@@ -1855,6 +1852,15 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         return chat.copy(messages = newMessages)
     }
 
-    fun runOnIo(block: () -> Unit) = io.execute(block)
+    fun runOnIo(block: () -> Unit) { launchIo(block) }
     fun runOnMain(block: () -> Unit) = main.post(block)
 }
+
+/** What the view model reads from disk at start. */
+private data class OnDisk(
+    val chats: List<Conversation>,
+    val library: Library,
+    val outbox: Outbox,
+    val automations: List<AutomationEntry>,
+    val schedules: List<RecipeSchedule>,
+)
