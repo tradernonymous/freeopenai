@@ -1,8 +1,5 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -41,7 +38,10 @@ fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("
 
 android {
     namespace = "com.neura.os"
-    compileSdk = 36
+    // 37 for Compose 1.12 and Navigation 3 (master plan v2, V1). targetSdk
+    // stays 36: compiling against 37 changes no runtime behaviour, targeting
+    // it would, and that is its own step.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.neura.os"
@@ -136,15 +136,9 @@ android {
     }
 }
 
-// Kotlin 2.3's Gradle plugin turned the old android.kotlinOptions.jvmTarget
-// string assignment from a deprecation warning into a hard compile error;
-// this top-level block (not inside android {}) is where the replacement
-// compilerOptions DSL lives for an Android application module.
-kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
-}
+// AGP 9 builds Kotlin itself (android.builtInKotlin, on by default), so the
+// org.jetbrains.kotlin.android plugin and its kotlin { compilerOptions } block
+// are gone: the JVM target now follows compileOptions above (17).
 
 dependencies {
     // Native screens are Compose + Material 3. R8 strips the unused parts of
@@ -178,6 +172,13 @@ dependencies {
     testImplementation(libs.junit)
     // Navigation 3 serialization for type-safe routes.
     implementation(libs.androidx.serialization.json)
+    // Master plan v2: Navigation 3 (V4), view-model-owned coroutines and
+    // lifecycle-aware collection (V3). Added in V1 so V3/V4 change no build file.
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.navigation3.ui)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    testImplementation(libs.kotlinx.coroutines.test)
     // Studio images are decoded in-app from stored data URLs (loadBitmap in
     // AppViewModel), so no Coil dependency is pulled in. If remote image URLs
     // are ever added, that is the moment to add Coil -- not before.
