@@ -98,4 +98,18 @@ class TurnsTest {
         assertEquals(4000, turns.size)
         assertEquals("r1999", (turns.last() as Turn.Assistant).steps.single().output)
     }
+
+    @Test
+    fun aCachedAnswerIsMarkedOnItsTurnAndALiveOneIsNot() {
+        val turns = buildTurns(
+            listOf(
+                ChatMessage("user", "q1"),
+                ChatMessage("assistant", "kept from before", model = "m1", cached = true),
+                ChatMessage("user", "q2"),
+                ChatMessage("assistant", "live", model = "m1"),
+            ),
+        )
+        assertTrue((turns[1] as Turn.Assistant).cached)
+        assertFalse((turns[3] as Turn.Assistant).cached)
+    }
 }

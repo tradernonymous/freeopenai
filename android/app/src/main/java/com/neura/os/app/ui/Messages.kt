@@ -100,6 +100,9 @@ sealed interface Turn {
         val imageIds: List<String>,
         val actions: List<String>,
         val lastIndex: Int,
+        /** Served from the offline cache (ChatMessage.cached); a fresh reply
+         * replaces it once the connection returns. */
+        val cached: Boolean = false,
     ) : Turn
     /** Two replies from one Compare run, kept apart from Turn.Assistant so
      * they render side by side instead of concatenating into one block. */
@@ -143,6 +146,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
         val actions = mutableListOf<String>()
         var error = false
         var model = ""
+        var cached = false
         val start = index
         while (index < messages.size && messages[index].role != "user") {
             val part = messages[index]
@@ -154,6 +158,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
                     }
                     if (part.reasoning.isNotBlank()) reasoning.append(part.reasoning)
                     if (part.error) error = true
+                    if (part.cached) cached = true
                     if (part.model.isNotEmpty()) model = part.model
                     part.toolCalls.forEach { call ->
                         val result = results[call.id]
@@ -167,7 +172,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
             }
             index++
         }
-        turns.add(Turn.Assistant("a$start-${messages[start].createdAt}", steps, text.toString(), reasoning.toString(), error, model, images, actions, index - 1))
+        turns.add(Turn.Assistant("a$start-${messages[start].createdAt}", steps, text.toString(), reasoning.toString(), error, model, images, actions, index - 1, cached))
     }
     return turns
 }
@@ -318,9 +323,13 @@ private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform,
                 DropdownMenuItem({ Text("Select text") }, { platform.selectText(turn.text); more = false })
             }
         }
-        if (turn.model.isNotEmpty()) {
+        if (turn.cached || turn.model.isNotEmpty()) {
             Spacer(Modifier.width(6.dp))
-            Text(turn.model.substringAfterLast('/'), color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val label = listOfNotNull(
+                if (turn.cached) "cached, refreshes when online" else null,
+                turn.model.substringAfterLast('/').ifEmpty { null },
+            ).joinToString(" · ")
+            Text(label, color = if (turn.cached) Palette.text else Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

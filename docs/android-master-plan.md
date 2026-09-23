@@ -293,7 +293,7 @@ phone nobody here can attach a debugger to, and each will otherwise repeat §2.4
 four-round-trip pattern. It also has the shortest path to done: the desktop already
 solved it and the port is mostly field selection.
 
-### Phase 3 — "Shipped product" polish
+### Phase 3 — "Shipped product" polish · **done**
 
 1. **Cold start budget.** Measure it, write the number down, set a target. The desktop
    has this discipline (NEURA-035); Android has no number at all.
@@ -303,6 +303,8 @@ solved it and the port is mostly field selection.
 3. **Response cache.** Answers cached by (model, mode, normalised prompt), sealed like
    chats, opt-in, with an obvious "cached" marker and a one-tap re-ask. Per §2.2 this
    is the entire offline story, so it carries that weight deliberately.
+
+**Shipped (2026-09-23):** (1) cold start is measured — process start to the first frame, once per fresh launch — and reported by Copy diagnostics against the 2 s target; the number itself needs a real phone. (2) a queued chat shows why and when above its composer ("Tried 2 times. Next try in 3 s…"), with Retry now. (3) **Offline answers**, off by default (Settings → Data): answers kept sealed on the phone, keyed by model, mode and every question in the chat; on a lost connection the kept answer is shown marked "cached, refreshes when online" and the chat stays queued for a fresh reply. Turning it off, Delete all chats and Erase all delete what was kept.
 
 ### Phase 4 — The surfaces worth adding
 

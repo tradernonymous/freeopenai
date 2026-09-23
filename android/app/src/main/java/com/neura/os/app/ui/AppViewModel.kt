@@ -45,6 +45,8 @@ import com.neura.os.app.data.ModelInfo
 import com.neura.os.app.data.NativeApi
 import com.neura.os.app.data.Outbox
 import com.neura.os.app.data.FailureRing
+import com.neura.os.app.data.ResponseCache
+import com.neura.os.app.data.responseCacheKey
 import com.neura.os.app.data.Persona
 import com.neura.os.app.data.PromptTemplate
 import com.neura.os.app.data.PUTER_PROVIDER
@@ -217,6 +219,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val lib = repo.loadLibrary()
             val savedOutbox = repo.loadOutbox()
             val runs = repo.loadAutomations()
+            if (store.offlineAnswers) responseCache = repo.loadResponseCache()
             main.post {
                 // A chat started before the disk was read (a shared photo, a
                 // notification tap) is kept rather than replaced by the load.
@@ -247,6 +250,37 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             if (streamingId != null) break
             updateOutbox(outbox.attempted(entry.chatId, now))
             regenerate(entry.chatId)
+        }
+    }
+
+    /** "Retry now" on a queued chat's banner: this chat, at once, whatever
+     * its backoff says -- a person asking is not a flapping connection. */
+    fun retryQueued(chatId: String) {
+        if (streamingId != null || outbox.entries.none { it.chatId == chatId }) return
+        updateOutbox(outbox.attempted(chatId, System.currentTimeMillis()))
+        regenerate(chatId)
+    }
+
+    /** Process start to the first frame, in ms, measured once per process by
+     * NativeActivity (master plan Phase 3); "Copy diagnostics" reports it
+     * against the 2 s target. Null until measured. */
+    var startupMs by mutableStateOf<Long?>(null)
+
+    /** Opt-in offline answers (data/ResponseCache.kt). Read and written on
+     * the io pool -- only one reply runs at a time -- so volatile is enough. */
+    @Volatile private var responseCache = ResponseCache()
+
+    /** Settings -> "Offline answers". Turning it off also deletes what was
+     * kept, so the switch means what it says. */
+    var offlineAnswers by mutableStateOf(store.offlineAnswers)
+        private set
+
+    fun setOfflineAnswersOn(on: Boolean) {
+        store.offlineAnswers = on
+        offlineAnswers = on
+        if (!on) {
+            responseCache = ResponseCache()
+            io.execute { repo.deleteResponseCache() }
         }
     }
 
@@ -407,6 +441,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
         store.clearSecrets()
         if (erase) {
+            responseCache = ResponseCache()
             conversations.clear()
             library = Library()
         }
@@ -631,7 +666,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         conversations.clear()
         drafts.clear()
         currentChatId = null
-        io.execute { repo.deleteAllConversations() }
+        responseCache = ResponseCache()
+        io.execute {
+            repo.deleteAllConversations()
+            repo.deleteResponseCache()
+        }
     }
 
     /** True when the message was accepted, so the composer can let go of the
@@ -1016,6 +1055,17 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     break
                 }
                 if (error != null) recordFailure("chat", chat.provider + "/" + chat.model + ": " + error)
+                // Offline answers: a turn lost to the connection itself shows the
+                // answer kept from the same questions before, marked cached, and
+                // stays queued so a fresh reply replaces it once back online.
+                val offline = if (queueForRetry && store.offlineAnswers) {
+                    responseCacheKey(start.model, start.mode, start.messages)?.let { responseCache.lookup(it) }
+                } else null
+                if (offline != null) {
+                    chat = base.copy(messages = base.messages + ChatMessage("assistant", offline.content, createdAt = started, model = offline.model, cached = true))
+                    finalText = offline.content
+                    break
+                }
                 val assistant = draft(error).copy(toolCalls = if (error == null) calls else emptyList())
                 chat = base.copy(messages = base.messages + assistant)
                 finalText = assistant.content
@@ -1058,6 +1108,14 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val done = chat
             val text = finalText
             val retry = queueForRetry
+            val lastReply = done.messages.lastOrNull()
+            if (!retry && store.offlineAnswers && lastReply != null && lastReply.role == "assistant" && !lastReply.error && !lastReply.cached && text.isNotBlank()) {
+                responseCacheKey(start.model, start.mode, start.messages)?.let { key ->
+                    val next = responseCache.stored(key, text, done.model, System.currentTimeMillis())
+                    responseCache = next
+                    repo.saveResponseCache(next)
+                }
+            }
             publishChat(done, persist = true)
             main.post {
                 streamingId = null

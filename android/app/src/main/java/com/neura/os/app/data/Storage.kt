@@ -64,6 +64,9 @@ class Repository(context: Context) {
     private val libraryFile = File(root, "library.bin")
     private val outboxFile = File(root, "outbox.bin")
     private val automationsFile = File(root, "automations.bin")
+    // Opt-in offline answers (ResponseCache.kt): answer text, so sealed
+    // like the chats and erased with them.
+    private val responseCacheFile = File(root, "responses.bin")
 
     private fun safeId(id: String): String = id.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(64)
 
@@ -123,6 +126,19 @@ class Repository(context: Context) {
     }
 
     @Synchronized
+    fun loadResponseCache(): ResponseCache = responseCacheFromJson(readSealed(responseCacheFile)?.let { String(it, Charsets.UTF_8) })
+
+    @Synchronized
+    fun saveResponseCache(cache: ResponseCache) {
+        writeSealed(responseCacheFile, cache.toJson().toByteArray(Charsets.UTF_8))
+    }
+
+    @Synchronized
+    fun deleteResponseCache() {
+        responseCacheFile.delete()
+    }
+
+    @Synchronized
     fun loadAutomations(): List<AutomationEntry> = automationsFromJson(readSealed(automationsFile)?.let { String(it, Charsets.UTF_8) })
 
     @Synchronized
@@ -151,5 +167,6 @@ class Repository(context: Context) {
         libraryFile.delete()
         outboxFile.delete()
         automationsFile.delete()
+        responseCacheFile.delete()
     }
 }

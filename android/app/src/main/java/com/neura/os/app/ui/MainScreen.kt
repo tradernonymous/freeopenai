@@ -466,6 +466,10 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                 PendingWritesBanner(chat.pendingWrites.size) { workspaceSheet = true }
                 Spacer(Modifier.height(6.dp))
             }
+            if (vm.outbox.entries.any { it.chatId == chat.id }) {
+                OutboxBanner(vm.outbox, chat.id, canRetry = !streaming) { vm.retryQueued(chat.id) }
+                Spacer(Modifier.height(6.dp))
+            }
             Composer(vm, platform, chat, streaming)
         }
     }

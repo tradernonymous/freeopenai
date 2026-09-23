@@ -95,4 +95,30 @@ class OutboxTest {
     @Test fun `outboxEntryFromJson rejects an entry missing its chat id`() {
         assertNull(outboxEntryFromJson(JSONObject().put("attempts", 1)))
     }
+
+    // Phase 3: the queue was working but invisible, so a turn that failed on
+    // a dropped connection read as lost. The notice is what the chat shows.
+
+    @Test fun `a chat that is not queued shows no notice`() {
+        assertNull(outboxNotice(Outbox().enqueued("other"), "c1", 0L))
+    }
+
+    @Test fun `a queued chat with no attempt yet waits for the connection`() {
+        assertEquals(
+            "No connection when this was sent. The reply will be fetched when you're back online.",
+            outboxNotice(Outbox().enqueued("c1"), "c1", 0L),
+        )
+    }
+
+    @Test fun `a retried chat says how many tries and when the next one is`() {
+        val outbox = Outbox().enqueued("c1").attempted("c1", 10_000L).attempted("c1", 20_000L)
+        // Two attempts: the next one is due 2 s after the last.
+        assertEquals("Tried 2 times. Next try in 1 s, or as soon as you're back online.", outboxNotice(outbox, "c1", 21_000L))
+        assertEquals("Tried 2 times. Trying again as soon as you're back online.", outboxNotice(outbox, "c1", 30_000L))
+    }
+
+    @Test fun `one attempt reads in the singular`() {
+        val outbox = Outbox().enqueued("c1").attempted("c1", 0L)
+        assertTrue(outboxNotice(outbox, "c1", 0L)!!.startsWith("Tried once."))
+    }
 }

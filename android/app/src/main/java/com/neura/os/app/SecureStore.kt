@@ -55,6 +55,13 @@ class SecureStore(context: Context) {
         get() = prefs.getBoolean(KEY_ASKED_NOTIFY, false)
         set(value) = prefs.edit().putBoolean(KEY_ASKED_NOTIFY, value).apply()
 
+    /** Settings -> "Offline answers": keep answers to show again, marked
+     * cached, when the connection is gone (data/ResponseCache.kt). Off by
+     * default -- it stores answer text on the phone. */
+    var offlineAnswers: Boolean
+        get() = prefs.getBoolean(KEY_OFFLINE_ANSWERS, false)
+        set(value) = prefs.edit().putBoolean(KEY_OFFLINE_ANSWERS, value).apply()
+
     var lastUpdateCheck: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK, value).apply()
@@ -133,6 +140,7 @@ class SecureStore(context: Context) {
         const val KEY_APP_LOCK = "app_lock"
         const val KEY_UPDATE_CHECK = "last_update_check"
         const val KEY_ASKED_NOTIFY = "asked_notifications"
+        const val KEY_OFFLINE_ANSWERS = "offline_answers"
         const val KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "neuraos-secrets"
         const val TRANSFORM = "AES/GCM/NoPadding"

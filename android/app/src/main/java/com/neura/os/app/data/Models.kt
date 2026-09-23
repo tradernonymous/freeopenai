@@ -39,6 +39,10 @@ data class ChatMessage(
      * render side by side instead of merging into one assistant turn. Empty
      * for every ordinary message. */
     val compareGroup: String = "",
+    /** An answer served from the opt-in offline cache (data/ResponseCache.kt)
+     * because the connection was gone; the chat stays queued and a fresh
+     * reply replaces it once the connection returns. */
+    val cached: Boolean = false,
 )
 
 data class Conversation(
@@ -108,6 +112,7 @@ fun ChatMessage.toJson(): JSONObject = JSONObject()
     .put("imageIds", JSONArray(imageIds))
     .put("action", action)
     .put("compareGroup", compareGroup)
+    .put("cached", cached)
 
 fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     role = obj.optString("role", "user"),
@@ -127,6 +132,7 @@ fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     imageIds = obj.optJSONArray("imageIds")?.let { list -> (0 until list.length()).map { list.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList(),
     action = obj.optString("action", ""),
     compareGroup = obj.optString("compareGroup", ""),
+    cached = obj.optBoolean("cached", false),
 )
 
 fun Conversation.toJson(): JSONObject {

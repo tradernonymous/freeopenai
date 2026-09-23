@@ -540,7 +540,7 @@ private fun diagnosticsText(vm: AppViewModel, platform: Platform): String = buil
         outboxDepth = vm.outbox.entries.size,
         deviceControl = platform.deviceControlEnabled(),
         puterImages = vm.puterImages,
-        startupMs = null,
+        startupMs = vm.startupMs,
         failures = vm.failures.items,
         now = System.currentTimeMillis(),
     ),

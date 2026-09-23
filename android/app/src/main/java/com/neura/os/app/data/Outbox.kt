@@ -43,6 +43,21 @@ data class Outbox(val entries: List<OutboxEntry> = emptyList()) {
     }
 }
 
+/** What a queued chat shows above its composer, or null when it is not
+ * queued. The queue always worked; it was invisible, so a turn that failed on
+ * a dropped connection read as lost rather than pending (master plan Phase 3). */
+fun outboxNotice(outbox: Outbox, chatId: String, now: Long): String? {
+    val entry = outbox.entries.firstOrNull { it.chatId == chatId } ?: return null
+    if (entry.attempts <= 0) return "No connection when this was sent. The reply will be fetched when you're back online."
+    val tries = if (entry.attempts == 1) "Tried once." else "Tried ${entry.attempts} times."
+    val waitMs = entry.lastAttemptAt + Outbox.backoff(entry.attempts) - now
+    return if (waitMs > 0) {
+        "$tries Next try in ${(waitMs + 999) / 1000} s, or as soon as you're back online."
+    } else {
+        "$tries Trying again as soon as you're back online."
+    }
+}
+
 fun OutboxEntry.toJson(): JSONObject = JSONObject()
     .put("chatId", chatId)
     .put("attempts", attempts)

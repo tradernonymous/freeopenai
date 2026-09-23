@@ -58,6 +58,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -209,8 +210,22 @@ class NativeActivity : ComponentActivity(), Platform {
         vm.puterSignIn = { done -> puter.signIn(done) }
         registerForPush()
         observeConnectivity()
+        // Cold start (master plan Phase 3): process start to the first frame,
+        // once per process and only on a fresh launch -- a rotation or a
+        // restore would measure from a process start long gone.
+        val measureStartup = savedInstanceState == null && vm.startupMs == null
         setContent {
             NeuraTheme {
+                if (measureStartup) {
+                    LaunchedEffect(Unit) {
+                        // Resumes on the frame after the first composition,
+                        // i.e. once something is actually on screen.
+                        withFrameNanos { }
+                        if (vm.startupMs == null) {
+                            vm.startupMs = android.os.SystemClock.uptimeMillis() - android.os.Process.getStartUptimeMillis()
+                        }
+                    }
+                }
                 LaunchedEffect(vm.finishedReply) {
                     val (chatId, text, _) = vm.finishedReply ?: return@LaunchedEffect
                     if (voice.state != VoiceSession.State.IDLE) voice.speak(text)
