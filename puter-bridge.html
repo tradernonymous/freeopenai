@@ -8,9 +8,11 @@
     <!--
       Loaded invisibly by the Android app (PuterBridge.kt) so it can draw and
       chat on the user's own Puter account. fa4uSignIn(id) is the one job that
-      opens a window of its own -- puter.auth.signIn()'s popup, which Android's
-      WebChromeClient hosts in a visible dialog -- and it only runs when the
-      app asks for it directly, never as a side effect of a background job.
+      is ever seen: it shows a Continue prompt (the app makes this WebView
+      full-screen for it), and that tap opens puter.auth.signIn()'s popup,
+      which Android's WebChromeClient hosts in a visible dialog. It only runs
+      when the app asks for it directly, never as a side effect of a
+      background job.
       fa4uDraw(id, prompt, options) and fa4uChat(id, payload) fail fast instead
       if nobody has signed in yet. Every job is read the same way: poll
       fa4uStatus(id), then fa4uChunk for the picture. options is optional:
@@ -93,8 +95,33 @@
     <script src="https://js.puter.com/v2/"
             onload="window.fa4uScript = 'loaded'"
             onerror="window.fa4uScript = 'failed'"></script>
+    <style>
+        html, body { margin: 0; height: 100%; background: #0f1115; color: #e8eaf0; font: 16px/1.45 system-ui, sans-serif; }
+        #fa4u-signin { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+        #fa4u-signin[hidden] { display: none; }
+        #fa4u-signin .card { width: 100%; max-width: 360px; }
+        #fa4u-signin .title { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+        #fa4u-signin .note { color: #a4a9b6; margin: 0 0 24px; }
+        #fa4u-signin button { display: block; width: 100%; min-height: 48px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; margin-top: 12px; }
+        #fa4u-go { background: #7c6cff; color: #fff; }
+        #fa4u-go:disabled { opacity: 0.6; }
+        #fa4u-cancel { background: transparent; color: #a4a9b6; }
+    </style>
 </head>
 <body>
+<!--
+  Shown only while the app is asking for a Puter sign-in (PuterBridge.kt makes
+  this WebView full-screen for exactly that long). Puter opens its sign-in
+  window only from a real user gesture; the Continue tap is that gesture.
+-->
+<div id="fa4u-signin" hidden>
+    <div class="card">
+        <p class="title">Sign in to Puter</p>
+        <p class="note">Puter opens its own sign-in window after a tap. Your Puter account pays for Puter chats and pictures.</p>
+        <button id="fa4u-go" type="button" onclick="window.fa4uContinueSignIn()">Continue</button>
+        <button id="fa4u-cancel" type="button" onclick="window.fa4uCancelSignIn()">Cancel</button>
+    </div>
+</div>
 <script>
     window.fa4uJobs = {};
 
@@ -214,10 +241,14 @@
     // through window.opener reaching back from the popup -- if that channel
     // is what is broken, the sign-in can genuinely succeed while the promise
     // it was supposed to be reported by never settles at all.
-    function signedInWithin(ms) {
+    function signedInWithin(ms, id) {
         var deadline = Date.now() + ms;
         return new Promise(function (resolve, reject) {
             (function tick() {
+                // The race this feeds is already over: stop polling rather
+                // than tick on for the rest of [ms] with nobody listening.
+                var job = window.fa4uJobs[id];
+                if (!job || job.state !== 'pending') return;
                 var yes = false;
                 try {
                     yes = !!(window.fa4uSignedIn || (puter.auth && puter.auth.isSignedIn()));
@@ -233,20 +264,75 @@
         });
     }
 
-    window.fa4uSignIn = async function (id) {
+    // The sign-in job waiting on the Continue tap, if any.
+    var pendingSignIn = null;
+
+    function showSignIn(show) {
+        var box = document.getElementById('fa4u-signin');
+        if (box) box.hidden = !show;
+        var go = document.getElementById('fa4u-go');
+        if (go) go.disabled = false;
+    }
+
+    function finishSignIn(id, result) {
+        if (pendingSignIn === id) pendingSignIn = null;
+        showSignIn(false);
+        window.fa4uJobs[id] = result;
+    }
+
+    // Asked for by the app (evaluateJavascript), which is not a user
+    // gesture -- and Puter's signIn() opens its window only from one
+    // (hasUserActivation() in its Auth module); without it Puter shows a
+    // consent prompt inside this page instead, which in the app's invisible
+    // WebView nobody could see, so the promise never settled. So this only
+    // shows the page's own prompt; the Continue tap below is what calls Puter.
+    window.fa4uSignIn = function (id) {
         var jobs = window.fa4uJobs;
         jobs[id] = { state: 'pending' };
-        try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
-            var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
-            // 110s, inside PuterBridge.kt's own 2.5-minute poll: the page
-            // gets to say *why* it failed before Kotlin can only say "timed
-            // out".
-            if (!signedIn) await Promise.race([puter.auth.signIn(), signedInWithin(110000)]);
-            jobs[id] = { state: 'done', length: 0, data: '' };
-        } catch (error) {
-            jobs[id] = { state: 'error', error: String(describe(error)).slice(0, 300) };
+        if (typeof puter === 'undefined') {
+            jobs[id] = { state: 'error', error: ('Puter did not load ' + window.fa4uDiagnose()).slice(0, 300) };
+            return;
         }
+        var signedIn = false;
+        try {
+            signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
+        } catch (e) {
+            signedIn = false;
+        }
+        if (signedIn) {
+            jobs[id] = { state: 'done', length: 0, data: '' };
+            return;
+        }
+        pendingSignIn = id;
+        showSignIn(true);
+    };
+
+    // The Continue button's own click handler, so Puter sees the tap as the
+    // gesture it requires: signIn() must be called synchronously in here, not
+    // after an await. 110s stays inside PuterBridge.kt's own poll budget, so
+    // the page gets to say *why* before Kotlin can only say "timed out".
+    window.fa4uContinueSignIn = function () {
+        var id = pendingSignIn;
+        if (!id) return;
+        var go = document.getElementById('fa4u-go');
+        if (go) go.disabled = true;
+        var started;
+        try {
+            started = puter.auth.signIn();
+        } catch (error) {
+            started = Promise.reject(error);
+        }
+        Promise.race([started, signedInWithin(110000, id)]).then(function () {
+            finishSignIn(id, { state: 'done', length: 0, data: '' });
+        }, function (error) {
+            finishSignIn(id, { state: 'error', error: String(describe(error)).slice(0, 300) });
+        });
+    };
+
+    window.fa4uCancelSignIn = function () {
+        var id = pendingSignIn;
+        if (!id) return;
+        finishSignIn(id, { state: 'error', error: 'Puter sign-in cancelled' });
     };
 
     window.fa4uDraw = async function (id, prompt, options) {

@@ -20,6 +20,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -29,9 +31,10 @@ import org.json.JSONObject
  * evaluateJavascript, in slices: no JavaScript bridge is added, so the page
  * gets no handle into the app. The page is reloaded for every job because
  * Puter reads its sign-in only when it loads. Signing in itself is the one
- * exception to "hidden": signIn() opens Puter's own popup in a visible dialog
- * (see openSignInPopup below), which is the only way this WebView's storage
- * ever gets a signed-in session in the first place. */
+ * exception to "hidden": signIn() shows the page full-screen for its Continue
+ * tap (see showForSignIn), and that tap opens Puter's own popup in a visible
+ * dialog (see openSignInPopup below), which is the only way this WebView's
+ * storage ever gets a signed-in session in the first place. */
 class PuterBridge(private val context: Context, private val baseUrl: () -> String) {
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
@@ -51,6 +54,9 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     // attempt apart from the current one, the same way currentSignInJob does
     // for pollSignIn. See load()'s own comment for why this exists.
     private var loadGeneration = 0
+    // Back while the sign-in prompt is on screen cancels it instead of
+    // navigating the app underneath; removed when the job ends.
+    private var signInBack: OnBackPressedCallback? = null
 
     private fun logConsole(message: ConsoleMessage): Boolean {
         if (message.messageLevel() == ConsoleMessage.MessageLevel.ERROR ||
@@ -342,9 +348,49 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 val job = "s" + System.nanoTime()
                 currentSignInJob = job
                 lastConsoleIssue = null
+                showForSignIn(view)
                 view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
-                pollSignIn(view, job, 0, done)
+                pollSignIn(view, job, 0) { outcome ->
+                    hideAfterSignIn(view)
+                    done(outcome)
+                }
             }
+        }
+    }
+
+    /** Puter opens its sign-in window only from a real tap on its own page
+     * (hasUserActivation() in Puter's Auth module); a call arriving through
+     * evaluateJavascript is not one, and without it Puter shows its consent
+     * prompt inside this page -- which, at 1x1 and invisible, nobody could
+     * see, so sign-in sat on "signing in" forever. So for exactly as long as
+     * a sign-in is open the page is full-screen and tappable, showing its own
+     * Continue button; hideAfterSignIn puts it back. */
+    private fun showForSignIn(view: WebView) {
+        view.layoutParams = view.layoutParams.apply {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            height = ViewGroup.LayoutParams.MATCH_PARENT
+        }
+        view.visibility = View.VISIBLE
+        view.bringToFront()
+        view.requestFocus()
+        val activity = context as? ComponentActivity ?: return
+        signInBack?.remove()
+        val callback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                view.evaluateJavascript("window.fa4uCancelSignIn && window.fa4uCancelSignIn()", null)
+            }
+        }
+        signInBack = callback
+        activity.onBackPressedDispatcher.addCallback(callback)
+    }
+
+    private fun hideAfterSignIn(view: WebView) {
+        signInBack?.remove()
+        signInBack = null
+        view.visibility = View.INVISIBLE
+        view.layoutParams = view.layoutParams.apply {
+            width = 1
+            height = 1
         }
     }
 
@@ -398,12 +444,12 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     return if (issue.isNullOrEmpty()) message else "$message ($issue)"
                 }
                 when (status.optString("state")) {
-                    // 500 * 300ms = 2.5 minutes: long enough for a real sign-in
-                    // (password, maybe 2FA), short enough that a genuinely
-                    // stuck popup surfaces a "timed out" notice instead of
-                    // leaving the button animating for six minutes with no
-                    // feedback at all.
-                    "pending" -> if (tries < 500) pollSignIn(view, job, tries + 1, done) else {
+                    // 700 * 300ms = 3.5 minutes: the page's own 110s clock
+                    // starts only at the Continue tap, so this leaves room
+                    // for that tap plus a real sign-in (password, maybe 2FA)
+                    // and lets the page report *why* first. The prompt has
+                    // Cancel and Back, so a long budget strands nobody.
+                    "pending" -> if (tries < 700) pollSignIn(view, job, tries + 1, done) else {
                         currentSignInJob = null
                         failWithDiagnosis(view, withConsole("timed out")) {
                             done(Result.failure(IllegalStateException(it)))

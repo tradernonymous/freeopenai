@@ -175,6 +175,26 @@ and Phase 2 generalises the pattern rather than leaving it as one page's fix.
 The alternative was to keep guessing, which has a measured cost: four builds and
 four installs so far, and the bug is still open.
 
+**How it actually ended (2026-09-23), and why it proves the decision.** No guess
+found it; looking did. A debug build with `chrome://inspect` access (`769bf1e`, debug
+variant only) plus one request typed into a browser tab produced two root causes in
+an hour, after four blind rounds had produced none:
+
+1. **The bridge page answered `401`.** It sits behind the server's login gate, and
+   the app's login is native: the session cookie travelled as a header on the app's
+   own HTTP calls and never reached WebView's cookie jar. Every symptom — `puter`
+   undefined, no window, even the new diagnosis missing — was the 401 error body
+   loading in place of the page. Fixed in `2174ecb` (the session is synced into
+   `CookieManager` on sign-in, silent re-auth, sign-out, and once at start).
+2. **Puter opens its window only from a real tap.** Its `signIn()` checks
+   `hasUserActivation()`; a call through `evaluateJavascript` has none, so Puter
+   showed its consent prompt *inside* a 1×1 invisible page. The fix makes the page
+   full-screen for the sign-in with its own Continue button, whose tap calls Puter.
+   `fa4uDiagnose()` reported `opened: 0` — the probe added for exactly this.
+
+The general rule this leaves for Phase 2: an embedded page must be inspectable in a
+debug build, and anything that needs a user gesture must get one from the page itself.
+
 ---
 
 ## 3. The phases
@@ -321,10 +341,9 @@ foreground layer alone.
 (predictive back, edge-to-edge with the keyboard up, `ReplyService` under a long
 streaming reply). CI cannot prove any of the three.
 
-**Puter sign-in, once more, on the build from `3e00ee5` or later.** If it fails
-again the message now carries the diagnosis; that text is the whole ask, and it
-ends the guessing. Worth also saying whether Puter sign-in works in the **web app**
-right now — that one answer decides whether this is an Android problem at all.
+**Puter sign-in, once more, on the build with the Continue prompt.** Settings →
+Sign in to Puter → Continue → Puter's own window. Both root causes in §2.4 are fixed;
+this one tap on a real phone is the only proof left.
 
 Nothing else is blocking. The offline and Play Store questions were settled on
 2026-09-22 (§2.2, §2.3).
