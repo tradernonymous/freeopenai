@@ -68,6 +68,7 @@ import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.runtime.CompositionLocalProvider
 import com.neura.os.app.ui.LocalSharedScope
+import com.neura.os.app.ui.AiEdgeGlow
 import androidx.compose.ui.Modifier
 import android.Manifest
 import android.annotation.SuppressLint
@@ -306,6 +307,8 @@ class NativeActivity : ComponentActivity(), Platform {
                             }
                         }
                     }
+                    // The screen's edges glow while a reply streams (V6).
+                    if (vm.signedIn && !locked) AiEdgeGlow(active = vm.streamingId != null)
                     if (vm.signedIn && !locked) {
                         NoticeHost(
                             vm.notices,

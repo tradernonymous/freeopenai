@@ -709,7 +709,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 }
             }
         }
-        Surface(color = Palette.surface, shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth()) {
+        Surface(color = androidx.compose.ui.graphics.Color.Transparent, shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth().glass(RoundedCornerShape(26.dp))) {
             Column(Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
                 run {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1054,6 +1054,9 @@ private fun SessionRow(label: String, value: String) {
 @Composable
 private fun VoiceOverlay(voice: VoiceSession) {
     Box(Modifier.fillMaxSize().background(Palette.background.copy(alpha = 0.97f)).clickable(enabled = false) {}) {
+        // The aurora rises with your voice (V6); it holds still when
+        // animations are off or battery saver is on.
+        VoiceAurora(if (voice.state == VoiceSession.State.LISTENING) voice.level else 0.15f)
         Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             VoiceOrb(voice.level, voice.state == VoiceSession.State.LISTENING, voice.state == VoiceSession.State.SPEAKING)
             Spacer(Modifier.height(28.dp))

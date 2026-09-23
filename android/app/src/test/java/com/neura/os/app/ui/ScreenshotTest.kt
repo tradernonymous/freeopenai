@@ -158,6 +158,19 @@ class ScreenshotTest {
         shot("space_phone", dark = false) { SpaceSample() }
     }
 
+    /** The AI-working edge glow over a chat (V6). */
+    @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun glow_phone() {
+        val sample: @Composable () -> Unit = {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                ChatSample()
+                AiEdgeGlow(active = true)
+            }
+        }
+        shot("glow_phone", dark = true, sample)
+        shot("glow_phone", dark = false, sample)
+    }
+
     @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun lock_phone() {
         shot("lock_phone", dark = true) { LockScreen(error = null, onUnlock = {}) }

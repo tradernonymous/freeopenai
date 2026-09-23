@@ -107,7 +107,7 @@ fun GoAnywhereSheet(vm: AppViewModel, platform: Platform, onClose: () -> Unit) {
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Column(Modifier.fillMaxSize().background(Palette.background.copy(alpha = 0.97f)).imePadding().padding(16.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(26.dp)).background(Palette.surfaceHigh).padding(start = 16.dp, end = 4.dp),
+            Modifier.fillMaxWidth().height(52.dp).glass(RoundedCornerShape(26.dp)).padding(start = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Filled.Search, null, tint = Palette.accent, modifier = Modifier.size(20.dp))

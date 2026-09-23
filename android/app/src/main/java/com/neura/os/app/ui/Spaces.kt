@@ -82,9 +82,7 @@ fun Dock(
         modifier
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .shadow(16.dp, RoundedCornerShape(28.dp), clip = false)
-            .clip(RoundedCornerShape(28.dp))
-            .background(Palette.surface.copy(alpha = 0.94f))
-            .border(1.dp, Palette.outline.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
+            .glass(RoundedCornerShape(28.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
