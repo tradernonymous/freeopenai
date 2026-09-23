@@ -67,8 +67,8 @@ object WebShell {
      * every "Puter did not load" / stuck-signing-in report this app has
      * chased under other explanations: onPageFinished still fires (the
      * WebView did load *something*, just the 401 error body), so every
-     * window.fa4uX function this file calls is silently undefined, and even
-     * fa4uDiagnose -- built specifically to explain a failure like this --
+     * window.neuraX function this file calls is silently undefined, and even
+     * neuraDiagnose -- built specifically to explain a failure like this --
      * never gets served either. WebView's CookieManager persists to disk on
      * its own once flushed, so this only needs calling when the cookie
      * actually changes: sign-in, a silent re-auth, sign-out, and once at

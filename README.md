@@ -106,7 +106,7 @@ curl -s https://<project>.up.railway.app/api/health
 3. Sign in once. Updates are offered in the app.
 
 > [!NOTE]
-> Puter sign-in inside apps needs a Puter username and password. Google sign-in is blocked in app browsers.
+> Puter sign-in opens in your phone's browser, so Google, Apple and Microsoft work too. Finish there, then return to the app.
 
 ## 🖥️ Desktop app (Windows)
 

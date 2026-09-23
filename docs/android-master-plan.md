@@ -3,7 +3,7 @@
 [← Back to README](../README.md)
 
 Status: **V1–V8 shipped 2026-09-23**, with V3, the phase gaps and P7 finished the
-same day (§4.1). Open: V0's phone session, P8 (parked) and P11. v2 written 2026-09-23 against
+same day (§4.1), then P8 and P11. Open: V0's phone session. v2 written 2026-09-23 against
 `9b70b7d` (the R2 reskin). v1 (Phases 0–5, all done) is in git history:
 `git show 5d136ca:docs/android-master-plan.md`.
 
@@ -81,10 +81,10 @@ Nothing from v1 or the rebrand is dropped. Each item has a home below.
 | P5 | A scheduled prompt fires and its notification opens the chat | you, once | V0 |
 | P6 | R2 on the phone: light theme, launcher and themed icon, fonts | you, once | V0 |
 | P7 | APK size and an `r8-analyzer` pass. **Done** (`39f35f5`): the package-wide `-keep` became `-keep,allowshrinking,allowoptimization` (names and line numbers kept for crash logs); build 239 → 240 went from 5,113,069 to 4,801,773 bytes (−6.1%). The pre-R2 size was not recorded and the release keeps only the latest APK, so R2's font cost is not measurable any more | CI | V1 |
-| P8 | Puter "Continue with Google / Apple / Microsoft": sign in through the phone's browser and collect the token from Puter's `/login/wait` (the SDK's own path; the desktop already does it). A tested patch is parked. | you said "later" | V7 |
+| P8 | Puter "Continue with Google / Apple / Microsoft": sign in through the phone's browser and collect the token from Puter's `/login/wait` (the SDK's own path; the desktop already does it). **Done**: the sign-in page opens in a Custom Tab, the wait is a coroutine owned by the activity (a second tap retires the first; closing the app ends it and says so), and the token goes only into the bridge page's SDK | you said "later" | V7 |
 | P9 | Rebrand R4 (message anatomy), R5 (home, agents, command palette), R6 (generative UI), R7 (canvas): the Android halves. **Done** | — | V4, V5, V8 |
 | P10 | NEURA-004 (logo) and NEURA-039 (desktop parity) are done by R0 and Phase 5; the backlog's owner can close both rows | backlog owner | — |
-| P11 | The old `fa4u` prefix in `puter-bridge.html` and `PuterBridge.kt` (internal names, never shown) | — | V3, while those files are open |
+| P11 | The old `fa4u` prefix in `puter-bridge.html` and `PuterBridge.kt` (internal names, never shown). **Done**: renamed to `neura`; the page keeps each old name as a read-through alias for app builds up to 2.0.241, to be removed once those are gone | — | V3, while those files are open |
 
 ---
 
@@ -244,7 +244,7 @@ what the row above asked for and the phase did not do.
 | V4 | `09d451e`, `d13c935` | Navigation 3 back stack; the dock with the orb; Chat, Create, Agents, Activity; home with greeting and Continue cards; Go anywhere; from 840 dp the chat list stands beside the chat | — |
 | V5 | `4b299e1`, `cbfeae0` | "Thought for 12 s", streaming caret, source chips, context meter; send ↔ Stop morph; shared titles, and a build card that grows into the build page with its status pill; the agents gallery | The other §2.2 journeys open inside one page or switch tabs, so there is no page transition for them to ride |
 | V6 | `274e8f6`, `d13c935` | Glass surfaces (translucent); AI edge glow; voice aurora (AGSL on API 33+); the voice waveform pill; still under Remove animations or battery saver | Blur behind glass, **decided against**: nothing scrolls behind the dock or composer, so it would blur a plain background |
-| V7 | `438cdac`, `d13c935` | "Replying…" and a followed running build as Live Updates (`ProgressStyle`, promoted ongoing; the build's shows its step and a bar of steps done); Approve on a build's notification, behind the device unlock | P8 (parked) |
+| V7 | `438cdac`, `d13c935`, P8 | "Replying…" and a followed running build as Live Updates (`ProgressStyle`, promoted ongoing; the build's shows its step and a bar of steps done); Approve on a build's notification, behind the device unlock | — |
 | V8 | `70fb4dc`, `d13c935`, `cbfeae0` | ` ```ui ` blocks (choices, form with Material date and time pickers, table, card, chart; data only, checked against fixed limits) drawn natively, latest reply only; "Open in canvas" for long replies, stepping through the chat's replies and each reply's versions (Regenerate keeps up to four earlier answers, never sent to a model) | — |
 
 `6e78972` made screenshots stable: they are taken with animations off, and entrances

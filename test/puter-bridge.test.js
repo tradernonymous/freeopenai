@@ -17,9 +17,9 @@ const SCRIPTS = [...HTML.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/scri
 
 function loadBridge({ signedIn = false, signIn } = {}) {
   const elements = {
-    'fa4u-signin': { hidden: true },
-    'fa4u-go': { disabled: false },
-    'fa4u-cancel': { disabled: false },
+    'neura-signin': { hidden: true },
+    'neura-go': { disabled: false },
+    'neura-cancel': { disabled: false },
   };
   const calls = { signIn: 0 };
   const state = { signedIn };
@@ -47,23 +47,23 @@ function loadBridge({ signedIn = false, signIn } = {}) {
     },
   };
   vm.runInContext(SCRIPTS[1], ctx);
-  const status = (id) => JSON.parse(ctx.fa4uStatus(id));
+  const status = (id) => JSON.parse(ctx.neuraStatus(id));
   return { ctx, elements, calls, state, status };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test('the page carries a visible prompt with a Continue and a Cancel button', () => {
-  assert.match(HTML, /id="fa4u-signin"[^>]*hidden/);
-  assert.match(HTML, /id="fa4u-go"[^>]*onclick="window\.fa4uContinueSignIn\(\)"/);
-  assert.match(HTML, /id="fa4u-cancel"[^>]*onclick="window\.fa4uCancelSignIn\(\)"/);
+  assert.match(HTML, /id="neura-signin"[^>]*hidden/);
+  assert.match(HTML, /id="neura-go"[^>]*onclick="window\.neuraContinueSignIn\(\)"/);
+  assert.match(HTML, /id="neura-cancel"[^>]*onclick="window\.neuraCancelSignIn\(\)"/);
 });
 
 test('a sign-in asked for from the app waits for a tap instead of calling Puter', () => {
   const bridge = loadBridge();
-  bridge.ctx.fa4uSignIn('s1');
+  bridge.ctx.neuraSignIn('s1');
   assert.equal(bridge.calls.signIn, 0, 'no gesture yet, so Puter would only show an unseen consent prompt');
-  assert.equal(bridge.elements['fa4u-signin'].hidden, false, 'the prompt is shown for the tap');
+  assert.equal(bridge.elements['neura-signin'].hidden, false, 'the prompt is shown for the tap');
   assert.equal(bridge.status('s1').state, 'pending');
 });
 
@@ -74,46 +74,59 @@ test('the Continue tap is what calls Puter, and a finished sign-in closes the pr
       return Promise.resolve({ username: 'u' });
     },
   });
-  bridge.ctx.fa4uSignIn('s2');
-  bridge.ctx.fa4uContinueSignIn();
+  bridge.ctx.neuraSignIn('s2');
+  bridge.ctx.neuraContinueSignIn();
   assert.equal(bridge.calls.signIn, 1, 'called synchronously inside the tap, where the gesture is');
-  assert.equal(bridge.elements['fa4u-go'].disabled, true, 'a second tap cannot start a second window');
+  assert.equal(bridge.elements['neura-go'].disabled, true, 'a second tap cannot start a second window');
   await settle();
   assert.equal(bridge.status('s2').state, 'done');
-  assert.equal(bridge.elements['fa4u-signin'].hidden, true);
-  assert.equal(bridge.elements['fa4u-go'].disabled, false);
+  assert.equal(bridge.elements['neura-signin'].hidden, true);
+  assert.equal(bridge.elements['neura-go'].disabled, false);
 });
 
 test('a refused sign-in reports Puter\'s reason', async () => {
   const bridge = loadBridge({ signIn: () => Promise.reject({ message: 'popup closed' }) });
-  bridge.ctx.fa4uSignIn('s3');
-  bridge.ctx.fa4uContinueSignIn();
+  bridge.ctx.neuraSignIn('s3');
+  bridge.ctx.neuraContinueSignIn();
   await settle();
   assert.deepEqual(bridge.status('s3'), { state: 'error', length: 0, error: 'popup closed' });
-  assert.equal(bridge.elements['fa4u-signin'].hidden, true);
+  assert.equal(bridge.elements['neura-signin'].hidden, true);
 });
 
 test('Cancel ends the job without ever calling Puter', () => {
   const bridge = loadBridge();
-  bridge.ctx.fa4uSignIn('s4');
-  bridge.ctx.fa4uCancelSignIn();
+  bridge.ctx.neuraSignIn('s4');
+  bridge.ctx.neuraCancelSignIn();
   assert.equal(bridge.calls.signIn, 0);
   assert.equal(bridge.status('s4').state, 'error');
   assert.match(bridge.status('s4').error, /cancelled/);
-  assert.equal(bridge.elements['fa4u-signin'].hidden, true);
+  assert.equal(bridge.elements['neura-signin'].hidden, true);
 });
 
 test('an account already signed in finishes without showing anything', () => {
   const bridge = loadBridge({ signedIn: true });
-  bridge.ctx.fa4uSignIn('s5');
+  bridge.ctx.neuraSignIn('s5');
   assert.equal(bridge.status('s5').state, 'done');
-  assert.equal(bridge.elements['fa4u-signin'].hidden, true);
+  assert.equal(bridge.elements['neura-signin'].hidden, true);
   assert.equal(bridge.calls.signIn, 0);
 });
 
 test('a stray Continue or Cancel with no sign-in waiting does nothing', () => {
   const bridge = loadBridge();
-  bridge.ctx.fa4uContinueSignIn();
-  bridge.ctx.fa4uCancelSignIn();
+  bridge.ctx.neuraContinueSignIn();
+  bridge.ctx.neuraCancelSignIn();
   assert.equal(bridge.calls.signIn, 0);
+});
+
+test('app builds that still use the old fa4u names reach the same functions and state', async () => {
+  const bridge = loadBridge({ signedIn: true });
+  for (const name of ['Status', 'Chunk', 'Forget', 'Chat', 'Draw', 'SignIn', 'ContinueSignIn', 'CancelSignIn', 'Diagnose', 'Jobs']) {
+    assert.equal(bridge.ctx['fa4u' + name], bridge.ctx['neura' + name], name);
+  }
+  assert.equal(typeof bridge.ctx.fa4uSignIn, 'function');
+  // A flag read through the old name follows the new one, never a stale copy.
+  bridge.ctx.neuraSignedIn = true;
+  assert.equal(bridge.ctx.fa4uSignedIn, true);
+  bridge.ctx.neuraSignedIn = false;
+  assert.equal(bridge.ctx.fa4uSignedIn, false);
 });

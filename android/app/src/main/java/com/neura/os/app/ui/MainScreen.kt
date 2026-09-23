@@ -873,8 +873,8 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                         Text("Puter images", color = Palette.text)
                         Text("Your Puter account draws. Turns off by itself.", color = Palette.muted, fontSize = 12.sp)
                     }
-                    TextButton({ vm.signInToPuter() }, enabled = !vm.puterSigningIn) {
-                        Text(if (vm.puterSigningIn) "Signing in…" else "Sign in")
+                    TextButton({ vm.signInToPuter() }) {
+                        Text(if (vm.puterSigningIn) "Reopen sign-in" else "Sign in")
                     }
                     Switch(vm.puterImages, { vm.puterImages = it })
                 }

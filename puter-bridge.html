@@ -7,15 +7,15 @@
     <title>NeuraOS Puter bridge</title>
     <!--
       Loaded invisibly by the Android app (PuterBridge.kt) so it can draw and
-      chat on the user's own Puter account. fa4uSignIn(id) is the one job that
+      chat on the user's own Puter account. neuraSignIn(id) is the one job that
       is ever seen: it shows a Continue prompt (the app makes this WebView
       full-screen for it), and that tap opens puter.auth.signIn()'s popup,
       which Android's WebChromeClient hosts in a visible dialog. It only runs
       when the app asks for it directly, never as a side effect of a
       background job.
-      fa4uDraw(id, prompt, options) and fa4uChat(id, payload) fail fast instead
+      neuraDraw(id, prompt, options) and neuraChat(id, payload) fail fast instead
       if nobody has signed in yet. Every job is read the same way: poll
-      fa4uStatus(id), then fa4uChunk for the picture. options is optional:
+      neuraStatus(id), then neuraChunk for the picture. options is optional:
       { model, ratio: {w,h}, source }.
     -->
     <!--
@@ -33,7 +33,7 @@
         // 'failed'. A 'loaded' that still leaves `puter` undefined is a real
         // and separate case (the file arrived and threw), which is why this
         // is tracked apart from typeof puter rather than inferred from it.
-        window.fa4uScript = 'pending';
+        window.neuraScript = 'pending';
 
         // Wrapped before the SDK loads, so the SDK captures this rather than
         // the original. Sign-in is one window.open() plus a postMessage back
@@ -41,45 +41,45 @@
         // is the single fact that tells a WebView problem apart from an SDK
         // one. Nothing is blocked: the real window.open still runs and its
         // return value is passed straight back.
-        window.fa4uOpened = 0;
-        window.fa4uOpenBlocked = 0;
+        window.neuraOpened = 0;
+        window.neuraOpenBlocked = 0;
         (function () {
             var real = window.open;
             window.open = function () {
-                window.fa4uOpened++;
+                window.neuraOpened++;
                 var opened = null;
                 try {
                     opened = real.apply(window, arguments);
                 } catch (e) {
-                    window.fa4uOpenError = String((e && e.message) || e).slice(0, 200);
+                    window.neuraOpenError = String((e && e.message) || e).slice(0, 200);
                 }
-                if (!opened) window.fa4uOpenBlocked++;
+                if (!opened) window.neuraOpenBlocked++;
                 return opened;
             };
         })();
 
         // Deliberately defined here rather than in the body block below: if
         // that block ever dies partway (the failure mode the try/catch around
-        // onAuthStateChanged exists for), every fa4u function goes with it and
+        // onAuthStateChanged exists for), every neura function goes with it and
         // the app is left with no way to ask what happened. This one survives
         // that, because nothing above it can throw.
-        window.fa4uDiagnose = function () {
+        window.neuraDiagnose = function () {
             var out = {
-                script: window.fa4uScript || 'unknown',
+                script: window.neuraScript || 'unknown',
                 puter: typeof puter,
-                opened: window.fa4uOpened || 0,
-                blocked: window.fa4uOpenBlocked || 0,
-                jobs: window.fa4uJobs ? Object.keys(window.fa4uJobs).length : -1,
-                flag: window.fa4uSignedIn ? 1 : 0,
+                opened: window.neuraOpened || 0,
+                blocked: window.neuraOpenBlocked || 0,
+                jobs: window.neuraJobs ? Object.keys(window.neuraJobs).length : -1,
+                flag: window.neuraSignedIn ? 1 : 0,
                 url: String(location.href).slice(0, 120)
             };
-            if (window.fa4uOpenError) out.openError = window.fa4uOpenError;
+            if (window.neuraOpenError) out.openError = window.neuraOpenError;
             // The SDK keeps its session in localStorage. A WebView with
             // storage blocked would leave every reload signed out with no
             // error anywhere, which looks exactly like a sign-in that failed.
             try {
-                localStorage.setItem('fa4u.probe', '1');
-                localStorage.removeItem('fa4u.probe');
+                localStorage.setItem('neura.probe', '1');
+                localStorage.removeItem('neura.probe');
                 out.storage = 'ok';
             } catch (e) {
                 out.storage = 'blocked';
@@ -91,21 +91,35 @@
             }
             return JSON.stringify(out);
         };
+
+        // App builds up to 2.0.241 call this page by its old internal prefix
+        // (fa4u, from before NeuraOS). Each old name reads through to the new
+        // one -- a getter, so a flag like SignedIn is never a stale copy --
+        // until those builds are gone. Nothing here can throw past its try.
+        ['Status', 'Chunk', 'Forget', 'Chat', 'Draw', 'SignIn', 'ContinueSignIn', 'CancelSignIn',
+            'Diagnose', 'Jobs', 'SignedIn'].forEach(function (name) {
+            try {
+                Object.defineProperty(window, 'fa4u' + name, {
+                    get: function () { return window['neura' + name]; },
+                    configurable: true
+                });
+            } catch (e) { /* an alias is a convenience, never a failure */ }
+        });
     </script>
     <script src="https://js.puter.com/v2/"
-            onload="window.fa4uScript = 'loaded'"
-            onerror="window.fa4uScript = 'failed'"></script>
+            onload="window.neuraScript = 'loaded'"
+            onerror="window.neuraScript = 'failed'"></script>
     <style>
         html, body { margin: 0; height: 100%; background: #0f1115; color: #e8eaf0; font: 16px/1.45 system-ui, sans-serif; }
-        #fa4u-signin { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
-        #fa4u-signin[hidden] { display: none; }
-        #fa4u-signin .card { width: 100%; max-width: 360px; }
-        #fa4u-signin .title { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
-        #fa4u-signin .note { color: #a4a9b6; margin: 0 0 24px; }
-        #fa4u-signin button { display: block; width: 100%; min-height: 48px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; margin-top: 12px; }
-        #fa4u-go { background: #7c6cff; color: #fff; }
-        #fa4u-go:disabled { opacity: 0.6; }
-        #fa4u-cancel { background: transparent; color: #a4a9b6; }
+        #neura-signin { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+        #neura-signin[hidden] { display: none; }
+        #neura-signin .card { width: 100%; max-width: 360px; }
+        #neura-signin .title { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+        #neura-signin .note { color: #a4a9b6; margin: 0 0 24px; }
+        #neura-signin button { display: block; width: 100%; min-height: 48px; border: 0; border-radius: 12px; font: inherit; font-weight: 600; margin-top: 12px; }
+        #neura-go { background: #7c6cff; color: #fff; }
+        #neura-go:disabled { opacity: 0.6; }
+        #neura-cancel { background: transparent; color: #a4a9b6; }
     </style>
 </head>
 <body>
@@ -114,16 +128,16 @@
   this WebView full-screen for exactly that long). Puter opens its sign-in
   window only from a real user gesture; the Continue tap is that gesture.
 -->
-<div id="fa4u-signin" hidden>
+<div id="neura-signin" hidden>
     <div class="card">
         <p class="title">Sign in to Puter</p>
         <p class="note">Puter opens its own sign-in window after a tap. Your Puter account pays for Puter chats and pictures.</p>
-        <button id="fa4u-go" type="button" onclick="window.fa4uContinueSignIn()">Continue</button>
-        <button id="fa4u-cancel" type="button" onclick="window.fa4uCancelSignIn()">Cancel</button>
+        <button id="neura-go" type="button" onclick="window.neuraContinueSignIn()">Continue</button>
+        <button id="neura-cancel" type="button" onclick="window.neuraCancelSignIn()">Cancel</button>
     </div>
 </div>
 <script>
-    window.fa4uJobs = {};
+    window.neuraJobs = {};
 
     // Mirrors the web app's own signed-in tracking (app.js's
     // onAuthStateChanged), so a sign-in that completes is knowable the same
@@ -133,20 +147,20 @@
     // separate popup WebView is not guaranteed to keep working; this flag is
     // what PuterBridge.kt's resolveSignInFromCurrentState polls as a
     // fallback once the popup visibly closes.
-    window.fa4uSignedIn = false;
+    window.neuraSignedIn = false;
     try {
-        // Guarded: everything below this (fa4uStatus, fa4uChat, fa4uSignIn,
-        // fa4uDraw) is defined later in this same script block, so a throw
+        // Guarded: everything below this (neuraStatus, neuraChat, neuraSignIn,
+        // neuraDraw) is defined later in this same script block, so a throw
         // here -- Puter's SDK is not guaranteed to be done with its own
         // async setup the instant its script tag finishes executing --
         // would silently take all of them down with it, turning every
-        // window.fa4uX && window.fa4uX(...) call on the Kotlin side into a
+        // window.neuraX && window.neuraX(...) call on the Kotlin side into a
         // permanent no-op with no error ever surfaced.
         if (typeof puter !== 'undefined' && puter.auth && typeof puter.auth.onAuthStateChanged === 'function') {
-            puter.auth.onAuthStateChanged(function (user) { window.fa4uSignedIn = !!user; });
+            puter.auth.onAuthStateChanged(function (user) { window.neuraSignedIn = !!user; });
         }
     } catch (e) {
-        console.error('fa4u: onAuthStateChanged registration failed: ' + (e && e.message || e));
+        console.error('neura: onAuthStateChanged registration failed: ' + (e && e.message || e));
     }
 
     function toDataUrl(blob) {
@@ -182,19 +196,19 @@
         return error.message || (error.error && (error.error.message || error.error)) || code || 'Puter failed';
     }
 
-    window.fa4uStatus = function (id) {
-        var job = window.fa4uJobs[id];
+    window.neuraStatus = function (id) {
+        var job = window.neuraJobs[id];
         if (!job) return JSON.stringify({ state: 'missing' });
         return JSON.stringify({ state: job.state, length: job.length || 0, error: job.error || '' });
     };
 
-    window.fa4uChunk = function (id, offset, size) {
-        var job = window.fa4uJobs[id];
+    window.neuraChunk = function (id, offset, size) {
+        var job = window.neuraJobs[id];
         return job && job.data ? job.data.substr(offset, size) : '';
     };
 
-    window.fa4uForget = function (id) {
-        delete window.fa4uJobs[id];
+    window.neuraForget = function (id) {
+        delete window.neuraJobs[id];
     };
 
     // Chat, for the Android app's Puter provider. Puter answers in the
@@ -203,11 +217,11 @@
     // from Kotlin. The reply is appended to the job as it streams, so the app
     // can read it in slices while it is still being written -- state stays
     // "pending" until the last chunk, and `length` only ever grows.
-    window.fa4uChat = async function (id, payload) {
-        var jobs = window.fa4uJobs;
+    window.neuraChat = async function (id, payload) {
+        var jobs = window.neuraJobs;
         jobs[id] = { state: 'pending', data: '', length: 0 };
         try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
+            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.neuraDiagnose());
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
             if (!signedIn) throw new Error('sign in to Puter in Web app first');
             var request = typeof payload === 'string' ? JSON.parse(payload) : (payload || {});
@@ -230,7 +244,7 @@
         }
     };
 
-    // A deliberate, user-requested sign-in -- not one fa4uChat/fa4uDraw trigger
+    // A deliberate, user-requested sign-in -- not one neuraChat/neuraDraw trigger
     // on their own, so a background picture or reply never pops a login window
     // out of nowhere. puter.auth.signIn() opens the same window.open() popup
     // Android's WebChromeClient now knows how to host; this job just waits for
@@ -247,17 +261,17 @@
             (function tick() {
                 // The race this feeds is already over: stop polling rather
                 // than tick on for the rest of [ms] with nobody listening.
-                var job = window.fa4uJobs[id];
+                var job = window.neuraJobs[id];
                 if (!job || job.state !== 'pending') return;
                 var yes = false;
                 try {
-                    yes = !!(window.fa4uSignedIn || (puter.auth && puter.auth.isSignedIn()));
+                    yes = !!(window.neuraSignedIn || (puter.auth && puter.auth.isSignedIn()));
                 } catch (e) {
                     yes = false;
                 }
                 if (yes) return resolve();
                 if (Date.now() >= deadline) {
-                    return reject(new Error('Puter never reported a sign-in ' + window.fa4uDiagnose()));
+                    return reject(new Error('Puter never reported a sign-in ' + window.neuraDiagnose()));
                 }
                 setTimeout(tick, 500);
             })();
@@ -268,16 +282,16 @@
     var pendingSignIn = null;
 
     function showSignIn(show) {
-        var box = document.getElementById('fa4u-signin');
+        var box = document.getElementById('neura-signin');
         if (box) box.hidden = !show;
-        var go = document.getElementById('fa4u-go');
+        var go = document.getElementById('neura-go');
         if (go) go.disabled = false;
     }
 
     function finishSignIn(id, result) {
         if (pendingSignIn === id) pendingSignIn = null;
         showSignIn(false);
-        window.fa4uJobs[id] = result;
+        window.neuraJobs[id] = result;
     }
 
     // Asked for by the app (evaluateJavascript), which is not a user
@@ -286,11 +300,11 @@
     // consent prompt inside this page instead, which in the app's invisible
     // WebView nobody could see, so the promise never settled. So this only
     // shows the page's own prompt; the Continue tap below is what calls Puter.
-    window.fa4uSignIn = function (id) {
-        var jobs = window.fa4uJobs;
+    window.neuraSignIn = function (id) {
+        var jobs = window.neuraJobs;
         jobs[id] = { state: 'pending' };
         if (typeof puter === 'undefined') {
-            jobs[id] = { state: 'error', error: ('Puter did not load ' + window.fa4uDiagnose()).slice(0, 300) };
+            jobs[id] = { state: 'error', error: ('Puter did not load ' + window.neuraDiagnose()).slice(0, 300) };
             return;
         }
         var signedIn = false;
@@ -311,10 +325,10 @@
     // gesture it requires: signIn() must be called synchronously in here, not
     // after an await. 110s stays inside PuterBridge.kt's own poll budget, so
     // the page gets to say *why* before Kotlin can only say "timed out".
-    window.fa4uContinueSignIn = function () {
+    window.neuraContinueSignIn = function () {
         var id = pendingSignIn;
         if (!id) return;
-        var go = document.getElementById('fa4u-go');
+        var go = document.getElementById('neura-go');
         if (go) go.disabled = true;
         var started;
         try {
@@ -329,18 +343,18 @@
         });
     };
 
-    window.fa4uCancelSignIn = function () {
+    window.neuraCancelSignIn = function () {
         var id = pendingSignIn;
         if (!id) return;
         finishSignIn(id, { state: 'error', error: 'Puter sign-in cancelled' });
     };
 
-    window.fa4uDraw = async function (id, prompt, options) {
-        var jobs = window.fa4uJobs;
+    window.neuraDraw = async function (id, prompt, options) {
+        var jobs = window.neuraJobs;
         options = options || {};
         jobs[id] = { state: 'pending' };
         try {
-            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.fa4uDiagnose());
+            if (typeof puter === 'undefined') throw new Error('Puter did not load ' + window.neuraDiagnose());
             var signedIn = puter.auth && typeof puter.auth.isSignedIn === 'function' ? puter.auth.isSignedIn() : false;
             if (!signedIn) throw new Error('sign in to Puter in Web app first');
             var args = { quality: 'high' };
@@ -349,7 +363,7 @@
             if (options.source) args.input_images = [String(options.source)];
             var image = await puter.ai.txt2img(String(prompt || '').slice(0, 2000), args);
             var dataUrl = await imageToDataUrl(image);
-            // The app reads the picture back in slices (fa4uChunk), so no
+            // The app reads the picture back in slices (neuraChunk), so no
             // single evaluateJavascript result has to carry megabytes.
             jobs[id] = { state: 'done', length: dataUrl.length, data: dataUrl };
         } catch (error) {

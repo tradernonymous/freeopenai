@@ -22,8 +22,26 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import com.neura.os.app.data.PUTER_SIGN_IN_POLL_MS
+import com.neura.os.app.data.PUTER_SIGN_IN_TIMEOUT_MS
+import com.neura.os.app.data.PUTER_WAIT_URL
+import com.neura.os.app.data.puterSignInUrl
+import com.neura.os.app.data.puterTokenFrom
+import com.neura.os.app.data.puterWaitBody
+import com.neura.os.app.data.setPuterTokenScript
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** The user's own Puter account, reached from the app. A hidden WebView loads
  * /puter-bridge.html from the app's own server and runs puter.ai.txt2img and
@@ -91,7 +109,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             // The page may be far enough along to answer even though
             // onPageFinished never fired -- a hung subresource (js.puter.com
             // itself being the likeliest) stops the load event without
-            // stopping the inline scripts that already ran, and fa4uDiagnose
+            // stopping the inline scripts that already ran, and neuraDiagnose
             // is in the head precisely so it is one of them.
             failWithDiagnosis(web, message) { callback(Result.failure(IllegalStateException(it))) }
         }, LOAD_TIMEOUT_MS)
@@ -104,7 +122,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         }
         val created = WebView(context)
         // false: this page itself is not a popup, so it may open the one
-        // popup fa4uSignIn asks for -- the reverse of the flag a popup
+        // popup neuraSignIn asks for -- the reverse of the flag a popup
         // window gets in openSignInPopup below, which must not open one of
         // its own.
         WebShell.harden(created, "NeuraOS/" + BuildConfig.VERSION_NAME, popup = false)
@@ -247,7 +265,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 done("the Puter page could not be created on this phone")
             } else {
                 val job = "c" + System.nanoTime()
-                view.evaluateJavascript("window.fa4uChat && window.fa4uChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
+                view.evaluateJavascript("window.neuraChat && window.neuraChat(" + JSONObject.quote(job) + "," + JSONObject.quote(body) + ");", null)
                 followChat(view, job, 0, 0, onDelta, done)
             }
         }
@@ -258,7 +276,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
      * drawing path uses. */
     private fun followChat(view: WebView, job: String, read: Int, tries: Int, onDelta: (String) -> Unit, done: (String?) -> Unit) {
         main.postDelayed({
-            view.evaluateJavascript("window.fa4uStatus ? window.fa4uStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
+            view.evaluateJavascript("window.neuraStatus ? window.neuraStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
                 val status = try {
                     JSONObject(unquote(raw))
                 } catch (e: Exception) {
@@ -271,13 +289,13 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     return@evaluateJavascript
                 }
                 if (length > read) {
-                    view.evaluateJavascript("window.fa4uChunk(" + JSONObject.quote(job) + "," + read + "," + (length - read) + ")") { piece ->
+                    view.evaluateJavascript("window.neuraChunk(" + JSONObject.quote(job) + "," + read + "," + (length - read) + ")") { piece ->
                         val text = unquote(piece)
                         if (text.isNotEmpty()) onDelta(text)
                         val now = read + text.length
                         if (state == "pending") followChat(view, job, now, 0, onDelta, done)
                         else {
-                            view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                            view.evaluateJavascript("window.neuraForget && window.neuraForget(" + JSONObject.quote(job) + ")", null)
                             done(if (state == "done") null else status.optString("error", "Puter stopped without saying why"))
                         }
                     }
@@ -287,7 +305,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     state == "pending" && tries < 600 -> followChat(view, job, read, tries + 1, onDelta, done)
                     state == "pending" -> done("Puter sent nothing new for 3 minutes, so the reply was stopped")
                     else -> {
-                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        view.evaluateJavascript("window.neuraForget && window.neuraForget(" + JSONObject.quote(job) + ")", null)
                         done(if (state == "done") null else status.optString("error", "Puter stopped without saying why"))
                     }
                 }
@@ -321,7 +339,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 if (ratio != null) options.put("ratio", JSONObject().put("w", ratio.first).put("h", ratio.second))
                 if (source != null) options.put("source", source)
                 val job = "j" + System.nanoTime()
-                view.evaluateJavascript("window.fa4uDraw && window.fa4uDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
+                view.evaluateJavascript("window.neuraDraw && window.neuraDraw(" + JSONObject.quote(job) + "," + JSONObject.quote(prompt.take(2000)) + "," + options + ");", null)
                 poll(view, job, 0, done)
             }
         }
@@ -349,13 +367,126 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                 currentSignInJob = job
                 lastConsoleIssue = null
                 showForSignIn(view)
-                view.evaluateJavascript("window.fa4uSignIn && window.fa4uSignIn(" + JSONObject.quote(job) + ");", null)
+                view.evaluateJavascript("window.neuraSignIn && window.neuraSignIn(" + JSONObject.quote(job) + ");", null)
                 pollSignIn(view, job, 0) { outcome ->
                     hideAfterSignIn(view)
                     done(outcome)
                 }
             }
         }
+    }
+
+    // Bumped by every browser sign-in, so a second tap retires the first
+    // one's wait instead of racing it; the job is what cancelling stops.
+    private var browserSignIn = 0
+    private var browserSignInJob: Job? = null
+
+    /** Signs in to Puter in the phone's real browser (data/PuterSignIn.kt):
+     * [open] shows Puter's sign-in page in a Custom Tab, where Google, Apple
+     * and Microsoft all work, and a coroutine in [scope] (the activity's)
+     * waits on Puter's /login/wait for that session's token, exactly as
+     * Puter's SDK does on a page with no popup. The token goes straight into
+     * the hidden bridge page's SDK (setAuthToken) and is never logged or
+     * stored anywhere else. A second tap retires the first wait; the activity
+     * going away ends it and says so through [done]. Call on the main thread. */
+    fun signInWithBrowser(scope: CoroutineScope, open: (String) -> Unit, done: (Result<Unit>) -> Unit) {
+        if (baseUrl().isEmpty()) {
+            done(Result.failure(IllegalStateException("not signed in to the app yet")))
+            return
+        }
+        val attempt = ++browserSignIn
+        browserSignInJob?.cancel()
+        val session = UUID.randomUUID().toString()
+        open(puterSignInUrl(session))
+        browserSignInJob = scope.launch {
+            var lastProblem: String? = null
+            try {
+                val found = withTimeoutOrNull(PUTER_SIGN_IN_TIMEOUT_MS) {
+                    var token: String? = null
+                    while (token == null) {
+                        token = withContext(Dispatchers.IO) {
+                            try {
+                                askForToken(session)
+                            } catch (e: Exception) {
+                                lastProblem = e.javaClass.simpleName
+                                null
+                            }
+                        }
+                        if (token == null) delay(PUTER_SIGN_IN_POLL_MS)
+                    }
+                    token
+                }
+                if (found == null) {
+                    done(Result.failure(IllegalStateException(
+                        "no sign-in arrived from Puter within 5 minutes" + (lastProblem?.let { " (last network problem: $it)" } ?: "") +
+                            ". Tap Sign in again and finish in the browser tab that opens.",
+                    )))
+                } else {
+                    giveTokenToPage(found, done)
+                }
+            } catch (e: CancellationException) {
+                // A newer tap took over (that one reports), or the app's
+                // window closed mid-wait: say so, so the button is not stuck.
+                if (attempt == browserSignIn) done(Result.failure(IllegalStateException("the sign-in was interrupted. Tap Sign in again.")))
+                throw e
+            }
+        }
+    }
+
+    /** One POST to /login/wait: the token, or null while there is none yet. */
+    private fun askForToken(session: String): String? {
+        val conn = URL(PUTER_WAIT_URL).openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15_000
+            // Puter may hold the request open until the sign-in finishes.
+            conn.readTimeout = 60_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(puterWaitBody(session).toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) puterTokenFrom(conn.inputStream.bufferedReader().use { it.readText().take(16_384) }) else null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Loads the bridge page, gives its SDK the token, and checks it took. */
+    private fun giveTokenToPage(token: String, done: (Result<Unit>) -> Unit) {
+        load { result ->
+            val view = web
+            if (result.isFailure || view == null) {
+                done(Result.failure(result.exceptionOrNull() ?: IllegalStateException("the Puter page could not be created on this phone")))
+                return@load
+            }
+            view.evaluateJavascript(setPuterTokenScript(token)) { raw ->
+                when (unquote(raw)) {
+                    "ok" -> confirmSignedIn(view, 0, done)
+                    "nosdk" -> failWithDiagnosis(view, "Puter's script did not load, so the sign-in could not be kept") {
+                        done(Result.failure(IllegalStateException(it)))
+                    }
+                    else -> failWithDiagnosis(view, "Puter refused the sign-in" + (lastConsoleIssue?.let { " ($it)" } ?: "")) {
+                        done(Result.failure(IllegalStateException(it)))
+                    }
+                }
+            }
+        }
+    }
+
+    /** setAuthToken fetches the account in the background; give it ~5 s. */
+    private fun confirmSignedIn(view: WebView, tries: Int, done: (Result<Unit>) -> Unit) {
+        main.postDelayed({
+            view.evaluateJavascript(
+                "(function(){ try { return !!(window.neuraSignedIn || (window.puter && puter.auth && puter.auth.isSignedIn && puter.auth.isSignedIn())); } catch (e) { return false; } })()"
+            ) { raw ->
+                when {
+                    raw == "true" -> done(Result.success(Unit))
+                    tries < 10 -> confirmSignedIn(view, tries + 1, done)
+                    else -> failWithDiagnosis(view, "Puter sent a sign-in, but the page still says nobody is signed in") {
+                        done(Result.failure(IllegalStateException(it)))
+                    }
+                }
+            }
+        }, 500)
     }
 
     /** Puter opens its sign-in window only from a real tap on its own page
@@ -377,7 +508,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         signInBack?.remove()
         val callback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                view.evaluateJavascript("window.fa4uCancelSignIn && window.fa4uCancelSignIn()", null)
+                view.evaluateJavascript("window.neuraCancelSignIn && window.neuraCancelSignIn()", null)
             }
         }
         signInBack = callback
@@ -416,12 +547,12 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
         main.postDelayed({
             if (currentSignInJob != job) return@postDelayed
             view.evaluateJavascript(
-                "(function(){ try { return !!(window.fa4uSignedIn || (window.puter && puter.auth && puter.auth.isSignedIn && puter.auth.isSignedIn())); } catch (e) { return false; } })()"
+                "(function(){ try { return !!(window.neuraSignedIn || (window.puter && puter.auth && puter.auth.isSignedIn && puter.auth.isSignedIn())); } catch (e) { return false; } })()"
             ) { raw ->
                 if (currentSignInJob != job) return@evaluateJavascript
                 if (raw == "true") {
                     view.evaluateJavascript(
-                        "window.fa4uJobs && (window.fa4uJobs[" + JSONObject.quote(job) + "] = { state: 'done', length: 0, data: '' });",
+                        "window.neuraJobs && (window.neuraJobs[" + JSONObject.quote(job) + "] = { state: 'done', length: 0, data: '' });",
                         null
                     )
                 } else if (tries < 5) {
@@ -433,7 +564,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
 
     private fun pollSignIn(view: WebView, job: String, tries: Int, done: (Result<Unit>) -> Unit) {
         main.postDelayed({
-            view.evaluateJavascript("window.fa4uStatus ? window.fa4uStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
+            view.evaluateJavascript("window.neuraStatus ? window.neuraStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
                 val status = try {
                     JSONObject(unquote(raw))
                 } catch (e: Exception) {
@@ -463,12 +594,12 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
                     }
                     "done" -> {
                         currentSignInJob = null
-                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        view.evaluateJavascript("window.neuraForget && window.neuraForget(" + JSONObject.quote(job) + ")", null)
                         done(Result.success(Unit))
                     }
                     else -> {
                         currentSignInJob = null
-                        view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+                        view.evaluateJavascript("window.neuraForget && window.neuraForget(" + JSONObject.quote(job) + ")", null)
                         failWithDiagnosis(view, withConsole(status.optString("error", "Puter stopped without saying why"))) {
                             done(Result.failure(IllegalStateException(it)))
                         }
@@ -479,7 +610,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
     }
 
     /** Appends the bridge page's own account of itself to a failure message
-     * before reporting it. fa4uDiagnose is defined in the page's head, ahead
+     * before reporting it. neuraDiagnose is defined in the page's head, ahead
      * of Puter's SDK and of everything that could throw, so it answers even
      * when nothing else on the page does -- which is the whole point: every
      * failure below this line otherwise reads as one of "timed out", "Puter
@@ -492,7 +623,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
             report(message)
             return
         }
-        view.evaluateJavascript("window.fa4uDiagnose ? window.fa4uDiagnose() : ''") { raw ->
+        view.evaluateJavascript("window.neuraDiagnose ? window.neuraDiagnose() : ''") { raw ->
             val detail = unquote(raw)
             report(if (detail.isEmpty()) message else "$message $detail")
         }
@@ -506,7 +637,7 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
 
     private fun poll(view: WebView, job: String, tries: Int, done: (Result<Pair<String, ByteArray>>) -> Unit) {
         main.postDelayed({
-            view.evaluateJavascript("window.fa4uStatus ? window.fa4uStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
+            view.evaluateJavascript("window.neuraStatus ? window.neuraStatus(" + JSONObject.quote(job) + ") : '{\"state\":\"missing\"}'") { raw ->
                 val status = try {
                     JSONObject(unquote(raw))
                 } catch (e: Exception) {
@@ -526,13 +657,13 @@ class PuterBridge(private val context: Context, private val baseUrl: () -> Strin
 
     private fun readChunks(view: WebView, job: String, length: Int, out: StringBuilder, done: (Result<Pair<String, ByteArray>>) -> Unit) {
         if (out.length >= length) {
-            view.evaluateJavascript("window.fa4uForget && window.fa4uForget(" + JSONObject.quote(job) + ")", null)
+            view.evaluateJavascript("window.neuraForget && window.neuraForget(" + JSONObject.quote(job) + ")", null)
             val decoded = decodeDataUrl(out.toString())
             if (decoded == null) done(Result.failure(IllegalStateException("Puter answered, but not with a picture this app can read")))
             else done(Result.success(decoded))
             return
         }
-        view.evaluateJavascript("window.fa4uChunk(" + JSONObject.quote(job) + "," + out.length + "," + CHUNK + ")") { raw ->
+        view.evaluateJavascript("window.neuraChunk(" + JSONObject.quote(job) + "," + out.length + "," + CHUNK + ")") { raw ->
             val piece = unquote(raw)
             if (piece.isEmpty()) {
                 done(Result.failure(IllegalStateException("the picture from Puter could not be read back in full")))

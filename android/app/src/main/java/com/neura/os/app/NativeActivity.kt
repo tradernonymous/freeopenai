@@ -90,6 +90,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.browser.customtabs.CustomTabsIntent
+import androidx.lifecycle.lifecycleScope
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -235,7 +237,9 @@ class NativeActivity : ComponentActivity(), Platform {
         puter = PuterBridge(this) { vm.serverUrl }
         vm.puterDraw = { prompt, model, ratio, source, done -> puter.draw(prompt, model, ratio, source, done) }
         vm.puterChat = { body, onDelta, done -> puter.chat(body, onDelta, done) }
-        vm.puterSignIn = { done -> puter.signIn(done) }
+        // In the phone's browser, not a WebView popup: Google, Apple and
+        // Microsoft refuse to sign in inside an app (see data/PuterSignIn.kt).
+        vm.puterSignIn = { done -> puter.signInWithBrowser(lifecycleScope, { url -> openPuterSignIn(url) }, done) }
         registerForPush()
         observeConnectivity()
         // Cold start (master plan Phase 3): process start to the first frame,
@@ -851,6 +855,23 @@ class NativeActivity : ComponentActivity(), Platform {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (e: ActivityNotFoundException) {
             toast("No browser can open that link.")
+        }
+    }
+
+    /** Puter's sign-in page in a Custom Tab (the phone's own browser engine),
+     * or any browser when no Custom Tab provider is installed. */
+    private fun openPuterSignIn(url: String) {
+        val uri = Uri.parse(url)
+        if (uri.scheme != "https" || uri.host != "puter.com") return
+        Toast.makeText(this, "Sign in to Puter in the browser, then come back to NeuraOS.", Toast.LENGTH_LONG).show()
+        try {
+            CustomTabsIntent.Builder().build().launchUrl(this, uri)
+        } catch (e: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+            } catch (e2: ActivityNotFoundException) {
+                toast("No browser can open Puter's sign-in page.")
+            }
         }
     }
 

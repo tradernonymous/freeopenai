@@ -1410,10 +1410,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
      * Set by the activity, so the view model stays free of Android views. */
     var puterChat: ((body: String, onDelta: (String) -> Unit, done: (String?) -> Unit) -> Unit)? = null
 
-    /** Opens Puter's own sign-in window. Set by the activity, same as above. */
+    /** Opens Puter's sign-in page in the phone's browser. Set by the
+     * activity, same as above. */
     var puterSignIn: ((done: (Result<Unit>) -> Unit) -> Unit)? = null
-    /** True while that window is open, so the row can say so instead of
-     * looking like the tap did nothing. */
+    /** True while a sign-in is waiting for the browser; tapping again reopens
+     * the page (the earlier wait is retired, so only one answer arrives). */
     var puterSigningIn by mutableStateOf(false)
 
     /** The Puter switch's row calls this directly: chat and drawing never open
