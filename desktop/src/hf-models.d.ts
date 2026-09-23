@@ -36,7 +36,7 @@ export declare function getModel(modelId: string, opts?: {
 export declare function ggufFiles(card: HfModelCard): GgufFile[];
 export declare function parseQuant(filename: string): string;
 export declare function estimateFitsRam(sizeBytes: number, quant: string): string;
-export declare function fileUrl(modelId: string, filename: string, token?: string): string;
+export declare function fileUrl(modelId: string, filename: string): string;
 export declare function formatSize(bytes: number): string;
 export declare function licenseShort(card: HfModelCard): string;
 export declare function isGated(card: HfModelCard): boolean;

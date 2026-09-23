@@ -17,6 +17,22 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   var HF_API = 'https://huggingface.co/api';
 
+  /**
+   * Percent-encode a repo id or a file path SEGMENT BY SEGMENT.
+   *
+   * encodeURIComponent on the whole thing turns the separator into %2F, and a
+   * repo id is two segments: Hugging Face answers 400 "repo name includes an
+   * url-encoded slash" and the lookup never happens. The same is true of a
+   * file that lives in a subfolder of the repo. Each segment still needs
+   * encoding -- a filename may contain spaces, '#' or '?'.
+   */
+  function encodePath(path) {
+    return String(path || '')
+      .split('/')
+      .map(function (part) { return encodeURIComponent(part); })
+      .join('/');
+  }
+
   // --- search -------------------------------------------------------------
 
   /**
@@ -66,7 +82,7 @@
    */
   async function getModel(modelId, opts) {
     var options = opts || {};
-    var res = await fetch(HF_API + '/models/' + encodeURIComponent(modelId), {
+    var res = await fetch(HF_API + '/models/' + encodePath(modelId), {
       headers: {
         Accept: 'application/json',
         ...(options.authHeaders || {}),
@@ -98,7 +114,7 @@
       var size = Number(s.size || 0);
       var quant = parseQuant(name);
       var fitsRam = estimateFitsRam(size, quant);
-      var url = 'https://huggingface.co/' + (card.id || '') + '/resolve/main/' + encodeURIComponent(name);
+      var url = 'https://huggingface.co/' + encodePath(card.id || '') + '/resolve/main/' + encodePath(name);
       files.push({ name: name, size: size, quant: quant, fitsRam: fitsRam, url: url });
     }
     files.sort(function (a, b) { return a.size - b.size; });
@@ -138,10 +154,12 @@
    * The direct-download URL for a file in a repo.
    * When the user has a token, gated repos unlock automatically.
    */
-  function fileUrl(modelId, filename, token) {
-    var base = 'https://huggingface.co/' + modelId + '/resolve/main/' + encodeURIComponent(filename);
-    if (token) base += '?token=' + encodeURIComponent(token);
-    return base;
+  function fileUrl(modelId, filename) {
+    // No token in the URL, ever: a URL is logged by proxies, kept in history
+    // and pasted into bug reports, and HF has deprecated ?token= anyway. A
+    // gated repo is unlocked with an Authorization header at download time
+    // (the shell adds it -- net.rs), which is where the token already lives.
+    return 'https://huggingface.co/' + encodePath(modelId) + '/resolve/main/' + encodePath(filename);
   }
 
   // --- format helpers for the UI ------------------------------------------

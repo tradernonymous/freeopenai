@@ -142,14 +142,26 @@ describe('hf-models', () => {
   });
 
   it('fileUrl builds the correct download URL', () => {
-    const url = hfModels.fileUrl('test/model', 'file.gguf', 'tok123');
-    assert.ok(url.startsWith('https://huggingface.co/test/model/resolve/main/'));
-    assert.ok(url.includes('token=tok123'));
+    const url = hfModels.fileUrl('test/model', 'file.gguf');
+    assert.equal(url, 'https://huggingface.co/test/model/resolve/main/file.gguf');
   });
 
-  it('fileUrl omits token when not provided', () => {
-    const url = hfModels.fileUrl('test/model', 'file.gguf');
-    assert.ok(!url.includes('token='));
+  it('fileUrl never carries a token, whatever it is handed', () => {
+    // It used to append ?token=: a URL reaches proxy logs, browser history and
+    // pasted bug reports, and HF deprecated the parameter. A gated repo is
+    // unlocked with an Authorization header at download time instead.
+    const url = hfModels.fileUrl('test/model', 'file.gguf', 'tok123');
+    assert.ok(!url.includes('token'), 'no token in the URL');
+    assert.ok(!url.includes('tok123'), 'not even a stray extra argument');
+  });
+
+  it('a repo id and a nested path keep their slashes', () => {
+    // encodeURIComponent on the whole id made it test%2Fmodel, and Hugging
+    // Face answers 400 "repo name includes an url-encoded slash" -- the bug
+    // that made every Add-from-Hugging-Face lookup fail.
+    const url = hfModels.fileUrl('Shar514/Flux', 'sub dir/f.gguf');
+    assert.ok(!url.includes('%2F'), 'separators stay real slashes');
+    assert.ok(url.includes('/Shar514/Flux/resolve/main/sub%20dir/f.gguf'), 'segments are still encoded');
   });
 });
 
