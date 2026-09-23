@@ -164,10 +164,10 @@ next one starts, the same way as the Android plan.
 
 | Phase | What | Where | Size |
 | :-- | :-- | :-- | :-- |
-| **R0 Foundation** | `tokens.json` + generator + drift/contrast tests; logo SVG and every icon cut from it; fonts self-hosted; visible old-name strings replaced (storage keys moved with a read-old/write-new migration) | all | M |
-| **R1 Web reskin** | Tokens applied; the 7 extra stylesheets folded into `style.css` in `@layer` order (dead rules removed, measured before and after); Font Awesome → Lucide; light theme; the pulse | web | L |
-| **R2 Android reskin** | `Tokens.kt` scheme; Material 3 Expressive springs and shapes; light theme + optional dynamic colour; bundled fonts; the pulse; new launcher icon | Android | M |
-| **R3 Desktop reskin** | Tokens under the existing hue system (default hue = brand); tray and installer icons; lands **with** NEURA-069, not against it | desktop | M |
+| **R0 Foundation** | `tokens.json` + generator + drift/contrast tests; the emblem SVG and PNG | all | S |
+| **R1 Web reskin** | Tokens applied; favicon and PWA icons from the emblem; Inter + JetBrains Mono self-hosted; visible old-name strings replaced; the 7 extra stylesheets folded into `style.css` in `@layer` order (dead rules removed, measured before and after); Font Awesome → Lucide; light theme; the pulse | web | L |
+| **R2 Android reskin** | `Tokens.kt` scheme; launcher, themed and notification icons from the emblem; Material 3 Expressive springs and shapes; light theme + optional dynamic colour; bundled fonts; the pulse; new launcher icon | Android | M |
+| **R3 Desktop reskin** | Tokens under the existing hue system (default hue = brand); tray and installer icons; `freeai4u` storage keys moved with a read-old/write-new migration; lands **with** NEURA-069, not against it | desktop | M |
 | **R4 Message anatomy** | §4.1 in all three apps: Reasoning, Tool cards, Sources, Actions, Context meter | all | L |
 | **R5 Home, agents, palette** | §4.2, §4.3, §4.5 | all | L |
 | **R6 Generative UI** | §4.4, the `ui` block, parser shared in spirit (JS + Kotlin, each tested), native renderers | all | L |
@@ -188,11 +188,22 @@ the two agents do not edit the same stylesheet at the same time.
 - Every reskin phase records before and after screenshots in its "Shipped" note here.
 - The desktop is shared with another agent: R3 is coordinated through NEURA-069.
 
-## 7. Decisions needed from you
+## 7. Decisions (2026-09-23)
 
-1. **Colour direction:** A (Neural Violet, recommended), B (Signal Green) or C (Aurora Teal).
-2. **Logo:** shall I draw the SVG emblem, or will you supply one?
-3. **Order:** start with R0 + R2 (Android first, recommended), or the web first?
+1. **Colour direction: A, Neural Violet.**
+2. **Logo: drawn here** as `assets/branding/neuraos-emblem.svg`; every icon is cut from it.
+   If you supply your own emblem later, only that file changes.
+3. **Order: Android first** (R0 → R2 → R1 → R4 → R5 → R3 → R6 → R7).
+
+## 8. Shipped
+
+**R0 (2026-09-23):** `design/tokens.json` (Neural Violet, dark and light) and
+`npm run tokens`, which writes `design/tokens.css` and the Android `ui/Tokens.kt`.
+`test/tokens.test.js` fails on a stale generated file and checks 22 colour pairs
+per theme against WCAG AA. The emblem is `assets/branding/neuraos-emblem.svg`, with
+a 1024 px transparent PNG at `assets/branding/neuraos-logo.png` (the file NEURA-004
+asked for). Fonts and the old-name cleanup move into each app's own reskin phase,
+where the files they touch already change.
 
 ## Sources
 

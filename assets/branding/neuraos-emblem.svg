@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <!-- NeuraOS emblem (docs/neuraos-rebrand-plan.md, R0): an N drawn as four
+       connected nodes, Neural Violet fading to the AI-activity cyan. Emblem
+       only: no text, no background. Every app icon is cut from this file. -->
+  <defs>
+    <linearGradient id="neura" x1="12" y1="52" x2="52" y2="12" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B6CFF"/>
+      <stop offset="0.45" stop-color="#8B6CFF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <path d="M18 46V18L46 46V18" fill="none" stroke="url(#neura)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="url(#neura)">
+    <circle cx="18" cy="46" r="6.5"/>
+    <circle cx="18" cy="18" r="6.5"/>
+    <circle cx="46" cy="46" r="6.5"/>
+    <circle cx="46" cy="18" r="6.5"/>
+  </g>
+</svg>
