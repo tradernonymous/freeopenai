@@ -34,6 +34,7 @@ type SdStatus = {
   uptime_ms: number;
   base_url: string;
   detail: string;
+  warning: string;
 };
 
 // "On this PC", on the Images screen: which sd-server draws, with which
@@ -406,6 +407,7 @@ export default function LocalImagesCard({ facts, status, onRefresh, onStart, onS
           <button onClick={() => guard('refresh', onRefresh)} disabled={!!busy}>Look again</button>
         </div>
         {status?.detail && status.state !== 'ready' && <div className="chip-note">{status.detail}</div>}
+        {status?.warning && <div className="chip-note" role="note">{status.warning}</div>}
 
         <div className="dictation-links">
           <button className="link-button" onClick={() => open(facts?.releases_url || '')}>stable-diffusion.cpp releases</button>

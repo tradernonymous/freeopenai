@@ -367,3 +367,22 @@ test('a folder that forms a set is listed, chosen and started as one model', () 
   // Loopback survives the new argv, exactly as for a single file.
   assert.match(rs, /args_for_set[\s\S]*?"--listen-ip",\s*"127\.0\.0\.1"/);
 });
+
+// NEURA-075: an instruction-edit model is handed the picture as a reference.
+// img2img (`init_image` + `strength`) starts from the picture's noise-blurred
+// pixels; an edit model (Krea2 edit, Qwen-Image-Edit, Flux Kontext) reads the
+// picture through `ref_images` and follows the instruction. Sending the wrong
+// one gives a picture that ignores what was asked. And a big model on a card
+// with no fp16 was measured to come out white, so the status says so up front.
+test('an edit model gets the picture as a reference, and a weak GPU is named', () => {
+  const rs = sdRs();
+  assert.match(rs, /pub fn edits_by_reference\(/, 'the model decides the route');
+  assert.match(rs, /pub fn by_reference\(/, 'and the body is moved to ref_images');
+  assert.match(rs, /"ref_images"/, 'the documented field name');
+  assert.match(rs, /if edits_by_reference\(&model\) \{[\s\S]*?by_reference\(/, 'sd_generate applies it');
+  assert.match(rs, /pub fn gpu_warning\(/, 'the log is read for the card');
+  assert.match(rs, /pub warning: String/, 'the status carries the warning');
+  const source = card();
+  assert.match(source, /warning: string/, 'the card knows the field');
+  assert.match(source, /status\?\.warning/, 'and shows it');
+});

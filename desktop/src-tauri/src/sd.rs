@@ -84,6 +84,9 @@ struct Run {
     model: String,
     port: u16,
     started: Instant,
+    /// Said once the server is up, from its own log: empty unless this card
+    /// is known to draw a large model wrong.
+    warning: String,
 }
 
 fn slot() -> &'static Mutex<Option<Run>> {
@@ -611,6 +614,8 @@ pub struct SdStatus {
     pub uptime_ms: u64,
     pub base_url: String,
     pub detail: String,
+    /// Empty, or why this model may not draw properly on this machine.
+    pub warning: String,
 }
 
 fn snapshot(run: &Option<Run>, is_ready: bool, detail: String) -> SdStatus {
@@ -624,6 +629,7 @@ fn snapshot(run: &Option<Run>, is_ready: bool, detail: String) -> SdStatus {
             uptime_ms: active.started.elapsed().as_millis() as u64,
             base_url: base_url(active.port),
             detail,
+            warning: active.warning.clone(),
         },
         None => SdStatus {
             state: "stopped".to_string(),
@@ -634,6 +640,7 @@ fn snapshot(run: &Option<Run>, is_ready: bool, detail: String) -> SdStatus {
             uptime_ms: 0,
             base_url: String::new(),
             detail,
+            warning: String::new(),
         },
     }
 }
@@ -778,6 +785,7 @@ pub async fn sd_start(
             model: model.display().to_string(),
             port,
             started: Instant::now(),
+            warning: String::new(),
         });
     }
 
@@ -804,10 +812,19 @@ pub async fn sd_start(
         }
         let (ok, detail) = ready(port).await;
         if ok {
-            let guard = match slot().lock() {
+            // The device line is at the top of the log, so the whole file is
+            // read, not the tail an error shows.
+            let text = log_file(&app)
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            let warning = gpu_warning(&text, model.is_dir());
+            let mut guard = match slot().lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
+            if let Some(run) = guard.as_mut() {
+                run.warning = warning;
+            }
             return Ok(snapshot(&guard, true, detail));
         }
         if Instant::now() >= deadline {
@@ -868,6 +885,70 @@ pub fn job_body(
             serde_json::json!(strength.unwrap_or(DEFAULT_EDIT_STRENGTH).clamp(0.0, 1.0));
     }
     body
+}
+
+/// An instruction-edit model -- Krea2 edit, Qwen-Image-Edit, Flux Kontext --
+/// is named for it, in the file or, for a set, in its diffusion part. Those
+/// models read the picture as a reference and follow the words; image-to-image would
+/// instead start from the picture's pixels and mostly restyle them.
+pub fn edits_by_reference(model: &Path) -> bool {
+    let named = |path: &Path| {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        name.contains("edit") || name.contains("kontext")
+    };
+    if named(model) {
+        return true;
+    }
+    model.is_dir() && set_in(model).map(|parts| named(&parts.diffusion)).unwrap_or(false)
+}
+
+/// The same job with the picture moved to where an edit model reads it:
+/// `ref_images`, documented as an array of base64 strings or data: URLs.
+/// `strength` goes with `init_image`, because it only means something to
+/// image-to-image. A body with no picture is returned untouched.
+pub fn by_reference(mut body: serde_json::Value) -> serde_json::Value {
+    if let Some(map) = body.as_object_mut() {
+        if let Some(image) = map.remove("init_image") {
+            map.remove("strength");
+            map.insert("ref_images".to_string(), serde_json::json!([image]));
+        }
+    }
+    body
+}
+
+/// What sd-server's own log says about the card, for a large (multi-file)
+/// model. ggml's Vulkan backend prints one line per device, e.g.
+/// `ggml_vulkan: 0 = NVIDIA GeForce GTX 1050 Ti (NVIDIA) | uma: 0 | fp16: 0 |`.
+/// On that exact card Krea2 decoded pure white whatever the cfg, flash
+/// attention or VAE placement, so a card reporting `fp16: 0` is named before
+/// someone waits minutes for a white square. A single-file checkpoint is left
+/// alone: SD 1.5 drew correctly on the same card.
+pub fn gpu_warning(log: &str, is_set: bool) -> String {
+    if !is_set {
+        return String::new();
+    }
+    let weak = log
+        .lines()
+        .find(|line| line.contains("ggml_vulkan:") && line.contains(" = ") && line.contains("fp16: 0"));
+    match weak {
+        Some(line) => {
+            let card = line
+                .split(" = ")
+                .nth(1)
+                .and_then(|rest| rest.split(" |").next())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or("This graphics card");
+            format!(
+                "{} has no fp16 support. A large model like this one has been seen to come out as a plain white picture on such a card; if yours does, this model cannot draw on this PC. A Stable Diffusion 1.5 checkpoint can.",
+                card
+            )
+        }
+        None => String::new(),
+    }
 }
 
 /// How much of the source an edit is allowed to leave behind when the caller
@@ -936,6 +1017,15 @@ fn running_port() -> Option<u16> {
     guard.as_ref().map(|run| run.port)
 }
 
+/// What the running server was started with: a file, or a set's folder.
+fn running_model() -> Option<PathBuf> {
+    let guard = match slot().lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    guard.as_ref().map(|run| PathBuf::from(&run.model))
+}
+
 /// Submit one job. Returns sd-server's own answer ({"id", "status", ...}); the
 /// page then polls `sd_job` and can `sd_cancel`, so nothing blocks for the
 /// minutes an image takes.
@@ -964,7 +1054,7 @@ pub async fn sd_generate(
         Some(raw) => Some(valid_init_image(&raw)?),
         None => None,
     };
-    let body = job_body(
+    let mut body = job_body(
         &prompt,
         negative_prompt.unwrap_or_default().trim(),
         width,
@@ -973,8 +1063,12 @@ pub async fn sd_generate(
         seed,
         init.as_deref(),
         strength,
-    )
-    .to_string();
+    );
+    let model = running_model().unwrap_or_default();
+    if edits_by_reference(&model) {
+        body = by_reference(body);
+    }
+    let body = body.to_string();
     let url = format!("{}/sdcpp/v1/img_gen", base_url(port));
     let response = client(Duration::from_secs(30))?
         .post(&url)
@@ -1210,6 +1304,40 @@ mod tests {
         assert!(valid_side(500, "width").is_err(), "not a multiple of 64");
         assert!(valid_side(40000, "width").is_err());
         assert!(valid_side(0, "width").is_err());
+    }
+
+    #[test]
+    fn an_edit_model_is_known_by_its_name_or_its_sets_diffusion_part() {
+        assert!(edits_by_reference(Path::new("m/Qwen-Image-Edit-2509-Q4_K_M.gguf")));
+        assert!(edits_by_reference(Path::new("m/flux1-kontext-dev-Q4_0.gguf")));
+        assert!(!edits_by_reference(Path::new("m/v1-5-pruned-emaonly.safetensors")));
+        assert!(!edits_by_reference(Path::new("")), "no server, no edit route");
+    }
+
+    #[test]
+    fn an_edit_model_gets_the_picture_as_a_reference_not_a_starting_point() {
+        let pixels = job_body("make it red", "", 512, 512, None, None, Some("QUJD"), Some(0.6));
+        let moved = by_reference(pixels);
+        assert_eq!(moved["ref_images"], serde_json::json!(["QUJD"]));
+        assert!(moved.get("init_image").is_none(), "one route, not both");
+        assert!(moved.get("strength").is_none(), "strength belongs to image-to-image");
+        assert_eq!(moved["prompt"], "make it red", "the rest of the job is untouched");
+
+        let draw = job_body("a cat", "", 512, 512, None, None, None, None);
+        assert_eq!(by_reference(draw.clone()), draw, "a plain draw has nothing to move");
+    }
+
+    #[test]
+    fn a_card_without_fp16_is_named_for_a_large_model_only() {
+        let weak = "load_backend: loaded Vulkan backend\nggml_vulkan: 0 = NVIDIA GeForce GTX 1050 Ti (NVIDIA) | uma: 0 | fp16: 0 | bf16: 0 | warp size: 32\n";
+        let said = gpu_warning(weak, true);
+        assert!(said.starts_with("NVIDIA GeForce GTX 1050 Ti (NVIDIA) has no fp16"), "{}", said);
+        assert!(said.contains("Stable Diffusion 1.5"), "and what does work");
+        assert_eq!(gpu_warning(weak, false), "", "a single checkpoint drew fine on it");
+
+        let strong = "ggml_vulkan: 0 = AMD Radeon RX 7600 (AMD) | uma: 0 | fp16: 1 | bf16: 1\n";
+        assert_eq!(gpu_warning(strong, true), "");
+        assert_eq!(gpu_warning("", true), "", "a CPU-only log says nothing about a card");
     }
 
     #[test]

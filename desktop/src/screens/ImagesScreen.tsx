@@ -74,6 +74,7 @@ type SdStatus = {
   uptime_ms: number;
   base_url: string;
   detail: string;
+  warning: string;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
