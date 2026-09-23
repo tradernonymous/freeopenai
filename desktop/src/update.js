@@ -139,13 +139,28 @@
     };
   }
 
-  // The installer a Windows user double-clicks, else the first artifact.
-  function installerFor(parsed) {
+  function isSetupExe(a) { return /setup\.exe$/i.test(a.name); }
+  function isMsi(a) { return /\.msi$/i.test(a.name); }
+  // The portable build is the one .exe that is not an installer.
+  function isPortable(a) { return /\.exe$/i.test(a.name) && !isSetupExe(a); }
+
+  // The artifact that updates THIS copy. `kind` is how it was installed, as
+  // the shell reports it (install_kind in net.rs): the same installer type
+  // must be used again, because the NSIS setup run over an MSI install (or the
+  // other way round) registers a second copy with Windows instead of
+  // upgrading the first. A portable copy gets the portable exe, or nothing --
+  // it is never handed an installer. An unknown kind keeps the old choice:
+  // the first installer, else the first artifact.
+  function installerFor(parsed, kind) {
     if (!parsed || !parsed.artifacts || !parsed.artifacts.length) return null;
-    var setup = parsed.artifacts.filter(function (a) {
-      return /setup\.exe$/i.test(a.name) || /\.msi$/i.test(a.name);
-    });
-    return setup.length ? setup[0] : parsed.artifacts[0];
+    var list = parsed.artifacts;
+    if (kind === 'portable') return list.filter(isPortable)[0] || null;
+    var preferred = kind === 'msi' ? list.filter(isMsi)[0]
+      : kind === 'nsis' ? list.filter(isSetupExe)[0]
+        : null;
+    if (preferred) return preferred;
+    var setup = list.filter(function (a) { return isSetupExe(a) || isMsi(a); });
+    return setup.length ? setup[0] : list[0];
   }
 
   function humanSize(bytes) {

@@ -648,9 +648,116 @@ pub fn run_installer(app: tauri::AppHandle, path: String) -> Result<(), String> 
     Ok(())
 }
 
+/// A Windows path as a comparable string: lowercased, forward slashes turned
+/// into backslashes, no trailing separator. Windows paths are
+/// case-insensitive and `Path::starts_with` is not, so the comparison is done
+/// on these strings instead.
+fn folded_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    text.trim_end_matches('\\').to_string()
+}
+
+/// How this copy was installed, decided from facts the caller gathers so the
+/// rule is testable without an install. The NSIS installer puts
+/// `uninstall.exe` beside the app exe, and it may do so under Program Files
+/// too (a per-machine install) -- so that fact is checked first. With no
+/// uninstaller, an exe under Program Files was put there by the MSI (Windows
+/// Installer keeps its uninstall entry elsewhere). Anything else -- Downloads,
+/// the desktop, a USB stick -- is the portable exe, which must never be
+/// replaced by running an installer.
+fn kind_of(exe_dir: &Path, has_uninstaller: bool, program_dirs: &[PathBuf]) -> &'static str {
+    if has_uninstaller {
+        return "nsis";
+    }
+    let dir = folded_path(exe_dir);
+    let under_program_files = program_dirs.iter().any(|root| {
+        let root = folded_path(root);
+        !root.is_empty() && (dir == root || dir.starts_with(&format!("{}\\", root)))
+    });
+    if under_program_files {
+        "msi"
+    } else {
+        "portable"
+    }
+}
+
+/// "nsis", "msi" or "portable": which artifact of a release updates this copy.
+/// Running the other installer type over an install registers a second copy
+/// with Windows instead of upgrading the first, and a portable exe is not
+/// installed at all. A copy whose own location cannot be read is treated as
+/// portable, the one kind that never runs anything.
+#[tauri::command]
+pub fn install_kind() -> String {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return "portable".to_string(),
+    };
+    let dir = match exe.parent() {
+        Some(dir) => dir.to_path_buf(),
+        None => return "portable".to_string(),
+    };
+    let has_uninstaller = dir.join("uninstall.exe").is_file();
+    // All three: a 32-bit view of the environment reports the x86 folder as
+    // ProgramFiles, and ProgramW6432 is where the 64-bit folder then lives.
+    let program_dirs: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
+        .iter()
+        .filter_map(|name| std::env::var_os(name))
+        .map(PathBuf::from)
+        .collect();
+    kind_of(&dir, has_uninstaller, &program_dirs).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn program_files() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+        ]
+    }
+
+    #[test]
+    fn an_nsis_install_is_known_by_its_uninstaller() {
+        let per_user = Path::new(r"C:\Users\Ann\AppData\Local\NeuraOS Desktop");
+        assert_eq!(kind_of(per_user, true, &program_files()), "nsis");
+        // A per-machine NSIS install also lives under Program Files; the
+        // uninstaller beside the exe still says which installer put it there.
+        let per_machine = Path::new(r"C:\Program Files\NeuraOS Desktop");
+        assert_eq!(kind_of(per_machine, true, &program_files()), "nsis");
+    }
+
+    #[test]
+    fn an_msi_install_lives_under_program_files_without_an_uninstaller() {
+        let dir = Path::new(r"C:\Program Files\NeuraOS Desktop");
+        assert_eq!(kind_of(dir, false, &program_files()), "msi");
+        let x86 = Path::new(r"C:\Program Files (x86)\NeuraOS Desktop");
+        assert_eq!(kind_of(x86, false, &program_files()), "msi");
+    }
+
+    #[test]
+    fn anything_else_is_portable() {
+        let downloads = Path::new(r"C:\Users\Ann\Downloads");
+        assert_eq!(kind_of(downloads, false, &program_files()), "portable");
+        // A folder that merely starts with the same letters is not inside it.
+        let lookalike = Path::new(r"C:\Program Files Extra\NeuraOS");
+        assert_eq!(kind_of(lookalike, false, &program_files()), "portable");
+        // No Program Files variables at all: nothing can be called an MSI install.
+        let dir = Path::new(r"C:\Program Files\NeuraOS Desktop");
+        assert_eq!(kind_of(dir, false, &[]), "portable");
+        assert_eq!(kind_of(dir, false, &[PathBuf::new()]), "portable");
+    }
+
+    #[test]
+    fn program_files_is_compared_without_case_or_slash_differences() {
+        let dir = Path::new(r"c:\PROGRAM FILES\NeuraOS Desktop");
+        assert_eq!(kind_of(dir, false, &program_files()), "msi");
+        let forward = Path::new("C:/Program Files/NeuraOS Desktop");
+        assert_eq!(kind_of(forward, false, &program_files()), "msi");
+        let trailing = vec![PathBuf::from(r"C:\Program Files\")];
+        assert_eq!(kind_of(Path::new(r"C:\Program Files\NeuraOS Desktop"), false, &trailing), "msi");
+    }
 
     fn extra(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

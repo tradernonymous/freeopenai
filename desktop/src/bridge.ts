@@ -60,6 +60,21 @@ export async function runInstaller(path: string): Promise<void> {
   await call('run_installer', { path });
 }
 
+/**
+ * How this copy was installed (net.rs install_kind), so an update uses the
+ * same installer type. Outside the shell, or when the shell cannot say, the
+ * answer is 'portable': the one kind whose update never runs anything.
+ */
+export async function installKind(): Promise<'nsis' | 'msi' | 'portable'> {
+  if (!hasShell()) return 'portable';
+  try {
+    const kind = await call<string>('install_kind');
+    return kind === 'nsis' || kind === 'msi' ? kind : 'portable';
+  } catch {
+    return 'portable';
+  }
+}
+
 export interface DiagnosticsFacts {
   version: string;
   os: string;

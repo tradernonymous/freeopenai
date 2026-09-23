@@ -79,6 +79,42 @@ jobs:
           test/desktop-cors.test.js
           test/desktop-p6p8p9.test.js
           test/desktop-neura-049-050.test.js
+      # NEURA-076: every build used to say 2.11.0, so no build was ever newer
+      # than the one installed -- the update check could never fire, and
+      # Windows Installer will not upgrade an MSI to the same version. The
+      # patch becomes the run number, which only rises. It is written here:
+      # after the tests (they check the repo's own files agree, and those stay
+      # at x.y.0) and before anything is built, into every file that carries the
+      # version, so APP_VERSION, both installers and desktop-version.json all say
+      # the same thing. MSI allows a patch up to 65535; the run number fits.
+      # Cargo.lock is not committed, so cargo writes the new version into the
+      # one it generates.
+      - name: Stamp the build version (patch = run number)
+        shell: pwsh
+        run: |
+          $base = (Get-Content desktop/package.json -Raw | ConvertFrom-Json).version
+          $parts = $base.Split('.')
+          $version = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
+          $old = [regex]::Escape($base)
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          # file, pattern, replacement, how many matches: the package's OWN
+          # version only, never a dependency that happens to share the number.
+          $edits = @(
+            @('desktop/package.json', "(`"version`"\s*:\s*`")$old(`")", 1),
+            @('desktop/package-lock.json', "(`"version`"\s*:\s*`")$old(`")", 2),
+            @('desktop/src-tauri/tauri.conf.json', "(`"version`"\s*:\s*`")$old(`")", 1),
+            @('desktop/src-tauri/Cargo.toml', "(?m)(^version\s*=\s*`")$old(`")", 1),
+            @('desktop/src/version.ts', "(APP_VERSION = ')$old(')", 1)
+          )
+          foreach ($e in $edits) {
+            # A full path: .NET's current directory is not always PowerShell's.
+            $file = (Resolve-Path $e[0]).Path
+            $text = [IO.File]::ReadAllText($file)
+            $next = ([regex]$e[1]).Replace($text, "`${1}$version`${2}", $e[2])
+            if ($version -ne $base -and $next -eq $text) { throw "no $base version found to stamp in $($e[0])" }
+            [IO.File]::WriteAllText($file, $next, $utf8)
+          }
+          Write-Host "Stamped version $version (from $base)"
       # NEURA-049: the Rust side has had unit tests all along and nothing ran
       # them, so a red one shipped. `cargo test` compiles the binary, and
       # generate_context! embeds `frontendDist` when it does -- so the frontend

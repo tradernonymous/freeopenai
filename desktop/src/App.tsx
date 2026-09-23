@@ -106,6 +106,8 @@ export default function App() {
     downloaded,
     install: installUpdate,
     checkNow,
+    checkError,
+    installNotice,
   } = useUpdateCheck();
   const [showFolder, setShowFolder] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -454,7 +456,8 @@ export default function App() {
         exportChats();
         break;
       case 'check-updates':
-        checkNow().then((result: 'update' | 'current' | 'unknown') => {
+        // A person asked, so a version they dismissed earlier is still reported.
+        checkNow(true).then((result: 'update' | 'current' | 'unknown') => {
           if (result === 'update') pushToast('info', 'A newer build is available — see the banner at the top.');
           else if (result === 'current') pushToast('ok', 'This is the newest build.');
           else pushToast('warn', 'Could not reach the release page to check.');
@@ -579,6 +582,7 @@ export default function App() {
                 {installState === 'installing' && 'Installing…'}
                 {installState === 'idle' && 'Download and install'}
                 {installState === 'error' && 'Try again'}
+                {installState === 'saved' && 'Saved'}
               </button>
               <a href={releaseUrl} target="_blank" rel="noreferrer">
                 Download manually
@@ -603,6 +607,12 @@ export default function App() {
           )}
           {installState === 'error' && installError && (
             <div className="server-banner">Update failed: {installError}</div>
+          )}
+          {installState === 'saved' && installNotice && (
+            <div className="server-banner">
+              {installNotice}{' '}
+              {downloaded?.verified ? '(sha256 verified)' : '(no digest published by the release)'}
+            </div>
           )}
           {installState === 'installing' && downloaded && (
             <div className="server-banner">
@@ -735,6 +745,14 @@ export default function App() {
         state={shell.reason === 'signed-out' ? 'signed-out' : (outcome ? outcome.kind : 'checking')}
         signedIn={signedIn}
         updateAvailable={updateInfo?.version}
+        // The palette's check, lifted into an always-visible button: a manual
+        // check (dismissed versions are reported) and the banner's install flow.
+        onCheckUpdates={() => checkNow(true)}
+        checkError={checkError}
+        onInstallUpdate={installUpdate}
+        installState={installState}
+        installError={installError}
+        installNotice={installNotice}
         onOpenPalette={openPalette}
       />
       <CommandPalette

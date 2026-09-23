@@ -35,7 +35,14 @@ export declare function parseVersion(value: unknown): number[] | null;
 export declare function compareVersions(a: unknown, b: unknown): number | null;
 export declare function isNewer(remote: unknown, local: unknown): boolean;
 export declare function readVersionPayload(payload: any): VersionPayload | null;
-export declare function installerFor(parsed: VersionPayload | null): UpdateArtifact | null;
+/** How this copy was installed, as the shell reports it (net.rs install_kind). */
+export type InstallKind = 'nsis' | 'msi' | 'portable';
+/**
+ * The artifact that updates this copy: the same installer type it came from,
+ * the portable exe for a portable copy (null when the release has none), and
+ * the first installer when the kind is unknown.
+ */
+export declare function installerFor(parsed: VersionPayload | null, kind?: InstallKind | string): UpdateArtifact | null;
 export declare function humanSize(bytes: number): string;
 export declare function delayFor(attempt: number, baseDelayMs?: number): number;
 export declare function fetchVersion(options?: {

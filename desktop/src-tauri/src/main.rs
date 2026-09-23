@@ -183,6 +183,7 @@ fn main() {
             net::update_manifest,
             net::remote_download,
             net::run_installer,
+            net::install_kind,
             net::open_url,
             net::puter_signin_open,
             net::auth_window_open,
