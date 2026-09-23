@@ -380,6 +380,8 @@ export default function LocalImagesCard({ facts, status, onRefresh, onStart, onS
         <p className="settings-hint">
           Put weights (.safetensors, .ckpt or .gguf) in{' '}
           <span className="mono">{facts?.models_dir || '<app data>/sd-models'}</span> or beside sd-server, or pick any file.
+          A model that comes in parts (Krea2, Flux, Qwen-Image) goes in its own folder there, with its VAE and
+          text encoder beside it; it then shows up as one model marked "set of N files".
         </p>
 
         <HubDownloader

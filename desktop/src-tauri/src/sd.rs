@@ -149,6 +149,22 @@ fn remembered(path: Result<PathBuf, String>) -> Option<PathBuf> {
     }
 }
 
+/// The chosen model: a file, or a folder that still forms a set. Kept apart
+/// from `remembered`, which the binary shares and where a folder is never
+/// valid.
+fn remembered_model(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Some(file) = remembered(model_file(app)) {
+        return Some(file);
+    }
+    let saved = std::fs::read_to_string(model_file(app).ok()?).ok()?;
+    let candidate = PathBuf::from(saved.trim());
+    if candidate.is_dir() && set_in(&candidate).is_some() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 /// The saved binary first (the one the user chose), then PATH.
 fn find_binary(app: &tauri::AppHandle) -> Option<(PathBuf, &'static str)> {
     if let Some(path) = remembered(binary_file(app)) {
@@ -163,6 +179,131 @@ fn find_binary(app: &tauri::AppHandle) -> Option<(PathBuf, &'static str)> {
         }
     }
     None
+}
+
+/// A model that is several files (NEURA-073): a diffusion model plus the
+/// parts it needs beside it -- a VAE, and a text encoder, which sd-server takes
+/// each under its own flag. Krea2, Flux, Qwen-Image and the rest ship this way,
+/// and `-m <file>` alone cannot start any of them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SetParts {
+    pub diffusion: PathBuf,
+    pub vae: Option<PathBuf>,
+    pub llm: Option<PathBuf>,
+    /// The text encoder's vision projector (`mmproj-...`). An edit model reads
+    /// its reference picture through it; without it sd.cpp disables vision
+    /// and the model edits a picture it cannot see.
+    pub llm_vision: Option<PathBuf>,
+    pub clip_l: Option<PathBuf>,
+    pub t5xxl: Option<PathBuf>,
+}
+
+/// The role a weight file plays in a set, from its name. Names are the only
+/// evidence on disk, and they hold in practice because every published set
+/// names its parts this way ("..._vae", "Qwen3VL-4B-Instruct", "t5xxl",
+/// "clip_l"). A multimodal projector (`mmproj-...`) is the encoder's vision,
+/// which an edit model needs to see the picture it is changing.
+fn role_of(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.starts_with("mmproj") || lower.contains(".mmproj") {
+        "llm_vision"
+    } else if lower.contains("vae") {
+        "vae"
+    } else if lower.contains("clip_l") {
+        "clip_l"
+    } else if lower.contains("t5xxl") || lower.contains("umt5") || lower.starts_with("t5") {
+        "t5xxl"
+    } else if [
+        "instruct",
+        "text_encoder",
+        "textencoder",
+        "llm",
+        "mistral",
+        "gemma",
+        "qwen3vl",
+        "qwen3-vl",
+        "qwen2.5-vl",
+        "qwen2_5_vl",
+    ]
+    .iter()
+    .any(|k| lower.contains(k))
+    {
+        "llm"
+    } else {
+        "diffusion"
+    }
+}
+
+/// Sort a folder's weight files into a set. The diffusion model is the
+/// largest file no other role claimed; a folder with no diffusion model, or
+/// with nothing beside it, is not a set -- a lone checkpoint still starts
+/// with `-m` exactly as before.
+pub fn set_roles(files: &[(PathBuf, u64)]) -> Option<SetParts> {
+    let mut parts = SetParts::default();
+    let mut diffusion: Option<(PathBuf, u64)> = None;
+    for (path, bytes) in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !is_model_name(&name) {
+            continue;
+        }
+        match role_of(&name) {
+            "vae" => {
+                if parts.vae.is_none() {
+                    parts.vae = Some(path.clone());
+                }
+            }
+            "clip_l" => {
+                if parts.clip_l.is_none() {
+                    parts.clip_l = Some(path.clone());
+                }
+            }
+            "t5xxl" => {
+                if parts.t5xxl.is_none() {
+                    parts.t5xxl = Some(path.clone());
+                }
+            }
+            "llm" => {
+                if parts.llm.is_none() {
+                    parts.llm = Some(path.clone());
+                }
+            }
+            "llm_vision" => {
+                if parts.llm_vision.is_none() {
+                    parts.llm_vision = Some(path.clone());
+                }
+            }
+            "diffusion" => {
+                let bigger = match &diffusion {
+                    Some((_, b)) => *bytes > *b,
+                    None => true,
+                };
+                if bigger {
+                    diffusion = Some((path.clone(), *bytes));
+                }
+            }
+            _ => {}
+        }
+    }
+    let (path, _) = diffusion?;
+    if parts.vae.is_none() && parts.llm.is_none() && parts.clip_l.is_none() && parts.t5xxl.is_none() {
+        return None;
+    }
+    parts.diffusion = path;
+    Some(parts)
+}
+
+/// The set a folder holds, if it holds one (not recursive).
+pub fn set_in(dir: &Path) -> Option<SetParts> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let files: Vec<(PathBuf, u64)> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| (e.path(), e.metadata().map(|m| m.len()).unwrap_or(0)))
+        .collect();
+    set_roles(&files)
 }
 
 /// Is this a file name sd.cpp would load as a model?
@@ -185,6 +326,29 @@ fn models_in(dir: &Path, out: &mut Vec<SdModel>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_dir() {
+            // A folder that forms a set is one model, listed under the
+            // folder's name, so choosing it is one click like any other.
+            if let Some(parts) = set_in(&path) {
+                let shown = path.display().to_string();
+                if out.iter().any(|m| m.path == shown) {
+                    continue;
+                }
+                let count = 1 + [&parts.vae, &parts.llm, &parts.llm_vision, &parts.clip_l, &parts.t5xxl]
+                    .iter()
+                    .filter(|p| p.is_some())
+                    .count();
+                let bytes: u64 = std::fs::read_dir(&path)
+                    .map(|d| d.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+                    .unwrap_or(0);
+                out.push(SdModel {
+                    name: format!("{} (set of {} files)", entry.file_name().to_string_lossy(), count),
+                    path: shown,
+                    bytes,
+                });
+            }
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
@@ -269,6 +433,18 @@ pub fn sd_find(app: tauri::AppHandle) -> SdFacts {
 /// page cannot name a file this app then runs.
 fn use_binary(app: &tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
     let source = PathBuf::from(&path);
+    if source.is_dir() {
+        if set_in(&source).is_none() {
+            return Err(format!(
+                "{} is a folder, but not a model set: it needs a diffusion model and at least a VAE or a text encoder beside it.",
+                path
+            ));
+        }
+        let file = model_file(&app)?;
+        std::fs::write(&file, source.display().to_string())
+            .map_err(|e| format!("Could not save the path: {}", e))?;
+        return Ok(serde_json::json!({ "path": source.display().to_string(), "set": true }));
+    }
     if !source.is_file() {
         return Err(format!("No file at {}", path));
     }
@@ -502,6 +678,46 @@ fn log_tail(app: &tauri::AppHandle) -> String {
     tail.trim().to_string()
 }
 
+/// The argv for a set: each part under its own flag, then what a multi-file
+/// model needs on an ordinary machine. `--offload-to-cpu` keeps the weights in
+/// RAM and moves each piece to the GPU only while it runs -- Krea2's three
+/// parts are ~10 GB against a 4 GB card. `--vae-tiling` decodes the finished
+/// picture in tiles: without it, sampling ran to the end on a 4 GB card and
+/// the very last step failed out of GPU memory, leaving a blank file after
+/// six minutes of work.
+pub fn args_for_set(parts: &SetParts, port: u16, threads: Option<u32>) -> Vec<String> {
+    let mut args = vec!["--diffusion-model".to_string(), parts.diffusion.display().to_string()];
+    for (flag, part) in [
+        ("--vae", &parts.vae),
+        ("--llm", &parts.llm),
+        ("--llm_vision", &parts.llm_vision),
+        ("--clip_l", &parts.clip_l),
+        ("--t5xxl", &parts.t5xxl),
+    ] {
+        if let Some(path) = part {
+            args.push(flag.to_string());
+            args.push(path.display().to_string());
+        }
+    }
+    for flag in [
+        "--offload-to-cpu",
+        "--diffusion-fa",
+        "--vae-tiling",
+        // An image server is for this machine, not for the network it is on.
+        "--listen-ip",
+        "127.0.0.1",
+        "--listen-port",
+    ] {
+        args.push(flag.to_string());
+    }
+    args.push(port.to_string());
+    if let Some(threads) = threads {
+        args.push("-t".to_string());
+        args.push(threads.to_string());
+    }
+    args
+}
+
 /// Start sd-server and wait for it to answer. Failure says what went wrong --
 /// no binary, no model, or the server's own last words -- rather than hanging.
 #[tauri::command(async)]
@@ -517,7 +733,7 @@ pub async fn sd_start(
             RELEASES_URL
         )
     })?;
-    let model = remembered(model_file(&app)).ok_or_else(|| {
+    let model = remembered_model(&app).ok_or_else(|| {
         "No model chosen: pick a .safetensors, .ckpt or .gguf under Images, \"On this PC\".".to_string()
     })?;
     let port = valid_port(port)?;
@@ -526,7 +742,12 @@ pub async fn sd_start(
     shutdown();
 
     let mut command = Command::new(&binary);
-    command.args(args_for(&model, port, threads));
+    // A folder is a set, and a set starts with each part under its own flag.
+    let argv = match set_in(&model) {
+        Some(parts) if model.is_dir() => args_for_set(&parts, port, threads),
+        _ => args_for(&model, port, threads),
+    };
+    command.args(argv);
     command.stdin(Stdio::null());
     // The server's own log is the only place a load failure explains itself.
     if let Some(log) = log_file(&app) {
@@ -833,6 +1054,70 @@ pub async fn sd_cancel(id: String) -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn krea2s_three_files_are_one_set_by_role() {
+        let files = vec![
+            (PathBuf::from("k/Krea2_turbo_edit-Q4_K_M.gguf"), 7_216_993_344),
+            (PathBuf::from("k/Qwen3VL-4B-Instruct-Q4_K_M.gguf"), 2_497_281_664),
+            (PathBuf::from("k/wan_2.1_vae.safetensors"), 253_815_318),
+            (PathBuf::from("k/mmproj-Qwen3VL-4B-Instruct-F16.gguf"), 780_000_000),
+            (PathBuf::from("k/README.md"), 4_000),
+        ];
+        let parts = set_roles(&files).expect("a diffusion model with a VAE and an encoder is a set");
+        assert_eq!(parts.diffusion, PathBuf::from("k/Krea2_turbo_edit-Q4_K_M.gguf"));
+        assert_eq!(parts.llm, Some(PathBuf::from("k/Qwen3VL-4B-Instruct-Q4_K_M.gguf")));
+        assert_eq!(parts.vae, Some(PathBuf::from("k/wan_2.1_vae.safetensors")));
+        assert_eq!(
+            parts.llm_vision,
+            Some(PathBuf::from("k/mmproj-Qwen3VL-4B-Instruct-F16.gguf")),
+            "the projector is the encoder's eyes, not the encoder"
+        );
+        assert_eq!(parts.clip_l, None);
+    }
+
+    #[test]
+    fn a_lone_checkpoint_is_not_a_set() {
+        let files = vec![(PathBuf::from("m/v1-5-pruned-emaonly.safetensors"), 4_000_000_000)];
+        assert!(set_roles(&files).is_none(), "one file keeps starting with -m");
+        let no_diffusion = vec![(PathBuf::from("m/wan_vae.safetensors"), 250_000_000)];
+        assert!(set_roles(&no_diffusion).is_none(), "a VAE alone is not a model");
+    }
+
+    #[test]
+    fn a_qwen_image_diffusion_model_is_not_mistaken_for_its_encoder() {
+        let files = vec![
+            (PathBuf::from("q/qwen-image-edit-2511-Q4_K_M.gguf"), 12_000_000_000),
+            (PathBuf::from("q/Qwen2.5-VL-7B-Instruct-q4_0.gguf"), 4_400_000_000),
+            (PathBuf::from("q/qwen_image_vae.safetensors"), 250_000_000),
+        ];
+        let parts = set_roles(&files).expect("a set");
+        assert_eq!(parts.diffusion, PathBuf::from("q/qwen-image-edit-2511-Q4_K_M.gguf"));
+        assert_eq!(parts.llm, Some(PathBuf::from("q/Qwen2.5-VL-7B-Instruct-q4_0.gguf")));
+    }
+
+    #[test]
+    fn a_set_starts_with_each_part_under_its_flag_and_stays_on_loopback() {
+        let parts = SetParts {
+            diffusion: PathBuf::from("d.gguf"),
+            vae: Some(PathBuf::from("v.safetensors")),
+            llm: Some(PathBuf::from("l.gguf")),
+            llm_vision: Some(PathBuf::from("mmproj-l.gguf")),
+            clip_l: None,
+            t5xxl: None,
+        };
+        let args = args_for_set(&parts, 18431, None);
+        let joined = args.join(" ");
+        assert!(joined.starts_with("--diffusion-model d.gguf"));
+        assert!(joined.contains("--vae v.safetensors"));
+        assert!(joined.contains("--llm l.gguf"));
+        assert!(joined.contains("--llm_vision mmproj-l.gguf"));
+        assert!(!joined.contains("--clip_l"), "an absent part is not passed");
+        assert!(joined.contains("--offload-to-cpu"));
+        assert!(joined.contains("--vae-tiling"), "the decode that ran out of GPU memory");
+        assert!(joined.contains("--listen-ip 127.0.0.1"));
+        assert!(!args.iter().any(|a| a == "-m"), "a set is never started with -m");
+    }
 
     #[test]
     fn the_binary_has_one_expected_name_per_platform() {

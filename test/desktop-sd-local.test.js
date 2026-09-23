@@ -347,3 +347,23 @@ test('the card can start and stop the server, and says which it is', () => {
   assert.match(screen(), /call\('sd_stop'\)/);
   assert.match(screen(), /call<SdStatus>\('sd_start', \{ port: null, threads: null \}\)/);
 });
+
+// NEURA-073: a model that comes in parts starts with each part by role.
+// Krea2, Flux and Qwen-Image are a diffusion model, a VAE and a text encoder;
+// `-m <file>` alone cannot start any of them. The pure half (role detection,
+// the argv) is unit-tested in sd.rs and runs under CI's cargo test; this
+// pins the wiring those tests cannot see.
+test('a folder that forms a set is listed, chosen and started as one model', () => {
+  const rs = fs.readFileSync(path.join(__dirname, '..', 'desktop', 'src-tauri', 'src', 'sd.rs'), 'utf8');
+  assert.match(rs, /pub fn set_roles\(/, 'files are sorted into roles');
+  assert.match(rs, /if path\.is_dir\(\) \{[\s\S]*?set_in\(&path\)/, 'the scan lists a set folder');
+  assert.match(rs, /set of \{\} files/, 'and names it as a set');
+  assert.match(rs, /if source\.is_dir\(\) \{[\s\S]*?set_in\(&source\)\.is_none\(\)/, 'choosing a plain folder is refused');
+  assert.match(rs, /let model = remembered_model\(&app\)/, 'a chosen set survives a restart');
+  assert.match(rs, /Some\(parts\) if model\.is_dir\(\) => args_for_set\(/, 'and starts by role');
+  for (const flag of ['--diffusion-model', '--vae', '--llm', '--llm_vision', '--offload-to-cpu', '--vae-tiling']) {
+    assert.ok(rs.includes(`"${flag}"`), `${flag} is passed`);
+  }
+  // Loopback survives the new argv, exactly as for a single file.
+  assert.match(rs, /args_for_set[\s\S]*?"--listen-ip",\s*"127\.0\.0\.1"/);
+});
