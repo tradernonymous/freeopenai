@@ -564,9 +564,11 @@ fn resolve_model_file(app: &tauri::AppHandle, file: &str) -> Result<PathBuf, Str
     Ok(path)
 }
 
-/// The Hub URL for one file of one repo. The repo is two path segments and
-/// the file one (or a folder and a name, for the split layouts), so a page
-/// cannot turn this into a request for another host or another path.
+/// The Hub URL for one file of one repo. The repo is two path segments; the
+/// file is a bounded path of clean segments -- a name, a folder and a name
+/// for the split layouts, or deeper for repos that sort their weights into
+/// `split/diffusion_models/...`. Every segment is checked, so a page cannot
+/// turn this into a request for another host or another path.
 pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
     let repo = repo.trim().trim_matches('/');
     let ok_segment = |s: &str| {
@@ -580,7 +582,7 @@ pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
     }
     let file = file.trim().trim_matches('/');
     let file_parts: Vec<&str> = file.split('/').collect();
-    if file_parts.is_empty() || file_parts.len() > 2 || !file_parts.iter().all(|p| ok_segment(p)) {
+    if file_parts.is_empty() || file_parts.len() > MAX_FILE_DEPTH || !file_parts.iter().all(|p| ok_segment(p)) {
         return Err(format!("{} is not a file name this app will fetch", file));
     }
     if !file.to_ascii_lowercase().ends_with(".gguf") {
@@ -588,6 +590,13 @@ pub fn hub_file_url(repo: &str, file: &str) -> Result<String, String> {
     }
     Ok(format!("https://huggingface.co/{}/resolve/main/{}", repo, file))
 }
+
+/// How deep a repo file path may be. The two-segment limit refused every
+/// repo that keeps its weights in `split/diffusion_models/<name>.gguf` with
+/// "not a file name this app will fetch", a message that read as a typo
+/// rather than a rule. Six is more than any layout on the Hub uses and still
+/// bounds the request.
+const MAX_FILE_DEPTH: usize = 6;
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -1023,6 +1032,12 @@ mod tests {
             "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
         );
         assert!(hub_file_url("unsloth/x-GGUF", "UD-Q4_K_XL/x-UD-Q4_K_XL-00001-of-00002.gguf").is_ok());
+        assert!(
+            hub_file_url("ChrisColeTech/qwen-image-GGUF", "split/diffusion_models/qwen-image-Q4_K_M.gguf").is_ok(),
+            "three deep is a real Hub layout"
+        );
+        assert!(hub_file_url("a/b", "1/2/3/4/5/6/7.gguf").is_err(), "still bounded");
+        assert!(hub_file_url("a/b", "split/../x.gguf").is_err(), "a dot segment never passes");
         assert!(hub_file_url("unsloth", "x.gguf").is_err(), "no owner");
         assert!(hub_file_url("a/b/c", "x.gguf").is_err(), "too deep");
         assert!(hub_file_url("../etc", "x.gguf").is_err());

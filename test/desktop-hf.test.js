@@ -155,6 +155,23 @@ describe('hf-models', () => {
     assert.ok(!url.includes('tok123'), 'not even a stray extra argument');
   });
 
+  it('a model card is asked with blobs=true, or it has no sizes', async () => {
+    let asked = '';
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => { asked = String(url); return { ok: true, json: async () => ({ siblings: [] }) }; };
+    try {
+      await hfModels.getModel('unsloth/Qwen3-4B-GGUF');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.ok(asked.includes('/api/models/unsloth/Qwen3-4B-GGUF?blobs=true'), asked);
+  });
+
+  it('a size on the LFS pointer still counts', () => {
+    const files = hfModels.ggufFiles({ id: 'o/r', siblings: [{ rfilename: 'a-Q4_K_M.gguf', lfs: { size: 2000 } }] });
+    assert.equal(files[0].size, 2000);
+  });
+
   it('a repo id and a nested path keep their slashes', () => {
     // encodeURIComponent on the whole id made it test%2Fmodel, and Hugging
     // Face answers 400 "repo name includes an url-encoded slash" -- the bug

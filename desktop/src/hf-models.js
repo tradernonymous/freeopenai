@@ -82,7 +82,9 @@
    */
   async function getModel(modelId, opts) {
     var options = opts || {};
-    var res = await fetch(HF_API + '/models/' + encodePath(modelId), {
+    // ?blobs=true: without it the Hub lists the files but not their sizes,
+    // and every quant read "0.0 GB" with a made-up memory estimate under it.
+    var res = await fetch(HF_API + '/models/' + encodePath(modelId) + '?blobs=true', {
       headers: {
         Accept: 'application/json',
         ...(options.authHeaders || {}),
@@ -111,7 +113,8 @@
       var s = siblings[i];
       var name = s.rfilename || s.name || '';
       if (!/\.gguf$/i.test(name)) continue;
-      var size = Number(s.size || 0);
+      // Older API shapes carry the size on the LFS pointer instead.
+      var size = Number(s.size || (s.lfs && s.lfs.size) || 0);
       var quant = parseQuant(name);
       var fitsRam = estimateFitsRam(size, quant);
       var url = 'https://huggingface.co/' + encodePath(card.id || '') + '/resolve/main/' + encodePath(name);
