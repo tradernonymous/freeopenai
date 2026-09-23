@@ -176,7 +176,9 @@ next one starts, the same way as the Android plan.
 **Recommended order:** R0 → R2 → R1 → R4 → R5 → R3 → R6 → R7. Android goes first
 after the foundation because it has the smallest theme surface (one `Palette`) and
 proves the token pipeline cheaply. R3 waits for the desktop agent's NEURA-069, so
-the two agents do not edit the same stylesheet at the same time.
+the two agents do not edit the same stylesheet at the same time. The Android halves
+of R4–R7 are scheduled in the [Android master plan](android-master-plan.md) (phases
+V4, V5 and V8), which owns all Android work.
 
 ## 6. Rules for this work
 
