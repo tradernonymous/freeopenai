@@ -103,7 +103,7 @@ fun Page(title: String, vm: AppViewModel, content: @Composable () -> Unit) {
         containerColor = Palette.background,
         topBar = {
             TopAppBar(
-                title = { Text(title) },
+                title = { Text(title, modifier = Modifier.sharedTitle(title)) },
                 navigationIcon = { IconButton({ vm.back() }, Modifier.pressScale()) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
             )

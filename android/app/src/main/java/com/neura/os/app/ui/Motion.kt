@@ -199,3 +199,21 @@ fun VoiceOrb(level: Float, listening: Boolean, speaking: Boolean, size: Dp = 180
         drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent)), radius = radius * 0.9f)
     }
 }
+
+/** The shared-element scope around the navigation host (V5); null in a
+ * preview or a screenshot test, where there is nothing to travel between. */
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+val LocalSharedScope = androidx.compose.runtime.compositionLocalOf<androidx.compose.animation.SharedTransitionScope?> { null }
+
+/** A title that travels: the card you tap grows into the page it opens,
+ * matched by [key] (docs/android-master-plan.md §2.2). Does nothing outside
+ * the navigation host. */
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.sharedTitle(key: String): Modifier {
+    val shared = LocalSharedScope.current ?: return this
+    val animated = androidx.navigation3.ui.LocalNavAnimatedContentScope.current
+    return with(shared) {
+        this@sharedTitle.sharedBounds(rememberSharedContentState("title:$key"), animated)
+    }
+}

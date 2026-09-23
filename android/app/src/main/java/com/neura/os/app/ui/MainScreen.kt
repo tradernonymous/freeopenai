@@ -2,6 +2,8 @@ package com.neura.os.app.ui
 
 import androidx.activity.compose.PredictiveBackHandler
 import kotlinx.coroutines.CancellationException
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -764,40 +766,58 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                         }
                     }
                     Spacer(Modifier.width(4.dp))
-                    AnimatedContent(
-                        when { streaming -> 2; canSend -> 1; else -> 0 },
-                        transitionSpec = { (scaleIn(tween(180)) + fadeIn()) togetherWith (scaleOut(tween(120)) + fadeOut()) },
-                        label = "send",
-                    ) { state ->
-                        val (icon, label) = when (state) {
-                            2 -> Icons.Filled.Stop to "Stop"
-                            1 -> Icons.Filled.ArrowUpward to "Send"
-                            else -> Icons.Filled.GraphicEq to "Voice mode"
-                        }
-                        Box(
-                            Modifier.padding(4.dp).size(40.dp).pressScale(0.85f).clip(CircleShape)
-                                .testTag("send_button")
-                                .background(if (state == 0) Palette.surfaceHigh else Palette.text)
-                                .clickable {
-                                    haptics(HapticFeedbackType.TextHandleMove)
-                                    when (state) {
-                                        // The Send button becomes Stop the instant a reply starts, so a
-                                        // double-tap on Send would cancel what it just sent.
-                                        2 -> if (System.currentTimeMillis() - vm.streamStartedAt > 700) vm.stop()
-                                        1 -> {
-                                            if (vm.imageArmed && text.isNotBlank()) {
-                                                vm.drawInChat(chat.id, text)
-                                                vm.imageArmed = false
-                                            } else if (vm.send(chat.id, text, photos.toList())) {
-                                                photos.clear()
-                                            }
+                    // One button that changes shape rather than three that swap
+                    // (master plan v2, V5): a violet circle to send, a rounded
+                    // square to stop, springing between them.
+                    val state = when { streaming -> 2; canSend -> 1; else -> 0 }
+                    val corner by animateIntAsState(
+                        if (state == 2) 30 else 50,
+                        spring(dampingRatio = NeuraTokens.SPRING_DAMPING, stiffness = NeuraTokens.SPRING_STIFFNESS),
+                        label = "sendShape",
+                    )
+                    val fill = when (state) {
+                        1 -> androidx.compose.ui.graphics.Brush.linearGradient(listOf(Palette.accent, Palette.glow))
+                        2 -> androidx.compose.ui.graphics.SolidColor(Palette.accentDeep)
+                        else -> androidx.compose.ui.graphics.SolidColor(Palette.surfaceHigh)
+                    }
+                    Box(
+                        Modifier.padding(4.dp).size(40.dp).pressScale(0.85f).clip(RoundedCornerShape(percent = corner))
+                            .testTag("send_button")
+                            .background(fill)
+                            .clickable {
+                                haptics(HapticFeedbackType.TextHandleMove)
+                                when (state) {
+                                    // The Send button becomes Stop the instant a reply starts, so a
+                                    // double-tap on Send would cancel what it just sent.
+                                    2 -> if (System.currentTimeMillis() - vm.streamStartedAt > 700) vm.stop()
+                                    1 -> {
+                                        if (vm.imageArmed && text.isNotBlank()) {
+                                            vm.drawInChat(chat.id, text)
+                                            vm.imageArmed = false
+                                        } else if (vm.send(chat.id, text, photos.toList())) {
+                                            photos.clear()
                                         }
-                                        else -> platform.startVoice()
                                     }
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(icon, label, tint = if (state == 0) Palette.text else Palette.background, modifier = Modifier.size(22.dp))
+                                    else -> platform.startVoice()
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AnimatedContent(
+                            state,
+                            transitionSpec = { (scaleIn(tween(180)) + fadeIn()) togetherWith (scaleOut(tween(120)) + fadeOut()) },
+                            label = "sendIcon",
+                        ) { shown ->
+                            val (icon, label) = when (shown) {
+                                2 -> Icons.Filled.Stop to "Stop"
+                                1 -> Icons.Filled.ArrowUpward to "Send"
+                                else -> Icons.Filled.GraphicEq to "Voice mode"
+                            }
+                            Icon(
+                                icon, label,
+                                tint = when (shown) { 1 -> Palette.onAccent; 2 -> Palette.text; else -> Palette.text },
+                                modifier = Modifier.size(22.dp),
+                            )
                         }
                     }
                 }

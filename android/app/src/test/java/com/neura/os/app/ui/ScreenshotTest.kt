@@ -136,6 +136,23 @@ class ScreenshotTest {
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun agents_phone() {
+        val sample: @Composable () -> Unit = {
+            SpaceHome(
+                title = "Agents",
+                tagline = "Who works for you, and how.",
+                items = listOf(SpaceItem(androidx.compose.material.icons.Icons.Filled.Build, "Library", "8 personas, 12 prompts") {}),
+                header = { AgentGallery(com.neura.os.app.data.BUILT_IN_PERSONAS) {} },
+                initial = "Sam",
+                onSearch = {},
+                onAccount = {},
+            )
+        }
+        shot("agents_phone", dark = true, sample)
+        shot("agents_phone", dark = false, sample)
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun space_phone() {
         shot("space_phone", dark = true) { SpaceSample() }
         shot("space_phone", dark = false) { SpaceSample() }

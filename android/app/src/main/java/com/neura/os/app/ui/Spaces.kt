@@ -151,6 +151,7 @@ fun SpaceHome(
     initial: String = "",
     onSearch: (() -> Unit)? = null,
     onAccount: (() -> Unit)? = null,
+    header: (@Composable () -> Unit)? = null,
 ) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
         // Reading, not doing, at the top: the search and the account (which
@@ -174,6 +175,10 @@ fun SpaceHome(
         Spacer(Modifier.height(4.dp))
         Text(tagline, color = Palette.muted, fontSize = 14.sp, modifier = Modifier.enterUp(60))
         Spacer(Modifier.height(20.dp))
+        header?.let {
+            it()
+            Spacer(Modifier.height(20.dp))
+        }
         items.forEachIndexed { index, item ->
             SpaceCard(item, Modifier.enterUp(90 + index * 40))
             Spacer(Modifier.height(10.dp))
@@ -203,7 +208,7 @@ private fun SpaceCard(item: SpaceItem, modifier: Modifier) {
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.title, color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(item.title, color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.Medium, modifier = Modifier.sharedTitle(item.title))
             Text(item.subtitle, color = if (item.attention) Palette.amber else Palette.muted, fontSize = 13.sp)
         }
     }
@@ -221,8 +226,14 @@ fun AgentsSpace(vm: AppViewModel) {
         initial = vm.username,
         onSearch = { vm.goAnywhereOpen = true },
         onAccount = { vm.push(Route.Settings) },
+        header = {
+            AgentGallery(com.neura.os.app.data.allPersonas(vm.library)) { persona ->
+                vm.newChat(personaId = persona.id)
+                vm.goToChat()
+            }
+        },
         items = listOf(
-            SpaceItem(Icons.Filled.Person, "Personas and prompts", "Library: ${vm.library.personas.size} personas, ${vm.library.prompts.size} prompts") { vm.push(Route.Knowledges) },
+            SpaceItem(Icons.Filled.Person, "Library", "${vm.library.personas.size} personas, ${vm.library.prompts.size} prompts") { vm.push(Route.Knowledges) },
             SpaceItem(Icons.Filled.Extension, "Skills", if (vm.skills.isEmpty()) "Instructions a chat can pin" else "${vm.skills.size} skills") { vm.push(Route.Skills) },
             SpaceItem(Icons.Filled.Construction, "Tools", "Search, status, files and more") { vm.push(Route.Tools) },
             SpaceItem(Icons.Filled.AutoAwesome, "Automate", if (schedules == 0) "Scheduled prompts and phone actions" else "$schedules scheduled") { vm.push(Route.Automation) },
@@ -272,3 +283,36 @@ fun ActivitySpace(vm: AppViewModel) {
  * replies waiting for the network. Badges the dock's Activity. */
 fun needsYouCount(vm: AppViewModel): Int =
     vm.builds.list?.sessions.orEmpty().count { it.waiting } + (if (vm.builds.attention != null) 1 else 0)
+
+/** The agents gallery (rebrand plan §4.3): every persona as a card with its
+ * avatar; one tap starts a chat with it. */
+@Composable
+fun AgentGallery(personas: List<com.neura.os.app.data.Persona>, onStart: (com.neura.os.app.data.Persona) -> Unit) {
+    Column {
+        Text("Start with", color = Palette.muted, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(personas.size, key = { personas[it].id }) { index ->
+                val persona = personas[index]
+                Column(
+                    Modifier.width(112.dp).enterUp(index * 40).pressScale(0.95f).clip(RoundedCornerShape(18.dp))
+                        .background(Palette.surface)
+                        .border(1.dp, Palette.outline.copy(alpha = 0.25f), RoundedCornerShape(18.dp))
+                        .clickable { onStart(persona) }
+                        .padding(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier.size(48.dp).clip(CircleShape)
+                            .background(GradientBrush.linearGradient(listOf(Palette.accentTint, Palette.glow.copy(alpha = 0.18f)))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(persona.emoji.ifBlank { "✨" }, fontSize = 22.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(persona.name, color = Palette.text, fontSize = 13.sp, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+            }
+        }
+    }
+}

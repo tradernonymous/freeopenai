@@ -104,6 +104,8 @@ sealed interface Turn {
         /** Served from the offline cache (ChatMessage.cached); a fresh reply
          * replaces it once the connection returns. */
         val cached: Boolean = false,
+        /** Total time spent reasoning before answering (ChatMessage.thoughtMs). */
+        val thoughtMs: Long = 0L,
     ) : Turn
     /** Two replies from one Compare run, kept apart from Turn.Assistant so
      * they render side by side instead of concatenating into one block. */
@@ -148,6 +150,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
         var error = false
         var model = ""
         var cached = false
+        var thoughtMs = 0L
         val start = index
         while (index < messages.size && messages[index].role != "user") {
             val part = messages[index]
@@ -160,6 +163,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
                     if (part.reasoning.isNotBlank()) reasoning.append(part.reasoning)
                     if (part.error) error = true
                     if (part.cached) cached = true
+                    thoughtMs += part.thoughtMs
                     if (part.model.isNotEmpty()) model = part.model
                     part.toolCalls.forEach { call ->
                         val result = results[call.id]
@@ -173,7 +177,7 @@ fun buildTurns(messages: List<ChatMessage>): List<Turn> {
             }
             index++
         }
-        turns.add(Turn.Assistant("a$start-${messages[start].createdAt}", steps, text.toString(), reasoning.toString(), error, model, images, actions, index - 1, cached))
+        turns.add(Turn.Assistant("a$start-${messages[start].createdAt}", steps, text.toString(), reasoning.toString(), error, model, images, actions, index - 1, cached, thoughtMs))
     }
     return turns
 }
@@ -224,11 +228,17 @@ fun AssistantTurn(
 ) {
     Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
-        if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty())
+        if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty(), turn.thoughtMs)
         when {
             turn.text.isEmpty() && streaming -> Box(Modifier.padding(vertical = 8.dp)) { NeuraPulse() }
             turn.error -> ErrorCard(turn.text, onRetry = if (isLast) onRegenerate else null)
-            turn.text.isNotEmpty() -> MarkdownText(turn.text) { platform.copy(it) }
+            // A soft caret rides the end of a reply while it is still arriving.
+            turn.text.isNotEmpty() -> MarkdownText(if (streaming && isLast) turn.text + " ▍" else turn.text) { platform.copy(it) }
+        }
+        // The pages the reply cited, as chips (data/Anatomy.kt).
+        if (!streaming && !turn.error && turn.text.isNotEmpty()) {
+            val sources = remember(turn.text) { com.neura.os.app.data.sourcesFrom(turn.text) }
+            if (sources.isNotEmpty()) SourcesRow(sources)
         }
         // File Generation: detect files in agent output and show download bar
         if (turn.text.isNotEmpty() && !streaming) {
@@ -266,6 +276,7 @@ fun AssistantTurn(
         AnimatedVisibility(!streaming && !turn.error && turn.text.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
             ActionRow(turn, isLast, platform, onRegenerate, onBranch)
         }
+        if (isLast && !streaming && !turn.error && turn.text.isNotEmpty()) ContextMeter(vm)
         // A reply that reads like a plan can be handed to the server to build.
         val planLike = remember(turn.text) { looksLikePlan(turn.text) }
         val canBuild = onBuild != null && !streaming && !turn.error && planLike
@@ -404,15 +415,15 @@ private fun WorkLog(steps: List<Step>, streaming: Boolean, startedAt: Long) {
 }
 
 @Composable
-private fun Thought(reasoning: String, live: Boolean) {
+private fun Thought(reasoning: String, live: Boolean, thoughtMs: Long) {
     var open by remember { mutableStateOf(false) }
     Column(Modifier.animateContentSize()) {
         Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (live) "Thinking" else "Thought", color = Palette.muted, fontSize = 13.sp)
             if (live) {
+                NeuraPulse(12.dp)
                 Spacer(Modifier.width(6.dp))
-                TypingDots(Palette.muted, 4.dp)
             }
+            Text(com.neura.os.app.data.thoughtLabel(thoughtMs, live), color = Palette.muted, fontSize = 13.sp)
             Icon(Icons.Filled.ExpandMore, null, tint = Palette.muted, modifier = Modifier.size(18.dp).rotate(if (open) 180f else 0f))
         }
         AnimatedVisibility(open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
@@ -627,5 +638,53 @@ fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** The pages a reply cited, one chip each; only https links ever get here
+ * (data/Anatomy.kt), and a tap opens the phone's browser. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SourcesRow(sources: List<com.neura.os.app.data.Source>) {
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        sources.forEachIndexed { index, source ->
+            Row(
+                Modifier.enterUp(index * 40).clip(RoundedCornerShape(14.dp)).background(Palette.surface)
+                    .clickable { runCatching { uri.openUri(source.url) } }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text((index + 1).toString(), color = Palette.accent, fontSize = 11.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(source.label, color = Palette.text, fontSize = 12.sp, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** How much of the model's context this chat already fills: an estimate,
+ * and labelled as one (data/Anatomy.kt). Only under the latest reply. */
+@Composable
+private fun ContextMeter(vm: AppViewModel) {
+    val chat = vm.currentChatId?.let { vm.conversation(it) } ?: return
+    val window = vm.models[chat.provider]?.firstOrNull { it.id == chat.model }?.contextLength ?: 0
+    val (label, fraction) = remember(chat.messages.size, window) {
+        com.neura.os.app.data.contextLabel(com.neura.os.app.data.estimateTokens(chat.messages), window)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
+        if (fraction != null) {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.width(44.dp).height(3.dp).clip(RoundedCornerShape(2.dp)),
+                color = if (fraction > 0.85f) Palette.amber else Palette.accent,
+                trackColor = Palette.surfaceHigh,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(label, color = Palette.muted, fontSize = 11.sp)
     }
 }

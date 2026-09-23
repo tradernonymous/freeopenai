@@ -43,6 +43,9 @@ data class ChatMessage(
      * because the connection was gone; the chat stays queued and a fresh
      * reply replaces it once the connection returns. */
     val cached: Boolean = false,
+    /** How long the model reasoned before its first word of answer, for
+     * "Thought for 12 s" (data/Anatomy.kt). 0 when unknown. */
+    val thoughtMs: Long = 0L,
 )
 
 data class Conversation(
@@ -113,6 +116,7 @@ fun ChatMessage.toJson(): JSONObject = JSONObject()
     .put("action", action)
     .put("compareGroup", compareGroup)
     .put("cached", cached)
+    .put("thoughtMs", thoughtMs)
 
 fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     role = obj.optString("role", "user"),
@@ -133,6 +137,7 @@ fun chatMessageFromJson(obj: JSONObject): ChatMessage = ChatMessage(
     action = obj.optString("action", ""),
     compareGroup = obj.optString("compareGroup", ""),
     cached = obj.optBoolean("cached", false),
+    thoughtMs = obj.optLong("thoughtMs", 0L).coerceAtLeast(0L),
 )
 
 fun Conversation.toJson(): JSONObject {

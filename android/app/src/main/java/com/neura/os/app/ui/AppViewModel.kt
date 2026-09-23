@@ -1074,9 +1074,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 var failure: String? = null
                 var connectivityFailure = false
                 var lastPost = 0L
+                // When the first word of answer arrived after some reasoning:
+                // "Thought for 12 s" (data/Anatomy.kt).
+                var thoughtEnd = 0L
                 val base = chat
+                fun thoughtMs(): Long = if (thoughtEnd > 0L) thoughtEnd - started else 0L
                 fun draft(rawError: String?): ChatMessage = when {
-                    rawError == null -> ChatMessage("assistant", content.toString(), reasoning.toString(), started, model = chat.model)
+                    rawError == null -> ChatMessage("assistant", content.toString(), reasoning.toString(), started, model = chat.model, thoughtMs = thoughtMs())
                     content.isEmpty() -> ChatMessage("assistant", maskSecrets(rawError), createdAt = started, error = true, model = chat.model)
                     else -> ChatMessage("assistant", "$content\n\n⚠️ ${maskSecrets(rawError)}", reasoning.toString(), started, model = chat.model)
                 }
@@ -1106,6 +1110,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                             is ChatEvent.Delta -> {
                                 content.append(event.content)
                                 reasoning.append(event.reasoning)
+                                if (thoughtEnd == 0L && reasoning.isNotEmpty() && event.content.isNotEmpty()) thoughtEnd = System.currentTimeMillis()
                                 val now = System.currentTimeMillis()
                                 if (now - lastPost > 60) {
                                     lastPost = now

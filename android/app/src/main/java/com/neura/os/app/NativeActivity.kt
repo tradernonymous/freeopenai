@@ -64,6 +64,10 @@ import com.neura.os.app.ui.needsYouCount
 import com.neura.os.app.ui.AgentsSpace
 import com.neura.os.app.ui.ActivitySpace
 import com.neura.os.app.ui.GoAnywhereSheet
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.runtime.CompositionLocalProvider
+import com.neura.os.app.ui.LocalSharedScope
 import androidx.compose.ui.Modifier
 import android.Manifest
 import android.annotation.SuppressLint
@@ -205,6 +209,7 @@ class NativeActivity : ComponentActivity(), Platform {
         if (!heard.isNullOrBlank()) callback(heard)
     }
 
+    @OptIn(ExperimentalSharedTransitionApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
@@ -273,12 +278,17 @@ class NativeActivity : ComponentActivity(), Platform {
                                 (vm.currentTab != Tab.Chat || chat == null || chat.messages.isEmpty())
                             BackHandler(enabled = stack.size == 1 && vm.currentTab != Tab.Chat) { vm.back() }
                             Column(Modifier.fillMaxSize()) {
-                                NavDisplay(
-                                    backStack = stack,
-                                    modifier = Modifier.weight(1f),
-                                    onBack = { vm.back() },
-                                    entryProvider = { dest -> NavEntry(dest) { Destination(it) } },
-                                )
+                                // Shared elements between pages (V5): a card's title
+                                // grows into the page it opens (Modifier.sharedTitle).
+                                SharedTransitionLayout(Modifier.weight(1f)) {
+                                    CompositionLocalProvider(LocalSharedScope provides this) {
+                                        NavDisplay(
+                                            backStack = stack,
+                                            onBack = { vm.back() },
+                                            entryProvider = { dest -> NavEntry(dest) { Destination(it) } },
+                                        )
+                                    }
+                                }
                                 AnimatedVisibility(
                                     showDock,
                                     enter = slideInVertically { it } + fadeIn(),
