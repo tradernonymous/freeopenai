@@ -81,6 +81,7 @@ fun systemPrompt(
         skillBlock.ifEmpty { null }?.let { "Active skills for this chat (follow them):\n\n$it" },
         modeInstructions(mode),
         CHART_FORMAT_HINT,
+        UI_FORMAT_HINT,
         "Current date and time: $today. You are running in the NeuraOS Android app.",
     ).joinToString("\n\n")
 }

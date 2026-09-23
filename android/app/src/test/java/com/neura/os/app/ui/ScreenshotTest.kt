@@ -176,4 +176,21 @@ class ScreenshotTest {
         shot("lock_phone", dark = true) { LockScreen(error = null, onUnlock = {}) }
         shot("lock_phone", dark = false) { LockScreen(error = "Fingerprint not recognised", onUnlock = {}) }
     }
+
+    /** A reply's ```ui blocks drawn natively (V8): choices, a form, a table, a card. */
+    @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun genui_phone() {
+        val sample: @Composable () -> Unit = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(
+                    """{"type":"choices","prompt":"Which city?","options":["Paris","Rome","Lisbon"]}""",
+                    """{"type":"form","title":"Book a table","fields":[{"id":"when","label":"Date","kind":"date","required":true},{"id":"size","label":"Size","kind":"select","options":["2","4","6"]}],"submit":"Book"}""",
+                    """{"type":"table","columns":["Plan","Price"],"rows":[["Free","0"],["Pro","9"]]}""",
+                    """{"type":"card","title":"Trip ready","body":"3 days in Rome, 2 museums booked.","actions":["Show plan"]}""",
+                ).forEach { json -> com.neura.os.app.data.parseUiSpec(json)?.let { UiBlock(it) {} } }
+            }
+        }
+        shot("genui_phone", dark = true, sample)
+        shot("genui_phone", dark = false, sample)
+    }
 }

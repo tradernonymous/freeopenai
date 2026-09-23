@@ -68,3 +68,21 @@ fun contextLabel(tokens: Int, window: Int): Pair<String, Float?> {
         "≈ ${short(tokens)} tokens" to null
     }
 }
+
+/** Past this, a reply reads better in the canvas than in a bubble (V8). */
+const val CANVAS_MIN_CHARS = 1_200
+const val CANVAS_MIN_CODE_LINES = 25
+
+/** Long prose, or a code block long enough to scroll, earns "Open in
+ * canvas"; a short answer does not. */
+fun canvasWorthy(text: String): Boolean {
+    if (text.length >= CANVAS_MIN_CHARS) return true
+    return Regex("```[^\\n]*\\n([\\s\\S]*?)```").findAll(text).any { block ->
+        block.groupValues[1].count { it == '\n' } + 1 >= CANVAS_MIN_CODE_LINES
+    }
+}
+
+/** The replies the canvas steps through: this chat's finished assistant
+ * answers, oldest first -- no failures, no blank tool-call turns. */
+fun canvasReplies(messages: List<ChatMessage>): List<String> =
+    messages.filter { it.role == "assistant" && !it.error && it.content.isNotBlank() }.map { it.content }

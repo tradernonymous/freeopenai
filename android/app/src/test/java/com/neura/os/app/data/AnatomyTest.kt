@@ -43,4 +43,24 @@ class AnatomyTest {
         assertEquals(1f, contextLabel(500_000, 128_000).second!!, 0f)
         assertEquals("≈ 1M of 2M tokens", contextLabel(1_000_000, 2_000_000).first)
     }
+
+    @Test fun `long prose or a long code block earns the canvas, a short answer does not`() {
+        assertTrue(!canvasWorthy("A short answer."))
+        assertTrue(canvasWorthy("x".repeat(CANVAS_MIN_CHARS)))
+        val longCode = "Here:\n```kotlin\n" + (1..30).joinToString("\n") { "val a$it = $it" } + "\n```"
+        assertTrue(canvasWorthy(longCode))
+        val shortCode = "Here:\n```kotlin\nval a = 1\n```"
+        assertTrue(!canvasWorthy(shortCode))
+    }
+
+    @Test fun `the canvas steps through finished replies only`() {
+        val chat = listOf(
+            ChatMessage("user", "hi"),
+            ChatMessage("assistant", "one"),
+            ChatMessage("assistant", "failed", error = true),
+            ChatMessage("assistant", " "),
+            ChatMessage("assistant", "two"),
+        )
+        assertEquals(listOf("one", "two"), canvasReplies(chat))
+    }
 }

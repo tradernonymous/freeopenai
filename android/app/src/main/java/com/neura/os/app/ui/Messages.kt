@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -77,6 +78,8 @@ import com.neura.os.app.data.ChatMessage
 import com.neura.os.app.data.Conversation
 import com.neura.os.app.data.TaskItem
 import com.neura.os.app.data.actionTicketFromJson
+import com.neura.os.app.data.canvasReplies
+import com.neura.os.app.data.canvasWorthy
 import com.neura.os.app.data.looksLikePlan
 import com.neura.os.app.data.openAction
 import com.neura.os.app.data.safeFileName
@@ -226,6 +229,8 @@ fun AssistantTurn(
     onBranch: () -> Unit,
     onBuild: (() -> Unit)? = null,
 ) {
+    var canvas by remember { mutableStateOf(false) }
+    val worthy = remember(turn.text) { canvasWorthy(turn.text) }
     Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
         if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty(), turn.thoughtMs)
@@ -233,7 +238,10 @@ fun AssistantTurn(
             turn.text.isEmpty() && streaming -> Box(Modifier.padding(vertical = 8.dp)) { NeuraPulse() }
             turn.error -> ErrorCard(turn.text, onRetry = if (isLast) onRegenerate else null)
             // A soft caret rides the end of a reply while it is still arriving.
-            turn.text.isNotEmpty() -> MarkdownText(if (streaming && isLast) turn.text + " ▍" else turn.text) { platform.copy(it) }
+            turn.text.isNotEmpty() -> MarkdownText(
+                if (streaming && isLast) turn.text + " ▍" else turn.text,
+                onAnswer = if (isLast && !streaming) { answer -> vm.currentChatId?.let { vm.send(it, answer) } } else null,
+            ) { platform.copy(it) }
         }
         // The pages the reply cited, as chips (data/Anatomy.kt).
         if (!streaming && !turn.error && turn.text.isNotEmpty()) {
@@ -274,7 +282,12 @@ fun AssistantTurn(
             }
         }
         AnimatedVisibility(!streaming && !turn.error && turn.text.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
-            ActionRow(turn, isLast, platform, onRegenerate, onBranch)
+            ActionRow(turn, isLast, platform, onRegenerate, onBranch, onCanvas = if (worthy) ({ canvas = true }) else null)
+        }
+        if (canvas) {
+            val replies = remember(turn.text) { vm.currentChatId?.let { vm.conversation(it) }?.messages.orEmpty().let(::canvasReplies) }
+            val all = replies.ifEmpty { listOf(turn.text) }
+            CanvasSheet(all, all.lastIndexOf(turn.text).takeIf { it >= 0 } ?: all.lastIndex, platform) { canvas = false }
         }
         if (isLast && !streaming && !turn.error && turn.text.isNotEmpty()) ContextMeter(vm)
         // A reply that reads like a plan can be handed to the server to build.
@@ -307,7 +320,7 @@ fun CompareTurn(turn: Turn.Compare, platform: Platform) {
 }
 
 @Composable
-private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform, onRegenerate: () -> Unit, onBranch: () -> Unit) {
+private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform, onRegenerate: () -> Unit, onBranch: () -> Unit, onCanvas: (() -> Unit)? = null) {
     var copied by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
@@ -326,6 +339,7 @@ private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform,
         SmallAction(Icons.AutoMirrored.Filled.VolumeUp, "Read aloud") { platform.speak(turn.text) }
         if (isLast) SmallAction(Icons.Filled.Refresh, "Regenerate", onRegenerate)
         SmallAction(Icons.Filled.Share, "Share") { platform.shareText("NeuraOS", turn.text) }
+        if (onCanvas != null) SmallAction(Icons.Filled.OpenInFull, "Open in canvas", onCanvas)
         Box {
             SmallAction(Icons.Filled.MoreHoriz, "More") { more = true }
             DropdownMenu(more, { more = false }) {
@@ -595,7 +609,7 @@ fun DataUrlThumb(url: String, sizeDp: Int) {
 /** Markdown with ChatGPT-style code blocks: language, Copy that turns into a
  * check mark, horizontal scroll. */
 @Composable
-fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
+fun MarkdownText(text: String, onAnswer: ((String) -> Unit)? = null, onCopyCode: (String) -> Unit) {
     // Split once per text rather than on every frame: during a stream this
     // composable is recomposed for each delta, and every visible turn was
     // re-parsed each time.
@@ -605,11 +619,19 @@ fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
     val charts = remember(text) {
         segments.map { if (it.code && it.language.equals("chart", ignoreCase = true)) parseChartSpec(it.text) else null }
     }
+    // A ```ui block (V8) is drawn the same way: native choices, a form, a
+    // table or a card -- or, if it does not parse, ordinary code.
+    val uis = remember(text) {
+        segments.map { if (it.code && it.language.equals("ui", ignoreCase = true)) com.neura.os.app.data.parseUiSpec(it.text) else null }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for ((index, segment) in segments.withIndex()) {
             val chart = charts[index]
+            val ui = uis[index]
             if (chart != null) {
                 ChartView(chart)
+            } else if (ui != null) {
+                UiBlock(ui, onAnswer)
             } else if (segment.code) {
                 var copied by remember(segment.text) { mutableStateOf(false) }
                 LaunchedEffect(copied) {
