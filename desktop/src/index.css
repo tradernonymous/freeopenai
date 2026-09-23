@@ -5301,6 +5301,10 @@ details.thinking > summary { cursor: pointer; color: var(--text-3); font-size: 1
   cursor: pointer;
 }
 .components-tab { display: grid; gap: 12px; }
+/* Mockups (the viralai slide generator): stepper, copy editor, full-size preview scaled to fit. */
+.mockups-tab { display: grid; gap: 10px; }
+.mockup-actions { display: flex; align-items: center; gap: 8px; }
+.mockup-preview { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; }
 .component-palette {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

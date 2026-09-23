@@ -6,7 +6,7 @@ import SelectPill from '../components/SelectPill';
 import { pushToast } from '../components/Toasts';
 import { isSavedProvider, streamSaved } from '../run-model';
 import { hasShell, writeLocalFile } from '../bridge';
-import { saveFile } from '../files/save';
+import { saveFile, base64ToBytes } from '../files/save';
 import { NAVIGATE_EVENT } from '../Sidebar';
 import { DESIGN_BRIEF_KEY } from './ChatScreen';
 import { CODE_HANDOFF_KEY } from './CodeScreen';
@@ -27,6 +27,7 @@ import '../design/social.js';
 import '../design/exports.js';
 import '../design/diagram-layout.js';
 import '../design/components.js';
+import '../design/mockups.js';
 // zip.js first: office.js takes its zip writer from the global.
 import '../files/zip.js';
 import '../files/office.js';
@@ -44,6 +45,7 @@ const social: typeof import('../design/social.js') = (globalThis as any).FreeAI4
 const exportsLib: typeof import('../design/exports.js') = (globalThis as any).FreeAI4UDesignExports;
 const diagramLib: typeof import('../design/diagram-layout.js') = (globalThis as any).FreeAI4UDiagramLayout;
 const componentsLib: typeof import('../design/components.js') = (globalThis as any).FreeAI4UDesignComponents;
+const mockups: typeof import('../design/mockups.js') = (globalThis as any).FreeAI4UMockups;
 const zip: typeof import('../files/zip.js') = (globalThis as any).FreeZip;
 const office: typeof import('../files/office.js') = (globalThis as any).FreeOffice;
 const savedModels: typeof import('../saved-models.js') = (globalThis as any).FreeAI4USavedModels;
@@ -120,7 +122,7 @@ interface Pin {
 }
 
 type Tool = 'view' | 'comment' | 'edit';
-type Tab = 'tweaks' | 'tokens' | 'components' | 'comments' | 'checks' | 'history';
+type Tab = 'tweaks' | 'tokens' | 'components' | 'mockups' | 'comments' | 'checks' | 'history';
 
 type Viewport = import('../design/stage.js').PresetId;
 const VIEWPORTS = stageLib.PRESETS;
@@ -137,6 +139,30 @@ const DIAGRAM_TEMPLATE: Template = {
 };
 
 type ExportKind = 'png' | 'svg' | 'pptx' | 'zip' | 'react' | 'flutter' | 'swiftui';
+
+// Mockup card sizes: the social templates' own platform formats (social.js).
+const MOCK_FORMATS = [
+  { value: 'square', label: 'Square', note: '1080x1080 — Instagram', width: 1080, height: 1080 },
+  { value: 'portrait', label: 'Portrait', note: '1080x1350 — LinkedIn', width: 1080, height: 1350 },
+  { value: 'wide', label: 'Wide', note: '1200x675 — X', width: 1200, height: 675 },
+] as const;
+
+// One mockup slide onto a canvas at full size (CSS may scale the element),
+// through design/mockups.js plan+paint. Module scope on purpose: the preview
+// effect and the exporters share it, and exports can never drift from what
+// the tab shows.
+function renderMock(canvas: HTMLCanvasElement, text: string, fmt: { width: number; height: number }) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const measureOne = (t: string, size: number, weight: string) => {
+    ctx.font = `${weight} ${size}px sans-serif`;
+    return ctx.measureText(t).width;
+  };
+  const p = mockups.plan({ text, width: fmt.width, height: fmt.height }, measureOne);
+  canvas.width = p.width;
+  canvas.height = p.height;
+  mockups.paint(ctx, p);
+}
 const EXPORTS: Array<{ value: ExportKind; label: string; note: string }> = [
   { value: 'png', label: 'PNG', note: 'each artboard (a slide, or the page)' },
   { value: 'svg', label: 'SVG', note: 'each artboard, as foreignObject' },
@@ -256,6 +282,11 @@ export default function DesignScreen() {
   const [mermaidText, setMermaidText] = useState('');
   const [lastExport, setLastExport] = useState<ExportKind>('png');
   const [exporting, setExporting] = useState(false);
+  // Mockups (NEURA-070, the viralai generator): the slide copy under edit,
+  // which slide is showing, and the card format.
+  const [mockSlides, setMockSlides] = useState<string[]>([]);
+  const [mockIndex, setMockIndex] = useState(0);
+  const [mockFormat, setMockFormat] = useState('square');
   const [fit, setFit] = useState(true);
   const [tool, setTool] = useState<Tool>('view');
   const [tab, setTab] = useState<Tab>('tweaks');
@@ -274,6 +305,7 @@ export default function DesignScreen() {
   const frameEdit = useRef('');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const critiqueAbort = useRef<AbortController | null>(null);
+  const mockCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const active = projects.find((p) => p.id === activeId) || null;
   const canvasHtml = active?.canvas?.html || '';
@@ -785,6 +817,89 @@ export default function DesignScreen() {
   };
 
   /** A palette component into the canvas: its CSS once, its markup before </main>, as a new version. */
+  const mockFmt = MOCK_FORMATS.find((f) => f.value === mockFormat) || MOCK_FORMATS[0];
+
+  // The preview is the full-size render scaled by CSS, so the exported PNG is
+  // exactly what is on screen.
+  useEffect(() => {
+    if (tab !== 'mockups') return;
+    const canvas = mockCanvasRef.current;
+    if (canvas) renderMock(canvas, mockSlides[mockIndex] ?? '', mockFmt);
+  }, [tab, mockSlides, mockIndex, mockFmt]);
+
+  // Generate: each canvas slide's own copy becomes a mockup slide (the
+  // raster side of the studio never rewrites the page).
+  const mockFromCanvas = () => {
+    if (!canvasHtml) return;
+    const texts = exportsLib.slideTexts(artifact.strip(canvasHtml))
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, mockups.LIMITS.slides);
+    if (!texts.length) { pushToast('warn', 'No slide copy on the canvas to mock up.'); return; }
+    setMockSlides(texts);
+    setMockIndex(0);
+  };
+
+  const addMockSlide = () => {
+    setMockSlides((prev) => (prev.length >= mockups.LIMITS.slides ? prev : [...prev, '']));
+    setMockIndex(Math.min(mockSlides.length, mockups.LIMITS.slides - 1));
+  };
+
+  const removeMockSlide = () => {
+    setMockSlides((prev) => prev.filter((_s, i) => i !== mockIndex));
+    setMockIndex((i) => Math.max(0, i - 1));
+  };
+
+  const goMockSlide = (delta: number) => {
+    setMockIndex((i) => stageLib.clampSlide(i, mockSlides.length, delta));
+  };
+
+  // A scratch canvas through the same plan+paint as the preview.
+  const mockPngBytes = (text: string): Uint8Array | null => {
+    const canvas = document.createElement('canvas');
+    renderMock(canvas, text, mockFmt);
+    const url = canvas.toDataURL('image/png');
+    return base64ToBytes(url.slice(url.indexOf(',') + 1));
+  };
+
+  const exportMockPng = async () => {
+    if (!mockSlides.length || exporting) return;
+    setExporting(true);
+    try {
+      const data = mockPngBytes(mockSlides[mockIndex] ?? '');
+      if (!data) return;
+      const slug = active ? slugOf(active.name) : 'mockups';
+      pushToast('ok', await saveFile({
+        name: `${slug}-mockup-${String(mockIndex + 1).padStart(2, '0')}.png`,
+        bytes: data,
+        mime: 'image/png',
+      }));
+    } catch (e) {
+      pushToast('error', String((e as Error).message || e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const exportMockZip = async () => {
+    if (!mockSlides.length || exporting) return;
+    setExporting(true);
+    try {
+      const files: Array<{ name: string; data: Uint8Array }> = [];
+      for (let i = 0; i < mockSlides.length; i += 1) {
+        const data = mockPngBytes(mockSlides[i]);
+        if (data) files.push({ name: `mockup-${String(i + 1).padStart(2, '0')}.png`, data });
+      }
+      const archive = await zip.writeZip(files);
+      const slug = active ? slugOf(active.name) : 'mockups';
+      pushToast('ok', await saveFile({ name: `${slug}-mockups.zip`, bytes: archive, mime: 'application/zip' }));
+    } catch (e) {
+      pushToast('error', String((e as Error).message || e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const insertComponent = (id: string) => {
     if (!canvasHtml || !active || draft) return;
     const part = componentsLib.get(id);
@@ -1109,7 +1224,7 @@ export default function DesignScreen() {
 
       <aside className="studio-right">
         <div className="inspector-tabs" role="tablist" aria-label="Inspector">
-          {(['tweaks', 'tokens', 'components', 'comments', 'checks', 'history'] as Tab[]).map((t) => (
+          {(['tweaks', 'tokens', 'components', 'mockups', 'comments', 'checks', 'history'] as Tab[]).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
               {t === 'comments' && pins.length ? `Comments ${pins.length}` : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
@@ -1211,6 +1326,51 @@ export default function DesignScreen() {
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === 'mockups' && (
+            <div className="mockups-tab">
+              <p className="settings-hint">
+                Carousel mockups from the viralai generator: a deterministic slide card (accent bar,
+                measured wrap, one accent per slide) rendered at full size and exported as PNG.
+                Edit the copy and it re-renders.
+              </p>
+              {!mockSlides.length ? (
+                <div className="empty">Generate from the canvas deck, or add a slide and type its copy.</div>
+              ) : (
+                <>
+                  <div className="mockup-actions">
+                    <button onClick={() => goMockSlide(-1)} disabled={mockIndex === 0} aria-label="Previous mockup slide"><Icon name="chevron-right" size={14} className="flip-x" /></button>
+                    <span className="deck-counter mono" aria-live="polite">{stageLib.counter(mockIndex, mockSlides.length)}</span>
+                    <button onClick={() => goMockSlide(1)} disabled={mockIndex >= mockSlides.length - 1} aria-label="Next mockup slide"><Icon name="chevron-right" size={14} /></button>
+                    <button className="linkish" onClick={removeMockSlide}>Remove</button>
+                  </div>
+                  <textarea
+                    rows={4}
+                    value={mockSlides[mockIndex] ?? ''}
+                    placeholder="What this slide says"
+                    aria-label={`Mockup slide ${mockIndex + 1} copy`}
+                    onChange={(e) => setMockSlides((prev) => prev.map((s, i) => (i === mockIndex ? e.target.value : s)))}
+                  />
+                </>
+              )}
+              <div className="mockup-actions">
+                <button onClick={mockFromCanvas} disabled={!canvasHtml} title="Take each slide's copy from the canvas deck">Generate from canvas</button>
+                <button onClick={addMockSlide} disabled={mockSlides.length >= mockups.LIMITS.slides}>Add slide</button>
+              </div>
+              <SelectPill
+                label="Card"
+                title="Mockup card size — the platform formats from the social templates"
+                value={mockFormat}
+                options={MOCK_FORMATS.map(({ value, label, note }) => ({ value, label, note }))}
+                onPick={(v) => setMockFormat(v)}
+              />
+              <canvas ref={mockCanvasRef} className="mockup-preview" aria-label="Mockup preview" />
+              <div className="mockup-actions">
+                <button className="primary" onClick={exportMockPng} disabled={!mockSlides.length || exporting}>Export PNG</button>
+                <button onClick={exportMockZip} disabled={!mockSlides.length || exporting}>Export all (ZIP)</button>
+              </div>
             </div>
           )}
 
