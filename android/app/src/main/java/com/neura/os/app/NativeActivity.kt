@@ -46,6 +46,24 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 import com.neura.os.app.ui.NoticeHost
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.Composable
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.ui.NavDisplay
+import com.neura.os.app.ui.Dest
+import com.neura.os.app.ui.backStack
+import com.neura.os.app.ui.Dock
+import com.neura.os.app.ui.needsYouCount
+import com.neura.os.app.ui.AgentsSpace
+import com.neura.os.app.ui.ActivitySpace
+import com.neura.os.app.ui.GoAnywhereSheet
 import androidx.compose.ui.Modifier
 import android.Manifest
 import android.annotation.SuppressLint
@@ -245,38 +263,35 @@ class NativeActivity : ComponentActivity(), Platform {
                         locked -> LockScreen(lockError) { unlock() }
                         !vm.signedIn -> SignInScreen(vm)
                         else -> {
-                            PredictiveBackHandler(enabled = vm.canGoBack) { progress ->
-                                try {
-                                    progress.collect { }
-                                } catch (e: CancellationException) {
-                                    throw e
-                                }
-                                vm.back()
-                            }
-                            Box(Modifier.fillMaxSize()) {
-                                MainScreen(vm, this@NativeActivity, voice)
-                                AnimatedContent(
-                                    vm.screen,
-                                    transitionSpec = {
-                                        (slideInHorizontally { it / 3 } + fadeIn()) togetherWith (slideOutHorizontally { it / 3 } + fadeOut())
-                                    },
-                                    label = "page",
-                                ) { screen ->
-                                    when (screen) {
-                                        null -> Unit
-                                        Route.Images -> Page("Images", vm) { ImageStudioScreen(vm, this@NativeActivity) }
-                                        Route.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
-                                        Route.Settings -> Page("Settings", vm) { SettingsScreen(vm, this@NativeActivity) }
-                                        Route.Personas -> PersonasScreen(vm)
-                                        Route.Prompts -> PromptsScreen(vm)
-                                        Route.Skills -> SkillsScreen(vm)
-                                        Route.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
-                                        Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
-                                        Route.Build -> BuildScreen(vm)
-                                        is Route.Detail -> Unit
-                                        Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
-                                        Route.Reviews -> Page("Pull requests", vm) { ReviewsScreen(vm) }
-                                    }
+                            // Navigation 3 (master plan v2, V4): the current space's stack,
+                            // with the system's predictive-back preview on every page above
+                            // a space's root. At the root itself, back returns to Chat.
+                            val stack = vm.nav.backStack()
+                            val chat = vm.currentChatId?.let { vm.conversation(it) }
+                            val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                            val showDock = stack.size == 1 && !imeOpen &&
+                                (vm.currentTab != Tab.Chat || chat == null || chat.messages.isEmpty())
+                            BackHandler(enabled = stack.size == 1 && vm.currentTab != Tab.Chat) { vm.back() }
+                            Column(Modifier.fillMaxSize()) {
+                                NavDisplay(
+                                    backStack = stack,
+                                    modifier = Modifier.weight(1f),
+                                    onBack = { vm.back() },
+                                    entryProvider = { dest -> NavEntry(dest) { Destination(it) } },
+                                )
+                                AnimatedVisibility(
+                                    showDock,
+                                    enter = slideInVertically { it } + fadeIn(),
+                                    exit = slideOutVertically { it } + fadeOut(),
+                                ) {
+                                    Dock(
+                                        current = vm.currentTab,
+                                        working = vm.streamingId != null,
+                                        needsYou = needsYouCount(vm),
+                                        onSelect = { tab -> if (tab == Tab.Chat) vm.goToChat() else vm.selectTab(tab) },
+                                        onOrb = { startVoice() },
+                                        onOrbLong = { vm.newChat(); vm.goToChat() },
+                                    )
                                 }
                             }
                         }
@@ -288,6 +303,10 @@ class NativeActivity : ComponentActivity(), Platform {
                                 .imePadding()
                                 .padding(bottom = 88.dp),
                         )
+                    }
+                    if (vm.goAnywhereOpen && vm.signedIn && !locked) {
+                        BackHandler { vm.goAnywhereOpen = false }
+                        GoAnywhereSheet(vm, this@NativeActivity) { vm.goAnywhereOpen = false }
                     }
                     viewer?.let { (id, bytes, mime) ->
                         ImageViewer(bytes, onClose = { viewer = null }, onSave = { saveImage("neuraos-" + id.take(8) + ext(mime), mime, bytes) }, onShare = { shareImage("neuraos-" + id.take(8) + ext(mime), mime, bytes) })
@@ -313,6 +332,35 @@ class NativeActivity : ComponentActivity(), Platform {
         ) {
             vm.store.askedNotifications = true
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    /** What one entry of the Navigation 3 stack draws (V4). */
+    @Composable
+    private fun Destination(dest: Dest) {
+        when (dest) {
+            is Dest.Root -> when (dest.tab) {
+                Tab.Chat -> MainScreen(vm, this, voice)
+                Tab.Create -> Page("Create", vm) { ImageStudioScreen(vm, this) }
+                Tab.Agents -> AgentsSpace(vm)
+                Tab.Activity -> ActivitySpace(vm)
+            }
+            is Dest.Page -> when (dest.route) {
+                Route.Images -> Page("Images", vm) { ImageStudioScreen(vm, this) }
+                Route.Tools -> Page("Tools", vm) { ToolsScreen(vm) }
+                Route.Settings -> Page("Settings", vm) { SettingsScreen(vm, this) }
+                Route.Personas -> PersonasScreen(vm)
+                Route.Prompts -> PromptsScreen(vm)
+                Route.Skills -> SkillsScreen(vm)
+                Route.Knowledges -> Page("Library", vm) { LibraryScreen(vm) }
+                Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
+                Route.Build -> BuildScreen(vm)
+                is Route.Detail -> Unit
+                Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
+                Route.Reviews -> Page("Pull requests", vm) { ReviewsScreen(vm) }
+                Route.Agents -> AgentsSpace(vm)
+                Route.Activity -> ActivitySpace(vm)
+            }
         }
     }
 
@@ -430,7 +478,7 @@ class NativeActivity : ComponentActivity(), Platform {
     private fun takeIntent(intent: Intent?) {
         when (intent?.action) {
             ACTION_NEW_CHAT -> vm.newChat()
-            ACTION_SETTINGS -> vm.resetTab(Tab.Settings)
+            ACTION_SETTINGS -> vm.push(Route.Settings)
             ACTION_OPEN_CHAT -> intent.getStringExtra(EXTRA_CHAT_ID)?.let { id -> if (vm.conversation(id) != null) vm.openChat(id) }
             // A scheduled recipe's notification: the id is checked, the prompt
             // comes from the phone's own storage, and it only becomes a draft.

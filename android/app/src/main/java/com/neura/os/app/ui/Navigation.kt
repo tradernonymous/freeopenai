@@ -22,6 +22,10 @@ import kotlinx.serialization.Serializable
     @Serializable data object Automation : Route
     /** Pull request review (master plan Phase 4). */
     @Serializable data object Reviews : Route
+    /** The Agents space's own page: Library, Skills, Tools, Automate (V4). */
+    @Serializable data object Agents : Route
+    /** The Activity space's own page: builds, reviews, queued replies (V4). */
+    @Serializable data object Activity : Route
 }
 
 /** A key that survives process death, unlike [Route.toString] -- adding a
@@ -38,6 +42,8 @@ fun Route.screenKey(): String = when (this) {
     Route.Build -> "build"
     Route.Automation -> "automation"
     Route.Reviews -> "reviews"
+    Route.Agents -> "agents"
+    Route.Activity -> "activity"
     is Route.Detail -> "detail:$kind:$id"
 }
 
@@ -53,30 +59,30 @@ fun screenFromKey(key: String): Route? = when {
     key == "build" -> Route.Build
     key == "automation" -> Route.Automation
     key == "reviews" -> Route.Reviews
+    key == "agents" -> Route.Agents
+    key == "activity" -> Route.Activity
     key.startsWith("detail:") -> key.removePrefix("detail:").split(":", limit = 2)
         .takeIf { it.size == 2 }?.let { (kind, id) -> Route.Detail(kind, id) }
     else -> null
 }
 
-/** The app's real peer destinations. Each owns its own back stack of
- * [Route]s pushed on top of its (implicit) root, so switching tabs resumes
- * wherever that tab was left -- unlike a single shared stack, where opening
- * an unrelated tab could land on top of whatever screen happened to be on
- * top already. */
+/** The four spaces of the dock (docs/android-master-plan.md §2.1, V4). Each
+ * owns its own back stack of [Route]s pushed on top of its (implicit) root,
+ * so switching spaces resumes wherever that space was left. Everything that
+ * used to be a drawer destination now lives inside one of them: Library,
+ * Skills, Tools and Automate under Agents; Builds and PR review under
+ * Activity; Settings is pushed from the avatar onto whichever space is open. */
 enum class Tab(val label: String) {
-    Chat("Chat"), Images("Images"), Tools("Tools"), Skills("Skills"), Knowledges("Library"), Automation("Automate"), Settings("Settings");
+    Chat("Chat"), Create("Create"), Agents("Agents"), Activity("Activity");
 }
 
 /** [Tab.Chat] has no root of its own -- chat itself isn't a [Route], it's
  * what shows when nothing is pushed. */
 fun Tab.rootScreen(): Route? = when (this) {
     Tab.Chat -> null
-    Tab.Images -> Route.Images
-    Tab.Tools -> Route.Tools
-    Tab.Skills -> Route.Skills
-    Tab.Knowledges -> Route.Knowledges
-    Tab.Automation -> Route.Automation
-    Tab.Settings -> Route.Settings
+    Tab.Create -> Route.Images
+    Tab.Agents -> Route.Agents
+    Tab.Activity -> Route.Activity
 }
 
 private fun tabRootedAt(screen: Route): Tab? = Tab.entries.firstOrNull { it.rootScreen() == screen }
@@ -127,3 +133,14 @@ data class NavState(
         return pushed(root)
     }
 }
+
+/** One entry of the stack Navigation 3 draws (V4): a space's own root, or a
+ * page pushed on top of it. */
+sealed interface Dest {
+    data class Root(val tab: Tab) : Dest
+    data class Page(val route: Route) : Dest
+}
+
+/** The current space's stack, root first, as NavDisplay wants it. */
+fun NavState.backStack(): List<Dest> =
+    listOf<Dest>(Dest.Root(currentTab)) + stacks[currentTab].orEmpty().map { Dest.Page(it) }

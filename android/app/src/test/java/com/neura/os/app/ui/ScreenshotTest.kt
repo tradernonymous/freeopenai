@@ -11,6 +11,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.neura.os.app.data.ChatMessage
@@ -109,6 +112,33 @@ class ScreenshotTest {
     fun tools_phone() {
         shot("tools_phone", dark = true) { ToolsSample() }
         shot("tools_phone", dark = false) { ToolsSample() }
+    }
+
+    /** A space's page with the dock under it (V4). */
+    @Composable
+    private fun SpaceSample() {
+        Column(Modifier.fillMaxSize()) {
+            SpaceHome(
+                title = "Activity",
+                tagline = "Everything running, or waiting for you.",
+                items = listOf(
+                    SpaceItem(androidx.compose.material.icons.Icons.Filled.Build, "Builds", "1 waiting for your approval", attention = true) {},
+                    SpaceItem(androidx.compose.material.icons.Icons.Filled.History, "Queued replies", "Nothing waiting for the network") {},
+                    SpaceItem(androidx.compose.material.icons.Icons.Filled.Schedule, "Scheduled prompts", "2 on") {},
+                ),
+                modifier = Modifier.weight(1f),
+                initial = "Sam",
+                onSearch = {},
+                onAccount = {},
+            )
+            Dock(current = Tab.Activity, working = false, needsYou = 1, onSelect = {}, onOrb = {}, onOrbLong = {})
+        }
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun space_phone() {
+        shot("space_phone", dark = true) { SpaceSample() }
+        shot("space_phone", dark = false) { SpaceSample() }
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp-xxhdpi")

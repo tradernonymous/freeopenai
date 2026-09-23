@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -252,11 +253,11 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
         }
         Spacer(Modifier.height(6.dp))
         DrawerRow(Icons.AutoMirrored.Filled.Chat, "New chat") { vm.newChat(); close() }
-        DrawerRow(Icons.Filled.Image, "Images") { vm.push(Route.Images); close() }
-        DrawerRow(Icons.Filled.Construction, "Tools") { vm.push(Route.Tools); close() }
-        DrawerRow(Icons.Filled.Extension, "Skills") { vm.push(Route.Skills); close() }
-        DrawerRow(Icons.Filled.AutoAwesome, "Library") { vm.push(Route.Knowledges); close() }
-        DrawerRow(Icons.Filled.Construction, "Builds") { vm.openBuilds(); close() }
+        // The four spaces (master plan v2, V4); what used to be listed here
+        // one by one now lives inside them.
+        DrawerRow(Icons.Filled.Image, "Create") { vm.selectTab(Tab.Create); close() }
+        DrawerRow(Icons.Filled.AutoAwesome, "Agents") { vm.selectTab(Tab.Agents); close() }
+        DrawerRow(Icons.Filled.Construction, "Activity") { vm.selectTab(Tab.Activity); close() }
         HorizontalDivider(color = Palette.outline, modifier = Modifier.padding(vertical = 6.dp))
         LazyColumn(Modifier.weight(1f)) {
             if (activeChats.isEmpty() && archivedChats.isEmpty()) {
@@ -434,7 +435,10 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                             Icon(Icons.Filled.ExpandMore, "Change model", tint = Palette.muted)
                         }
                     },
-                    actions = { IconButton({ sessionSheet = true }, Modifier.pressScale().testTag("session_button")) { Icon(Icons.Filled.Checklist, "Session") } },
+                    actions = {
+                        IconButton({ vm.goAnywhereOpen = true }, Modifier.pressScale().testTag("go_anywhere_button")) { Icon(Icons.Filled.Search, "Go anywhere") }
+                        IconButton({ sessionSheet = true }, Modifier.pressScale().testTag("session_button")) { Icon(Icons.Filled.Checklist, "Session") }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
                 )
                 AnimatedVisibility(streaming) { LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Palette.accent, trackColor = Palette.background) }
@@ -510,7 +514,25 @@ private val SUGGESTIONS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Home(vm: AppViewModel, chat: Conversation) {
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+    // The chat home (master plan v2, V4): the emblem, a greeting, the
+    // suggestion chips, and the last few chats to pick up where you left off.
+    val recent = remember(vm.conversations.size, chat.id) {
+        vm.conversations.filter { it.id != chat.id && it.messages.isNotEmpty() && !it.archived }
+            .sortedByDescending { it.updatedAt }.take(3)
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        androidx.compose.foundation.Image(
+            androidx.compose.ui.res.painterResource(com.neura.os.R.drawable.neura_emblem),
+            contentDescription = null,
+            modifier = Modifier.size(44.dp).enterUp(),
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(greeting(vm.username), color = Palette.muted, fontSize = 15.sp, modifier = Modifier.enterUp(30))
+        Spacer(Modifier.height(4.dp))
         Text("What can I help with?", style = MaterialTheme.typography.headlineSmall, color = Palette.text, modifier = Modifier.enterUp())
         if (vm.providers.isEmpty()) {
             Spacer(Modifier.height(8.dp))
@@ -536,7 +558,36 @@ private fun Home(vm: AppViewModel, chat: Conversation) {
                 }
             }
         }
+        if (recent.isNotEmpty()) {
+            Spacer(Modifier.height(28.dp))
+            Text("Continue", color = Palette.muted, fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            recent.forEachIndexed { index, item ->
+                Row(
+                    Modifier.fillMaxWidth().enterUp(200 + index * 50).pressScale(0.97f).clip(RoundedCornerShape(14.dp))
+                        .background(Palette.surface).clickable { vm.openChat(item.id) }.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Chat, null, tint = Palette.accent, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(item.title, color = Palette.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(relativeTime(item.updatedAt), color = Palette.muted, fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
     }
+}
+
+/** "Good morning, Sam" -- the phone's clock decides which. */
+private fun greeting(name: String): String {
+    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    val part = when (hour) {
+        in 5..11 -> "Good morning"
+        in 12..17 -> "Good afternoon"
+        else -> "Good evening"
+    }
+    return if (name.isBlank()) part else "$part, $name"
 }
 
 @OptIn(ExperimentalLayoutApi::class)

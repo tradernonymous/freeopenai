@@ -388,11 +388,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         nav = if (savedTab != null) restored.copy(currentTab = savedTab) else restored
     }
 
-    fun openBuilds() = push(Route.Builds)
-
     fun openBuild(id: String) {
         builds.open(id)
-        push(Route.Build)
+        nav = nav.pushed(Route.Activity).pushed(Route.Build)
     }
 
     /** Hands [plan] (a Plan-mode reply) to the server and opens the build. */
@@ -413,6 +411,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     // --- Navigation --------------------------------------------------------
 
     fun push(target: Route) { nav = nav.pushed(target) }
+
+    /** Builds live in the Activity space: open it there, whichever space is showing. */
+    fun openBuilds() { nav = nav.pushed(Route.Activity).pushed(Route.Builds) }
+
+    /** The Go anywhere sheet (ui/GoAnywhere.kt) is open. */
+    var goAnywhereOpen by mutableStateOf(false)
 
     fun selectTab(tab: Tab) { nav = nav.selectedTab(tab) }
 
