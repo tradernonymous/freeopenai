@@ -47,6 +47,14 @@ class ScreenshotTest {
 
     private fun shot(name: String, dark: Boolean, content: @Composable () -> Unit) {
         Palette.isDark = dark
+        // Animations off, as a person can set them: entrances land at once and
+        // the pulse holds still, so a picture never catches one mid-flight
+        // (space_phone differed between two runs of the same code).
+        android.provider.Settings.Global.putFloat(
+            org.robolectric.RuntimeEnvironment.getApplication().contentResolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            0f,
+        )
         captureRoboImage("src/test/screenshots/${name}_${if (dark) "dark" else "light"}.png") {
             NeuraTheme {
                 Column(Modifier.fillMaxSize().background(Palette.background).padding(16.dp)) { content() }

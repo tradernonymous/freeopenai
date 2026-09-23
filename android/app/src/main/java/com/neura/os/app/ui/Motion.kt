@@ -79,8 +79,11 @@ fun Modifier.pressScale(pressed: Float = 0.92f): Modifier = composed {
 
 /** Fades and lifts content in once, the first time it is composed. */
 fun Modifier.enterUp(delayMs: Int = 0, distance: Dp = 14.dp): Modifier = composed {
-    val progress = remember { Animatable(0f) }
+    // With animations off, content is simply there -- no fade, no lift.
+    val still = rememberReducedMotion()
+    val progress = remember { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(Unit) {
+        if (still) return@LaunchedEffect
         // A spring (rebrand plan §3.4) settles by physics rather than a fixed
         // duration, so content arrives with the same feel everywhere.
         if (delayMs > 0) kotlinx.coroutines.delay(delayMs.toLong())
