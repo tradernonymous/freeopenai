@@ -13,6 +13,13 @@
 //   * a provider that REFUSES tools outright (a 400 about `tools`) gets the turn
 //     again without them, once, and the person is told -- a model that cannot
 //     call tools should still be able to talk.
+//
+// And one rule that outranks both: a turn never ends in silence. Two ways it
+// used to. A model that streams only its reasoning (`reasoning_content`, kept
+// as <think> so the chat can fold it) left a "Thought" block and no answer. A
+// research-shaped request ran out of rounds and left a pile of tool cards and
+// no plan. Both now get one closing pass with the tools withheld, which is the
+// only thing the model can do with it: answer.
 import './tools.js';
 import type { StreamFrame } from './api';
 
@@ -51,9 +58,36 @@ export interface TurnOptions {
   signal?: AbortSignal;
 }
 
+/** What the person would actually read: the answer without its reasoning. */
+export function visibleAnswer(text: string): string {
+  return String(text || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
+}
+
+/** The nudge that closes a turn the model left open. */
+const CLOSING_NUDGE =
+  'Answer now, in words, using what you already have. Do not call any more tools.';
+
 export async function runTurn(options: TurnOptions): Promise<void> {
   const messages = options.messages.slice();
   let offered: ToolDef[] | undefined = options.tools.length ? options.tools : undefined;
+
+  // One closing pass, at most, per turn: stream once more with no tools on
+  // offer and an explicit ask for the answer. `why` is what the person is
+  // told, so the app never just goes quiet on them.
+  let closed = false;
+  const closeOut = async (why: string, history: Message[]): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    options.onNote?.(why);
+    const asked = history.concat([{ role: 'user', content: CLOSING_NUDGE }]);
+    let said = '';
+    await options.stream(asked, undefined, (frame: StreamFrame) => {
+      if (frame.content) { said += frame.content; options.onText(frame.content); }
+    }, options.signal);
+    if (!visibleAnswer(said)) {
+      options.onNote?.('The model had nothing more to say. Ask again, or try another model.');
+    }
+  };
 
   for (let round = 0; round < tools.MAX_ROUNDS; round += 1) {
     let text = '';
@@ -82,7 +116,14 @@ export async function runTurn(options: TurnOptions): Promise<void> {
     }
 
     const calls = tools.finish(pending);
-    if (!calls.length) return;
+    if (!calls.length) {
+      // Reasoning is not an answer. A model that thought out loud and stopped
+      // gets one chance to say the thing it was thinking about.
+      if (!visibleAnswer(text) && !options.signal?.aborted) {
+        await closeOut('That reply was only the model thinking. Asking it for the answer.', messages);
+      }
+      return;
+    }
 
     messages.push(tools.assistantMessage(text, calls));
     for (const call of calls) {
@@ -123,5 +164,10 @@ export async function runTurn(options: TurnOptions): Promise<void> {
       messages.push(tools.toolMessage(call, result));
     }
   }
-  options.onNote?.(`Stopped after ${tools.MAX_ROUNDS} rounds of tool calls. Ask it to continue if it was not finished.`);
+  if (!options.signal?.aborted) {
+    await closeOut(
+      `That is ${tools.MAX_ROUNDS} rounds of tool calls. Asking for the answer with what it has.`,
+      messages,
+    );
+  }
 }

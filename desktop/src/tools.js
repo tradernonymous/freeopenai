@@ -25,7 +25,12 @@
   var ALWAYS_KEY = 'freeai4u.tools_always';
   var CHANGED_EVENT = 'freeai4u:tools-changed';
   /** How many times a turn may go round before it is stopped. */
-  var MAX_ROUNDS = 8;
+  // Eight was too few for the work people actually ask for: "audit this repo
+  // and draft a plan" spends a round per read and a round per search, hits the
+  // cap mid-research, and the turn ends with tool cards and no plan. Twenty
+  // covers that shape; agent-turn.ts also makes sure the cap can no longer end
+  // a turn in silence.
+  var MAX_ROUNDS = 20;
   /** A tool result handed back to the model is clipped to this. */
   var MAX_RESULT_CHARS = 12000;
 
