@@ -139,6 +139,8 @@ export type ImageEditPlan =
   };
 
 export declare const LOCAL_EDIT_STRENGTH: number;
+/** How much a masked area is redrawn on this PC. */
+export declare const LOCAL_MASK_STRENGTH: number;
 /** Can this service be handed a picture to change, rather than only a prompt? */
 export declare function canEdit(choice: Partial<ImageChoice> | null): boolean;
 /** Can it be handed a mask too, or only the whole picture? */

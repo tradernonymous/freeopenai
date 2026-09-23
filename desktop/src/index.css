@@ -2552,6 +2552,30 @@ button.linkish {
   transition: border-color .15s, background .15s;
 }
 .dropzone:hover, .dropzone.dragging { border-color: var(--accent); background: var(--bg-2); }
+
+/* The mask brush: the canvas lies exactly over the picture, and both scale
+   together, so a stroke lands on the pixel it was painted over. */
+.mask-brush { display: grid; gap: 8px; margin-top: 8px; }
+.mask-brush-stage {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+.mask-brush-stage img,
+.mask-brush-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+}
+.mask-brush button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .extract-card, .gen-card {
   border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 14px 0;
   background: var(--bg-1);

@@ -3,6 +3,7 @@ import { api, imageUrlFrom } from '../api';
 import Icon from '../components/Icon';
 import SelectPill from '../components/SelectPill';
 import LocalImagesCard from '../components/LocalImagesCard';
+import MaskBrush from '../components/MaskBrush';
 // UMD modules: loaded for their side effect, read off globalThis.
 import '../images.js';
 import '../failure.js';
@@ -502,14 +503,25 @@ export default function ImagesScreen() {
                   <button onClick={() => { setSource(null); setMask(null); }}>Remove</button>
                 </div>
               )}
-              {/* A mask is a picture, not a brush: this app paints nothing.
-                  White marks what may change, black what must stay. It is only
-                  offered to a service that can actually be handed one. */}
+              {/* On this PC the mask is painted over the picture itself:
+                  white may change, black stays, measured against sd-server.
+                  A cloud service keeps the file picker, because each one reads
+                  a mask its own way (some by transparency, not by white). */}
+              {source && choice?.kind === 'local' && (
+                <MaskBrush
+                  src={source.url}
+                  width={source.width}
+                  height={source.height}
+                  onChange={(url) => setMask(url ? { url, name: 'Painted mask', width: source.width, height: source.height } : null)}
+                />
+              )}
               {source && images.canMask(choice || {}) && (
                 <div className="dictation-row">
                   <span className="chip">{mask ? mask.name : 'No mask'}</span>
                   <span className="settings-hint">
-                    Optional: a black-and-white picture, white where {choice?.label || 'the service'} may change things.
+                    {choice?.kind === 'local'
+                      ? 'Paint over the part to change, or choose a black-and-white mask. Nothing painted changes the whole picture.'
+                      : `Optional: a black-and-white picture, white where ${choice?.label || 'the service'} may change things.`}
                   </span>
                   <input
                     ref={maskInput}

@@ -367,6 +367,14 @@
    */
   var LOCAL_EDIT_STRENGTH = 0.6;
 
+  /**
+   * How much a MASKED area is redrawn on this PC. Inside the white of a mask
+   * the point is to replace what is there ("make the cube red"), so it is
+   * redrawn in full; outside it sd.cpp keeps the source untouched whatever
+   * this says, so there is nothing left to protect by holding back.
+   */
+  var LOCAL_MASK_STRENGTH = 1.0;
+
   /** Can this service be handed a picture to change? */
   function canEdit(choice) {
     var row = choice || {};
@@ -378,6 +386,8 @@
   /** Can this service be handed a mask as well, or only the whole picture? */
   function canMask(choice) {
     var row = choice || {};
+    // sd.cpp takes a mask beside its init image; the brush paints one.
+    if (row.kind === 'local') return true;
     return EDIT_WITH_MASK.indexOf(String(row.edits || '')) >= 0;
   }
 
@@ -425,12 +435,9 @@
     var mask = usableSource(req.mask);
     if (req.mask && !mask) return { error: 'That mask is not a picture this can read — choose an image file, or a link to one.' };
     if (mask && !canMask(row)) {
-      // The engine drops a mask it cannot send and says so; a mask for sd.cpp
-      // would have to be one channel, which nothing in this app paints. Either
-      // way the user hears it rather than watching their mask be ignored.
-      notes.push(row.kind === 'local'
-        ? 'the mask was left out — sd.cpp wants a one-channel mask, which this app does not paint'
-        : 'the mask was left out — ' + (row.label || 'this service') + ' changes the whole picture only');
+      // The engine drops a mask it cannot send and says so; the user hears it
+      // here rather than watching their mask be ignored.
+      notes.push('the mask was left out — ' + (row.label || 'this service') + ' changes the whole picture only');
       mask = '';
     }
     var model = String(req.model || '').trim() || modelFor(row, 'edit');
@@ -442,26 +449,28 @@
       if (source.indexOf('data:') !== 0) {
         return { error: 'This PC needs the picture itself — choose an image file rather than a link.' };
       }
+      if (mask && mask.indexOf('data:') !== 0) {
+        return { error: 'This PC needs the mask itself — paint it, or choose an image file rather than a link.' };
+      }
       // sd.cpp has no edit endpoint: an edit is the same img_gen job with an
       // init image and a strength (examples/server/api.md). The shape follows
       // the source rather than the preset, because resizing a picture the user
       // asked to CHANGE is a change nobody asked for.
       var width = localSide(Number(req.sourceWidth) > 0 ? req.sourceWidth : preset(req.size).width);
       var height = localSide(Number(req.sourceHeight) > 0 ? req.sourceHeight : preset(req.size).height);
-      return {
-        route: 'local',
-        model: row.model || '',
-        notes: notes,
-        body: {
-          prompt: prompt,
-          negativePrompt: String(req.negativePrompt || '').trim(),
-          width: width,
-          height: height,
-          steps: Number(req.steps) > 0 ? Math.round(Number(req.steps)) : LOCAL_STEPS,
-          initImage: source,
-          strength: LOCAL_EDIT_STRENGTH,
-        },
+      var localBody = {
+        prompt: prompt,
+        negativePrompt: String(req.negativePrompt || '').trim(),
+        width: width,
+        height: height,
+        steps: Number(req.steps) > 0 ? Math.round(Number(req.steps)) : LOCAL_STEPS,
+        initImage: source,
+        strength: mask ? LOCAL_MASK_STRENGTH : LOCAL_EDIT_STRENGTH,
       };
+      // White where it may change, black where it must stay: sd.cpp's
+      // mask_image, sent only when there is one.
+      if (mask) localBody.maskImage = mask;
+      return { route: 'local', model: row.model || '', notes: notes, body: localBody };
     }
 
     if (row.kind === 'browser') {
@@ -561,6 +570,7 @@
     modelFor: modelFor,
     serverBody: serverBody,
     LOCAL_EDIT_STRENGTH: LOCAL_EDIT_STRENGTH,
+    LOCAL_MASK_STRENGTH: LOCAL_MASK_STRENGTH,
     canEdit: canEdit,
     canMask: canMask,
     editReason: editReason,

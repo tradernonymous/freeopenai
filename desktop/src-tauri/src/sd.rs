@@ -33,9 +33,11 @@
 //                                  sd.cpp serves no edit route of its own --
 //                                  with "init_image" (a raw base64 string or a
 //                                  data: URL) and "strength", the documented
-//                                  image-to-image pair. "mask_image" exists
-//                                  too and is not sent: it wants one channel,
-//                                  and nothing in this app paints one.
+//                                  image-to-image pair, plus "mask_image" when
+//                                  the brush painted one: white may change,
+//                                  black stays. sd.cpp reads it as one channel,
+//                                  and the brush paints only black and white,
+//                                  so every channel says the same thing.
 //   GET  /sdcpp/v1/jobs/{id}    -- {"status": queued|generating|completed|
 //                                  failed|cancelled, "queue_position", and on
 //                                  completion "result": {"output_format",
@@ -913,8 +915,23 @@ pub fn by_reference(mut body: serde_json::Value) -> serde_json::Value {
     if let Some(map) = body.as_object_mut() {
         if let Some(image) = map.remove("init_image") {
             map.remove("strength");
+            // A reference is read whole; a region of it means nothing here.
+            map.remove("mask_image");
             map.insert("ref_images".to_string(), serde_json::json!([image]));
         }
+    }
+    body
+}
+
+/// The painted mask beside the picture it belongs to. A mask with no picture
+/// would mark regions of nothing, so it is added only when `init_image` is
+/// there -- and an empty one is no mask at all.
+pub fn with_mask(mut body: serde_json::Value, mask: Option<&str>) -> serde_json::Value {
+    let Some(mask) = mask.map(str::trim).filter(|m| !m.is_empty()) else {
+        return body;
+    };
+    if body.get("init_image").is_some() {
+        body["mask_image"] = serde_json::json!(mask);
     }
     body
 }
@@ -1041,6 +1058,8 @@ pub async fn sd_generate(
     // this is the draw it has always been.
     init_image: Option<String>,
     strength: Option<f64>,
+    // White where the picture may change. Checked exactly like the picture.
+    mask_image: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
@@ -1054,6 +1073,10 @@ pub async fn sd_generate(
         Some(raw) => Some(valid_init_image(&raw)?),
         None => None,
     };
+    let mask = match mask_image {
+        Some(raw) => Some(valid_init_image(&raw)?),
+        None => None,
+    };
     let mut body = job_body(
         &prompt,
         negative_prompt.unwrap_or_default().trim(),
@@ -1064,6 +1087,7 @@ pub async fn sd_generate(
         init.as_deref(),
         strength,
     );
+    body = with_mask(body, mask.as_deref());
     let model = running_model().unwrap_or_default();
     if edits_by_reference(&model) {
         body = by_reference(body);
@@ -1277,8 +1301,7 @@ mod tests {
         let edit = job_body("bluer", "", 512, 512, None, None, Some("QUJD"), None);
         assert_eq!(edit["init_image"], "QUJD");
         assert_eq!(edit["strength"], DEFAULT_EDIT_STRENGTH);
-        // A mask is never sent: sd.cpp wants one channel and nothing here
-        // paints one.
+        // The body alone carries no mask; `with_mask` adds a painted one.
         assert!(edit.get("mask_image").is_none());
         // A strength nobody could mean is clamped rather than refused upstream.
         let strong = job_body("bluer", "", 512, 512, None, None, Some("QUJD"), Some(9.0));
@@ -1325,6 +1348,24 @@ mod tests {
 
         let draw = job_body("a cat", "", 512, 512, None, None, None, None);
         assert_eq!(by_reference(draw.clone()), draw, "a plain draw has nothing to move");
+    }
+
+    #[test]
+    fn a_mask_rides_only_beside_the_picture_it_marks() {
+        let edit = job_body("a red cube", "", 384, 384, None, None, Some("SRC"), Some(1.0));
+        let masked = with_mask(edit.clone(), Some("MASK"));
+        assert_eq!(masked["mask_image"], "MASK");
+        assert_eq!(masked["init_image"], "SRC", "the picture is still the one being changed");
+        assert_eq!(with_mask(edit.clone(), None), edit, "no mask, no field");
+        assert_eq!(with_mask(edit.clone(), Some("  ")), edit, "an empty mask is no mask");
+
+        let draw = job_body("a cat", "", 512, 512, None, None, None, None);
+        assert!(with_mask(draw, Some("MASK")).get("mask_image").is_none(), "a mask of nothing is dropped");
+
+        // An edit model reads the picture whole, so the mask goes with init_image.
+        let moved = by_reference(masked);
+        assert!(moved.get("mask_image").is_none());
+        assert_eq!(moved["ref_images"], serde_json::json!(["SRC"]));
     }
 
     #[test]

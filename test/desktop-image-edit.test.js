@@ -203,9 +203,44 @@ test('the shell sends the fields stable-diffusion.cpp documents for an edit', ()
   // would go and read on a page's say-so.
   assert.match(source, /fn valid_init_image\(raw: &str\) -> Result<String, String>/);
   assert.match(source, /MAX_INIT_IMAGE_CHARS/);
-  // A mask is not sent at all, and the file says why.
-  assert.ok(!/"mask_image":/.test(source));
-  assert.match(source, /one channel/);
+  // A mask rides beside the picture it belongs to, checked like the picture:
+  // base64 or a data: URL, never a path.
+  assert.match(source, /pub fn with_mask\(/);
+  assert.match(source, /"mask_image"/);
+  assert.match(source, /Some\(raw\) => Some\(valid_init_image\(&raw\)\?\)/);
+});
+
+// A painted mask on this PC: white where it may change, black where it must
+// stay. sd.cpp documents the field as one channel; the brush paints only
+// black and white, so the channels agree whichever one the server reads.
+test('on this PC a painted mask rides with the picture, and only as bytes', () => {
+  assert.equal(images.canMask(localRow()), true, 'this PC takes a mask');
+  const plan = images.editRequest(localRow(), { prompt: 'a red cube', source: PNG, mask: PNG });
+  assert.equal(plan.route, 'local');
+  assert.equal(plan.body.initImage, PNG);
+  assert.equal(plan.body.maskImage, PNG);
+  assert.equal(plan.body.strength, images.LOCAL_MASK_STRENGTH, 'a masked area is redrawn, not blended');
+  assert.deepEqual(plan.notes, [], 'nothing was dropped, so nothing is said');
+  // No mask, no field: a whole-picture change is exactly what it was before.
+  const whole = images.editRequest(localRow(), { prompt: 'x', source: PNG });
+  assert.equal('maskImage' in whole.body, false);
+  assert.equal(whole.body.strength, images.LOCAL_EDIT_STRENGTH);
+  // A mask named by a link is refused for the same reason a source is.
+  const linked = images.editRequest(localRow(), { prompt: 'x', source: PNG, mask: 'https://example.com/m.png' });
+  assert.equal(linked.body, undefined);
+  assert.match(linked.error, /mask/i);
+});
+
+test('the screen paints the mask over the picture it belongs to', () => {
+  const source = screen();
+  assert.match(source, /<MaskBrush/, 'a brush, not only a file picker');
+  const brush = read('desktop', 'src', 'components', 'MaskBrush.tsx');
+  // The mask is drawn at the picture's own size, black then white strokes,
+  // and handed back as PNG bytes -- the shape sd-server reads.
+  assert.match(brush, /fillStyle = '#000'/);
+  assert.match(brush, /off\.strokeStyle = erasing \? '#000' : '#fff'/, 'white paints, black erases');
+  assert.match(brush, /toDataURL\('image\/png'\)/);
+  assert.match(brush, /onPointerDown/);
 });
 
 // ---- the screen ---------------------------------------------------------
