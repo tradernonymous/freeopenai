@@ -54,6 +54,12 @@ class ReplyService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            // Android 16 Live Update (master plan v2, V7): a progress-style
+            // notification the system may promote to the status bar chip and
+            // lock screen while the reply streams. The compat library leaves
+            // older phones with the plain notification above.
+            .setStyle(NotificationCompat.ProgressStyle().setProgressIndeterminate(true))
+            .setRequestPromotedOngoing(true)
             .build()
         try {
             if (Build.VERSION.SDK_INT >= 29) {

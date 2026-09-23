@@ -65,6 +65,20 @@ class RatchetTest {
         }
     }
 
+    // Approving a build change from a notification (V7) is consequential: the
+    // receiver stays private to this app and the action demands the unlock.
+    @Test fun `approve-from-notification stays private and behind the unlock`() {
+        val manifest = read("src/main/AndroidManifest.xml")
+        assertTrue(
+            "BuildApprovalReceiver must not be exported",
+            Regex("android:name=\"\\.app\\.BuildApprovalReceiver\"\\s+android:exported=\"false\"").containsMatchIn(manifest),
+        )
+        val receiver = read("src/main/java/com/neura/os/app/BuildApprovalReceiver.kt")
+        assertTrue("the Approve action must require the device unlock", receiver.contains(".setAuthenticationRequired(true)"))
+        assertTrue("the ids must be checked before the network", receiver.contains("isApprovalTarget(buildId, requestId)"))
+        assertFalse("no mutable PendingIntent", receiver.contains("FLAG_MUTABLE"))
+    }
+
     @Test fun `workspace itself is also free of filesystem or android import`() {
         val text = read("src/main/java/com/neura/os/app/data/Workspace.kt")
         for (banned in listOf("import java.io.", "import java.nio.", "import android.")) {

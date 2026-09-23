@@ -94,6 +94,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
+import com.neura.os.app.data.isApprovalTarget
 import com.neura.os.app.data.isScheduleId
 import com.neura.os.app.data.PhoneAction
 import com.neura.os.app.data.parseLocalDateTime
@@ -261,7 +262,7 @@ class NativeActivity : ComponentActivity(), Platform {
                 }
                 LaunchedEffect(vm.builds.attention) {
                     val attention = vm.builds.attention ?: return@LaunchedEffect
-                    if (!resumed) notifyBuild(attention.buildId, attention.requestId, attention.text)
+                    if (!resumed) notifyBuild(attention.buildId, attention.requestId, attention.text, attention.approval)
                 }
                 @OptIn(ExperimentalComposeUiApi::class)
                 Box(Modifier.fillMaxSize().background(Palette.background).safeDrawingPadding().semantics { testTagsAsResourceId = true }) {
@@ -1162,7 +1163,7 @@ class NativeActivity : ComponentActivity(), Platform {
      * background. One notification per build, replaced by the next question, so
      * a long build does not stack a pile of them (deepseek-harness-mobile keys
      * its notifications the same way). */
-    private fun notifyBuild(buildId: String, requestId: String, text: String) {
+    private fun notifyBuild(buildId: String, requestId: String, text: String, approval: Boolean = false) {
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
@@ -1183,6 +1184,9 @@ class NativeActivity : ComponentActivity(), Platform {
             .setOnlyAlertOnce(false)
             .setSortKey(requestId)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            // A change to approve can be approved from here, once the phone is
+            // unlocked (BuildApprovalReceiver); a question only opens the build.
+            .apply { if (approval && isApprovalTarget(buildId, requestId)) addAction(BuildApprovalReceiver.action(this@NativeActivity, buildId, requestId)) }
             .build()
         manager.notify(("build:" + buildId).hashCode(), notification)
     }

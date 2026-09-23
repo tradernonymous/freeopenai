@@ -246,3 +246,11 @@ class SseFrames {
         return null
     }
 }
+
+private val BUILD_HEX_ID = Regex("^[a-f0-9]{16,64}$")
+
+/** A build id and a request id as the server makes them (agent-sessions.js:
+ * hex). Checked before an Approve tapped on a notification reaches the
+ * network (master plan v2, V7), since both arrive through an intent. */
+fun isApprovalTarget(buildId: String?, requestId: String?): Boolean =
+    buildId != null && requestId != null && BUILD_HEX_ID.matches(buildId) && BUILD_HEX_ID.matches(requestId)

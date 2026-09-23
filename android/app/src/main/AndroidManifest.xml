@@ -18,8 +18,8 @@
     never a session; see server.js and data/NativeApi.kt), and the Quick
     Settings tile, which only the system can bind, and RecipeBootReceiver,
     which only re-arms saved schedules on the system's boot and
-    package-replaced broadcasts. The FileProvider and RecipeAlarmReceiver are
-    not exported.
+    package-replaced broadcasts. The FileProvider, RecipeAlarmReceiver and
+    BuildApprovalReceiver are not exported.
   - Chats, pictures, personas and prompts are sealed with a Keystore
     AES-256-GCM key in app-private storage (data/Storage.kt).
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
@@ -63,6 +63,10 @@
     <!-- Normal permission: re-arms scheduled recipes after a reboot, which
          clears every alarm (RecipeBootReceiver). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Normal permission: lets the "Replying…" notification ask Android 16
+         to promote it to a Live Update (ReplyService). The person can still
+         turn Live Updates off for the app. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <!-- Package visibility for the phone's own speech services (targetSdk 30+). -->
     <queries>
@@ -166,6 +170,12 @@
              immutable alarm PendingIntent reaches it. -->
         <receiver
             android:name=".app.RecipeAlarmReceiver"
+            android:exported="false" />
+        <!-- "Approve" on a build's notification: only this app's own immutable
+             PendingIntent reaches it, behind the device unlock
+             (BuildApprovalReceiver). -->
+        <receiver
+            android:name=".app.BuildApprovalReceiver"
             android:exported="false" />
         <!-- Re-arms scheduled recipes after a reboot or an app update. Both
              are protected broadcasts only the system can send; the receiver

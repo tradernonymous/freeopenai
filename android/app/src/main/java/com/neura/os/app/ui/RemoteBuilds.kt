@@ -16,7 +16,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** A build is waiting on the user: shown as a notification when the app is in
  * the background. [requestId] is the dedup key, so one question notifies once. */
-data class BuildAttention(val buildId: String, val requestId: String, val text: String)
+/** A build waiting on the person. [approval] marks a change to approve (as
+ * opposed to a question to answer), which is what may carry an Approve
+ * button on its notification (master plan v2, V7). */
+data class BuildAttention(val buildId: String, val requestId: String, val text: String, val approval: Boolean = false)
 
 /** State for remote builds, kept out of AppViewModel so the chat code stays
  * untouched. Network work runs on two single threads (one for requests, one for
@@ -222,7 +225,7 @@ class RemoteBuilds(private val api: NativeApi, private val post: (() -> Unit) ->
         when (event) {
             is BuildEvent.Message, is BuildEvent.Output, is BuildEvent.Diff, is BuildEvent.Answer,
             is BuildEvent.Done, is BuildEvent.Failed -> timeline.add(event)
-            is BuildEvent.Approval -> attention = BuildAttention(session.id, event.requestId, event.summary.ifEmpty { "A change needs your approval" })
+            is BuildEvent.Approval -> attention = BuildAttention(session.id, event.requestId, event.summary.ifEmpty { "A change needs your approval" }, approval = true)
             is BuildEvent.Question -> attention = BuildAttention(session.id, event.requestId, event.question)
             else -> Unit
         }

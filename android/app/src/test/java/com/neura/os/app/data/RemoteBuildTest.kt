@@ -128,4 +128,12 @@ class RemoteBuildTest {
         assertEquals("Done", buildStatusLabel("done"))
         assertEquals("mystery", buildStatusLabel("mystery"))
     }
+
+    @Test fun `only server-shaped ids reach an approval from a notification`() {
+        assertTrue(isApprovalTarget("0123456789abcdef", "a1b2c3d4e5f6a7b8c9d0e1f2"))
+        assertTrue(!isApprovalTarget("0123456789abcdef", null))
+        assertTrue(!isApprovalTarget("short", "a1b2c3d4e5f6a7b8c9d0e1f2"))
+        assertTrue(!isApprovalTarget("0123456789abcdef", "../../input"))
+        assertTrue(!isApprovalTarget("0123456789ABCDEF", "a1b2c3d4e5f6a7b8c9d0e1f2"))
+    }
 }
