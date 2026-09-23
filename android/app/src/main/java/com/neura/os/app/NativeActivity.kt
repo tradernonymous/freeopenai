@@ -66,6 +66,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
+import com.neura.os.app.data.isScheduleId
 import com.neura.os.app.data.PhoneAction
 import com.neura.os.app.data.parseLocalDateTime
 import com.neura.os.app.ui.AppViewModel
@@ -394,6 +395,11 @@ class NativeActivity : ComponentActivity(), Platform {
             ACTION_NEW_CHAT -> vm.newChat()
             ACTION_SETTINGS -> vm.resetTab(Tab.Settings)
             ACTION_OPEN_CHAT -> intent.getStringExtra(EXTRA_CHAT_ID)?.let { id -> if (vm.conversation(id) != null) vm.openChat(id) }
+            // A scheduled recipe's notification: the id is checked, the prompt
+            // comes from the phone's own storage, and it only becomes a draft.
+            ACTION_RUN_RECIPE -> intent.getStringExtra(RecipeAlarms.EXTRA_SCHEDULE_ID)
+                ?.takeIf { isScheduleId(it) }
+                ?.let { id -> vm.openScheduledRecipe(id) }
             ACTION_OPEN_BUILD -> intent.getStringExtra(EXTRA_BUILD_ID)
                 ?.takeIf { it.matches(Regex("^[a-f0-9]{16,64}$")) }
                 ?.let { id -> vm.openBuild(id) }
@@ -1098,6 +1104,7 @@ class NativeActivity : ComponentActivity(), Platform {
         const val EXTRA_CHAT_ID = "chat_id"
         const val ACTION_OPEN_BUILD = "com.neura.os.app.OPEN_BUILD"
         const val EXTRA_BUILD_ID = "build_id"
+        const val ACTION_RUN_RECIPE = "com.neura.os.app.RUN_RECIPE"
         private const val CHANNEL_REPLIES = "replies"
         // Not private: FcmService posts to the same channel for a build that
         // needs approval after Android has already killed this process.

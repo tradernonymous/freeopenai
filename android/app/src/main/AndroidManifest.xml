@@ -3,8 +3,8 @@
   NeuraOS Android app: a native Kotlin/Compose client for the NeuraOS
   server, with a native sign-in that keeps the phone logged in. Security
   posture:
-  - Permissions: INTERNET, ACCESS_NETWORK_STATE, USE_BIOMETRIC and SET_ALARM
-    are install-time "normal" permissions. RECORD_AUDIO (voice mode) and
+  - Permissions: INTERNET, ACCESS_NETWORK_STATE, USE_BIOMETRIC, SET_ALARM and
+    RECEIVE_BOOT_COMPLETED are install-time "normal" permissions. RECORD_AUDIO (voice mode) and
     POST_NOTIFICATIONS (reply ready) are runtime permissions asked for in
     context; no location, contacts, SMS, call or storage permission. Files come in through
     the system picker or the share sheet and go out through MediaStore,
@@ -16,8 +16,10 @@
     ever lands in a chat composer), a neuraos://github-connected deep link
     (a one-time pickup code from the server's own GitHub OAuth callback,
     never a session; see server.js and data/NativeApi.kt), and the Quick
-    Settings tile, which only the system can bind. The FileProvider is not
-    exported.
+    Settings tile, which only the system can bind, and RecipeBootReceiver,
+    which only re-arms saved schedules on the system's boot and
+    package-replaced broadcasts. The FileProvider and RecipeAlarmReceiver are
+    not exported.
   - Chats, pictures, personas and prompts are sealed with a Keystore
     AES-256-GCM key in app-private storage (data/Storage.kt).
   - Cleartext is off here AND refused in code (Api.normalizeBaseUrl): chat
@@ -58,6 +60,9 @@
     <!-- Keeps a streaming reply alive while the app is in the background. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Normal permission: re-arms scheduled recipes after a reboot, which
+         clears every alarm (RecipeBootReceiver). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Package visibility for the phone's own speech services (targetSdk 30+). -->
     <queries>
@@ -157,6 +162,22 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- Scheduled recipes (data/Schedules.kt): only this app's own
+             immutable alarm PendingIntent reaches it. -->
+        <receiver
+            android:name=".app.RecipeAlarmReceiver"
+            android:exported="false" />
+        <!-- Re-arms scheduled recipes after a reboot or an app update. Both
+             are protected broadcasts only the system can send; the receiver
+             ignores every other action. -->
+        <receiver
+            android:name=".app.RecipeBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     <!-- Off until the person turns it on in Settings > Accessibility.
          Only the system can bind it (BIND_ACCESSIBILITY_SERVICE); it
          reads the accessibility tree and taps/scrolls elements by their

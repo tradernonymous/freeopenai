@@ -327,12 +327,22 @@ In recommended order:
 
 **Shipped (2026-09-23):** (1) **PR review** — `GET /api/github/pulls`, `GET /api/github/pull`, `POST /api/github/review` (repo names checked before they reach a path; every refusal before GitHub is asked; `test/github-pulls.test.js`), and Settings → Connectors → Review pull requests: pick a repo, read a PR with its diffs, then Approve, Comment or Request changes, each confirmed. "GitHub not connected" no longer reads as a lapsed app session. (2) **Plan map** — the task panel's "View as map" draws the plan as a read-only radial map. (3) **Transcript actions** — Session sheet → Summarise, or Translate into a named language, sent as ordinary messages (so voice chats get them too). (4) **Charts** — a reply's ```chart block of JSON is drawn as a bar, line or scatter chart in Canvas; a block that does not parse stays code. (5) **Library** — Tutor and Code reviewer already existed; a Tone editor persona was added.
 
-### Phase 5 — Desktop parity, triaged (NEURA-039)
+### Phase 5 — Desktop parity, triaged (NEURA-039) · **done**
 
 - **Scheduled recipes → yes**, as WorkManager plus an approval notification, matching
   NEURA-036's posture: a scheduled recipe *asks* rather than refusing.
 - **MCP Apps → partial**, viewer only if at all.
 - **Evals history → no.** Desktop-shaped; a phone is the wrong place to read it.
+
+**Shipped (2026-09-23):** **Scheduled recipes** — Automate → the calendar button: a prompt, a
+time of day and weekdays (at most 10). When one comes due, a notification opens a new chat
+with the prompt typed in; nothing is sent until you tap Send. Built on an inexact
+`AlarmManager` window rather than WorkManager (no new library, no exact-alarm permission):
+`RecipeAlarmReceiver` is not exported, its PendingIntents are immutable, the prompt is read
+from sealed storage (`schedules.bin`, erased with everything else) rather than carried in an
+intent, and `RecipeBootReceiver` plus every app start re-arm the alarms. The times, labels and
+stored form are in `data/Schedules.kt` (JVM-tested, including a skipped DST hour).
+**MCP Apps viewer and Evals history: not built**, per the triage above.
 
 ---
 

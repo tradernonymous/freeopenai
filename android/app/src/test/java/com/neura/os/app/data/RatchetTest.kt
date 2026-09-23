@@ -47,6 +47,24 @@ class RatchetTest {
         assertTrue("it must guard DeviceControlService, not some other component", text.contains(".DeviceControlService"))
     }
 
+    // Scheduled recipes (Phase 5) remind, they never run: the alarm lands in a
+    // receiver no other app can reach, the wake-up is inexact (no exact-alarm
+    // permission), and the receiver only posts a notification.
+    @Test fun `scheduled recipes stay a private, inexact reminder`() {
+        val manifest = read("src/main/AndroidManifest.xml")
+        for (banned in listOf("SCHEDULE_EXACT_ALARM", "USE_EXACT_ALARM")) {
+            assertFalse("$banned is not needed for a reminder", manifest.contains(banned))
+        }
+        assertTrue(
+            "RecipeAlarmReceiver must not be exported",
+            Regex("android:name=\"\\.app\\.RecipeAlarmReceiver\"\\s+android:exported=\"false\"").containsMatchIn(manifest),
+        )
+        val receiver = read("src/main/java/com/neura/os/app/RecipeAlarmReceiver.kt")
+        for (banned in listOf("NativeApi", "ChatApi", "FLAG_MUTABLE")) {
+            assertFalse("RecipeAlarmReceiver must not use $banned", receiver.contains(banned))
+        }
+    }
+
     @Test fun `workspace itself is also free of filesystem or android import`() {
         val text = read("src/main/java/com/neura/os/app/data/Workspace.kt")
         for (banned in listOf("import java.io.", "import java.nio.", "import android.")) {

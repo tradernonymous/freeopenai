@@ -35,6 +35,11 @@ import com.neura.os.app.data.compareTargetsValid
 import com.neura.os.app.data.defaultCompareTarget
 import com.neura.os.app.data.AutomationEntry
 import com.neura.os.app.data.recordAutomation
+import com.neura.os.app.data.RecipeSchedule
+import com.neura.os.app.data.SCHEDULE_MAX
+import com.neura.os.app.data.upsertSchedule
+import com.neura.os.app.data.validateSchedule
+import com.neura.os.app.RecipeAlarms
 import com.neura.os.app.data.Skill
 import com.neura.os.app.data.SlashMatch
 import com.neura.os.app.data.renderCommandsHelp
@@ -157,6 +162,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** The Automate tab's history of runs, persisted on device. */
     var automations by mutableStateOf<List<AutomationEntry>>(emptyList())
         private set
+    /** Scheduled recipes (data/Schedules.kt), armed as alarms. */
+    var schedules by mutableStateOf<List<RecipeSchedule>>(emptyList())
+        private set
     /** SKILL.md text by name, fetched once per skill for the chats that pin it. */
     private val skillBodies = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** A long client-side answer to a slash command (/help, /doctor), shown in
@@ -222,6 +230,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val lib = repo.loadLibrary()
             val savedOutbox = repo.loadOutbox()
             val runs = repo.loadAutomations()
+            val savedSchedules = repo.loadSchedules()
+            // Alarms do not survive a reboot or an update; every start re-arms
+            // them, so a boot broadcast that never came costs nothing.
+            RecipeAlarms.armAll(getApplication<Application>(), savedSchedules)
             if (store.offlineAnswers) responseCache = repo.loadResponseCache()
             main.post {
                 // A chat started before the disk was read (a shared photo, a
@@ -232,6 +244,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 library = lib
                 outbox = savedOutbox
                 automations = runs
+                schedules = savedSchedules
                 loaded = true
             }
         }
@@ -444,6 +457,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
         store.clearSecrets()
         if (erase) {
+            schedules.forEach { RecipeAlarms.cancel(getApplication<Application>(), it.id) }
+            schedules = emptyList()
             responseCache = ResponseCache()
             conversations.clear()
             library = Library()
@@ -562,6 +577,54 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val chatId = newChat()
         recordAutomationRun(text)
         send(chatId, text)
+    }
+
+    // --- Scheduled recipes ------------------------------------------------------
+
+    /** Saves a new schedule, or changes the one with [id]; the reason it was
+     * refused otherwise. It only ever reminds: see RecipeAlarmReceiver. */
+    fun saveSchedule(id: String?, prompt: String, hour: Int, minute: Int, days: Set<Int>): String? {
+        validateSchedule(prompt, hour, minute, days)?.let { return it }
+        val schedule = RecipeSchedule(
+            id = id ?: UUID.randomUUID().toString().replace("-", "").take(16),
+            prompt = prompt.trim(),
+            hour = hour,
+            minute = minute,
+            days = days,
+        )
+        if (schedules.none { it.id == schedule.id } && schedules.size >= SCHEDULE_MAX) {
+            return "At most $SCHEDULE_MAX schedules. Delete one first."
+        }
+        storeSchedules(upsertSchedule(schedules, schedule))
+        RecipeAlarms.arm(getApplication<Application>(), schedule)
+        return null
+    }
+
+    fun setScheduleEnabled(id: String, on: Boolean) {
+        val schedule = schedules.firstOrNull { it.id == id } ?: return
+        val changed = schedule.copy(enabled = on)
+        storeSchedules(upsertSchedule(schedules, changed))
+        if (on) RecipeAlarms.arm(getApplication<Application>(), changed) else RecipeAlarms.cancel(getApplication<Application>(), id)
+    }
+
+    fun deleteSchedule(id: String) {
+        storeSchedules(schedules.filter { it.id != id })
+        RecipeAlarms.cancel(getApplication<Application>(), id)
+    }
+
+    private fun storeSchedules(next: List<RecipeSchedule>) {
+        schedules = next
+        io.execute { repo.saveSchedules(next) }
+    }
+
+    /** A scheduled recipe's notification was tapped: a new chat with the
+     * prompt typed in, waiting for Send. Read from disk, since a cold start
+     * may not have loaded the list yet. */
+    fun openScheduledRecipe(id: String) {
+        io.execute {
+            val schedule = repo.loadSchedules().firstOrNull { it.id == id }
+            main.post { if (schedule != null) newChat(draft = schedule.prompt) }
+        }
     }
 
     /** The SKILL.md shown in the Skills detail sheet, keyed by skill name. */

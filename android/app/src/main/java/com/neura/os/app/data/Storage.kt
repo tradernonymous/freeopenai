@@ -67,6 +67,9 @@ class Repository(context: Context) {
     // Opt-in offline answers (ResponseCache.kt): answer text, so sealed
     // like the chats and erased with them.
     private val responseCacheFile = File(root, "responses.bin")
+    // Scheduled recipes (Schedules.kt): read by RecipeAlarmReceiver too, when
+    // the app itself is not running.
+    private val schedulesFile = File(root, "schedules.bin")
 
     private fun safeId(id: String): String = id.filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(64)
 
@@ -147,6 +150,14 @@ class Repository(context: Context) {
     }
 
     @Synchronized
+    fun loadSchedules(): List<RecipeSchedule> = schedulesFromJson(readSealed(schedulesFile)?.let { String(it, Charsets.UTF_8) })
+
+    @Synchronized
+    fun saveSchedules(list: List<RecipeSchedule>) {
+        writeSealed(schedulesFile, schedulesToJson(list).toByteArray(Charsets.UTF_8))
+    }
+
+    @Synchronized
     fun saveImage(id: String, bytes: ByteArray) {
         writeSealed(File(imagesDir, safeId(id) + ".bin"), bytes)
     }
@@ -168,5 +179,6 @@ class Repository(context: Context) {
         outboxFile.delete()
         automationsFile.delete()
         responseCacheFile.delete()
+        schedulesFile.delete()
     }
 }
