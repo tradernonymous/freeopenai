@@ -74,6 +74,47 @@ jobs:
       # Every build's versionCode goes up, so each installs over the last.
       - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - run: gradle :app:testDebugUnitTest
+      # Screenshot tests (docs/android-master-plan.md, V2). The baselines live
+      # in the Actions cache, not the repository: the last green run's
+      # pictures are restored and this run is compared against them. A commit
+      # whose message contains [screenshots] -- an intended visual change --
+      # records new ones instead, as does the very first run.
+      - name: Restore the screenshot baselines
+        uses: actions/cache/restore@v4
+        with:
+          path: android/app/src/test/screenshots
+          key: roborazzi-${{ github.run_id }}
+          restore-keys: roborazzi-
+      - name: Compare (or record) screenshots
+        env:
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if ! ls app/src/test/screenshots/*.png >/dev/null 2>&1 || printf '%s' "$HEAD_MESSAGE" | grep -qF '[screenshots]'; then
+            echo "Recording new screenshot baselines"
+            gradle :app:recordRoborazziDebug
+          else
+            gradle :app:verifyRoborazziDebug
+          fi
+      # The pictures as one small contact sheet in this log (see
+      # printScreenshotSheet in app/build.gradle.kts), and as an artifact.
+      - name: Print the screenshot contact sheet
+        if: always()
+        run: gradle -q :app:printScreenshotSheet || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: screenshots
+          path: |
+            android/app/src/test/screenshots
+            android/app/build/outputs/roborazzi
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Save the screenshot baselines
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: android/app/src/test/screenshots
+          key: roborazzi-${{ github.run_id }}
       # Lint is a hard gate again (abortOnError=true in build.gradle.kts):
       # "mandatory" checks only mean something when they can actually fail.
       - run: gradle :app:lintRelease

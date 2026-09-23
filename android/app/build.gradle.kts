@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    // Screenshot tests on the JVM (master plan v2, V2); test-only.
+    alias(libs.plugins.roborazzi)
 }
 
 // Push notifications need a Firebase project, which is the user's own (free)
@@ -129,6 +131,11 @@ android {
         buildConfig = true
         compose = true
     }
+    testOptions {
+        // Robolectric renders the real resources (fonts, drawables) for the
+        // screenshot tests in src/test/.../ui/ScreenshotTest.kt.
+        unitTests.isIncludeAndroidResources = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -179,7 +186,53 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Screenshot tests: Robolectric draws the composables, Roborazzi records
+    // and compares the pictures. Test classpath only; nothing reaches the APK.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(platform(libs.androidx.compose.bom))
     // Studio images are decoded in-app from stored data URLs (loadBitmap in
     // AppViewModel), so no Coil dependency is pulled in. If remote image URLs
     // are ever added, that is the moment to add Coil -- not before.
+}
+
+// Prints every screenshot baseline as one small JPEG contact sheet, base64
+// between two marker lines, into the build log. CI runs it after the
+// screenshot step: artifacts cannot be downloaded from where this app is
+// developed, but job logs can be read, so this is how a reviewer (human or
+// agent) sees what a visual change did. Plain java.awt, headless; no plugin.
+tasks.register("printScreenshotSheet") {
+    val dir = layout.projectDirectory.dir("src/test/screenshots")
+    doLast {
+        val files = dir.asFile.listFiles { f -> f.name.endsWith(".png") }?.sortedBy { it.name } ?: emptyList()
+        if (files.isEmpty()) {
+            println("NEURA-SHEET: no screenshots")
+            return@doLast
+        }
+        val cell = 300
+        val columns = 4
+        val rows = (files.size + columns - 1) / columns
+        val labels = 18
+        val sheet = java.awt.image.BufferedImage(columns * cell, rows * (cell * 2 + labels), java.awt.image.BufferedImage.TYPE_INT_RGB)
+        val g = sheet.createGraphics()
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.color = java.awt.Color(128, 128, 128)
+        g.fillRect(0, 0, sheet.width, sheet.height)
+        files.forEachIndexed { i, f ->
+            val img = javax.imageio.ImageIO.read(f)
+            val x = (i % columns) * cell
+            val y = (i / columns) * (cell * 2 + labels)
+            val scale = minOf(cell.toDouble() / img.width, (cell * 2).toDouble() / img.height)
+            g.drawImage(img, x, y + labels, (img.width * scale).toInt(), (img.height * scale).toInt(), null)
+            g.color = java.awt.Color.WHITE
+            g.drawString(f.nameWithoutExtension, x + 4, y + 13)
+        }
+        g.dispose()
+        val out = java.io.ByteArrayOutputStream()
+        javax.imageio.ImageIO.write(sheet, "jpg", out)
+        println("NEURA-SHEET-BEGIN " + files.size)
+        java.util.Base64.getMimeEncoder(76, "\n".toByteArray()).encodeToString(out.toByteArray()).lines().forEach { println(it) }
+        println("NEURA-SHEET-END")
+    }
 }
