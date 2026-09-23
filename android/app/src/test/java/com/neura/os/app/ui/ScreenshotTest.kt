@@ -33,6 +33,9 @@ import org.robolectric.annotation.GraphicsMode
 // recordRoborazziDebug or verifyRoborazziDebug (see android.yml).
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+// Robolectric draws at an SDK it ships; it has none for the app's compileSdk
+// (37), which failed the whole class before any picture was taken.
+@Config(sdk = [35])
 class ScreenshotTest {
 
     @After fun backToDark() {
