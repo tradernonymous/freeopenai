@@ -2,8 +2,8 @@
 
 [← Back to README](../README.md)
 
-Status: **V1–V8 shipped 2026-09-23**, V3 and the phase gaps finished the same day
-(§4.1 lists what is still left); V0's phone session is still open. v2 written 2026-09-23 against
+Status: **V1–V8 shipped 2026-09-23**, with V3, the phase gaps and P7 finished the
+same day (§4.1). Open: V0's phone session, P8 (parked) and P11. v2 written 2026-09-23 against
 `9b70b7d` (the R2 reskin). v1 (Phases 0–5, all done) is in git history:
 `git show 5d136ca:docs/android-master-plan.md`.
 
@@ -74,15 +74,15 @@ Nothing from v1 or the rebrand is dropped. Each item has a home below.
 
 | # | Item | Needs | Where |
 | :-- | :-- | :-- | :-- |
-| P1 | R2 reskin: CI green, `apk-latest` republished | CI | V0 |
+| P1 | R2 reskin: CI green, `apk-latest` republished. **Done** | CI | V0 |
 | P2 | Real Android 16 phone: predictive back on every screen, edge-to-edge with the keyboard up, `ReplyService` through a long background reply | you, once | V0 |
 | P3 | Cold-start number from a real phone (Copy diagnostics shows it) | you, once | V0 |
 | P4 | One real failure (airplane mode) in Copy diagnostics names its cause | you, once | V0 |
 | P5 | A scheduled prompt fires and its notification opens the chat | you, once | V0 |
 | P6 | R2 on the phone: light theme, launcher and themed icon, fonts | you, once | V0 |
-| P7 | APK size before/after R2's fonts, and an `r8-analyzer` pass | CI | V1 |
+| P7 | APK size and an `r8-analyzer` pass. **Done** (`39f35f5`): the package-wide `-keep` became `-keep,allowshrinking,allowoptimization` (names and line numbers kept for crash logs); build 239 → 240 went from 5,113,069 to 4,801,773 bytes (−6.1%). The pre-R2 size was not recorded and the release keeps only the latest APK, so R2's font cost is not measurable any more | CI | V1 |
 | P8 | Puter "Continue with Google / Apple / Microsoft": sign in through the phone's browser and collect the token from Puter's `/login/wait` (the SDK's own path; the desktop already does it). A tested patch is parked. | you said "later" | V7 |
-| P9 | Rebrand R4 (message anatomy), R5 (home, agents, command palette), R6 (generative UI), R7 (canvas): the Android halves | — | V4, V5, V8 |
+| P9 | Rebrand R4 (message anatomy), R5 (home, agents, command palette), R6 (generative UI), R7 (canvas): the Android halves. **Done** | — | V4, V5, V8 |
 | P10 | NEURA-004 (logo) and NEURA-039 (desktop parity) are done by R0 and Phase 5; the backlog's owner can close both rows | backlog owner | — |
 | P11 | The old `fa4u` prefix in `puter-bridge.html` and `PuterBridge.kt` (internal names, never shown) | — | V3, while those files are open |
 
@@ -238,14 +238,14 @@ what the row above asked for and the phase did not do.
 
 | Phase | Commit | Shipped | Left |
 | :-- | :-- | :-- | :-- |
-| V1 | `014b6d1` | AGP 9.4.0 / Gradle 9.6 (builds Kotlin itself), compileSdk 37, targetSdk 36, BOM 2026.09.00, Navigation 3, lifecycle 2.11, coroutines-test | APK size and R8 check (P7) |
-| V2 | `59585a1` | Roborazzi on Robolectric (SDK 35); baselines in the Actions cache; `[screenshots]` in a commit message records them; a contact sheet at the end of the build log | Tablet width covers the chat only |
+| V1 | `014b6d1`, `39f35f5` | AGP 9.4.0 / Gradle 9.6 (builds Kotlin itself), compileSdk 37, targetSdk 36, BOM 2026.09.00, Navigation 3, lifecycle 2.11, coroutines-test; R8 now shrinks app code (P7) | — |
+| V2 | `59585a1`, `cbfeae0` | Roborazzi on Robolectric (SDK 35); baselines in the Actions cache; `[screenshots]` in a commit message records them; a contact sheet at the end of the build log; tablet shots of the chat, a space and the ui blocks | The two-pane chat itself (it needs a live view model) |
 | V3 | `8c8dc9a`, `5581c72` | Notices through a `Channel`; replies and the build stream as cold flows (`data/Streams.kt`: cancelling closes the connection; builds reconnect from the last event); every job on `viewModelScope`, 0 `io.execute` (target under 15); Stop ends a Puter wait too; `CancellationException` rethrown | The data layer stays blocking by design (§3.1) |
 | V4 | `09d451e`, `d13c935` | Navigation 3 back stack; the dock with the orb; Chat, Create, Agents, Activity; home with greeting and Continue cards; Go anywhere; from 840 dp the chat list stands beside the chat | — |
-| V5 | `4b299e1` | "Thought for 12 s", streaming caret, source chips, context meter; send ↔ Stop morph; shared titles; the agents gallery | Shared elements beyond titles |
+| V5 | `4b299e1`, `cbfeae0` | "Thought for 12 s", streaming caret, source chips, context meter; send ↔ Stop morph; shared titles, and a build card that grows into the build page with its status pill; the agents gallery | The other §2.2 journeys open inside one page or switch tabs, so there is no page transition for them to ride |
 | V6 | `274e8f6`, `d13c935` | Glass surfaces (translucent); AI edge glow; voice aurora (AGSL on API 33+); the voice waveform pill; still under Remove animations or battery saver | Blur behind glass, **decided against**: nothing scrolls behind the dock or composer, so it would blur a plain background |
 | V7 | `438cdac`, `d13c935` | "Replying…" and a followed running build as Live Updates (`ProgressStyle`, promoted ongoing; the build's shows its step and a bar of steps done); Approve on a build's notification, behind the device unlock | P8 (parked) |
-| V8 | `70fb4dc`, `d13c935` | ` ```ui ` blocks (choices, form with Material date and time pickers, table, card; data only, checked against fixed limits) drawn natively, latest reply only; "Open in canvas" for long replies, stepping through the chat's replies | Charts inside a ui block; canvas versions of one reply |
+| V8 | `70fb4dc`, `d13c935`, `cbfeae0` | ` ```ui ` blocks (choices, form with Material date and time pickers, table, card, chart; data only, checked against fixed limits) drawn natively, latest reply only; "Open in canvas" for long replies, stepping through the chat's replies and each reply's versions (Regenerate keeps up to four earlier answers, never sent to a model) | — |
 
 `6e78972` made screenshots stable: they are taken with animations off, and entrances
 now honour "Remove animations" too.
