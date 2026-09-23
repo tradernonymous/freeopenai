@@ -56,7 +56,13 @@ fun SignInScreen(vm: AppViewModel) {
         verticalArrangement = Arrangement.Center,
     ) {
         Spacer(Modifier.height(48.dp))
-        Text("NeuraOS", style = MaterialTheme.typography.headlineLarge, color = Palette.green, modifier = Modifier.enterUp())
+        androidx.compose.foundation.Image(
+            androidx.compose.ui.res.painterResource(com.neura.os.R.drawable.neura_emblem),
+            contentDescription = null,
+            modifier = Modifier.size(56.dp).enterUp(),
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("NeuraOS", style = MaterialTheme.typography.headlineLarge, color = Palette.text, modifier = Modifier.enterUp())
         Spacer(Modifier.height(6.dp))
         Text("Free AI, one app. Sign in once.", color = Palette.muted, modifier = Modifier.enterUp(80))
         Spacer(Modifier.height(24.dp))
@@ -97,7 +103,7 @@ fun SignInScreen(vm: AppViewModel) {
 @Composable
 fun LockScreen(error: String?, onUnlock: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(Icons.Filled.Fingerprint, contentDescription = null, tint = Palette.green, modifier = Modifier.size(72.dp))
+        Icon(Icons.Filled.Fingerprint, contentDescription = null, tint = Palette.accent, modifier = Modifier.size(72.dp))
         Spacer(Modifier.height(16.dp))
         Text("NeuraOS is locked", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))

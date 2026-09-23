@@ -56,11 +56,11 @@ fun BuildModeBanner() {
 @Composable
 fun PendingWritesBanner(count: Int, onOpen: () -> Unit) {
     Surface(
-        color = Palette.greenDark.copy(alpha = 0.25f), shape = RoundedCornerShape(12.dp),
+        color = Palette.accentDeep.copy(alpha = 0.25f), shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).clickable(onClick = onOpen),
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Description, null, tint = Palette.green, modifier = Modifier.size(16.dp))
+            Icon(Icons.Filled.Description, null, tint = Palette.accent, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             Text(
                 if (count == 1) "1 change waiting for your approval" else "$count changes waiting for your approval",

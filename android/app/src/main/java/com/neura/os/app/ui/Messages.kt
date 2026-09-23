@@ -226,7 +226,7 @@ fun AssistantTurn(
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
         if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty())
         when {
-            turn.text.isEmpty() && streaming -> Box(Modifier.padding(vertical = 8.dp)) { TypingDots(Palette.green) }
+            turn.text.isEmpty() && streaming -> Box(Modifier.padding(vertical = 8.dp)) { NeuraPulse() }
             turn.error -> ErrorCard(turn.text, onRetry = if (isLast) onRegenerate else null)
             turn.text.isNotEmpty() -> MarkdownText(turn.text) { platform.copy(it) }
         }
@@ -286,7 +286,7 @@ fun CompareTurn(turn: Turn.Compare, platform: Platform) {
                     Text(reply.model.ifEmpty { "—" }, color = Palette.muted, fontSize = 12.sp)
                     when {
                         reply.error -> Text(reply.text, color = Palette.red, fontSize = 14.sp)
-                        reply.text.isEmpty() -> TypingDots(Palette.green)
+                        reply.text.isEmpty() -> NeuraPulse()
                         else -> MarkdownText(reply.text) { platform.copy(it) }
                     }
                 }
@@ -361,8 +361,8 @@ private fun WorkLog(steps: List<Step>, streaming: Boolean, startedAt: Long) {
             .clickable { open = !open }.padding(horizontal = 12.dp, vertical = 8.dp).animateContentSize(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (running) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Palette.green)
-            else Icon(Icons.Filled.CheckCircle, null, tint = Palette.green, modifier = Modifier.size(16.dp))
+            if (running) NeuraPulse(14.dp)
+            else Icon(Icons.Filled.CheckCircle, null, tint = Palette.success, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(8.dp))
             val head = if (running) steps.lastOrNull { !it.done }?.summary ?: "Working" else "Worked"
             Text(
@@ -438,7 +438,7 @@ private fun ErrorCard(text: String, onRetry: (() -> Unit)?) {
     }
 }
 
-private val Color_error = androidx.compose.ui.graphics.Color(0xFF2A1215)
+private val Color_error: androidx.compose.ui.graphics.Color get() = Palette.redTint
 
 /** Provider keys and bearer values hidden, so an error that echoes a key never
  * reaches the screen, the saved chat, a share or an export. Raw strings: in a
@@ -476,12 +476,12 @@ private fun ExpiredAction() {
 @Composable
 fun ActionButton(label: String, onClick: () -> Unit) {
     Surface(
-        color = Palette.greenDark.copy(alpha = 0.25f),
+        color = Palette.accentDeep.copy(alpha = 0.25f),
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier.pressScale().clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick),
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.TouchApp, null, tint = Palette.green, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.TouchApp, null, tint = Palette.accent, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(label, color = Palette.text, fontSize = 14.sp)
         }
@@ -524,7 +524,7 @@ fun TaskPanel(tasks: List<TaskItem>) {
                 Text("Tasks $done/${tasks.size}", color = Palette.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 val progress = if (tasks.isEmpty()) 0f else done.toFloat() / tasks.size
                 androidx.compose.material3.LinearProgressIndicator(
-                    progress = { progress }, color = Palette.green, trackColor = Palette.surfaceHigh,
+                    progress = { progress }, color = Palette.accent, trackColor = Palette.surfaceHigh,
                     modifier = Modifier.width(72.dp).height(4.dp).clip(CircleShape),
                 )
                 Icon(Icons.Filled.ExpandMore, null, tint = Palette.muted, modifier = Modifier.rotate(if (open) 180f else 0f))
@@ -535,7 +535,7 @@ fun TaskPanel(tasks: List<TaskItem>) {
                         Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 if (task.status == "done") Icons.Filled.CheckCircle else if (task.status == "doing") Icons.Filled.Autorenew else Icons.Filled.RadioButtonUnchecked,
-                                null, tint = if (task.status == "done") Palette.green else Palette.muted, modifier = Modifier.size(16.dp),
+                                null, tint = if (task.status == "done") Palette.success else Palette.muted, modifier = Modifier.size(16.dp),
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
@@ -616,7 +616,7 @@ fun MarkdownText(text: String, onCopyCode: (String) -> Unit) {
                     }
                     SelectionContainer {
                         Text(
-                            segment.text, fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = Palette.text,
+                            segment.text, fontFamily = NeuraMono, fontSize = 13.sp, color = Palette.text,
                             modifier = Modifier.horizontalScroll(rememberScrollState()).padding(12.dp),
                         )
                     }

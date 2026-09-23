@@ -62,6 +62,12 @@ class SecureStore(context: Context) {
         get() = prefs.getBoolean(KEY_OFFLINE_ANSWERS, false)
         set(value) = prefs.edit().putBoolean(KEY_OFFLINE_ANSWERS, value).apply()
 
+    /** Settings -> App -> Theme: "dark" (the default), "light" or "system".
+     * Kept across sign-out: it is how the app looks, not whose it is. */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME, null)?.takeIf { it in THEME_MODES } ?: "dark"
+        set(value) = prefs.edit().putString(KEY_THEME, value.takeIf { it in THEME_MODES } ?: "dark").apply()
+
     var lastUpdateCheck: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_CHECK, value).apply()
@@ -141,6 +147,8 @@ class SecureStore(context: Context) {
         const val KEY_UPDATE_CHECK = "last_update_check"
         const val KEY_ASKED_NOTIFY = "asked_notifications"
         const val KEY_OFFLINE_ANSWERS = "offline_answers"
+        const val KEY_THEME = "theme_mode"
+        val THEME_MODES = setOf("dark", "light", "system")
         const val KEYSTORE = "AndroidKeyStore"
         const val ALIAS = "neuraos-secrets"
         const val TRANSFORM = "AES/GCM/NoPadding"

@@ -49,7 +49,7 @@ fun PlanMapDialog(tasks: List<TaskItem>, onClose: () -> Unit) {
 }
 
 private fun statusColor(status: String): Color = when (status) {
-    "done" -> Palette.green
+    "done" -> Palette.success
     "doing" -> Palette.text
     else -> Palette.muted
 }
@@ -70,7 +70,7 @@ private fun PlanMap(nodes: List<TaskItem>, modifier: Modifier) {
                 drawLine(Palette.surfaceHigh, center, at, strokeWidth = 2.dp.toPx())
                 drawCircle(statusColor(nodes[index].status), radius = 7.dp.toPx(), center = at)
             }
-            drawCircle(Palette.green, radius = 10.dp.toPx(), center = center)
+            drawCircle(Palette.accent, radius = 10.dp.toPx(), center = center)
         }
         points.forEachIndexed { index, (x, y) ->
             val task = nodes[index]

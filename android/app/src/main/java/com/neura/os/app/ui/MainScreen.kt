@@ -245,7 +245,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             BasicTextField(
                 query, { query = it }, singleLine = true,
                 textStyle = TextStyle(color = Palette.text, fontSize = 15.sp),
-                cursorBrush = SolidColor(Palette.green),
+                cursorBrush = SolidColor(Palette.accent),
                 modifier = Modifier.weight(1f),
                 decorationBox = { inner -> if (query.isEmpty()) Text("Search", color = Palette.muted, fontSize = 15.sp); inner() },
             )
@@ -301,7 +301,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             Modifier.fillMaxWidth().clickable { vm.push(Route.Settings); close() }.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(32.dp).background(Palette.greenDark, CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(32.dp).background(Palette.accentDeep, CircleShape), contentAlignment = Alignment.Center) {
                 Text(vm.username.take(1).uppercase().ifEmpty { "?" }, color = Palette.text, fontSize = 14.sp)
             }
             Spacer(Modifier.width(10.dp))
@@ -365,12 +365,12 @@ private fun ChatRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (vm.streamingId == item.id) {
-                    Box(Modifier.size(8.dp).background(Palette.green, CircleShape))
+                    Box(Modifier.size(8.dp).background(Palette.accent, CircleShape))
                     Spacer(Modifier.width(8.dp))
                 }
                 if (item.pinned) Icon(Icons.Filled.PushPin, null, tint = Palette.muted, modifier = Modifier.size(14.dp).padding(end = 4.dp))
                 Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Palette.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                if (item.mode != "chat") Text(modeLabel(item.mode), color = Palette.green, fontSize = 11.sp)
+                if (item.mode != "chat") Text(modeLabel(item.mode), color = Palette.accent, fontSize = 11.sp)
             }
             DropdownMenu(menuOpen, { onMenuOpenChange(false) }) {
                 DropdownMenuItem({ Text(if (item.pinned) "Unpin" else "Pin") }, { vm.togglePin(item.id); onMenuOpenChange(false) })
@@ -445,7 +445,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
                     actions = { IconButton({ sessionSheet = true }, Modifier.pressScale().testTag("session_button")) { Icon(Icons.Filled.Checklist, "Session") } },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
                 )
-                AnimatedVisibility(streaming) { LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Palette.green, trackColor = Palette.background) }
+                AnimatedVisibility(streaming) { LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Palette.accent, trackColor = Palette.background) }
             }
         },
     ) { padding ->
@@ -538,7 +538,7 @@ private fun Home(vm: AppViewModel, chat: Conversation) {
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    suggestion.icon?.let { Icon(it, null, tint = Palette.green, modifier = Modifier.size(18.dp)) }
+                    suggestion.icon?.let { Icon(it, null, tint = Palette.accent, modifier = Modifier.size(18.dp)) }
                     Spacer(Modifier.width(8.dp))
                     Text(suggestion.label, color = Palette.text, fontSize = 14.sp)
                 }
@@ -645,7 +645,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 LazyColumn(Modifier.heightIn(max = 240.dp)) {
                     items(slashRows, key = { it.first }) { (name, detail) ->
                         Column(Modifier.fillMaxWidth().clickable { setText("/$name ") }.padding(horizontal = 14.dp, vertical = 9.dp)) {
-                            Text("/$name", color = Palette.green, fontSize = 14.sp)
+                            Text("/$name", color = Palette.accent, fontSize = 14.sp)
                             Text(detail, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
                         }
                     }
@@ -657,7 +657,7 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                 LazyColumn(Modifier.heightIn(max = 220.dp)) {
                     items(suggestions, key = { it.id }) { prompt ->
                         Column(Modifier.fillMaxWidth().clickable { setText(prompt.text) }.padding(horizontal = 14.dp, vertical = 9.dp)) {
-                            Text("/" + prompt.title, color = Palette.green, fontSize = 14.sp)
+                            Text("/" + prompt.title, color = Palette.accent, fontSize = 14.sp)
                             Text(prompt.text, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
                         }
                     }
@@ -701,13 +701,13 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
                     IconButton({ plusSheet = true }, Modifier.pressScale()) { Icon(Icons.Filled.Add, "Add", tint = Palette.text) }
                     if (chat.provider != PUTER_PROVIDER) {
                         IconButton({ vm.compareArmed = !vm.compareArmed }, Modifier.pressScale()) {
-                            Icon(Icons.Filled.CompareArrows, "Compare two models", tint = if (vm.compareArmed) Palette.green else Palette.muted)
+                            Icon(Icons.Filled.CompareArrows, "Compare two models", tint = if (vm.compareArmed) Palette.accent else Palette.muted)
                         }
                     }
                     BasicTextField(
                         text, { setText(it) },
                         textStyle = TextStyle(color = Palette.text, fontSize = 16.sp),
-                        cursorBrush = SolidColor(Palette.green),
+                        cursorBrush = SolidColor(Palette.accent),
                         maxLines = 6,
                         modifier = Modifier.weight(1f).padding(vertical = 12.dp).testTag("chat_input"),
                         decorationBox = { inner ->
@@ -818,13 +818,13 @@ private fun ModeToggle(mode: String, onPick: (String) -> Unit) {
             val on = mode == option
             Row(
                 Modifier.clip(RoundedCornerShape(12.dp))
-                    .background(if (on) Palette.greenDark.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent)
+                    .background(if (on) Palette.accentDeep.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent)
                     .clickable { if (!on) onPick(option) }
                     .semantics { contentDescription = modeLabel(option) + " mode" + if (on) ", on" else "" }
                     .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(modeIcon(option), null, tint = if (on) Palette.green else Palette.muted, modifier = Modifier.size(15.dp))
+                Icon(modeIcon(option), null, tint = if (on) Palette.accent else Palette.muted, modifier = Modifier.size(15.dp))
                 Spacer(Modifier.width(5.dp))
                 Text(modeLabel(option), color = if (on) Palette.text else Palette.muted, fontSize = 13.sp)
             }
@@ -835,11 +835,11 @@ private fun ModeToggle(mode: String, onPick: (String) -> Unit) {
 @Composable
 private fun ModeChip(label: String, icon: ImageVector, onClear: () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(14.dp)).background(Palette.greenDark.copy(alpha = 0.35f)).clickable(onClick = onClear)
+        Modifier.clip(RoundedCornerShape(14.dp)).background(Palette.accentDeep.copy(alpha = 0.35f)).clickable(onClick = onClear)
             .padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = Palette.green, modifier = Modifier.size(15.dp))
+        Icon(icon, null, tint = Palette.accent, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(5.dp))
         Text(label, color = Palette.text, fontSize = 13.sp)
         Spacer(Modifier.width(3.dp))
@@ -881,8 +881,8 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
                 vm.providers.forEach { option ->
                     val selected = option.id == provider
                     Text(
-                        option.label, color = if (selected) Palette.background else Palette.text, fontSize = 14.sp,
-                        modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(if (selected) Palette.green else Palette.surfaceHigh)
+                        option.label, color = if (selected) Palette.onAccent else Palette.text, fontSize = 14.sp,
+                        modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(if (selected) Palette.accent else Palette.surfaceHigh)
                             .clickable { provider = option.id }.padding(horizontal = 12.dp, vertical = 7.dp),
                     )
                 }
@@ -893,7 +893,7 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
             ) {
                 Icon(Icons.Filled.Search, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                BasicTextField(filter, { filter = it }, singleLine = true, textStyle = TextStyle(color = Palette.text, fontSize = 15.sp), cursorBrush = SolidColor(Palette.green), modifier = Modifier.weight(1f))
+                BasicTextField(filter, { filter = it }, singleLine = true, textStyle = TextStyle(color = Palette.text, fontSize = 15.sp), cursorBrush = SolidColor(Palette.accent), modifier = Modifier.weight(1f))
             }
             val list = vm.models[provider]
             if (list == null) {
@@ -911,8 +911,8 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
                             }.padding(vertical = 11.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(shortModel(model.name), color = if (selected) Palette.green else Palette.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (selected) Icon(Icons.Filled.CheckCircle, "Selected", tint = Palette.green, modifier = Modifier.size(18.dp))
+                            Text(shortModel(model.name), color = if (selected) Palette.accent else Palette.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (selected) Icon(Icons.Filled.CheckCircle, "Selected", tint = Palette.accent, modifier = Modifier.size(18.dp))
                         }
                     }
                 }
@@ -1007,7 +1007,7 @@ private fun VoiceOverlay(voice: VoiceSession) {
             }
             if (voice.state == VoiceSession.State.THINKING) {
                 Spacer(Modifier.height(10.dp))
-                TypingDots(Palette.green)
+                NeuraPulse()
             }
             Spacer(Modifier.height(10.dp))
             Text(voice.partial, color = Palette.muted, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)

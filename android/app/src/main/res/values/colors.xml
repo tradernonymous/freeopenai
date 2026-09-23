@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The adaptive icon's background layer. The same near-black the mark's
-         speech lines are drawn in (ic_app.xml), so the bubble reads as cut
-         out of the icon rather than sitting on a second colour. A flat
-         colour, not a drawable: a launcher shifting the layers for parallax
-         has nothing to reveal at the edges. -->
-    <color name="ic_launcher_background">#0D1512</color>
+    <!-- The adaptive icon's background layer: the brand's near-black ink
+         (design/tokens.json color.dark.bg), so the emblem's violet and cyan
+         sit on the same ground as the app itself. A flat colour, not a
+         drawable: a launcher shifting the layers for parallax has nothing to
+         reveal at the edges. -->
+    <color name="ic_launcher_background">#0A0B10</color>
 </resources>

@@ -88,10 +88,10 @@ fun AutomationScreen(
             ),
             actions = {
                 IconButton(onClick = { scheduling = RecipeSchedule("", "", 8, 0, WEEKDAYS) }) {
-                    Icon(Icons.Default.DateRange, "Schedule a prompt", tint = Palette.green)
+                    Icon(Icons.Default.DateRange, "Schedule a prompt", tint = Palette.accent)
                 }
                 IconButton(onClick = { showBuilder = true }) {
-                    Icon(Icons.Default.Add, "New automation", tint = Palette.green)
+                    Icon(Icons.Default.Add, "New automation", tint = Palette.accent)
                 }
             },
         )
@@ -188,7 +188,7 @@ fun AutomationScreen(
                         placeholder = { Text("Open Instagram and like the 5 most recent posts", color = Palette.muted) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Palette.green,
+                            focusedBorderColor = Palette.accent,
                             unfocusedBorderColor = Palette.outline,
                             focusedTextColor = Palette.text,
                             unfocusedTextColor = Palette.text,
@@ -216,7 +216,7 @@ fun AutomationScreen(
                     },
                     enabled = automationPrompt.isNotBlank() && isDeviceControlEnabled,
                 ) {
-                    Text("Run", color = Palette.green)
+                    Text("Run", color = Palette.accent)
                 }
             },
             dismissButton = {
@@ -243,7 +243,7 @@ private fun DeviceStatusCard(enabled: Boolean) {
             modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(if (enabled) Palette.green else Palette.red),
+                .background(if (enabled) Palette.success else Palette.red),
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -291,7 +291,7 @@ private fun AutomationCard(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (enabled) Palette.green else Palette.muted,
+            tint = if (enabled) Palette.accent else Palette.muted,
             modifier = Modifier.size(24.dp),
         )
         Spacer(Modifier.width(12.dp))
@@ -303,7 +303,7 @@ private fun AutomationCard(
             Icon(
                 imageVector = Icons.Default.PlayArrow,
                 contentDescription = "Run",
-                tint = Palette.green,
+                tint = Palette.accent,
             )
         }
     }
@@ -389,7 +389,7 @@ private fun ScheduleDialog(
                     placeholder = { Text("Summarise the news I should know about today", color = Palette.muted) },
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Palette.green,
+                        focusedBorderColor = Palette.accent,
                         unfocusedBorderColor = Palette.outline,
                         focusedTextColor = Palette.text,
                         unfocusedTextColor = Palette.text,
@@ -406,11 +406,11 @@ private fun ScheduleDialog(
                             modifier = Modifier
                                 .size(32.dp)
                                 .clip(CircleShape)
-                                .background(if (on) Palette.green else Palette.surfaceHigh)
+                                .background(if (on) Palette.accent else Palette.surfaceHigh)
                                 .clickable { days = if (on) days - day else days + day; error = null },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(letter, color = if (on) Palette.background else Palette.text, style = MaterialTheme.typography.labelMedium)
+                            Text(letter, color = if (on) Palette.onAccent else Palette.text, style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
@@ -430,7 +430,7 @@ private fun ScheduleDialog(
         },
         confirmButton = {
             TextButton(onClick = { error = onSave(prompt, time.hour, time.minute, days) }) {
-                Text("Save", color = Palette.green)
+                Text("Save", color = Palette.accent)
             }
         },
         dismissButton = {

@@ -123,7 +123,7 @@ private fun AnnotatedString.Builder.appendInline(line: String) {
         val token = match.value
         when {
             token.startsWith("**") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.removeSurrounding("**")) }
-            token.startsWith("`") -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Palette.surfaceHigh, color = Palette.green)) {
+            token.startsWith("`") -> withStyle(SpanStyle(fontFamily = NeuraMono, background = Palette.surfaceHigh, color = Palette.accent)) {
                 append(token.removeSurrounding("`"))
             }
             else -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(token.removeSurrounding("*")) }

@@ -6,7 +6,7 @@
 
 ### 📲 The Android app
 
-`android/` is **NeuraOS**, a native Android client (Kotlin, Jetpack Compose, Material 3) for this server. Its layout follows the ChatGPT Android app, always dark with the web app's green accent. It talks to the same routes the web page uses (`/api/llm/chat`, `/api/llm/models`, `/api/llm/images/generations`, `/api/llm/websearch`, `/api/llm/fetch`). Everything runs as native Compose screens; there is no in-app browser view of the deployed site.
+`android/` is **NeuraOS**, a native Android client (Kotlin, Jetpack Compose, Material 3) for this server. Its layout follows the ChatGPT Android app, in the NeuraOS Neural Violet look ([rebrand plan](neuraos-rebrand-plan.md)): dark by default, with Light and System under Settings → App → Theme. It talks to the same routes the web page uses (`/api/llm/chat`, `/api/llm/models`, `/api/llm/images/generations`, `/api/llm/websearch`, `/api/llm/fetch`). Everything runs as native Compose screens; there is no in-app browser view of the deployed site.
 
 **Install it (first time)**
 

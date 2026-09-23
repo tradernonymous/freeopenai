@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Dark frame around the page; the page brings its own theme. -->
+    <!-- The frame before Compose draws: the brand's near-black ink. NativeActivity.applyTheme()
+         repaints the window for the light theme. -->
     <style name="Theme.NeuraOS" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#121212</item>
-        <item name="android:statusBarColor">#121212</item>
-        <item name="android:navigationBarColor">#121212</item>
+        <item name="android:windowBackground">#0A0B10</item>
+        <item name="android:statusBarColor">#0A0B10</item>
+        <item name="android:navigationBarColor">#0A0B10</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
-        <item name="android:colorAccent">#3FB950</item>
+        <item name="android:colorAccent">#8B6CFF</item>
     </style>
 </resources>

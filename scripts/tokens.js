@@ -93,7 +93,8 @@ function renderCss(tokens) {
 
 function renderKotlin(tokens) {
   const all = themes(tokens);
-  const colors = (list) => list.map(([name, value]) => `        val ${name} = Color(0xFF${value.slice(1).toUpperCase()})`).join('\n');
+  const fields = all.dark.map(([name]) => `    val ${name}: Color,`).join('\n');
+  const values = (list) => list.map(([name, value]) => `        ${name} = Color(0xFF${value.slice(1).toUpperCase()}),`).join('\n');
   const radius = entries(tokens.radius).map(([name, value]) => `    const val RADIUS_${upperSnake(name)} = ${px(value)}`).join('\n');
   const motion = entries(tokens.motion).map(([name, value]) => {
     if (typeof value === 'number') return `    const val ${upperSnake(name)} = ${value}f`;
@@ -103,17 +104,24 @@ function renderKotlin(tokens) {
     `// ${HEADER}`,
     'package com.neura.os.app.ui',
     '',
+    'import androidx.compose.runtime.Immutable',
     'import androidx.compose.ui.graphics.Color',
     '',
-    '/** NeuraOS design tokens (docs/neuraos-rebrand-plan.md). Read through [Palette]. */',
-    'object NeuraTokens {',
-    '    object Dark {',
-    colors(all.dark),
-    '    }',
+    '/** One theme\'s colours. Read through [Palette], which picks the theme. */',
+    '@Immutable',
+    'class NeuraColors(',
+    fields,
+    ')',
     '',
-    '    object Light {',
-    colors(all.light),
-    '    }',
+    '/** NeuraOS design tokens (docs/neuraos-rebrand-plan.md). */',
+    'object NeuraTokens {',
+    '    val Dark = NeuraColors(',
+    values(all.dark),
+    '    )',
+    '',
+    '    val Light = NeuraColors(',
+    values(all.light),
+    '    )',
     '',
     radius,
     motion,

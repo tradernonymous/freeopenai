@@ -1,17 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Minimal chat-bubble mark: rounded body plus tail, nothing else. -->
+<!--
+  The NeuraOS emblem in one colour, filling the icon: the notification small
+  icon and the Quick Settings tile. Android tints both by alpha alone, so
+  the colour here never shows.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#3FB950"
-        android:pathData="M24,20 L84,20 A8,8 0 0 1 92,28 L92,68 A8,8 0 0 1 84,76 L44,76 L30,90 L32,76 L24,76 A8,8 0 0 1 16,68 L16,28 A8,8 0 0 1 24,20 Z" />
-    <path
-        android:fillColor="#0D1512"
-        android:pathData="M34,40 L74,40 M34,52 L64,52 M34,64 L56,64"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:strokeColor="#0D1512" />
+    <group
+        android:scaleX="2.2"
+        android:scaleY="2.2"
+        android:translateX="-16.4"
+        android:translateY="-16.4">
+        <path
+            android:pathData="M18,46V18L46,46V18"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M11.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM11.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0Z" />
+    </group>
 </vector>

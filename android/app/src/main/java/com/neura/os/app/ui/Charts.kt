@@ -29,7 +29,7 @@ import com.neura.os.app.data.chartRange
 import com.neura.os.app.data.chartX
 
 /** Series colours: distinct on the app's dark surface, at most four. */
-private val SERIES_COLORS = listOf(Color(0xFF3FB950), Color(0xFF58A6FF), Color(0xFFD29922), Color(0xFFF778BA))
+private val SERIES_COLORS: List<Color> get() = listOf(Palette.accent, Palette.glow, Palette.amber, Palette.success)
 
 /** One chart from a reply's ```chart block (master plan Phase 4), drawn in
  * Compose Canvas. The spec was already checked drawable by data/ChartSpec.kt. */

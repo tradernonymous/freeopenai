@@ -77,7 +77,7 @@ fun LibraryScreen(vm: AppViewModel) {
                 BasicTextField(
                     query, { query = it }, singleLine = true,
                     textStyle = TextStyle(color = Palette.text, fontSize = 15.sp),
-                    cursorBrush = SolidColor(Palette.green),
+                    cursorBrush = SolidColor(Palette.accent),
                     modifier = Modifier.weight(1f),
                     decorationBox = { inner -> if (query.isEmpty()) Text(searchHint, color = Palette.muted, fontSize = 15.sp); inner() },
                 )
@@ -93,7 +93,7 @@ fun LibraryScreen(vm: AppViewModel) {
             CHAT_COMMANDS.forEach { command ->
                 item(key = command.name) {
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).padding(horizontal = 14.dp, vertical = 10.dp)) {
-                        Text(command.usage, color = Palette.green, fontSize = 14.sp)
+                        Text(command.usage, color = Palette.accent, fontSize = 14.sp)
                         Text(command.desc, color = Palette.muted, fontSize = 12.sp)
                     }
                 }

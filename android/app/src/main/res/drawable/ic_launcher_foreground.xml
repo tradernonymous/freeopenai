@@ -1,37 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Adaptive-icon foreground: the same chat-bubble mark as ic_app.xml, scaled
-  into the adaptive icon's safe zone.
+  Adaptive-icon foreground: the NeuraOS emblem (assets/branding/neuraos-emblem.svg).
 
   An adaptive icon is 108x108dp, but a launcher may mask it to a circle,
   squircle or rounded square, and only the centre 72x72dp is guaranteed to
-  survive every mask. The mark's own bounds are x 16..92, y 20..90, which is
-  wider than that, so the whole thing is scaled 0.68 about the centre
-  (54,54): the art then spans x 28.2..79.8, y 30.9..78.5, whose furthest
-  corner sits 34.6dp from the centre, inside the 36dp circle mask, before
-  the bubble's rounded corners are even counted.
+  survive every mask. The emblem is drawn in a 64-unit box and scaled 1.1
+  about the origin, then moved 18.8 so its centre (32,32) lands on (54,54).
+  Its furthest point, the outer edge of a corner node, then sits 28.9dp from
+  the centre: inside the 33dp keyline Android's icon guidelines recommend,
+  and well inside the 36dp circle mask.
 
   The outer 18dp on each side stays empty on purpose: that is the parallax
   margin launchers shift the layers within.
 -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:scaleX="0.68"
-        android:scaleY="0.68">
+        android:scaleX="1.1"
+        android:scaleY="1.1"
+        android:translateX="18.8"
+        android:translateY="18.8">
         <path
-            android:fillColor="#3FB950"
-            android:pathData="M24,20 L84,20 A8,8 0 0 1 92,28 L92,68 A8,8 0 0 1 84,76 L44,76 L30,90 L32,76 L24,76 A8,8 0 0 1 16,68 L16,28 A8,8 0 0 1 24,20 Z" />
-        <path
-            android:fillColor="#0D1512"
-            android:pathData="M34,40 L74,40 M34,52 L64,52 M34,64 L56,64"
-            android:strokeWidth="5"
+            android:pathData="M18,46V18L46,46V18"
+            android:strokeWidth="6"
             android:strokeLineCap="round"
-            android:strokeColor="#0D1512" />
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="12"
+                    android:startY="52"
+                    android:endX="52"
+                    android:endY="12">
+                    <item android:offset="0" android:color="#FF8B6CFF" />
+                    <item android:offset="0.45" android:color="#FF8B6CFF" />
+                    <item android:offset="1" android:color="#FF22D3EE" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M11.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM11.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="12"
+                    android:startY="52"
+                    android:endX="52"
+                    android:endY="12">
+                    <item android:offset="0" android:color="#FF8B6CFF" />
+                    <item android:offset="0.45" android:color="#FF8B6CFF" />
+                    <item android:offset="1" android:color="#FF22D3EE" />
+                </gradient>
+            </aapt:attr>
+        </path>
     </group>
 </vector>

@@ -172,7 +172,7 @@ private fun FileDiff(file: PullFile) {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Palette.surface).padding(10.dp)) {
         Text(
             "${file.filename}  +${file.additions} −${file.deletions}" + (if (file.status.isNotEmpty()) "  (${file.status})" else ""),
-            color = Palette.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+            color = Palette.text, fontSize = 12.sp, fontFamily = NeuraMono,
         )
         if (file.patch.isEmpty()) {
             Text("No text diff (binary, renamed, or too large).", color = Palette.muted, fontSize = 11.sp)
@@ -181,14 +181,14 @@ private fun FileDiff(file: PullFile) {
                 file.patch.lines().forEach { line ->
                     val kind = diffLineKind(line)
                     val tint = when (kind) {
-                        DiffLine.ADDED -> Palette.green.copy(alpha = 0.18f)
+                        DiffLine.ADDED -> Palette.successTint
                         DiffLine.REMOVED -> Palette.red.copy(alpha = 0.18f)
                         DiffLine.HUNK, DiffLine.CONTEXT -> Color.Transparent
                     }
                     Text(
                         line.ifEmpty { " " },
                         color = if (kind == DiffLine.HUNK) Palette.muted else Palette.text,
-                        fontSize = 11.sp, fontFamily = FontFamily.Monospace, softWrap = false,
+                        fontSize = 11.sp, fontFamily = NeuraMono, softWrap = false,
                         modifier = Modifier.background(tint),
                     )
                 }

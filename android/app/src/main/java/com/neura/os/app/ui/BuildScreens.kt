@@ -96,9 +96,9 @@ import com.neura.os.app.data.buildStatusLabel
 // will change, as deepseek-harness-mobile's approval sheet does.
 
 private fun statusColor(status: String): Color = when (status) {
-    "queued", "running" -> Palette.violet
+    "queued", "running" -> Palette.accent
     "awaiting_approval", "awaiting_input" -> Palette.amber
-    "done" -> Palette.green
+    "done" -> Palette.success
     "failed", "cancelled", "expired" -> Palette.red
     else -> Palette.muted
 }
@@ -325,7 +325,7 @@ private fun BuildTimelinePane(builds: RemoteBuilds, session: BuildSession, modif
         items(builds.timeline, key = { "e" + it.seq }) { event -> TimelineItem(event) }
         if (session.finished && builds.timeline.none { it is BuildEvent.Done || it is BuildEvent.Failed }) {
             item {
-                if (session.status == "done") ResultCard(session.summary.ifEmpty { "Build finished." }, Palette.green, Palette.greenTint)
+                if (session.status == "done") ResultCard(session.summary.ifEmpty { "Build finished." }, Palette.success, Palette.successTint)
                 else ResultCard(session.error.ifEmpty { buildStatusLabel(session.status) }, Palette.red, Palette.redTint)
             }
         }
@@ -342,9 +342,9 @@ private fun StepTicker(steps: List<BuildStep>) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.animateContentSize()) {
         steps.forEachIndexed { index, step ->
             val look = when (step.status) {
-                "done" -> StepLook(Palette.green, Palette.green, "✓", Color(0xFF04260F))
-                "failed" -> StepLook(Palette.red, Palette.red, "!", Color.White)
-                "in_progress" -> StepLook(Palette.violetTint, Palette.violet.copy(alpha = ring), "${index + 1}", Palette.violet)
+                "done" -> StepLook(Palette.success, Palette.success, "✓", Palette.background)
+                "failed" -> StepLook(Palette.red, Palette.red, "!", Palette.background)
+                "in_progress" -> StepLook(Palette.accentTint, Palette.accent.copy(alpha = ring), "${index + 1}", Palette.accent)
                 "skipped" -> StepLook(Color.Transparent, Palette.outline, "–", Palette.muted)
                 else -> StepLook(Color.Transparent, Palette.outline, "${index + 1}", Palette.muted)
             }
@@ -399,7 +399,7 @@ private fun ApprovalCard(pending: BuildPending, busy: Boolean, onApprove: () -> 
             val approving = dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
             Box(
                 Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
-                    .background(if (approving) Palette.green else Palette.red)
+                    .background(if (approving) Palette.success else Palette.red)
                     .padding(horizontal = 20.dp),
                 contentAlignment = if (approving) Alignment.CenterStart else Alignment.CenterEnd,
             ) {
@@ -478,7 +478,7 @@ private fun TimelineItem(event: BuildEvent) {
             },
             color = Palette.muted, fontSize = 13.sp,
         )
-        is BuildEvent.Done -> ResultCard(event.summary.ifEmpty { "Build finished." }, Palette.green, Palette.greenTint)
+        is BuildEvent.Done -> ResultCard(event.summary.ifEmpty { "Build finished." }, Palette.success, Palette.successTint)
         is BuildEvent.Failed -> ResultCard(event.error.ifEmpty { buildStatusLabel(event.status) }, Palette.red, Palette.redTint)
         else -> Unit
     }
@@ -506,24 +506,24 @@ private fun CodeBlock(title: String, text: String) {
     Surface(color = Palette.code, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, Palette.outline), modifier = Modifier.fillMaxWidth()) {
         Column {
             Text(
-                title, color = Palette.muted, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                title, color = Palette.muted, fontFamily = NeuraMono, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().background(Palette.surface).padding(horizontal = 10.dp, vertical = 8.dp),
             )
             SelectionContainer {
                 Column(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
                     shown.forEach { line ->
                         val lineColor = when {
-                            line.startsWith("+") -> Palette.green
+                            line.startsWith("+") -> Palette.success
                             line.startsWith("-") -> Palette.red
                             else -> Palette.text
                         }
                         val lineBackground = when {
-                            line.startsWith("+") -> Palette.greenTint
+                            line.startsWith("+") -> Palette.successTint
                             line.startsWith("-") -> Palette.redTint
                             else -> Color.Transparent
                         }
                         Text(
-                            line.ifEmpty { " " }, color = lineColor, fontFamily = FontFamily.Monospace, fontSize = 12.sp, softWrap = false,
+                            line.ifEmpty { " " }, color = lineColor, fontFamily = NeuraMono, fontSize = 12.sp, softWrap = false,
                             modifier = Modifier.background(lineBackground).padding(horizontal = 10.dp),
                         )
                     }
@@ -531,7 +531,7 @@ private fun CodeBlock(title: String, text: String) {
             }
             if (lines.size > FOLDED_LINES) {
                 TextButton({ expanded = !expanded }, Modifier.padding(start = 4.dp)) {
-                    Text(if (expanded) "Show less" else "Show all ${lines.size} lines", color = Palette.green, fontSize = 13.sp)
+                    Text(if (expanded) "Show less" else "Show all ${lines.size} lines", color = Palette.accent, fontSize = 13.sp)
                 }
             }
         }
@@ -542,13 +542,13 @@ private fun CodeBlock(title: String, text: String) {
 @Composable
 fun BuildRemotelyChip(onClick: () -> Unit) {
     Surface(
-        color = Palette.violetTint, shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Palette.violet.copy(alpha = 0.6f)),
+        color = Palette.accentTint, shape = RoundedCornerShape(50), border = BorderStroke(1.dp, Palette.accent.copy(alpha = 0.6f)),
         modifier = Modifier.heightIn(min = 48.dp).pressScale(0.95f).clickable(onClickLabel = "Build this plan on the server", onClick = onClick),
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.Construction, null, tint = Palette.violet, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.Construction, null, tint = Palette.accent, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Build remotely", color = Palette.violet, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text("Build remotely", color = Palette.accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

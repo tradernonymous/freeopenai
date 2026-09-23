@@ -205,6 +205,18 @@ a 1024 px transparent PNG at `assets/branding/neuraos-logo.png` (the file NEURA-
 asked for). Fonts and the old-name cleanup move into each app's own reskin phase,
 where the files they touch already change.
 
+**R2 (2026-09-23), Android:** `ui/Theme.kt`'s `Palette` now reads the generated
+tokens and switches between the dark and light sets (Settings → App → Theme: Dark,
+Light or System; dark stays the default). The accent is violet everywhere it meant
+"primary" or "the AI"; build steps that finished, approvals, "online" and added diff
+lines stay green as **success**, so status never borrows the accent. The NeuraOS pulse
+(`NeuraPulse` in `ui/Motion.kt`) replaces the typing dots and the tool spinner while
+the AI works, and holds still when animations are off. Entrances use the token spring.
+Inter (400–700) and JetBrains Mono are bundled as Latin/Greek/Cyrillic subsets, with
+their OFL licences in `assets/licenses/`. The launcher, themed and notification icons
+and the sign-in screen use the emblem. Dynamic colour was left out on purpose: it would
+replace the brand colour with the wallpaper's.
+
 ## Sources
 
 [Open WebUI features](https://docs.openwebui.com/features/) ·

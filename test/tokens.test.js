@@ -23,7 +23,7 @@ const PAIRS = [
   ['text', 'bg', 4.5], ['text', 'surface', 4.5], ['text', 'raised', 4.5], ['text', 'accentSoft', 4.5],
   ['muted', 'bg', 4.5], ['muted', 'surface', 4.5], ['muted', 'raised', 4.5],
   ['accent', 'bg', 4.5], ['accent', 'surface', 4.5], ['accent', 'raised', 4.5],
-  ['onAccent', 'accent', 4.5],
+  ['onAccent', 'accent', 4.5], ['text', 'accentDeep', 4.5],
   ['danger', 'bg', 4.5], ['danger', 'surface', 4.5],
   ['warning', 'bg', 4.5], ['warning', 'surface', 4.5],
   ['success', 'surface', 4.5], ['info', 'surface', 4.5],

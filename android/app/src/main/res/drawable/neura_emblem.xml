@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The NeuraOS emblem (assets/branding/neuraos-emblem.svg): an N of four
+  connected nodes, Neural Violet with a cyan spark. Full colour, for screens
+  (the sign-in page); every icon below is cut from the same shapes.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M18,46V18L46,46V18"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="12"
+                    android:startY="52"
+                    android:endX="52"
+                    android:endY="12">
+                    <item android:offset="0" android:color="#FF8B6CFF" />
+                    <item android:offset="0.45" android:color="#FF8B6CFF" />
+                    <item android:offset="1" android:color="#FF22D3EE" />
+                </gradient>
+            </aapt:attr>
+    </path>
+    <path android:pathData="M11.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM11.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0Z">
+        <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="12"
+                    android:startY="52"
+                    android:endX="52"
+                    android:endY="12">
+                    <item android:offset="0" android:color="#FF8B6CFF" />
+                    <item android:offset="0.45" android:color="#FF8B6CFF" />
+                    <item android:offset="1" android:color="#FF22D3EE" />
+                </gradient>
+            </aapt:attr>
+    </path>
+</vector>

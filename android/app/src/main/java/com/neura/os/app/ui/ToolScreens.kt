@@ -346,7 +346,7 @@ fun ToolsScreen(vm: AppViewModel) {
 
 @Composable
 fun SectionTitle(text: String) {
-    Text(text, color = Palette.green, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+    Text(text, color = Palette.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
 }
 
 @Composable
@@ -374,7 +374,7 @@ private fun StatusCard(vm: AppViewModel) {
                 Text("📡 Status", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 IconButton({ vm.refreshHealth(); vm.refreshCatalogue() }) { Icon(Icons.Filled.Refresh, "Refresh") }
             }
-            Text(vm.healthText ?: "", color = if (vm.healthText?.startsWith("Online") == true) Palette.green else Palette.muted, fontSize = 13.sp)
+            Text(vm.healthText ?: "", color = if (vm.healthText?.startsWith("Online") == true) Palette.success else Palette.muted, fontSize = 13.sp)
             vm.catalogueError?.let { Text(it, color = Palette.red, fontSize = 13.sp) }
             HorizontalDivider(color = Palette.outline)
             Text("Tap Test to time a model", color = Palette.muted, fontSize = 12.sp)
@@ -386,7 +386,7 @@ private fun StatusCard(vm: AppViewModel) {
                         Text(provider.label)
                         Text(model ?: "Loading…", color = Palette.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         vm.probes["${provider.id}/$model"]?.let {
-                            Text(it, fontSize = 12.sp, color = if (it.startsWith("✓")) Palette.green else if (it.startsWith("✗")) Palette.red else Palette.muted)
+                            Text(it, fontSize = 12.sp, color = if (it.startsWith("✓")) Palette.success else if (it.startsWith("✗")) Palette.red else Palette.muted)
                         }
                     }
                     TextButton({ if (model != null) vm.probe(provider.id, model) }, enabled = model != null) { Text("Test") }
@@ -491,6 +491,7 @@ fun SettingsScreen(vm: AppViewModel, platform: Platform) {
         SectionTitle("Data")
         SettingRow("Delete all chats", null, danger = true) { confirmClear = true }
         SectionTitle("App")
+        ThemePicker(vm.themeMode) { vm.setTheme(it) }
         SettingRow("Check for updates", null) { platform.checkUpdates() }
         SettingRow("Copy crash log", null) { if (!platform.copyCrashLog()) vm.notice = "No crash recorded" }
         val problems = vm.failures.items.size
@@ -559,6 +560,30 @@ private fun SettingRow(title: String, value: String?, danger: Boolean = false, o
     ) {
         Text(title, color = if (danger) Palette.red else Palette.text, modifier = Modifier.weight(1f))
         if (value != null) Text(value, color = Palette.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Settings -> App -> Theme: Dark (the default), Light, or follow the phone. */
+@Composable
+private fun ThemePicker(mode: String, onPick: (String) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.surface).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Theme", color = Palette.text, modifier = Modifier.weight(1f))
+        listOf("dark" to "Dark", "light" to "Light", "system" to "System").forEach { (value, label) ->
+            val on = mode == value
+            Text(
+                label,
+                color = if (on) Palette.onAccent else Palette.text,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(14.dp))
+                    .background(if (on) Palette.accent else Palette.surfaceHigh)
+                    .clickable { onPick(value) }
+                    .semantics { contentDescription = "$label theme" + if (on) ", selected" else "" }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
     }
 }
 
@@ -665,7 +690,7 @@ fun PromptsScreen(vm: AppViewModel) {
                         if (!prompt.builtIn) TextButton({ editing = prompt }) { Text("Edit") }
                     },
                 ) {
-                    Text("/" + prompt.title, color = Palette.green)
+                    Text("/" + prompt.title, color = Palette.accent)
                     Text(prompt.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Palette.muted, fontSize = 12.sp)
                 }
             }
@@ -734,7 +759,7 @@ fun SkillsScreen(vm: AppViewModel) {
                     LibraryRow(
                         actions = {
                             IconButton({ vm.pinSkillToCurrentChat(skill.name) }, Modifier.size(40.dp)) {
-                                Icon(Icons.Filled.PushPin, "Pin to this chat", tint = Palette.green)
+                                Icon(Icons.Filled.PushPin, "Pin to this chat", tint = Palette.accent)
                             }
                             TextButton({ open = skill; vm.loadSkillInstructions(skill.name) }) { Text("View") }
                             TextButton({ vm.newChatWithSkill(skill.name) }) { Text("Use") }

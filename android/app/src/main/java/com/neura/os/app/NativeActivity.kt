@@ -57,6 +57,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -185,13 +186,8 @@ class NativeActivity : ComponentActivity(), Platform {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
-        // The app is always dark, so the status and navigation bar icons are
-        // always light; the default follows the system theme and vanishes on
-        // a light-themed phone.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-        )
+        // Before the first frame, so a light theme never flashes dark.
+        applyTheme()
         CrashLog.install(this)
         publishShortcuts()
         if (savedInstanceState == null) takeIntent(intent)
@@ -217,6 +213,8 @@ class NativeActivity : ComponentActivity(), Platform {
         // restore would measure from a process start long gone.
         val measureStartup = savedInstanceState == null && vm.startupMs == null
         setContent {
+            // A change in Settings -> App -> Theme.
+            LaunchedEffect(vm.themeMode) { applyTheme() }
             NeuraTheme {
                 if (measureStartup) {
                     LaunchedEffect(Unit) {
@@ -304,6 +302,33 @@ class NativeActivity : ComponentActivity(), Platform {
             vm.store.askedNotifications = true
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    /** Settings -> App -> Theme, and the phone's own mode for "System":
+     * which token set Palette shows, the window behind it, and whether the
+     * status and navigation bar icons are drawn dark or light (the default
+     * follows the system and vanishes on the wrong background). Called
+     * outside composition, so a switch is one ordinary state change. */
+    private fun applyTheme() {
+        val night = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val dark = when (vm.themeMode) {
+            "light" -> false
+            "system" -> night
+            else -> true
+        }
+        Palette.isDark = dark
+        val clear = android.graphics.Color.TRANSPARENT
+        val bars = if (dark) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
+        enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Palette.background.toArgb()))
+    }
+
+    // uiMode is in the manifest's configChanges, so the phone switching
+    // between dark and light arrives here instead of recreating the screen.
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyTheme()
     }
 
     override fun onNewIntent(intent: Intent) {

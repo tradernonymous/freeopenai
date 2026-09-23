@@ -288,6 +288,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     /** Settings -> "Offline answers". Turning it off also deletes what was
      * kept, so the switch means what it says. */
+    /** Settings -> App -> Theme; NativeActivity.applyTheme() turns it into
+     * Palette.isDark and the system bar icons. */
+    var themeMode by mutableStateOf(store.themeMode)
+        private set
+
+    fun setTheme(mode: String) {
+        store.themeMode = mode
+        themeMode = store.themeMode
+    }
+
     var offlineAnswers by mutableStateOf(store.offlineAnswers)
         private set
 

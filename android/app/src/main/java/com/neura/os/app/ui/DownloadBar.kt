@@ -93,7 +93,7 @@ private fun FileChip(
         Icon(
             imageVector = iconForFile(file),
             contentDescription = null,
-            tint = Palette.green,
+            tint = Palette.accent,
             modifier = Modifier.size(18.dp),
         )
 

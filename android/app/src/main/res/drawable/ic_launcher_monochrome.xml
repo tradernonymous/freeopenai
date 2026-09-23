@@ -1,16 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Themed-icon (monochrome) layer, used by Android 13+ when the person turns
-  on themed icons: the system ignores these colours entirely and re-tints the
-  layer's alpha to match their wallpaper.
-
-  That is why this is the bubble silhouette alone, with no speech lines: a
-  monochrome layer has exactly one tint, so the lines ic_launcher_foreground
-  draws in the dark background colour would be tinted the same as the body
-  they are meant to cut through, and the mark would read as a solid blob with
-  three smudges. Silhouette-only is the shape that survives the tint.
-
-  Same 0.68 scale about (54,54) as the foreground, so the two layers line up.
+  on themed icons: the system ignores these colours and re-tints the layer's
+  alpha to match their wallpaper. The emblem's silhouette in one colour, at
+  the same scale and offset as ic_launcher_foreground, so the layers line up.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -18,12 +11,18 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:scaleX="0.68"
-        android:scaleY="0.68">
+        android:scaleX="1.1"
+        android:scaleY="1.1"
+        android:translateX="18.8"
+        android:translateY="18.8">
         <path
-            android:fillColor="#000000"
-            android:pathData="M24,20 L84,20 A8,8 0 0 1 92,28 L92,68 A8,8 0 0 1 84,76 L44,76 L30,90 L32,76 L24,76 A8,8 0 0 1 16,68 L16,28 A8,8 0 0 1 24,20 Z" />
+            android:pathData="M18,46V18L46,46V18"
+            android:strokeColor="#FF000000"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M11.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM11.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,46a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0ZM39.5,18a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0Z" />
     </group>
 </vector>
