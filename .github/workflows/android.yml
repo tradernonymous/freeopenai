@@ -5,6 +5,10 @@ name: Android
 # tests, lints, builds the signed release APK, boots it in an emulator to
 # prove it launches, and only THEN publishes it to the rolling `apk-latest`
 # GitHub release, where a phone can download it straight from the browser.
+# While this repository is private, a phone cannot read that release
+# without a login, so the same build is also mirrored to the public
+# repository named by the PUBLIC_RELEASES_REPO variable, which the APK
+# updates from (needs the PUBLIC_RELEASES_TOKEN secret; see publish).
 # Delivery is three jobs so a build that crashes at launch (or fails lint,
 # or fails its tests) is never published: build -> smoke (BLOCKING) -> publish.
 # Without a signing key in the repository's secrets it falls back to the
@@ -32,7 +36,11 @@ jobs:
       # first launch's defaults. The password is never a build input.
       APK_SERVER_URL: ${{ vars.APK_SERVER_URL }}
       APK_USERNAME: ${{ vars.APK_USERNAME }}
-      APK_UPDATE_URL: https://github.com/${{ github.repository }}/releases/download/apk-latest/version.json
+      # Where the installed app looks for its next build. A phone checks
+      # without a GitHub login, so a private repository answers it 404 ("the
+      # update server had a problem"): with PUBLIC_RELEASES_REPO set, the
+      # APK reads the copy the publish job mirrors to that public repository.
+      APK_UPDATE_URL: https://github.com/${{ vars.PUBLIC_RELEASES_REPO || github.repository }}/releases/download/apk-latest/version.json
       APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
       APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
       APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
@@ -211,38 +219,71 @@ jobs:
         if: env.HAS_KEYSTORE == 'true'
         env:
           APK_VERSION_CODE: ${{ github.run_number }}
+          # The public mirror phones update from (APK_UPDATE_URL above). The
+          # token is a fine-grained PAT with Contents: read and write on that
+          # repository only; github.token cannot write to another repository.
+          PUBLIC_RELEASES_REPO: ${{ vars.PUBLIC_RELEASES_REPO }}
+          PUBLIC_RELEASES_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
         run: |
           VCODE=$((100 + APK_VERSION_CODE))
           NOTES="NeuraOS Android app, build $VCODE (from $GITHUB_SHA). Every push to main that touches android/ replaces neuraos.apk here; install it over the previous build, it keeps its data."
-          if gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit apk-latest --repo "$GITHUB_REPOSITORY" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
-          else
-            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
-          fi
-          # What the installed app reads to offer the next build (see
-          # NativeActivity.checkForUpdate). The link is the stable asset URL.
-          # sha256 + size let the phone reject a truncated download instead
-          # of failing at install time with a parse error.
           APK_SHA256="$(sha256sum "$RUNNER_TEMP/neuraos.apk" | cut -d' ' -f1)"
           APK_SIZE="$(stat -c%s "$RUNNER_TEMP/neuraos.apk")"
-          printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/neuraos.apk","notes":"Build %s from %s","sha256":"%s","size":%s}\n' \
-            "$VCODE" "$VCODE" "$GITHUB_REPOSITORY" "$VCODE" "${GITHUB_SHA:0:7}" "$APK_SHA256" "$APK_SIZE" > "$RUNNER_TEMP/version.json"
-          # APK first, manifest second: a phone never sees a version that is
-          # not downloadable yet.
-          # Delete, then upload, then check that the release really serves
-          # this build's bytes. The check reads the release's assets endpoint:
-          # the asset list embedded in /releases/tags/<tag> can lag behind by
-          # hours (it did on 2026-09-23 and was misread as a failed upload),
-          # so it is not trusted for this.
-          for asset in neuraos.apk version.json; do
-            gh release delete-asset apk-latest "$asset" --repo "$GITHUB_REPOSITORY" --yes || true
-          done
-          gh release upload apk-latest "$RUNNER_TEMP/neuraos.apk" --repo "$GITHUB_REPOSITORY"
-          gh release upload apk-latest "$RUNNER_TEMP/version.json" --repo "$GITHUB_REPOSITORY"
-          RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/apk-latest" --jq '.id')"
-          SERVED="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "neuraos.apk") | "\(.size) \(.digest)"')"
-          echo "apk-latest serves: $SERVED"
-          if [ "$SERVED" != "$APK_SIZE sha256:$APK_SHA256" ]; then
-            echo "::error::apk-latest does not serve this build's APK (expected $APK_SIZE sha256:$APK_SHA256)"
-            exit 1
+
+          # One repository's apk-latest: the APK, then a manifest that links
+          # to the APK in that same repository -- a phone that can read the
+          # manifest can then also download what it names.
+          publish_to() {
+            repo="$1"
+            if gh release view apk-latest --repo "$repo" >/dev/null 2>&1; then
+              gh release edit apk-latest --repo "$repo" --title "NeuraOS Android app (latest build)" --notes "$NOTES"
+            else
+              # --latest=false: never take over the repository's
+              # releases/latest, which another app's updater may read.
+              gh release create apk-latest --repo "$repo" --title "NeuraOS Android app (latest build)" --notes "$NOTES" --latest=false
+            fi
+            # What the installed app reads to offer the next build (see
+            # NativeActivity.checkForUpdate). The link is the stable asset URL.
+            # sha256 + size let the phone reject a truncated download instead
+            # of failing at install time with a parse error.
+            printf '{"versionCode":%s,"versionName":"2.0.%s","url":"https://github.com/%s/releases/download/apk-latest/neuraos.apk","notes":"Build %s from %s","sha256":"%s","size":%s}\n' \
+              "$VCODE" "$VCODE" "$repo" "$VCODE" "${GITHUB_SHA:0:7}" "$APK_SHA256" "$APK_SIZE" > "$RUNNER_TEMP/version.json"
+            # APK first, manifest second: a phone never sees a version that is
+            # not downloadable yet.
+            # Delete, then upload, then check that the release really serves
+            # this build's bytes. The check reads the release's assets endpoint:
+            # the asset list embedded in /releases/tags/<tag> can lag behind by
+            # hours (it did on 2026-09-23 and was misread as a failed upload),
+            # so it is not trusted for this.
+            for asset in neuraos.apk version.json; do
+              gh release delete-asset apk-latest "$asset" --repo "$repo" --yes || true
+            done
+            gh release upload apk-latest "$RUNNER_TEMP/neuraos.apk" --repo "$repo"
+            gh release upload apk-latest "$RUNNER_TEMP/version.json" --repo "$repo"
+            RELEASE_ID="$(gh api "repos/$repo/releases/tags/apk-latest" --jq '.id')"
+            SERVED="$(gh api "repos/$repo/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "neuraos.apk") | "\(.size) \(.digest)"')"
+            echo "$repo apk-latest serves: $SERVED"
+            if [ "$SERVED" != "$APK_SIZE sha256:$APK_SHA256" ]; then
+              echo "::error::$repo apk-latest does not serve this build's APK (expected $APK_SIZE sha256:$APK_SHA256)"
+              exit 1
+            fi
+          }
+
+          publish_to "$GITHUB_REPOSITORY"
+
+          if [ -n "$PUBLIC_RELEASES_REPO" ]; then
+            # This build's APK already points at the mirror, so a mirror
+            # that is not written would leave it with no way to update.
+            if [ -z "$PUBLIC_RELEASES_TOKEN" ]; then
+              echo "::error::PUBLIC_RELEASES_REPO is set but the PUBLIC_RELEASES_TOKEN secret is not; this APK updates from $PUBLIC_RELEASES_REPO, which cannot be written"
+              exit 1
+            fi
+            GH_TOKEN="$PUBLIC_RELEASES_TOKEN" publish_to "$PUBLIC_RELEASES_REPO"
+            # The point of the mirror: a phone with no GitHub login can read it.
+            code="$(curl -sS -L -o /dev/null -w '%{http_code}' "https://github.com/$PUBLIC_RELEASES_REPO/releases/download/apk-latest/version.json")"
+            echo "anonymous read of the mirror's version.json: HTTP $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::$PUBLIC_RELEASES_REPO does not serve version.json without a login (HTTP $code); is the repository public?"
+              exit 1
+            fi
           fi
