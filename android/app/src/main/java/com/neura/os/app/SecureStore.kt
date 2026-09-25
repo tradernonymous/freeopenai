@@ -90,9 +90,18 @@ class SecureStore(context: Context) {
         editor.apply()
     }
 
+    // Same reasoning as data/Storage.kt's SecureBox: KeyStore.load is an IPC
+    // to the keystore daemon and is not cached by the platform, and every
+    // read of password/session/githubSession used to pay for one. The handle
+    // is a reference, not a copy, so holding it is safe.
+    @Volatile
+    private var cachedKey: SecretKey? = null
+
+    @Synchronized
     private fun key(): SecretKey {
+        cachedKey?.let { return it }
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { cachedKey = it; return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -101,7 +110,7 @@ class SecureStore(context: Context) {
                 .setKeySize(256)
                 .build()
         )
-        return generator.generateKey()
+        return generator.generateKey().also { cachedKey = it }
     }
 
     private fun seal(plain: String): String = try {

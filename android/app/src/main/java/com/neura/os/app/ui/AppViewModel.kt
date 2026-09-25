@@ -142,7 +142,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private val main = Handler(Looper.getMainLooper())
     private val context = app.applicationContext
 
-    var signedIn by mutableStateOf(store.server != null && (store.session != null || store.password != null))
+    // Decided in [init] on the pool, not here. Reading store.session or
+    // store.password opens the Keystore, and doing that in a property
+    // initializer meant two keystore round-trips on the main thread during
+    // onCreate, before the first frame. The UI already renders a loading
+    // state until `loaded` flips, so it is correct for this to arrive with
+    // the rest of the disk state.
+    var signedIn by mutableStateOf(false)
         private set
     var signInBusy by mutableStateOf(false)
         private set
@@ -263,6 +269,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 if (store.offlineAnswers) responseCache = repo.loadResponseCache()
                 OnDisk(repo.loadConversations(), repo.loadLibrary(), repo.loadOutbox(), repo.loadAutomations(), savedSchedules)
             }
+            // Read here rather than in a property initializer: opening the
+            // Keystore costs 5-30ms and this runs on the pool.
+            signedIn = store.server != null && (store.session != null || store.password != null)
             // A chat started before the disk was read (a shared photo, a
             // notification tap) is kept rather than replaced by the load.
             val fresh = conversations.filter { open -> disk.chats.none { it.id == open.id } }
@@ -273,8 +282,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             automations = disk.automations
             schedules = disk.schedules
             loaded = true
+            // Inside the block, not after it: `work` launches, so signedIn is
+            // still false on this line.
+            if (signedIn) refreshCatalogue()
         }
-        if (signedIn) refreshCatalogue()
     }
 
     private fun updateOutbox(next: Outbox) {

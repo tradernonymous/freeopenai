@@ -4,6 +4,9 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -20,10 +23,20 @@ object SecureBox {
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val IV_BYTES = 12
 
+    // KeyStore.load is an IPC to the keystore daemon plus a full keyset parse,
+    // and it is not cached by the platform. It used to run on every seal and
+    // every open -- that is once per file, so 50 chats meant 50 loads on
+    // startup, all serialised on this monitor, and two of them on the main
+    // thread before the first frame. The handle is safe to hold: it is a
+    // reference to a key the Keystore keeps, not a copy of it.
+    @Volatile
+    private var cached: SecretKey? = null
+
     @Synchronized
     private fun key(): SecretKey {
+        cached?.let { return it }
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { cached = it; return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -32,7 +45,7 @@ object SecureBox {
                 .setKeySize(256)
                 .build()
         )
-        return generator.generateKey()
+        return generator.generateKey().also { cached = it }
     }
 
     fun seal(plain: ByteArray): ByteArray {
@@ -78,12 +91,29 @@ class Repository(context: Context) {
     private fun writeSealed(file: File, bytes: ByteArray): Boolean {
         val temp = File(file.parentFile, file.name + ".tmp")
         return try {
-            temp.writeBytes(SecureBox.seal(bytes))
-            if (!temp.renameTo(file)) {
-                file.delete()
+            // sync() before the rename. A rename is atomic with respect to
+            // other readers, but it is not durable: without the flush a power
+            // cut can leave a correctly-named, empty file, which then reads
+            // back as "no chat here" forever.
+            FileOutputStream(temp).use { out ->
+                out.write(SecureBox.seal(bytes))
+                out.fd.sync()
+            }
+            // ATOMIC_MOVE replaces the destination in one step, so there is no
+            // window in which the old file is gone and the new one has not
+            // arrived -- which is exactly what the old
+            // delete-then-rename fallback opened up, silently losing the chat
+            // if the second rename then failed. And the result is returned
+            // rather than discarded: a caller must never be told a save
+            // succeeded that did not happen.
+            try {
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                true
+            } catch (_: Exception) {
+                // Some OEM filesystems refuse ATOMIC_MOVE across the two
+                // paths. renameTo on the same directory is still atomic.
                 temp.renameTo(file)
             }
-            true
         } catch (e: Exception) {
             temp.delete()
             false
