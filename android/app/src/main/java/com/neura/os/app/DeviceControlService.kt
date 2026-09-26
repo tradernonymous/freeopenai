@@ -37,7 +37,16 @@ class DeviceControlService : AccessibilityService() {
 
     // Every read happens on demand from tapText/scrollUntil/snapshot, not
     // from a stream of events, so there's nothing to do here.
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    //
+    // The one thing it does watch is WHICH app is in front, and that is not a
+    // read of anyone's content: it only looks at the package name on window
+    // changes. It exists so a tap_text approval can name the app it will act
+    // on, and so runDeviceAction can refuse if the foreground app changed
+    // while it was handing focus back.
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val pkg = event?.packageName?.toString() ?: return
+        if (pkg != packageName) lastOtherPackage = pkg
+    }
 
     override fun onInterrupt() = Unit
 
@@ -179,6 +188,25 @@ class DeviceControlService : AccessibilityService() {
          * is actually running -- every caller checks it first. */
         @Volatile var instance: DeviceControlService? = null
             private set
+
+        /** The most recent window that was not this app, from
+         * [onAccessibilityEvent]. That is the app a tap_text/scroll_until
+         * approval will land in, because runDeviceAction backgrounds NeuraOS
+         * to hand focus back to it. Null before any other app has been seen. */
+        @Volatile var lastOtherPackage: String? = null
+            private set
+
+        /** The package that currently has the foreground window, or null.
+         *
+         * A tap_text/scroll_until approval is only meaningful if the user
+         * knows WHICH app it will land in: the button has to background
+         * NeuraOS first (see NativeActivity.runDeviceAction), and the app
+         * that comes back is not necessarily the one they were looking at
+         * when they read the button. Callers compare this before and after
+         * that hand-back and refuse to act if it changed. */
+        fun foregroundPackage(): String? =
+            instance?.rootInActiveWindow?.packageName?.toString()
+
         private const val CHANNEL = "device_control"
         private const val NOTIFICATION_ID = 51
     }

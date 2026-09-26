@@ -238,6 +238,9 @@ android/build/
 android/app/build/
 android/local.properties
 android/*.iml
+# Kotlin 2.x writes its per-project session/compiler scratch here. Created by
+# any local or CI build, same as the others above.
+android/.kotlin/
 # The release signing key lives in GitHub secrets and a backup off the repo.
 *.p12
 *.jks

@@ -261,7 +261,13 @@ fun AssistantTurn(
                         vm.runOnIo {
                             val ctx = platform as? android.content.Context ?: return@runOnIo
                             val path = com.neura.os.app.data.FileGenerator.saveToDownloads(ctx, file)
-                            vm.runOnMain { if (path != null) platform.copy("Saved to Downloads/NeuraOS/") }
+                            // Say so either way. The old path wrote to a
+                            // directory scoped storage forbids and swallowed
+                            // the failure, so this used to print nothing at
+                            // all and the save had not happened.
+                            vm.runOnMain {
+                                if (path != null) platform.copy("Saved to $path") else vm.showNotice("Could not save that file.")
+                            }
                         }
                     },
                     onShare = { file ->
@@ -280,7 +286,16 @@ fun AssistantTurn(
             val ticket = actionTicketFromJson(json)
             val action = ticket?.let { openAction(it, System.currentTimeMillis()) }
             when {
-                action != null -> ActionButton(action.label()) { platform.runAction(action) }
+                // Name the app for the two kinds that need to background this
+                // one to act: "Tap \"Send\" on screen" and "Tap Send in Gmail"
+                // are not the same promise, and only the second is honest.
+                action != null -> {
+                    val target = if (action.kind == "tap_text" || action.kind == "scroll_until") {
+                        com.neura.os.app.DeviceControlService.lastOtherPackage
+                            ?.let { " in " + (vm.appLabel(it) ?: it.substringAfterLast('.')) }
+                    } else null
+                    ActionButton(action.label() + (target ?: "")) { platform.runAction(action) }
+                }
                 ticket != null -> ExpiredAction()
             }
         }

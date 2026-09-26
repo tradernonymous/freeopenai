@@ -16,18 +16,20 @@ sealed interface BaseUrlResult {
     data class Problem(val message: String) : BaseUrlResult
 }
 
-private fun isLocalHost(host: String): Boolean {
-    if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
-    if (host.startsWith("10.") || host.startsWith("192.168.")) return true
-    if (host.startsWith("172.")) {
-        val second = host.split('.').getOrNull(1)?.toIntOrNull()
-        if (second != null && second in 16..31) return true
-    }
-    return false
-}
+private fun isLocalHost(host: String): Boolean =
+    host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "10.0.2.2"
 
 /** Normalises a typed server address. Plain hostnames gain https://; http://
- * only ever crosses the room (loopback / RFC1918), never the internet. */
+ * is only ever the loopback a developer runs on their own machine, never a
+ * LAN address and never the internet.
+ *
+ * A private-range http:// used to be accepted here ("http:// only ever
+ * crosses the room") and could not work: Android's network security config
+ * matches <domain> by suffix string, not by CIDR, so there is no way to
+ * permit cleartext for an arbitrary 192.168.x.x. Every request then failed
+ * with "Cleartext HTTP traffic not permitted" -- see
+ * res/xml/network_security_config.xml. Refusing here instead, with a reason,
+ * is strictly more useful than accepting and failing mysteriously later. */
 fun normalizeBaseUrl(raw: String): BaseUrlResult {
     val text = raw.trim().trimEnd('/')
     if (text.isEmpty()) return BaseUrlResult.Problem("Enter the server address first.")
@@ -37,7 +39,10 @@ fun normalizeBaseUrl(raw: String): BaseUrlResult {
         val host = lower.removePrefix("http://").substringBefore(':').substringBefore('/')
         if (host.isEmpty()) return BaseUrlResult.Problem("That address has no host.")
         if (isLocalHost(host)) return BaseUrlResult.Ok(text)
-        return BaseUrlResult.Problem("Only https:// leaves this phone. http:// is refused outside your own network.")
+        return BaseUrlResult.Problem(
+            "Only https:// leaves this phone. A local network address (like 192.168.x.x) needs https too -- " +
+                "Android will not let this app send plain http to it. Use an https address, or a tunnel."
+        )
     }
     return BaseUrlResult.Ok("https://" + text)
 }

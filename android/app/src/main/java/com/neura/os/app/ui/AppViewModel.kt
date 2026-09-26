@@ -69,6 +69,8 @@ import com.neura.os.app.data.ReviewEvent
 import com.neura.os.app.data.responseCacheKey
 import com.neura.os.app.data.Persona
 import com.neura.os.app.data.PromptTemplate
+import com.neura.os.app.data.PhoneAction
+import com.neura.os.app.data.sealAction
 import com.neura.os.app.data.PUTER_PROVIDER
 import com.neura.os.app.data.ProviderInfo
 import com.neura.os.app.data.Repository
@@ -102,6 +104,9 @@ import java.util.concurrent.Executors
  * is the only thread Compose state is written from. */
 private const val UI_STATE_KEY = "ui_state"
 private const val DRAFT_SAVE_BUDGET = 50_000
+/** How often a streaming reply's draft is written to disk, so a process kill
+ * part-way through does not lose the whole turn. */
+private const val STREAM_PERSIST_MS = 2_000L
 
 class AppViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val store = SecureStore(app)
@@ -503,10 +508,18 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             if (erase) repo.eraseEverything()
         }
         store.clearSecrets()
+        // Not inside `if (erase)`. Both of these are per-account state:
+        // leaving the outbox queued means the next drainOutbox -- which
+        // onResume calls -- replays this account's unsent message after a
+        // different account has signed in, using that account's session.
+        // The offline cache is keyed on model+questions, not on who asked,
+        // so without this the next person to sign in on this phone is shown
+        // the previous person's cached answers.
+        updateOutbox(Outbox())
+        responseCache = ResponseCache()
         if (erase) {
             schedules.forEach { RecipeAlarms.cancel(getApplication<Application>(), it.id) }
             schedules = emptyList()
-            responseCache = ResponseCache()
             conversations.clear()
             library = Library()
         }
@@ -764,7 +777,33 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         conversations.removeAll { it.id == id }
         drafts.remove(id)
         if (currentChatId == id) currentChatId = null
+        // The outbox entry too: leaving it queued means the next drainOutbox
+        // finds a chat that is no longer on disk, and -- worse -- after a
+        // sign-out and a different sign-in it would replay this account's
+        // message under the next one's session.
+        updateOutbox(outbox.acked(id))
         launchIo { repo.deleteConversation(id) }
+    }
+
+    /** Appends one message to a chat and saves it. Used by an approved device
+     * read: the labelled elements have to land in the conversation, because
+     * the model can only see them on a later turn and the user has to be able
+     * to see what the app read on their behalf. */
+    fun appendUserMessage(chatId: String, text: String) {
+        val existing = conversation(chatId) ?: return
+        publishChat(
+            existing.copy(messages = existing.messages + ChatMessage("user", text, createdAt = System.currentTimeMillis())),
+            persist = true,
+        )
+    }
+
+    /** A human name for a package, for an approval button that has to say
+     * which app it will act on. Null when the package cannot be resolved. */
+    fun appLabel(pkg: String): String? = try {
+        val info = getApplication<Application>().packageManager.getApplicationInfo(pkg, 0)
+        getApplication<Application>().packageManager.getApplicationLabel(info)?.toString()
+    } catch (e: Exception) {
+        null
     }
 
     fun deleteAllChats() {
@@ -1102,6 +1141,20 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                     else -> ChatMessage("assistant", "$content\n\n⚠️ ${maskSecrets(rawError)}", reasoning.toString(), started, model = chat.model)
                 }
                 publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                // A process kill mid-reply used to lose every word of it. The
+                // draft was only written at the end of the turn, and the
+                // outbox only covers connectivity failures, so an OOM kill or
+                // a battery-saver kill left the user's message on disk with no
+                // reply and no error -- a turn that looked silently lost.
+                // Write the draft through every STREAM_PERSIST_MS instead; the
+                // 60ms cadence below is for the screen, not for the disk.
+                var lastPersist = 0L
+                fun postDraft() {
+                    val now = System.currentTimeMillis()
+                    val persist = now - lastPersist > STREAM_PERSIST_MS
+                    if (persist) lastPersist = now
+                    publishChat(base.copy(messages = base.messages + draft(null)), persist = persist)
+                }
                 try {
                     if (chat.provider == PUTER_PROVIDER) {
                         val bridge = puterChat ?: throw ApiException("Puter is only available in the app's own window.")
@@ -1115,7 +1168,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                                         val now = System.currentTimeMillis()
                                         if (now - lastPost > 60) {
                                             lastPost = now
-                                            publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                            postDraft()
                                         }
                                     }
                                 }, { error ->
@@ -1133,7 +1186,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                                 val now = System.currentTimeMillis()
                                 if (now - lastPost > 60) {
                                     lastPost = now
-                                    publishChat(base.copy(messages = base.messages + draft(null)), persist = false)
+                                    postDraft()
                                 }
                             }
                             is ChatEvent.ToolDelta -> collector.add(event)
@@ -1361,12 +1414,21 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val ticket = action?.let { sealAction(it, now) }
                 chat.copy(messages = chat.messages + result(message, action = ticket?.toJson() ?: ""))
             }
-            "device_snapshot" -> chat.copy(
-                messages = chat.messages + result(
-                    com.neura.os.app.DeviceControlService.instance?.snapshot()
-                        ?: "Error: Device control is off. Ask the user to turn it on in Settings.",
-                ),
-            )
+            "device_snapshot" -> {
+                // Never reads here. approvalFor makes this CONFIRM, so the
+                // screen is only read after the user taps the button this
+                // writes -- which is what stops a prompt-injected model
+                // pulling another app's contents off the device. The result
+                // lands in the chat as a user message (see
+                // NativeActivity.readDeviceScreen), so the model sees it on
+                // the next turn and the user can see exactly what was read.
+                val ticket = sealAction(PhoneAction("read_screen"), now)
+                chat.copy(messages = chat.messages + result(
+                    "Shown to the user as a button: \"Read the screen as labelled elements\". Nothing is read " +
+                        "until they tap it; if they do, the labelled elements arrive in their next message.",
+                    action = ticket.toJson(),
+                ))
+            }
             else -> chat.copy(messages = chat.messages + result("Error: unknown tool ${call.name}."))
         }
     }

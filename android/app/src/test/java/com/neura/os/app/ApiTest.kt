@@ -40,9 +40,26 @@ class ApiTest {
     @Test
     fun baseUrl_allowsLoopbackHttpForLocalTesting() {
         assertEquals("http://127.0.0.1:11434", (normalizeBaseUrl("http://127.0.0.1:11434") as BaseUrlResult.Ok).url)
-        assertEquals("http://192.168.1.10:8080", (normalizeBaseUrl("http://192.168.1.10:8080") as BaseUrlResult.Ok).url)
-        assertTrue(normalizeBaseUrl("http://172.15.0.9") is BaseUrlResult.Problem)
-        assertEquals("http://172.20.0.9", (normalizeBaseUrl("http://172.20.0.9") as BaseUrlResult.Ok).url)
+        assertEquals("http://localhost:3000", (normalizeBaseUrl("http://localhost:3000") as BaseUrlResult.Ok).url)
+        // The emulator's alias for the host machine, which network_security_config
+        // names exactly. These three are the only cleartext hosts Android's
+        // <domain> suffix matching can express.
+        assertEquals("http://10.0.2.2:3000", (normalizeBaseUrl("http://10.0.2.2:3000") as BaseUrlResult.Ok).url)
+    }
+
+    @Test
+    fun baseUrl_refusesPrivateRangeHttpBecauseAndroidCannotAllowIt() {
+        // Regression guard for a real dead end: these used to be accepted, and
+        // then every single request failed with "Cleartext HTTP traffic not
+        // permitted". <domain> in network_security_config matches by suffix
+        // string, not CIDR, so there is no way to permit cleartext for an
+        // arbitrary private address. Refusing at the field is the fix.
+        for (raw in listOf("http://192.168.1.10:8080", "http://172.20.0.9", "http://10.1.2.3", "http://172.15.0.9")) {
+            val result = normalizeBaseUrl(raw)
+            assertTrue("expected $raw to be refused", result is BaseUrlResult.Problem)
+            val message = (result as BaseUrlResult.Problem).message
+            assertTrue("the refusal should explain why: $message", message.contains("https"))
+        }
     }
 
     @Test

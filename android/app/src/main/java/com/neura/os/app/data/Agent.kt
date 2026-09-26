@@ -29,7 +29,7 @@ const val MAX_TOOL_STEPS_PER_TURN = 12
 // Declared before the tool schemas below, which read them while the file's
 // top-level values initialise in order.
 val TASK_STATUSES = listOf("todo", "doing", "done", "blocked")
-val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "open_url", "share", "copy", "tap_text", "scroll_until")
+val ACTION_KINDS = listOf("alarm", "timer", "event", "map", "dial", "email", "open_url", "share", "copy", "tap_text", "scroll_until", "read_screen")
 
 fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "Plan"
@@ -107,11 +107,12 @@ private val TASK_UPDATE = tool(
 private val GENERATE_IMAGE = tool("generate_image", "Draw a picture from a detailed prompt; it is shown in the chat.", JSONObject().put("prompt", prop("string", "Detailed image prompt: subject, style, lighting.")), listOf("prompt"))
 private val DEVICE_SNAPSHOT = tool(
     "device_snapshot",
-    "Read what's on screen right now as labelled elements (buttons, scrollable areas, text) -- never a screenshot. " +
-        "Needs Device control turned on in Settings. This reads whatever app has focus at the moment you call it, " +
-        "which in an ordinary chat turn is almost always this app's own screen, not another app the user was just " +
-        "in -- it is most reliable for helping the user navigate NeuraOS itself. Read this before proposing " +
-        "tap_text or scroll_until so the label you pick actually matches something there.",
+    "Ask to read what's on screen as labelled elements (buttons, scrollable areas, text) -- never a screenshot. " +
+        "Nothing is read until the user taps the button this produces, so the result arrives in a later turn, not " +
+        "this one. Needs Device control turned on in Settings. What it reads is whatever app has focus when the " +
+        "user taps, which in an ordinary chat turn is almost always this app's own screen rather than another app " +
+        "the user was just in -- so ask for it when you need labels from NeuraOS itself, and expect the user to " +
+        "decline if something else is on screen.",
     JSONObject(), emptyList(),
 )
 private val PHONE_ACTION = tool(
@@ -155,9 +156,8 @@ private val FILE_PATCH = tool(
 
 /** Which tools a mode offers. Chat researches and draws; Plan also records
  * tasks; Build also edits its own sandboxed files. Phone actions and
- * device_snapshot are offered everywhere: the snapshot only reads (like
- * file_read), and every phone action, tap_text/scroll_until included,
- * waits for the user's tap before anything happens. */
+ * device_snapshot are offered everywhere, and every one of them -- reading
+ * the screen included -- waits for the user's tap before anything happens. */
 fun toolsForMode(mode: String): JSONArray {
     val list = when (mode) {
         "plan" -> listOf(WEB_SEARCH, WEB_FETCH, TASK_LIST, TASK_ADD, TASK_UPDATE, PHONE_ACTION, DEVICE_SNAPSHOT)
@@ -193,6 +193,17 @@ fun approvalFor(mode: String, name: String): ToolApproval {
         // CONFIRM here describes the write itself, staged and unreal until a
         // later tap in the workspace review, not a gate on the tool call.
         "file_write", "file_patch" -> ToolApproval.CONFIRM
+        // Reading the screen is a CONFIRM, and it has to be. It used to be
+        // AUTO on the reasoning that "the snapshot only reads, like
+        // file_read" -- true of itself, and false once phone_action exists:
+        // an approved tap hands focus back to whatever app was open before
+        // (moveTaskToBack in NativeActivity.runDeviceAction), so a
+        // device_snapshot taken after one reads THAT app's accessibility
+        // tree and posts it to the provider, with nothing tapped. A
+        // prompt-injected model could reach another app's messages that way.
+        // CONFIRM routes it through the same sealed ActionTicket as every
+        // other action: proposed, shown as a button, fingerprinted, expiring.
+        "device_snapshot" -> ToolApproval.CONFIRM
         else -> ToolApproval.AUTO
     }
 }
@@ -308,6 +319,7 @@ data class PhoneAction(
         "copy" -> "Copy text"
         "tap_text" -> "Tap \"$targetLabel\" on screen"
         "scroll_until" -> "Scroll to \"$targetLabel\""
+        "read_screen" -> "Read the screen as labelled elements"
         else -> kind
     }
 }

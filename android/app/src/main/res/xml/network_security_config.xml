@@ -5,6 +5,16 @@
   this app and the server. Certificate pinning is deliberately NOT used:
   short-lived public CA certificates rotate faster than a sideloaded testing
   build gets updated, and a stale pin bricks the app with no recovery path.
+
+  The one cleartext exception is the loopback a developer points the app at
+  on their own machine, plus the emulator's alias for it. Those are the only
+  hosts this mechanism can express: a domain element is suffix string
+  matching on the hostname, so it can name "127.0.0.1" but has no way to say
+  "any RFC1918 address". That is why there is no private-range exception here,
+  and why Api.normalizeBaseUrl refuses http:// for a LAN IP with a message
+  saying why. It used to accept one and then fail every request with
+  "Cleartext HTTP traffic not permitted", which is a far worse answer than a
+  refusal at the sign-in field.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">
@@ -12,4 +22,10 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- Android emulator's alias for the host machine. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
 </network-security-config>

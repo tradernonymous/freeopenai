@@ -1098,6 +1098,10 @@ class NativeActivity : ComponentActivity(), Platform {
                 runDeviceAction(action)
                 null
             }
+            "read_screen" -> {
+                readDeviceScreen()
+                null
+            }
             else -> null
         }
         if (intent == null) return
@@ -1126,12 +1130,50 @@ class NativeActivity : ComponentActivity(), Platform {
             toast("Turn on Device control in Settings to use this.")
             return
         }
+        // Remember which app is in front right now, and re-check it after the
+        // hand-back below. The button says "Tap \"Send\" on screen", which is
+        // not the same promise as "Tap Send in the app you were just using" --
+        // and a prompt-injected model proposing a generic "Send" must not be
+        // able to land that tap in a mail client.
+        val expected = DeviceControlService.foregroundPackage()
         moveTaskToBack(true)
         Thread {
             Thread.sleep(500)
+            val now = DeviceControlService.foregroundPackage()
+            if (expected != null && now != null && now != expected) {
+                runOnUiThread { toast("The screen in front changed, so that action was not run.") }
+                return@Thread
+            }
             val result = if (action.kind == "tap_text") service.tapText(action.targetLabel) else service.scrollUntil(action.targetLabel, action.maxScrolls)
             result.exceptionOrNull()?.message?.let { message -> runOnUiThread { toast(message) } }
         }.start()
+    }
+
+    /** An approved device_snapshot. This is the ONLY place the accessibility
+     * tree is read, and it only runs from a tapped, fingerprinted, unexpired
+     * ActionTicket (see Agent.approvalFor and Messages.kt's ActionButton). The
+     * labelled elements go into the chat as a user message: the model can only
+     * act on them next turn, and the user can see exactly what left the phone
+     * on their behalf. */
+    private fun readDeviceScreen() {
+        val service = DeviceControlService.instance
+        if (service == null) {
+            toast("Turn on Device control in Settings to read the screen.")
+            return
+        }
+        val chatId = vm.currentChatId
+        val reading = Thread {
+            val text = try {
+                service.snapshot()
+            } catch (e: Exception) {
+                "Error: reading the screen failed (${e.message ?: e.javaClass.simpleName})."
+            }
+            runOnUiThread {
+                if (chatId == null) toast("Screen read, but this chat is no longer open.")
+                else vm.appendUserMessage(chatId, "Screen read at your request:\n\n" + text)
+            }
+        }
+        reading.start()
     }
 
     /** A reply that finished while the app was in the background. */

@@ -193,6 +193,10 @@
          reads the accessibility tree and taps/scrolls elements by their
          label, never a screenshot or a raw coordinate, and only after a
          tap in the chat approves the specific action (data/Agent.kt).
+         Reading the screen is gated exactly like a tap: an approved read
+         lands in the conversation, so the user sees what was read before
+         the assistant acts on it. It never draws an overlay on top of
+         other apps.
          NeuraOS device control for phone automation. -->
         <service
             android:name=".app.DeviceControlService"

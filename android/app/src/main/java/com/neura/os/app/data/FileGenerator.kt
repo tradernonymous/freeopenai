@@ -1,8 +1,6 @@
 package com.neura.os.app.data
 
 import android.content.Context
-import android.os.Environment
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,15 +48,25 @@ object FileGenerator {
         return listOfNotNull(files.lastOrNull())
     }
 
-    /** Save to Downloads/NeuraOS/. Returns the path or null. */
-    fun saveToDownloads(context: Context, file: GeneratedFile): String? = try {
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NeuraOS").apply { mkdirs() }
+    /** Save to Downloads/NeuraOS/, through MediaStore. Returns null on failure.
+     *
+     * This used to write with `File(Environment.getExternalStoragePublicDirectory(...))`
+     * and swallow the exception. Under scoped storage that throws on every
+     * supported Android version (minSdk 29, and the app holds no storage
+     * permission by design), so saving an agent-generated file silently did
+     * nothing at all and the user got no message either. The same save is
+     * already implemented correctly in WebShell.saveToDownloads; this calls
+     * it rather than keeping a second, broken copy. */
+    fun saveToDownloads(context: Context, file: GeneratedFile): String? {
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val base = file.name.substringBeforeLast('.')
-        val saveFile = File(dir, "${base}_$ts.${file.extension}")
-        saveFile.writeBytes(file.content)
-        saveFile.absolutePath
-    } catch (_: Exception) { null }
+        val name = "${base}_$ts.${file.extension}"
+        return if (com.neura.os.app.WebShell.saveToDownloads(context, name, file.mimeType, file.content)) {
+            "Downloads/NeuraOS/$name"
+        } else {
+            null
+        }
+    }
 
     // --- Extraction helpers --------------------------------------------------
 
