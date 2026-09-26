@@ -189,6 +189,84 @@ jobs:
           # lives in a checked-in file so newlines and quoting survive.
           script: bash "$GITHUB_WORKSPACE/.github/scripts/smoke.sh" "$RUNNER_TEMP/neuraos.apk"
 
+  # Records which classes and methods a cold start touches, for a faster
+  # first launch on a sideloaded install (master plan v2, "Baseline Profile
+  # for faster startup"). Not on the publish path: a flaky emulator boot
+  # here must never hold up a bug-fix release, and no build reads this run's
+  # output automatically -- app/src/main/baseline-prof.txt is committed by
+  # hand from what this job prints, the same way the screenshot contact
+  # sheet is read out of the build job's log rather than applied by CI
+  # itself. First run of new infrastructure: expect this job to need a
+  # follow-up fix before it produces a real profile.
+  baseline-profile:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: android
+    env:
+      APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
+      APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
+      APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+      HAS_KEYSTORE: ${{ secrets.APK_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          packages: platform-tools
+      - run: yes | sdkmanager --licenses
+      - run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        with:
+          gradle-version: 9.6.0
+      - run: echo "APK_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+      - name: Restore the signing key
+        if: env.HAS_KEYSTORE == 'true'
+        run: |
+          printf '%s' "${{ secrets.APK_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.p12"
+          echo "APK_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+      - name: Align the AVD home for the emulator action
+        run: |
+          mkdir -p "$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+      # API 33+ without root is what lets Macrobenchmark collect a profile at
+      # all (below that it needs a rooted device). aosp_atd is Google's own
+      # image for fast, low-resource headless CI -- the smoke job stays on
+      # API 29 default because that is what actually boots without KVM for
+      # a plain launch check, but this needs the higher API regardless.
+      - name: Boot the emulator and record the baseline profile
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@1b48cf25bcdcd1c835908e340039354ff983978a
+        with:
+          api-level: 34
+          arch: x86_64
+          target: aosp_atd
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
+          script: cd "$GITHUB_WORKSPACE/android" && gradle :app:generateBaselineProfile
+      - name: Print the generated profile
+        if: always()
+        run: |
+          if [ -s app/src/main/baseline-prof.txt ]; then
+            echo "NEURA-PROFILE-BEGIN"
+            cat app/src/main/baseline-prof.txt
+            echo "NEURA-PROFILE-END"
+          else
+            echo "No baseline-prof.txt was produced."
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: baseline-profile
+          path: android/app/src/main/baseline-prof.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
   # Only runs once the APK is built AND the smoke check passed. Recomputes the
   # manifest (sha256 + size) from the artifact it actually downloaded, so the
   # phone can reject a truncated download instead of failing at install time

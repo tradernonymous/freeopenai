@@ -16,6 +16,10 @@ navigation3 = "1.1.7"
 coroutines = "1.11.0"
 roborazzi = "1.75.0"
 robolectric = "4.17"
+profileinstaller = "1.4.1"
+benchmarkMacroJunit4 = "1.5.0"
+baselineProfile = "1.5.0"
+testExtJunit = "1.3.0"
 
 [libraries]
 androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
@@ -41,10 +45,20 @@ roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", versi
 roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+# Baseline Profile (master plan v2, faster cold start): the runtime piece
+# that applies a shipped baseline-prof.txt on a sideloaded install (this app
+# is never installed from the Play Store, so there is no other mechanism
+# that would compile it ahead of time) and the macrobenchmark rule that
+# generates that profile from a real cold-start run on the CI emulator.
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacroJunit4" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "testExtJunit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+baselineprofile = { id = "androidx.baselineprofile", version.ref = "baselineProfile" }

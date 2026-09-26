@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "neuraos"
 include(":app")
+include(":baselineprofile")

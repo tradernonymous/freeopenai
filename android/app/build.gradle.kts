@@ -15,6 +15,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     // Screenshot tests on the JVM (master plan v2, V2); test-only.
     alias(libs.plugins.roborazzi)
+    // Master plan v2: faster cold start. Adds the "nonMinifiedRelease" build
+    // type the :baselineprofile module instruments, and the task that merges
+    // what it records into app/src/main/baseline-prof.txt.
+    alias(libs.plugins.baselineprofile)
 }
 
 // Push notifications need a Firebase project, which is the user's own (free)
@@ -206,6 +210,16 @@ dependencies {
     // Studio images are decoded in-app from stored data URLs (loadBitmap in
     // AppViewModel), so no Coil dependency is pulled in. If remote image URLs
     // are ever added, that is the moment to add Coil -- not before.
+
+    // Applies app/src/main/baseline-prof.txt at install time. This app is
+    // never installed from the Play Store -- the one other mechanism that
+    // would AOT-compile a fresh install's hot classes on its own -- so
+    // without this a sideloaded install gets none of the profile's benefit.
+    implementation(libs.androidx.profileinstaller)
+    // The :baselineprofile module's own dependency, not a runtime one: this
+    // is what the baselineprofile plugin instruments to regenerate
+    // baseline-prof.txt (see that module's build.gradle.kts).
+    baselineProfile(project(":baselineprofile"))
 }
 
 // Prints every screenshot baseline as one small JPEG contact sheet, base64

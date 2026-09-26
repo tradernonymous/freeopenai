@@ -4,7 +4,7 @@
 
 Status: **V1–V8 shipped 2026-09-23**, with V3, the phase gaps and P7 finished the
 same day (§4.1), then P8 and P11, then a perf/security/a11y batch and its review fix
-batch (build 245, §4.1). Open: V0's phone session. v2 written 2026-09-23 against
+batch (build 249, §4.1). Open: V0's phone session. v2 written 2026-09-23 against
 `9b70b7d` (the R2 reskin). v1 (Phases 0–5, all done) is in git history:
 `git show 5d136ca:docs/android-master-plan.md`.
 
@@ -86,6 +86,7 @@ Nothing from v1 or the rebrand is dropped. Each item has a home below.
 | P9 | Rebrand R4 (message anatomy), R5 (home, agents, command palette), R6 (generative UI), R7 (canvas): the Android halves. **Done** | — | V4, V5, V8 |
 | P10 | NEURA-004 (logo) and NEURA-039 (desktop parity) are done by R0 and Phase 5; the backlog's owner can close both rows | backlog owner | — |
 | P11 | The old `fa4u` prefix in `puter-bridge.html` and `PuterBridge.kt` (internal names, never shown). **Done**: renamed to `neura`; the page keeps each old name as a read-through alias for app builds up to 2.0.241, to be removed once those are gone | — | V3, while those files are open |
+| P12 | Baseline Profile for faster cold start on a sideloaded install. New `:baselineprofile` module (`com.android.test` + `androidx.baselineprofile`), `androidx.profileinstaller` added to `:app`, and a non-blocking `baseline-profile` CI job (`aosp_atd` API 34, since profile collection needs API 33+ without root) that prints the recorded profile into its own job log. **First run unverified**: the profile is not auto-committed -- read from that job's log and check `app/src/main/baseline-prof.txt` in by hand, the same way the screenshot contact sheet is read rather than applied automatically | CI, then a commit | new module |
 
 ---
 
@@ -260,7 +261,7 @@ refused for any private address instead of silently failing, `@Stable` plus a
 on every streaming publish, and an accessibility/touch-target pass. Reviewed and
 fixed (see the next entry) rather than reverted.
 
-**Review fix batch** (build 245, this session): five bugs found reviewing the batch
+**Review fix batch** (build 249, `7991f62`): five bugs found reviewing the batch
 above, all fixed. (1) `tap_text`/`scroll_until` compared the foreground app against
 itself at the moment Approve is tapped -- always NeuraOS -- so every device action was
 silently cancelled; now compares against `DeviceControlService.lastOtherPackage`, the
