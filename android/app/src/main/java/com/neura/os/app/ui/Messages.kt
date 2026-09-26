@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -54,7 +55,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -230,6 +233,9 @@ fun AssistantTurn(
     entries: List<List<String>>,
     onRegenerate: () -> Unit,
     onBranch: () -> Unit,
+    /** Opens the model picker. A rate-limit or provider error says "switch
+     * model" in its own text, so that sentence needs a button behind it. */
+    onChangeModel: (() -> Unit)? = null,
     onBuild: (() -> Unit)? = null,
 ) {
     var canvas by remember { mutableStateOf(false) }
@@ -249,7 +255,9 @@ fun AssistantTurn(
         if (turn.reasoning.isNotBlank()) Thought(turn.reasoning, streaming && turn.text.isEmpty(), turn.thoughtMs)
         when {
             turn.text.isEmpty() && streaming -> Box(Modifier.padding(vertical = 8.dp)) { NeuraPulse() }
-            turn.error -> ErrorCard(turn.text, onRetry = if (isLast) onRegenerate else null)
+            // Retry on every errored turn, not just the last one: an error
+            // three turns up had no control at all.
+            turn.error -> ErrorCard(turn.text, onRetry = onRegenerate, onChangeModel = onChangeModel)
             // A soft caret rides the end of a reply while it is still arriving.
             turn.text.isNotEmpty() -> MarkdownText(
                 if (streaming && isLast) turn.text + " ▍" else turn.text,
@@ -477,14 +485,39 @@ private fun Thought(reasoning: String, live: Boolean, thoughtMs: Long) {
 }
 
 @Composable
-private fun ErrorCard(text: String, onRetry: (() -> Unit)?) {
+/** A failure, in a sentence, with the two things you can do about it.
+ *
+ * The advice used to be a dead end: "Rate limited. Wait a bit or switch model."
+ * with only a Retry button, and Retry only on the final turn, so an error
+ * anywhere else had no control at all. Now the sentence's own suggestion has a
+ * button, and any errored turn can be retried. */
+private fun ErrorCard(text: String, onRetry: (() -> Unit)?, onChangeModel: (() -> Unit)?) {
+    val friendly = friendlyError(text)
+    val suggestsSwitch = friendly.startsWith("Rate limited") || friendly.startsWith("Provider error")
     Surface(color = Color_error, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.ErrorOutline, null, tint = Palette.red)
-            Spacer(Modifier.width(10.dp))
-            Text(friendlyError(text), color = Palette.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
-            if (onRetry != null) {
-                IconButton(onRetry, Modifier.pressScale()) { Icon(Icons.Filled.Refresh, "Retry", tint = Palette.text) }
+        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 8.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(Icons.Filled.ErrorOutline, null, tint = Palette.red)
+                Spacer(Modifier.width(10.dp))
+                Text(friendly, color = Palette.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            }
+            if (onRetry != null || (suggestsSwitch && onChangeModel != null)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(start = 22.dp)) {
+                    if (onRetry != null) {
+                        TextButton(onRetry, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                            Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(16.dp), tint = Palette.text)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Try again", color = Palette.text, fontSize = 13.sp)
+                        }
+                    }
+                    if (suggestsSwitch && onChangeModel != null) {
+                        TextButton(onChangeModel, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                            Icon(Icons.Filled.Tune, null, modifier = Modifier.size(16.dp), tint = Palette.text)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Change model", color = Palette.text, fontSize = 13.sp)
+                        }
+                    }
+                }
             }
         }
     }
@@ -721,7 +754,7 @@ private fun SourcesRow(sources: List<com.neura.os.app.data.Source>) {
  * and labelled as one (data/Anatomy.kt). Only under the latest reply. */
 @Composable
 private fun ContextMeter(vm: AppViewModel) {
-    val chat = vm.currentChatId?.let { vm.conversation(it) } ?: return
+    val chat = vm.currentChat ?: return
     val window = vm.models[chat.provider]?.firstOrNull { it.id == chat.model }?.contextLength ?: 0
     val (label, fraction) = remember(chat.messages.size, window) {
         com.neura.os.app.data.contextLabel(com.neura.os.app.data.estimateTokens(chat.messages), window)

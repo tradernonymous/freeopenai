@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,6 +22,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neura.os.app.data.ChartSpec
@@ -36,7 +39,41 @@ private val SERIES_COLORS: List<Color> get() = listOf(Palette.accent, Palette.gl
 @Composable
 fun ChartView(spec: ChartSpec) {
     val (low, high) = chartRange(spec)
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.code).padding(12.dp)) {
+    // A Canvas has no text for a screen reader, so the data was simply
+    // unavailable to anyone not using sight -- a hard WCAG 1.1.1 failure. The
+    // spec already holds the title, the axis labels and every series name, so
+    // the summary is free to build and is kept out of the visual layout with
+    // clearAndSetSemantics.
+    val described = remember(spec) {
+        buildString {
+            if (spec.title.isNotBlank()) append(spec.title).append(". ")
+            append("Chart, ")
+            append(if (spec.type == ChartType.BAR) "bar" else "line")
+            append(", ")
+            append(spec.labels.size)
+            append(if (spec.labels.size == 1) " category." else " categories.")
+            spec.series.forEach { series ->
+                append(" ")
+                append(series.name)
+                append(": ")
+                append(
+                    series.values.mapIndexed { i, v ->
+                        val label = spec.labels.getOrNull(i).orEmpty()
+                        if (label.isEmpty()) formatNumber(v) else "$label ${formatNumber(v)}"
+                    }.joinToString(", ")
+                )
+                append(".")
+            }
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Palette.code)
+            .padding(12.dp)
+            .clearAndSetSemantics { contentDescription = described },
+    ) {
         if (spec.title.isNotBlank()) Text(spec.title, color = Palette.text, fontSize = 13.sp)
         Text(formatAxis(high), color = Palette.muted, fontSize = 10.sp)
         Canvas(Modifier.fillMaxWidth().height(180.dp).padding(vertical = 4.dp)) {
@@ -103,5 +140,9 @@ fun ChartView(spec: ChartSpec) {
     }
 }
 
-private fun formatAxis(value: Double): String =
+private fun formatAxis(value: Double): String = formatNumber(value)
+
+/** One number, plain: no grouping, no trailing zeros, so a screen reader does
+ * not read "1.20" as "one point two zero". */
+private fun formatNumber(value: Double): String =
     if (value == Math.rint(value) && kotlin.math.abs(value) < 1e12) value.toLong().toString() else "%.2f".format(value)

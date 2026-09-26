@@ -357,8 +357,13 @@ class NativeActivity : ComponentActivity(), Platform {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
             !vm.store.askedNotifications
         ) {
-            vm.store.askedNotifications = true
-            notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            // Deliberately NOT asked here, even though the manifest comment
+            // claimed it was "asked for in context": this fires in onCreate on
+            // a fresh install, before the user has seen a single screen, and
+            // it sets askedNotifications before launching so it is never
+            // offered again. It is now asked on the first reply that finishes
+            // while the app is backgrounded -- the exact moment the permission
+            // buys something. See maybeAskNotifications().
         }
     }
 
@@ -1193,8 +1198,22 @@ class NativeActivity : ComponentActivity(), Platform {
         reading.start()
     }
 
+    /** Asks for POST_NOTIFICATIONS once, in context. Not called on launch:
+     * see the note where the old onCreate-time request was removed. */
+    private fun maybeAskNotifications() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        if (vm.store.askedNotifications) return
+        vm.store.askedNotifications = true
+        notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     /** A reply that finished while the app was in the background. */
     private fun notifyReply(chatId: String, text: String) {
+        // The first backgrounded reply is when the permission is worth asking
+        // for: the user has just been told a reply is waiting without the app,
+        // which is the only reason this notification exists.
+        maybeAskNotifications()
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return

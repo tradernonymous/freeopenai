@@ -211,4 +211,13 @@ class Repository(context: Context) {
         responseCacheFile.delete()
         schedulesFile.delete()
     }
+
+    /** The plaintext crash log, which eraseEverything used to leave behind --
+     * the only unencrypted file this app writes. A stack trace is code
+     * locations rather than page content, so it is a small leak, but
+     * "Sign out and erase everything" should not leave one, and copyCrashLog
+     * would happily put a pre-erase trace on the clipboard. */
+    fun deleteCrashLog(context: Context) {
+        File(context.filesDir, "last_crash.txt").delete()
+    }
 }

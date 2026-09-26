@@ -291,7 +291,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             // notification tap) is kept rather than replaced by the load.
             val fresh = conversations.filter { open -> disk.chats.none { it.id == open.id } }
             conversations.clear()
+            conversationIndex.clear()
             conversations.addAll(fresh + disk.chats)
+            conversationIndex.clear()
+            conversations.forEachIndexed { i, c -> conversationIndex[c.id] = i }
+            currentChatId?.let { id -> currentChat = conversation(id) }
             library = disk.library
             outbox = disk.outbox
             automations = disk.automations
@@ -366,6 +370,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         // viewModelScope is cancelled by now: the reply, the build stream and
         // every load have stopped, and their connections are closed.
         pool.shutdownNow()
+        // Stop the foreground service here too. runReply starts it and then
+        // stops it in a `finally`, but that finally never runs if
+        // viewModelScope was already cancelled on the line after start --
+        // and a foreground service keeps the process alive, so a skipped stop
+        // leaves a permanent "Replying..." notification until the user
+        // force-stops the app.
+        ReplyService.stop(getApplication())
         super.onCleared()
     }
 
@@ -531,7 +542,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             schedules.forEach { RecipeAlarms.cancel(getApplication<Application>(), it.id) }
             schedules = emptyList()
             conversations.clear()
+            conversationIndex.clear()
+            currentChat = null
             library = Library()
+            // The plaintext crash log is the one file this app writes outside
+            // the sealed store, and it was the one thing "erase everything"
+            // left on disk.
+            launchIo { repo.deleteCrashLog(getApplication()) }
         }
         nav = NavState()
         providers = emptyList()
@@ -720,18 +737,49 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     // --- Chats -----------------------------------------------------------------
 
+    /** The chat on screen, as its own observable.
+     *
+     * The screens used to reach it with `vm.conversation(currentChatId)`,
+     * which does a `firstOrNull` over [conversations] -- a SnapshotStateList.
+     * Reading a list like that registers the reader against the *whole* list,
+     * so every `conversations[i] = ...` invalidated every screen: each of the
+     * ~17 streaming publishes a second recomposed the whole chat screen,
+     * top bar and composer included, no matter what actually changed. This
+     * field is written in exactly the places that change the open chat, so a
+     * screen reading it invalidates only when the open chat's identity moves. */
+    var currentChat: Conversation? by mutableStateOf(null)
+        private set
+
     fun conversation(id: String): Conversation? = conversations.firstOrNull { it.id == id }
 
     fun openChat(id: String) {
-        conversations.removeAll { it.messages.isEmpty() && it.id != id && it.id != streamingId }
+        pruneEmptyConversations(keep = id)
         currentChatId = id
+        currentChat = conversation(id)
         nav = nav.switchedToChat()
+    }
+
+    /** Drops chats that never got a message. [conversationIndex] is rebuilt
+     * rather than patched, because removeAll shifts everything after the
+     * first removal. */
+    private fun pruneEmptyConversations(keep: String) {
+        val before = conversations.size
+        conversations.removeAll { it.messages.isEmpty() && it.id != keep && it.id != streamingId }
+        if (conversations.size == before) return
+        conversationIndex.clear()
+        conversations.forEachIndexed { i, c -> conversationIndex[c.id] = i }
     }
 
     /** The chat on screen, creating a fresh one when there is none. */
     fun currentOrNew(): Conversation {
         currentChatId?.let { id -> conversation(id)?.let { return it } }
         return conversation(newChat())!!
+    }
+
+    /** Keeps [currentChat] in step with [currentChatId] for the paths that
+     * change one without the other. */
+    fun syncCurrentChat() {
+        currentChat = currentChatId?.let { conversation(it) }
     }
 
     fun newChat(personaId: String = DEFAULT_PERSONA_ID, draft: String = "", mode: String = "chat"): String {
@@ -741,17 +789,29 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         conversations.removeAll { it.messages.isEmpty() && it.id != streamingId }
         val chat = Conversation(UUID.randomUUID().toString(), "New chat", personaId, provider, model, emptyList(), now, now, mode = mode)
         conversations.add(chat)
+        conversationIndex[chat.id] = conversations.lastIndex
+        if (chat.id == currentChatId) currentChat = chat
         if (draft.isNotEmpty()) drafts[chat.id] = draft
         nav = nav.switchedToChat()
         currentChatId = chat.id
+        currentChat = chat
         return chat.id
     }
 
     private fun replace(updated: Conversation, persist: Boolean = true) {
-        val index = conversations.indexOfFirst { it.id == updated.id }
-        if (index >= 0) conversations[index] = updated else conversations.add(updated)
+        val index = conversationIndex[updated.id] ?: -1
+        if (index >= 0) conversations[index] = updated else {
+            conversations.add(updated)
+            conversationIndex[updated.id] = conversations.lastIndex
+        }
+        if (updated.id == currentChatId) currentChat = updated
         if (persist && updated.messages.isNotEmpty()) launchIo { repo.saveConversation(updated) }
     }
+
+    /** chat id -> position in [conversations]. replace() ran an
+     * indexOfFirst over the whole list on every write, i.e. once per
+     * streaming publish, so this was O(chats) each time. */
+    private val conversationIndex = HashMap<String, Int>()
 
     fun setModel(id: String, provider: String, model: String, makeDefault: Boolean) {
         val chat = conversation(id) ?: return
@@ -785,8 +845,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun delete(id: String) {
         if (streamingId == id) stop()
         conversations.removeAll { it.id == id }
+        conversationIndex.remove(id)
         drafts.remove(id)
-        if (currentChatId == id) currentChatId = null
+        if (currentChatId == id) {
+            currentChatId = null
+            currentChat = null
+        }
         // The outbox entry too: leaving it queued means the next drainOutbox
         // finds a chat that is no longer on disk, and -- worse -- after a
         // sign-out and a different sign-in it would replay this account's
@@ -853,8 +917,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun deleteAllChats() {
         stop()
         conversations.clear()
+        conversationIndex.clear()
         drafts.clear()
         currentChatId = null
+        currentChat = null
         responseCache = ResponseCache()
         launchIo {
             repo.deleteAllConversations()
@@ -945,6 +1011,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         replace(target)
         if (branch) {
             currentChatId = target.id
+            currentChat = target
         }
         runReply(target)
     }
@@ -961,12 +1028,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         )
         replace(copy)
         currentChatId = copy.id
+        currentChat = copy
     }
 
     /** The reply streaming now (runReply or runCompareReply). Stop cancels
      * it: the stream's collector goes away, which closes the connection
      * (data/Streams.kt), and the loop checks [replyStopped] between steps. */
     @Volatile private var replyJob: Job? = null
+    /** Set by the Puter draw bridge so stop() can unblock a draw parked in
+     * drawBlocking. See stop(). */
+    @Volatile var puterDrawRelease: (() -> Unit)? = null
 
     private fun replyStopped(): Boolean = replyJob?.isCancelled == true
 
@@ -978,6 +1049,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun stop() {
         replyJob?.cancel()
         ReplyService.stop(context)
+        // Puter draws are driven by the WebView bridge on the main thread and
+        // parked in drawBlocking on a pool thread, so cancelling the reply job
+        // does not reach them. Releasing the bridge is what unblocks the
+        // await; without this the Send/Stop button left a 150-second Puter
+        // draw running and the user could not stop it.
+        puterDrawRelease?.invoke()
     }
 
     fun setMode(id: String, mode: String) {
@@ -1727,7 +1804,31 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 val latch = java.util.concurrent.CountDownLatch(1)
                 var outcome: Result<Pair<String, ByteArray>>? = null
                 main.post { bridge(prompt, candidate, ratio, editSource) { result -> outcome = result; latch.countDown() } }
-                val finished = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
+                // stop() releases the latch, so a cancelled draw returns at
+                // once instead of parking a pool thread for 150s.
+                puterDrawRelease = { latch.countDown() }
+                // runInterruptible, not a bare await. onCleared shuts the pool
+                // down with shutdownNow(), which interrupts this thread; a plain
+                // await then throws InterruptedException, and the catch below
+                // turned that into a chat message rather than unwinding -- the
+                // one place in the app where a shutdown read as a user-visible
+                // error. It also means one stuck draw holds a pool thread for
+                // the full 150s, and three concurrent draws hold all three.
+                var interrupted = false
+                val finished = try {
+                    latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (e: InterruptedException) {
+                    // Preserve the flag so the executor can see it was cancelled.
+                    // A flag rather than a break: Kotlin forbids break/continue
+                    // inside a catch block.
+                    Thread.currentThread().interrupt()
+                    interrupted = true
+                    false
+                }
+                if (interrupted) {
+                    lastReason = "the draw was cancelled"
+                    break
+                }
                 val result = outcome
                 if (finished && result != null && result.isSuccess) {
                     val (type, data) = result.getOrThrow()
@@ -1746,6 +1847,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 }
                 lastReason = result?.exceptionOrNull()?.message ?: lastReason
             }
+            // Only while this loop owns the bridge; a later draw sets its own.
+            puterDrawRelease = null
             if (bytes == null) {
                 recordFailure("puter", "image: $lastReason")
                 main.post {

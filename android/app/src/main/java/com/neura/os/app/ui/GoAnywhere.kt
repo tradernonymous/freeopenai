@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -107,7 +108,7 @@ fun GoAnywhereSheet(vm: AppViewModel, platform: Platform, onClose: () -> Unit) {
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Column(Modifier.fillMaxSize().background(Palette.background.copy(alpha = 0.97f)).imePadding().padding(16.dp)) {
         Row(
-            Modifier.fillMaxWidth().height(52.dp).glass(RoundedCornerShape(26.dp)).padding(start = 16.dp, end = 4.dp),
+            Modifier.fillMaxWidth().heightIn(min = 52.dp).glass(RoundedCornerShape(26.dp)).padding(start = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Filled.Search, null, tint = Palette.accent, modifier = Modifier.size(20.dp))

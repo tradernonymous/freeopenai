@@ -15,10 +15,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -37,11 +41,28 @@ fun PlanMapDialog(tasks: List<TaskItem>, onClose: () -> Unit) {
         Surface(color = Palette.surface, shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Text("Plan map", color = Palette.text, style = MaterialTheme.typography.titleMedium)
+                val described = remember(tasks) {
+                    "Plan map: $done of ${tasks.size} tasks done." +
+                        (if (tasks.size > PLAN_MAP_MAX) " First $PLAN_MAP_MAX shown." else "") +
+                        " " + tasks.take(PLAN_MAP_MAX).joinToString(". ") { mapLabel(it.title) + " is " + it.status }
+                }
                 Text(
                     "$done of ${tasks.size} done" + (if (tasks.size > PLAN_MAP_MAX) " · first $PLAN_MAP_MAX shown" else ""),
                     color = Palette.muted, fontSize = 12.sp,
                 )
-                PlanMap(planMapNodes(tasks), Modifier.fillMaxWidth().aspectRatio(1f).padding(vertical = 12.dp))
+                PlanMap(
+                    planMapNodes(tasks),
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .padding(vertical = 12.dp)
+                        // The Canvas inside is dots and lines: a screen reader
+                        // had nothing to announce, so the whole plan was
+                        // unavailable without sight. The labels below carry the
+                        // same words, so they are dropped from the tree and the
+                        // map itself speaks instead.
+                        .clearAndSetSemantics { contentDescription = described },
+                )
                 TextButton(onClose) { Text("Close") }
             }
         }
@@ -80,6 +101,10 @@ private fun PlanMap(nodes: List<TaskItem>, modifier: Modifier) {
                 fontSize = 10.sp,
                 lineHeight = 12.sp,
                 textAlign = TextAlign.Center,
+                // Without an explicit overflow this silently CLIPS at 200%
+                // font scale rather than ellipsising, because maxLines=2 caps
+                // it and there is nowhere to put the third line.
+                overflow = TextOverflow.Ellipsis,
                 maxLines = 2,
                 modifier = Modifier
                     .offset(x = centerX + radius * x.toFloat() - 44.dp, y = centerY + radius * y.toFloat() + 9.dp)

@@ -33,13 +33,27 @@ class BuildApprovalReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             val outcome = try {
-                NativeApi(SessionManager(SecureStore(app))).answerBuild(buildId!!, requestId!!, "approve", "")
+                // A background broadcast gets about 10 seconds before the
+                // system kills the process for exceeding it. answerBuild uses
+                // the session manager's 30s read timeout, so a stalled network
+                // could run past the deadline and turn a slow approval into a
+                // broadcast-timeout ANR. Bounded well inside the budget.
+                val watchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+                try {
+                    watchdog.schedule({ pending.finish() }, APPROVAL_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    NativeApi(SessionManager(SecureStore(app))).answerBuild(buildId!!, requestId!!, "approve", "")
+                } finally {
+                    watchdog.shutdownNow()
+                }
                 "Approved. The build carries on."
             } catch (e: Exception) {
                 "Could not approve: " + (e.message ?: "the server did not answer") + ". Open the build to try again."
             }
             try {
                 showOutcome(app, buildId!!, outcome)
+            } catch (e: Exception) {
+                // The result is already known; failing to post it must not
+                // leave the broadcast un-finished and get the process killed.
             } finally {
                 pending.finish()
             }
@@ -71,6 +85,9 @@ class BuildApprovalReceiver : BroadcastReceiver() {
         const val ACTION_APPROVE = "com.neura.os.app.APPROVE_BUILD_CHANGE"
         const val EXTRA_BUILD_ID = "build_id"
         const val EXTRA_REQUEST_ID = "request_id"
+        /** Comfortably inside the ~10s a background broadcast is allowed
+         * before the system kills the process for exceeding it. */
+        const val APPROVAL_BUDGET_MS = 6_000L
 
         /** The Approve action for a build's notification: explicit, immutable,
          * and only usable once the phone is unlocked. */

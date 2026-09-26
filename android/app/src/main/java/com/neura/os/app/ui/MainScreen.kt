@@ -206,7 +206,10 @@ interface Platform {
 fun MainScreen(vm: AppViewModel, platform: Platform, voice: VoiceSession) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val chat = vm.currentChatId?.let { vm.conversation(it) }
+    // vm.currentChat, not vm.conversation(vm.currentChatId): the latter walks
+    // the whole conversations list, and reading a list inside composition
+    // subscribes this whole screen to every write to any chat in it.
+    val chat = vm.currentChat
     if (chat == null) {
         // Created outside composition, then shown on the next frame.
         // Wait for saved chats to load, so a chat restored after Android closed
@@ -264,6 +267,9 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
     val haptics = rememberHaptics()
     var query by rememberSaveable { mutableStateOf("") }
     var menuFor by remember { mutableStateOf<String?>(null) }
+    // Set by ChatRow's Delete item; the dialog below does the deleting. A whole
+    // conversation goes from the disk with no way back, so it is confirmed.
+    var confirmingDelete by remember { mutableStateOf<Conversation?>(null) }
     var renaming by remember { mutableStateOf<Conversation?>(null) }
     var showArchived by rememberSaveable { mutableStateOf(false) }
     val needle = query.trim().lowercase()
@@ -286,7 +292,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
     val archivedChats = visible.filter { it.archived }
     Column(Modifier.fillMaxHeight()) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 12.dp).fillMaxWidth().height(40.dp)
+            Modifier.padding(horizontal = 12.dp, vertical = 12.dp).fillMaxWidth().heightIn(min = 40.dp)
                 .clip(RoundedCornerShape(20.dp)).background(Palette.surfaceHigh).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -321,6 +327,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
                         vm, platform, item, item.id == currentId, haptics,
                         menuOpen = menuFor == item.id, onMenuOpenChange = { open -> menuFor = if (open) item.id else null },
                         onOpen = { vm.openChat(item.id); close() }, onRename = { renaming = item; menuFor = null },
+                        onDelete = { confirmingDelete = item; menuFor = null },
                     )
                 }
             }
@@ -340,6 +347,7 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
                             vm, platform, item, item.id == currentId, haptics,
                             menuOpen = menuFor == item.id, onMenuOpenChange = { open -> menuFor = if (open) item.id else null },
                             onOpen = { vm.openChat(item.id); close() }, onRename = { renaming = item; menuFor = null },
+                            onDelete = { confirmingDelete = item; menuFor = null },
                         )
                     }
                 }
@@ -369,6 +377,22 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
             dismissButton = { TextButton({ renaming = null }) { Text("Cancel") } },
         )
     }
+    confirmingDelete?.let { item ->
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = null },
+            title = { Text("Delete this chat?") },
+            text = {
+                Text(
+                    item.messages.size.toString() + " messages, gone for good. " +
+                        "Archive keeps it out of the way instead, and you can bring it back."
+                )
+            },
+            confirmButton = {
+                TextButton({ vm.delete(item.id); confirmingDelete = null; close() }) { Text("Delete", color = Palette.red) }
+            },
+            dismissButton = { TextButton({ confirmingDelete = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 /** One drawer row: tap opens the chat, long-press opens the same menu a
@@ -387,6 +411,7 @@ private fun ChatRow(
     onMenuOpenChange: (Boolean) -> Unit,
     onOpen: () -> Unit,
     onRename: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -430,7 +455,13 @@ private fun ChatRow(
                     onMenuOpenChange(false)
                 })
                 DropdownMenuItem({ Text(if (item.archived) "Unarchive" else "Archive") }, { vm.toggleArchive(item.id); onMenuOpenChange(false) })
-                DropdownMenuItem({ Text("Delete", color = Palette.red) }, { vm.delete(item.id); onMenuOpenChange(false) })
+                // Routed out to the drawer, which owns the confirmation. This
+                // used to delete the whole conversation from disk on the spot
+                // and drop you into a fresh chat, with no dialog and no undo --
+                // one mis-tap on a long-press menu destroyed it irrecoverably.
+                // Archive, one line above, is the reversible option, and
+                // deleteAllChats and signOut both already confirm properly.
+                DropdownMenuItem({ Text("Delete", color = Palette.red) }, { onDelete(); onMenuOpenChange(false) })
             }
         }
     }
@@ -500,7 +531,7 @@ private fun ChatSurface(vm: AppViewModel, platform: Platform, chat: Conversation
         Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()) {
             Box(Modifier.weight(1f)) {
                 AnimatedContent(chat.messages.isEmpty(), transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "home") { empty ->
-                    if (empty) Home(vm, chat) else Transcript(vm, platform, chat, streaming, onEdit = { editing = it })
+                    if (empty) Home(vm, chat) else Transcript(vm, platform, chat, streaming, onEdit = { editing = it }, onChangeModel = { modelSheet = true })
                 }
             }
             if (chat.tasks.isNotEmpty()) {
@@ -642,7 +673,16 @@ private fun greeting(name: String): String {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation, streaming: Boolean, onEdit: (Int) -> Unit) {
+private fun Transcript(
+    vm: AppViewModel,
+    platform: Platform,
+    chat: Conversation,
+    streaming: Boolean,
+    onEdit: (Int) -> Unit,
+    /** Opens the model picker for an errored turn's "Change model". The
+     * sheet itself is owned by ChatSurface, so it is reached by callback. */
+    onChangeModel: () -> Unit,
+) {
     // One scroll position per chat: opening another chat must not inherit
     // where the previous one was.
     val state = remember(chat.id) { LazyListState() }
@@ -705,6 +745,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
                         entries = entries,
                         onRegenerate = { vm.regenerate(chat.id) },
                         onBranch = { vm.forkAt(chat.id, turn.lastIndex) },
+                        onChangeModel = onChangeModel,
                         onBuild = if (chat.mode == "plan" || chat.mode == "build") ({ vm.startRemoteBuild(turn.text) }) else null,
                     )
                     is Turn.Compare -> CompareTurn(turn, platform)
@@ -1040,7 +1081,7 @@ private fun ModelSheet(vm: AppViewModel, chat: Conversation, onClose: () -> Unit
                 }
             }
             Row(
-                Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(20.dp)).background(Palette.surfaceHigh).padding(horizontal = 12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 40.dp).clip(RoundedCornerShape(20.dp)).background(Palette.surfaceHigh).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Filled.Search, null, tint = Palette.muted, modifier = Modifier.size(18.dp))
