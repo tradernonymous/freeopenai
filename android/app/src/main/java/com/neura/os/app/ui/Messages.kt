@@ -225,6 +225,9 @@ fun AssistantTurn(
     isLast: Boolean,
     vm: AppViewModel,
     platform: Platform,
+    /** The chat's answers grouped by version, derived once by the transcript.
+     * Passed in rather than recomputed here: see the note at the top. */
+    entries: List<List<String>>,
     onRegenerate: () -> Unit,
     onBranch: () -> Unit,
     onBuild: (() -> Unit)? = null,
@@ -232,7 +235,14 @@ fun AssistantTurn(
     var canvas by remember { mutableStateOf(false) }
     // The chat's answers with their versions (Regenerate keeps the old ones);
     // a reply with versions opens in the canvas even when it is short.
-    val entries = remember(turn.text, vm.currentChatId) { vm.currentChatId?.let { vm.conversation(it) }?.messages.orEmpty().let(::canvasEntries) }
+    //
+    // `entries` is passed in from the transcript, which derives it once for the
+    // whole chat. It used to be computed here, per visible turn, keyed on
+    // turn.text -- so the key changed on every one of the ~17 stream
+    // publishes a second and the cache never hit. canvasEntries walks every
+    // message in the chat, so that was a full rescan per turn per publish
+    // (thousands of message visits a second) purely to decide whether to
+    // offer a Canvas chip.
     val worthy = remember(turn.text, entries) { canvasWorthy(turn.text) || entries.any { it.size > 1 && it.last() == turn.text } }
     Column(Modifier.fillMaxWidth().enterUp(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (turn.steps.isNotEmpty()) WorkLog(turn.steps, streaming, startedAt)
@@ -535,7 +545,9 @@ fun ChatImage(vm: AppViewModel, platform: Platform, id: String) {
     var bitmap by remember(id) { mutableStateOf<ImageBitmap?>(null) }
     var bytes by remember(id) { mutableStateOf<ByteArray?>(null) }
     LaunchedEffect(id) {
-        vm.loadBitmap(id) { data, image ->
+        // An in-chat image is about 85% of a phone's width, so 1080 is ample;
+        // the source is often larger and used to be decoded whole.
+        vm.loadBitmap(id, maxEdge = 1080) { data, image ->
             bytes = data
             bitmap = image
         }

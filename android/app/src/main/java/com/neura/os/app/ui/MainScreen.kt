@@ -2,6 +2,8 @@ package com.neura.os.app.ui
 
 import androidx.activity.compose.PredictiveBackHandler
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.AnimatedContent
@@ -110,6 +112,7 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -136,6 +139,7 @@ import com.neura.os.app.VoiceSession
 import com.neura.os.app.data.Conversation
 import com.neura.os.app.data.PhoneAction
 import com.neura.os.app.data.allPrompts
+import com.neura.os.app.data.canvasEntries
 import com.neura.os.app.data.groupByDate
 import com.neura.os.app.data.matchPrompts
 import com.neura.os.app.data.MODES
@@ -148,8 +152,20 @@ import com.neura.os.app.data.translatePrompt
 import com.neura.os.app.data.isLanguageName
 import kotlinx.coroutines.launch
 
+/** How often the transcript is nudged to the bottom while a reply streams and
+ * the reader is still at the bottom. Matched to the ~17 publishes a second, so
+ * the scroll follows without a scroll per token. */
+private const val SCROLL_FOLLOW_MS = 120L
+
 /** Everything the screens need from Android itself, implemented by the
- * activity: clipboard, share sheet, files, speech, intents. */
+ * activity: clipboard, share sheet, files, speech, intents.
+ *
+ * @Stable because the Compose compiler cannot infer it: an interface with no
+ * annotation is unstable, and 12 composables take one. That made every screen
+ * non-skippable and forced a fresh lambda for anything capturing it, so a
+ * state write every 60ms recomposed the whole chat screen rather than the one
+ * turn that changed. */
+@Stable
 interface Platform {
     val version: String
     fun copy(text: String)
@@ -249,9 +265,17 @@ private fun Drawer(vm: AppViewModel, platform: Platform, currentId: String, clos
     var showArchived by rememberSaveable { mutableStateOf(false) }
     val needle = query.trim().lowercase()
     // Filtering reads every message of every chat, so it is done when the list
-    // or the search changes rather than on every recomposition -- during a
-    // stream that was once per delta.
-    val visible = remember(vm.conversations.toList(), needle) {
+    // or the search changes rather than on every recomposition.
+    //
+    // The key used to be vm.conversations.toList(), which defeated the point
+    // twice over: toList() allocates a new ArrayList on every recomposition,
+    // and remember compares keys with ==, so it then did a structural
+    // List<Conversation>.equals -- element by element, and each Conversation
+    // compares its whole List<ChatMessage>. The drawer reads vm.conversations,
+    // so it recomposes on every stream publish, and each of those cost a deep
+    // comparison of every message in every chat. A count is enough: adding,
+    // removing or reordering a chat changes it, and a streaming reply does not.
+    val visible = remember(vm.conversations.size, needle) {
         vm.conversations.filter { it.messages.isNotEmpty() }
             .filter { chat -> needle.isEmpty() || chat.title.lowercase().contains(needle) || chat.messages.any { it.content.lowercase().contains(needle) } }
     }
@@ -620,6 +644,13 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
     // where the previous one was.
     val state = remember(chat.id) { LazyListState() }
     val turns = remember(chat.messages) { buildTurns(chat.messages) }
+    // Derived once for the whole chat and handed to every turn, instead of
+    // each turn walking every message itself. Keyed on the message count and
+    // the last message's stamp, both of which are stable across a stream's
+    // intermediate publishes in a way turn.text is not.
+    val entries = remember(chat.id, chat.messages.size, chat.messages.lastOrNull()?.createdAt) {
+        canvasEntries(chat.messages)
+    }
     val atBottom by remember { derivedStateOf { !state.canScrollForward } }
     // Follow a streaming reply, but let go the moment the user scrolls up to
     // read, and take hold again when they return to the bottom or a new turn
@@ -635,8 +666,26 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
         if (keyboardOpen && turns.isNotEmpty() && follow) state.scrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
     }
     val last = chat.messages.lastOrNull()
-    LaunchedEffect(turns.size, last?.content?.length, last?.toolCalls?.size) {
-        if (turns.isNotEmpty() && (atBottom || (streaming && follow))) state.animateScrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
+    // Following a streaming reply, without cancelling and restarting a spring
+    // on every delta. The key used to include last.content.length, which
+    // changes on every one of the ~17 publishes a second: the effect was
+    // cancelled mid-flight and relaunched each time, so a spring (the default
+    // spec for animateScrollToItem) never got past ~60ms and the last line was
+    // never reliably visible. Two separate concerns instead -- a snap for the
+    // steady stream, and a throttled scroll for the reader who scrolled away.
+    LaunchedEffect(turns.size) {
+        if (turns.isNotEmpty()) state.scrollToItem(turns.lastIndex, Int.MAX_VALUE / 2)
+    }
+    LaunchedEffect(streaming, follow, atBottom) {
+        if (!streaming || !follow || !atBottom) return@LaunchedEffect
+        while (isActive) {
+            delay(SCROLL_FOLLOW_MS)
+            if (!isActive) break
+            val target = turns.lastIndex
+            if (target >= 0 && state.firstVisibleItemIndex != target) {
+                state.scrollToItem(target, Int.MAX_VALUE / 2)
+            }
+        }
     }
     val startedAt = remember(streaming) { System.currentTimeMillis() }
     Box(Modifier.fillMaxSize()) {
@@ -650,6 +699,7 @@ private fun Transcript(vm: AppViewModel, platform: Platform, chat: Conversation,
                         startedAt = startedAt,
                         isLast = turn.lastIndex == chat.messages.lastIndex,
                         vm = vm, platform = platform,
+                        entries = entries,
                         onRegenerate = { vm.regenerate(chat.id) },
                         onBranch = { vm.forkAt(chat.id, turn.lastIndex) },
                         onBuild = if (chat.mode == "plan" || chat.mode == "build") ({ vm.startRemoteBuild(turn.text) }) else null,
@@ -701,8 +751,15 @@ private fun Composer(vm: AppViewModel, platform: Platform, chat: Conversation, s
         }
         vm.refreshCompareTarget(chat)
     }
-    val suggestions = matchPrompts(text, allPrompts(vm.library))
-    val slashRows = slashSuggestions(text, vm.skills.map { it.name })
+    // All three used to be rebuilt on every keystroke: allPrompts() concatenates
+    // the built-ins with the library, matchPrompts() then lowercases every
+    // title and every prompt body, and the skills list was mapped to a fresh
+    // list each time. Hoisted, so typing a character re-filters a stable list
+    // instead of rebuilding it.
+    val promptPool = remember(vm.library) { allPrompts(vm.library) }
+    val skillNames = remember(vm.skills) { vm.skills.map { it.name } }
+    val suggestions = remember(text, promptPool) { matchPrompts(text, promptPool) }
+    val slashRows = remember(text, skillNames) { slashSuggestions(text, skillNames) }
     val canSend = text.isNotBlank() || photos.isNotEmpty()
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 8.dp)) {

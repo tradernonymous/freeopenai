@@ -8,6 +8,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -17,7 +18,12 @@ import java.util.Locale
 /** Hands-free voice chat: listen, send what was heard, read the reply aloud,
  * listen again. Uses the phone's own speech recognizer and text-to-speech, so
  * it needs no key; the microphone permission is asked for when voice mode is
- * first opened, never at install. */
+ * first opened, never at install.
+ *
+ * @Stable for the same reason as Platform: it holds a Context and a plain
+ * var, so the compiler infers unstable, and composables that take it could
+ * never be skipped. */
+@Stable
 class VoiceSession(private val context: Context, private val onHeard: (String) -> Unit) {
     enum class State { IDLE, LISTENING, THINKING, SPEAKING }
 

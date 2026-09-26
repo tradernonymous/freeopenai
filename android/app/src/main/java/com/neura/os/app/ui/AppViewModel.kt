@@ -18,6 +18,7 @@ import com.neura.os.app.data.FileGenerator
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -99,15 +100,24 @@ import com.neura.os.app.normalizeBaseUrl
 import java.util.UUID
 import java.util.concurrent.Executors
 
-/** All app state for the native screens. Network and disk work runs on a
- * small pool; every state change is posted back to the main thread, which
- * is the only thread Compose state is written from. */
 private const val UI_STATE_KEY = "ui_state"
 private const val DRAFT_SAVE_BUDGET = 50_000
 /** How often a streaming reply's draft is written to disk, so a process kill
  * part-way through does not lose the whole turn. */
 private const val STREAM_PERSIST_MS = 2_000L
 
+/** All app state for the native screens. Network and disk work runs on a
+ * small pool; every state change is posted back to the main thread, which
+ * is the only thread Compose state is written from.
+ *
+ * @Stable because the compiler cannot infer it. The class holds an Executor,
+ * a Handler and a Context, so it reads as unstable, and roughly 30
+ * composables take one. Unstable meant every one of them was non-skippable
+ * AND any lambda capturing it was rebuilt rather than memoised, so each
+ * streaming state write recomposed the whole screen instead of just the turn
+ * that changed. Identity still does not change; the fields the screens read
+ * are still observable state, which is what makes the writes work. */
+@Stable
 class AppViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val store = SecureStore(app)
     private val repo = Repository(app)
@@ -1790,12 +1800,20 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
 
     /** Reads and decodes a stored picture off the main thread: decoding a full
      * JPEG in the main-thread callback stuttered every scroll past an image. */
-    fun loadBitmap(id: String, onLoaded: (ByteArray?, androidx.compose.ui.graphics.ImageBitmap?) -> Unit) {
+    /** [maxEdge] is the longest side the caller actually needs. Decoding a
+     * stored image at its full resolution is how a two-column gallery grid
+     * ends up holding a dozen 4MB bitmaps at once: there was no bounds probe
+     * and no inSampleSize here, so every cell decoded the source pixels and
+     * the only guard was catching OutOfMemoryError, which drops the image
+     * rather than showing it. The full-screen viewer already sampled to 2048
+     * (see ui/Viewers.kt); this does the same, with the caller picking the
+     * size, and halves the decode further for thumbnails. */
+    fun loadBitmap(id: String, maxEdge: Int = 2048, onLoaded: (ByteArray?, androidx.compose.ui.graphics.ImageBitmap?) -> Unit) {
         work {
             val (bytes, image) = onIo {
                 val bytes = repo.loadImage(id)
                 val bitmap = try {
-                    bytes?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size) }
+                    bytes?.let { decodeSampled(it, maxEdge) }
                 } catch (e: OutOfMemoryError) {
                     null
                 }
@@ -1803,6 +1821,27 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             }
             onLoaded(bytes, image)
         }
+    }
+
+    /** Decodes [bytes] no larger than [maxEdge] on its longest side.
+     *
+     * A bounds-only pass first (no pixel memory), then a real decode at
+     * inSampleSize, which must be a power of two. 1 means "no subsampling". */
+    private fun decodeSampled(bytes: ByteArray, maxEdge: Int): android.graphics.Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxEdge || bounds.outHeight / sample > maxEdge) sample *= 2
+        return android.graphics.BitmapFactory.decodeByteArray(
+            bytes, 0, bytes.size,
+            android.graphics.BitmapFactory.Options().apply {
+                inSampleSize = sample
+                // Thumbnails never need an alpha channel; this halves their
+                // footprint again.
+                if (maxEdge <= 512) inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            },
+        )
     }
 
     fun deleteImage(id: String) {

@@ -92,6 +92,16 @@ data class Prefill(
     val image: Boolean = false,
 )
 
+/** Compiled once at file scope, not per call.
+ *
+ * These three used to be built inside the function, and inlineMarkdown runs
+ * on every visible streamed line, up to ~17 times a second. Kotlin does not
+ * cache Regex(String), so that was 120 Pattern compiles a second on the main
+ * thread for one turn. */
+private val HEADING = Regex("^#{1,6}\\s+")
+private val BULLET = Regex("^\\s*[-*+]\\s+")
+private val INLINE_TOKEN = Regex("(\\*\\*[^*]+\\*\\*|`[^`]+`|\\*[^*\\s][^*]*\\*)")
+
 /** Light Markdown: **bold**, *italic*, `code`, # headings and bullet lines.
  * Fenced blocks are handled by [MarkdownText]. Everything is rendered as
  * text: nothing in a reply can become a link, a script or an image load. */
@@ -99,12 +109,12 @@ fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
     val lines = text.split("\n")
     lines.forEachIndexed { lineIndex, rawLine ->
         var line = rawLine
-        val heading = Regex("^#{1,6}\\s+").find(line)
+        val heading = HEADING.find(line)
         if (heading != null) {
             line = line.substring(heading.value.length)
             withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 17.sp)) { appendInline(line) }
         } else {
-            val bullet = Regex("^\\s*[-*+]\\s+").find(line)
+            val bullet = BULLET.find(line)
             if (bullet != null) {
                 append("  •  ")
                 line = line.substring(bullet.value.length)
@@ -116,9 +126,8 @@ fun inlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
 }
 
 private fun AnnotatedString.Builder.appendInline(line: String) {
-    val pattern = Regex("(\\*\\*[^*]+\\*\\*|`[^`]+`|\\*[^*\\s][^*]*\\*)")
     var cursor = 0
-    for (match in pattern.findAll(line)) {
+    for (match in INLINE_TOKEN.findAll(line)) {
         append(line.substring(cursor, match.range.first))
         val token = match.value
         when {

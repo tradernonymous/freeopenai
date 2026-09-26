@@ -275,7 +275,9 @@ fun ImageStudioScreen(vm: AppViewModel, platform: Platform) {
 private fun StoredImage(vm: AppViewModel, image: GeneratedImage, modifier: Modifier) {
     var bitmap by remember(image.id) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(image.id) {
-        vm.loadBitmap(image.id) { _, decoded -> bitmap = decoded }
+        // A grid cell is a thumbnail, not the picture: 512 is plenty at phone
+        // density and a quarter of the memory the full decode needed.
+        vm.loadBitmap(image.id, maxEdge = 512) { _, decoded -> bitmap = decoded }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val current = bitmap
