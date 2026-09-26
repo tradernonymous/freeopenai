@@ -2,6 +2,8 @@ package com.neura.os.app.ui
 
 import androidx.lifecycle.viewModelScope
 import com.neura.os.app.data.NoticeQueue
+import com.neura.os.app.data.CoalescingSaver
+import com.neura.os.app.data.rebuildConversationIndex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -160,9 +162,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     // Decided in [init] on the pool, not here. Reading store.session or
     // store.password opens the Keystore, and doing that in a property
     // initializer meant two keystore round-trips on the main thread during
-    // onCreate, before the first frame. The UI already renders a loading
-    // state until `loaded` flips, so it is correct for this to arrive with
-    // the rest of the disk state.
+    // onCreate, before the first frame. [init] assigns this as soon as
+    // those two reads come back, ahead of the slower conversations/schedules
+    // disk load, so the sign-in screen does not flash before it.
     var signedIn by mutableStateOf(false)
         private set
     var signInBusy by mutableStateOf(false)
@@ -267,15 +269,28 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         private set
 
     init {
-        // Covers an account signed in before this existed: without this, the
-        // hidden Puter WebView stays 401'd on puter-bridge.html until the
-        // next fresh sign-in or silent re-auth happens to run. Every other
-        // caller (signIn, silentSignIn, signOut) keeps WebView's cookie jar
-        // in step with store.session from here on; this is the one-time
-        // catch-up for whatever store.session already held when the app
-        // launched. A no-op when nobody is signed in yet.
-        store.server?.let { server -> WebShell.syncSessionCookie(server, store.session) }
         work {
+            // Both Keystore reads (store.session, store.password) and the
+            // cookie-jar sync run on the pool, and signedIn is set from
+            // their result before the heavier disk load below (schedules,
+            // conversations) rather than after it: doing either on the main
+            // thread, or only assigning signedIn once the whole disk load
+            // finished, is what flashed the sign-in screen on every cold
+            // start even when the user was already signed in.
+            signedIn = onIo {
+                val server = store.server
+                val session = store.session
+                // Covers an account signed in before this existed: without
+                // this, the hidden Puter WebView stays 401'd on
+                // puter-bridge.html until the next fresh sign-in or silent
+                // re-auth happens to run. Every other caller (signIn,
+                // silentSignIn, signOut) keeps WebView's cookie jar in step
+                // with store.session from here on; this is the one-time
+                // catch-up for whatever store.session already held when the
+                // app launched. A no-op when nobody is signed in yet.
+                server?.let { WebShell.syncSessionCookie(it, session) }
+                server != null && (session != null || store.password != null)
+            }
             val disk = onIo {
                 val savedSchedules = repo.loadSchedules()
                 // Alarms do not survive a reboot or an update; every start re-arms
@@ -284,17 +299,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 if (store.offlineAnswers) responseCache = repo.loadResponseCache()
                 OnDisk(repo.loadConversations(), repo.loadLibrary(), repo.loadOutbox(), repo.loadAutomations(), savedSchedules)
             }
-            // Read here rather than in a property initializer: opening the
-            // Keystore costs 5-30ms and this runs on the pool.
-            signedIn = store.server != null && (store.session != null || store.password != null)
             // A chat started before the disk was read (a shared photo, a
             // notification tap) is kept rather than replaced by the load.
             val fresh = conversations.filter { open -> disk.chats.none { it.id == open.id } }
             conversations.clear()
-            conversationIndex.clear()
             conversations.addAll(fresh + disk.chats)
-            conversationIndex.clear()
-            conversations.forEachIndexed { i, c -> conversationIndex[c.id] = i }
+            reindexConversations()
             currentChatId?.let { id -> currentChat = conversation(id) }
             library = disk.library
             outbox = disk.outbox
@@ -766,8 +776,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val before = conversations.size
         conversations.removeAll { it.messages.isEmpty() && it.id != keep && it.id != streamingId }
         if (conversations.size == before) return
-        conversationIndex.clear()
-        conversations.forEachIndexed { i, c -> conversationIndex[c.id] = i }
+        reindexConversations()
     }
 
     /** The chat on screen, creating a fresh one when there is none. */
@@ -785,8 +794,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun newChat(personaId: String = DEFAULT_PERSONA_ID, draft: String = "", mode: String = "chat"): String {
         val now = System.currentTimeMillis()
         val (provider, model) = startingModel()
-        // An untouched empty chat is replaced rather than stacked up.
+        // An untouched empty chat is replaced rather than stacked up. The
+        // removal shifts every later chat's position, so conversationIndex
+        // has to be rebuilt in full -- not just have this chat's own id
+        // dropped -- or a later replace() lands on the wrong conversation.
+        val before = conversations.size
         conversations.removeAll { it.messages.isEmpty() && it.id != streamingId }
+        if (conversations.size != before) reindexConversations()
         val chat = Conversation(UUID.randomUUID().toString(), "New chat", personaId, provider, model, emptyList(), now, now, mode = mode)
         conversations.add(chat)
         conversationIndex[chat.id] = conversations.lastIndex
@@ -805,13 +819,33 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             conversationIndex[updated.id] = conversations.lastIndex
         }
         if (updated.id == currentChatId) currentChat = updated
-        if (persist && updated.messages.isNotEmpty()) launchIo { repo.saveConversation(updated) }
+        if (persist && updated.messages.isNotEmpty()) persistConversation(updated)
     }
 
     /** chat id -> position in [conversations]. replace() ran an
      * indexOfFirst over the whole list on every write, i.e. once per
      * streaming publish, so this was O(chats) each time. */
     private val conversationIndex = HashMap<String, Int>()
+
+    /** Rebuilds [conversationIndex] from the current [conversations]. Every
+     * add/remove that changes list order or length must call this (see
+     * [rebuildConversationIndex]'s doc) rather than patch one entry. */
+    private fun reindexConversations() {
+        conversationIndex.clear()
+        conversationIndex.putAll(rebuildConversationIndex(conversations))
+    }
+
+    /** Saves a conversation without letting an older write land after a
+     * newer one -- see [CoalescingSaver]. replace() fires a save once every
+     * STREAM_PERSIST_MS while a reply streams and again when the turn
+     * finishes; without this, the two could race and leave the periodic,
+     * stale one on disk as the "last" write, silently reverting part of a
+     * finished reply. */
+    private val chatSaver = CoalescingSaver<String, Conversation>(viewModelScope, ioDispatcher) { repo.saveConversation(it) }
+
+    private fun persistConversation(conversation: Conversation) {
+        chatSaver.queue(conversation.id, conversation)
+    }
 
     fun setModel(id: String, provider: String, model: String, makeDefault: Boolean) {
         val chat = conversation(id) ?: return
@@ -845,7 +879,11 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun delete(id: String) {
         if (streamingId == id) stop()
         conversations.removeAll { it.id == id }
-        conversationIndex.remove(id)
+        // Removing shifts every conversation after it down one slot, so a
+        // plain conversationIndex.remove(id) leaves every later chat's
+        // recorded index one too high -- replace() then either overwrites
+        // the wrong chat or indexes past the end of the list and crashes.
+        reindexConversations()
         drafts.remove(id)
         if (currentChatId == id) {
             currentChatId = null

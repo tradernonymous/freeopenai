@@ -3,7 +3,8 @@
 [← Back to README](../README.md)
 
 Status: **V1–V8 shipped 2026-09-23**, with V3, the phase gaps and P7 finished the
-same day (§4.1), then P8 and P11. Open: V0's phone session. v2 written 2026-09-23 against
+same day (§4.1), then P8 and P11, then a perf/security/a11y batch and its review fix
+batch (build 245, §4.1). Open: V0's phone session. v2 written 2026-09-23 against
 `9b70b7d` (the R2 reskin). v1 (Phases 0–5, all done) is in git history:
 `git show 5d136ca:docs/android-master-plan.md`.
 
@@ -249,6 +250,34 @@ what the row above asked for and the phase did not do.
 
 `6e78972` made screenshots stable: they are taken with animations off, and entrances
 now honour "Remove animations" too.
+
+**Perf/security/a11y batch** (`0f2a9e6`, `50c10db`, `a30625f`, `f42ab7b`, `a198ac0`,
+opencode, after P8/P11): Keystore key caching, durable atomic sealed writes,
+`device_snapshot` moved from auto-run to a confirmed approval, `signOut` now clears
+the previous account's outbox and response cache unconditionally, cleartext HTTP
+refused for any private address instead of silently failing, `@Stable` plus a
+`currentChat`/`conversationIndex` boundary to stop the whole chat screen recomposing
+on every streaming publish, and an accessibility/touch-target pass. Reviewed and
+fixed (see the next entry) rather than reverted.
+
+**Review fix batch** (build 245, this session): five bugs found reviewing the batch
+above, all fixed. (1) `tap_text`/`scroll_until` compared the foreground app against
+itself at the moment Approve is tapped -- always NeuraOS -- so every device action was
+silently cancelled; now compares against `DeviceControlService.lastOtherPackage`, the
+app actually in front before the switch. (2) `delete()` and `newChat()` patched only
+the touched id in `conversationIndex` after a removal that shifts every later chat's
+position, risking a crash or a save landing on the wrong chat; both now call a shared
+`rebuildConversationIndex()` (new, unit-tested in `ConversationIndexTest`). (3)
+`signedIn` was assigned after the full disk load instead of right after its own two
+Keystore reads, and a stray main-thread cookie sync ran before the pooled `work{}`
+block even started -- both flashed the sign-in screen on a cold start; fixed. (4) An
+approved `device_snapshot`'s screen text was appended as a plain user message, so a
+malicious app on screen could have its own text read back to the model with the
+user's authority; now fenced and labelled as untrusted screen content. (5) The
+streaming draft's periodic save (`STREAM_PERSIST_MS`) and the end-of-turn save could
+race and let the stale one land last; both now go through `CoalescingSaver` (new,
+`CoalescingSaverTest`), which keeps only the newest queued write per chat and never
+runs two for the same chat at once.
 
 **Why this order.** V1 first because V4–V6 need its APIs, and a toolchain bump must
 travel alone. V2 before any visual change, so every later phase has a before picture.
