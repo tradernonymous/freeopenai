@@ -3,9 +3,13 @@ import com.neura.os.app.DeviceControlService
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,28 +77,15 @@ fun AutomationScreen(
     vm: AppViewModel,
     onRunAutomation: (String) -> Unit = { vm.runAutomation(it) },
 ) {
-    var showBuilder by remember { mutableStateOf(false) }
     var automationPrompt by remember { mutableStateOf("") }
-    // null: no schedule dialog; a blank schedule id: a new one.
-    var scheduling by remember { mutableStateOf<RecipeSchedule?>(null) }
     val isDeviceControlEnabled = DeviceControlService.instance != null
 
+    // No TopAppBar of its own. NativeActivity already routes this screen
+    // through Page("Automate", vm), which supplies one with a Back arrow, so
+    // the bar that used to be here stacked a second "Automate" title directly
+    // above the real one and users tapped the wrong one. The two actions it
+    // carried move to the Page's actions slot below.
     Column(modifier = Modifier.fillMaxSize().background(Palette.background)) {
-        TopAppBar(
-            title = { Text("Automate", color = Palette.text) },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Palette.surface,
-                titleContentColor = Palette.text,
-            ),
-            actions = {
-                IconButton(onClick = { scheduling = RecipeSchedule("", "", 8, 0, WEEKDAYS) }) {
-                    Icon(Icons.Default.DateRange, "Schedule a prompt", tint = Palette.accent)
-                }
-                IconButton(onClick = { showBuilder = true }) {
-                    Icon(Icons.Default.Add, "New automation", tint = Palette.accent)
-                }
-            },
-        )
 
         LazyColumn(
             modifier = Modifier
@@ -131,7 +122,7 @@ fun AutomationScreen(
                 items(vm.schedules, key = { it.id }) { schedule ->
                     ScheduleCard(
                         schedule = schedule,
-                        onEdit = { scheduling = schedule },
+                        onEdit = { vm.editSchedule(schedule) },
                         onToggle = { vm.setScheduleEnabled(schedule.id, it) },
                         onDelete = { vm.deleteSchedule(schedule.id) },
                     )
@@ -158,21 +149,21 @@ fun AutomationScreen(
         }
     }
 
-    scheduling?.let { editing ->
+    vm.editingSchedule?.let { editing ->
         ScheduleDialog(
             initial = editing,
             onSave = { prompt, hour, minute, days ->
                 val error = vm.saveSchedule(editing.id.ifEmpty { null }, prompt, hour, minute, days)
-                if (error == null) scheduling = null
+                if (error == null) vm.closeSchedule()
                 error
             },
-            onDismiss = { scheduling = null },
+            onDismiss = { vm.closeSchedule() },
         )
     }
 
-    if (showBuilder) {
+    if (vm.automationBuilderOpen) {
         AlertDialog(
-            onDismissRequest = { showBuilder = false },
+            onDismissRequest = { vm.closeAutomationBuilder() },
             title = { Text("Build Automation", color = Palette.text) },
             text = {
                 Column {
@@ -210,7 +201,7 @@ fun AutomationScreen(
                     onClick = {
                         if (automationPrompt.isNotBlank()) {
                             onRunAutomation(automationPrompt)
-                            showBuilder = false
+                            vm.closeAutomationBuilder()
                             automationPrompt = ""
                         }
                     },
@@ -220,7 +211,7 @@ fun AutomationScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showBuilder = false }) {
+                TextButton(onClick = { vm.closeAutomationBuilder() }) {
                     Text("Cancel", color = Palette.muted)
                 }
             },
@@ -360,7 +351,7 @@ private val DAY_LETTERS = listOf("M", "T", "W", "T", "F", "S", "S")
 
 /** New or changed schedule: the prompt, a time of day and the weekdays. Saving
  * only sets a reminder -- the notification opens the prompt as a draft. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ScheduleDialog(
     initial: RecipeSchedule,
@@ -398,16 +389,23 @@ private fun ScheduleDialog(
                 )
                 Spacer(Modifier.height(12.dp))
                 TimeInput(state = time)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // FlowRow, not a fixed Row: seven 32dp chips plus six 6dp gaps
+                // is 260dp, which overflowed the ~224dp available inside this
+                // dialog on a 320dp-wide screen. Each chip is also 48dp now, to
+                // meet the minimum touch target.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     DAY_LETTERS.forEachIndexed { index, letter ->
                         val day = index + 1
                         val on = day in days
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(48.dp)
                                 .clip(CircleShape)
                                 .background(if (on) Palette.accent else Palette.surfaceHigh)
-                                .clickable { days = if (on) days - day else days + day; error = null },
+                                .selectable(selected = on, role = Role.Checkbox) {
+                                    days = if (on) days - day else days + day
+                                    error = null
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(letter, color = if (on) Palette.onAccent else Palette.text, style = MaterialTheme.typography.labelMedium)

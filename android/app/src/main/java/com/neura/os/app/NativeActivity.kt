@@ -39,6 +39,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -378,7 +383,19 @@ class NativeActivity : ComponentActivity(), Platform {
                 Route.Builds -> Page("Builds", vm) { BuildsScreen(vm) }
                 Route.Build -> BuildScreen(vm)
                 is Route.Detail -> Unit
-                Route.Automation -> Page("Automate", vm) { AutomationScreen(vm) }
+                Route.Automation -> Page(
+                "Automate", vm,
+                actions = {
+                    // These used to live on a second TopAppBar inside
+                    // AutomationScreen, stacked above the one Page provides.
+                    IconButton(onClick = { vm.newSchedule() }) {
+                        Icon(Icons.Default.DateRange, "Schedule a prompt", tint = Palette.accent)
+                    }
+                    IconButton(onClick = { vm.newAutomation() }) {
+                        Icon(Icons.Default.Add, "New automation", tint = Palette.accent)
+                    }
+                },
+            ) { AutomationScreen(vm) }
                 Route.Reviews -> Page("Pull requests", vm) { ReviewsScreen(vm) }
                 Route.Agents -> AgentsSpace(vm)
                 Route.Activity -> ActivitySpace(vm)

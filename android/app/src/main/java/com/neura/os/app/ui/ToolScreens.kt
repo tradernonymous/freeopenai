@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -98,17 +99,29 @@ import java.util.UUID
 /** A full page over the chat, with a back arrow. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Page(title: String, vm: AppViewModel, content: @Composable () -> Unit) {
+fun Page(
+    title: String,
+    vm: AppViewModel,
+    actions: @Composable () -> Unit = {},
+    content: @Composable () -> Unit,
+) {
     Scaffold(
         containerColor = Palette.background,
         topBar = {
             TopAppBar(
                 title = { Text(title, modifier = Modifier.sharedTitle(title)) },
                 navigationIcon = { IconButton({ vm.back() }, Modifier.pressScale()) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                actions = { actions() },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.background),
             )
         },
-    ) { padding -> Box(Modifier.padding(padding).fillMaxSize()) { content() } }
+    // imePadding here, not only on the chat screen. enableEdgeToEdge sets
+    // decorFitsSystemWindows = false (NativeActivity), which makes the
+    // manifest's windowSoftInputMode="adjustResize" a no-op -- so on every
+    // other page a focused text field sat underneath the keyboard, invisible
+    // and unreachable. That was Settings > Custom instructions, Library
+    // search, the PR comment box, the image prompt and the Skills search.
+    ) { padding -> Box(Modifier.padding(padding).fillMaxSize().imePadding()) { content() } }
 }
 
 // --- Image studio -----------------------------------------------------------------
@@ -760,7 +773,7 @@ fun SkillsScreen(vm: AppViewModel) {
                 items(vm.skills.distinctBy { it.source + "/" + it.name }, key = { it.source + "/" + it.name }) { skill ->
                     LibraryRow(
                         actions = {
-                            IconButton({ vm.pinSkillToCurrentChat(skill.name) }, Modifier.size(40.dp)) {
+                            IconButton({ vm.pinSkillToCurrentChat(skill.name) }, Modifier.size(48.dp)) {
                                 Icon(Icons.Filled.PushPin, "Pin to this chat", tint = Palette.accent)
                             }
                             TextButton({ open = skill; vm.loadSkillInstructions(skill.name) }) { Text("View") }

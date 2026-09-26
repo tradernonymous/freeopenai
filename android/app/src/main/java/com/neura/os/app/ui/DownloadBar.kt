@@ -112,7 +112,10 @@ private fun FileChip(
             )
         }
 
-        IconButton(onClick = onSave, modifier = Modifier.size(28.dp)) {
+        // 48dp, Material's minimum touch target. This was 28dp -- 42% of the
+        // minimum -- on the Save action for a generated file, which is one of
+        // the hardest things to hit accurately on a phone.
+        IconButton(onClick = onSave, modifier = Modifier.size(48.dp)) {
             Icon(
                 imageVector = Icons.Default.SaveAlt,
                 contentDescription = "Save to Downloads",
@@ -121,7 +124,7 @@ private fun FileChip(
             )
         }
 
-        IconButton(onClick = onShare, modifier = Modifier.size(28.dp)) {
+        IconButton(onClick = onShare, modifier = Modifier.size(48.dp)) {
             Icon(
                 imageVector = Icons.Default.Share,
                 contentDescription = "Share",

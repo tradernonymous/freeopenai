@@ -57,12 +57,20 @@ fun rememberHaptics(): (HapticFeedbackType) -> Unit {
     return remember(haptics) { { type: HapticFeedbackType -> haptics.performHapticFeedback(type) } }
 }
 
-/** Shrinks slightly while pressed and springs back: tactile buttons. */
-fun Modifier.pressScale(pressed: Float = 0.92f): Modifier = composed {
+/** Shrinks slightly while pressed and springs back: tactile buttons.
+ *
+ * The spring was DampingRatioMediumBouncy, which overshoots on every release.
+ * This repo's own design rules reject it -- desktop/src/design/slop.js says
+ * "Bounce easing was charming in 2016; now it reads as a template", and
+ * "motion should calm, not perform" -- so it now uses the token spring
+ * (0.8 damping, 380 stiffness), which the token file already defines as
+ * "fast spatial". It is applied at 30 sites including the send button, where
+ * a 0.85 overshoot visibly shrinks the one control the user is aiming at. */
+fun Modifier.pressScale(pressed: Float = 0.97f): Modifier = composed {
     var down by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         if (down) pressed else 1f,
-        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        spring(dampingRatio = NeuraTokens.SPRING_DAMPING, stiffness = NeuraTokens.SPRING_STIFFNESS),
         label = "press",
     )
     this

@@ -795,6 +795,40 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         launchIo { repo.deleteConversation(id) }
     }
 
+    /** Which schedule the Automate screen's editor is open on; null when it is
+     * closed. This lives here rather than in the composable because the two
+     * app-bar actions that open it are rendered by NativeActivity's Page, not
+     * by AutomationScreen -- which is exactly why AutomationScreen used to
+     * carry a second TopAppBar, stacking a duplicate "Automate" title above
+     * the real one. */
+    var editingSchedule by mutableStateOf<RecipeSchedule?>(null)
+        private set
+
+    /** Whether the "Build Automation" dialog is open. Same reason as
+     * [editingSchedule]. */
+    var automationBuilderOpen by mutableStateOf(false)
+        private set
+
+    fun newSchedule() {
+        editingSchedule = com.neura.os.app.data.RecipeSchedule("", "", 8, 0, com.neura.os.app.data.WEEKDAYS)
+    }
+
+    fun editSchedule(schedule: RecipeSchedule) {
+        editingSchedule = schedule
+    }
+
+    fun closeSchedule() {
+        editingSchedule = null
+    }
+
+    fun newAutomation() {
+        automationBuilderOpen = true
+    }
+
+    fun closeAutomationBuilder() {
+        automationBuilderOpen = false
+    }
+
     /** Appends one message to a chat and saves it. Used by an approved device
      * read: the labelled elements have to land in the conversation, because
      * the model can only see them on a later turn and the user has to be able

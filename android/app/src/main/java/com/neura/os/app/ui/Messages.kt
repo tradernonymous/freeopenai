@@ -389,7 +389,7 @@ private fun ActionRow(turn: Turn.Assistant, isLast: Boolean, platform: Platform,
 
 @Composable
 fun SmallAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp).pressScale()) {
+    IconButton(onClick = onClick, modifier = Modifier.size(48.dp).pressScale()) {
         Icon(icon, contentDescription = label, tint = Palette.muted, modifier = Modifier.size(18.dp))
     }
 }
@@ -672,7 +672,7 @@ fun MarkdownText(text: String, onAnswer: ((String) -> Unit)? = null, onCopyCode:
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.code)) {
                     Row(Modifier.fillMaxWidth().background(Palette.surfaceHigh).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(segment.language.ifEmpty { "code" }, color = Palette.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        IconButton({ onCopyCode(segment.text); copied = true }, Modifier.size(40.dp)) {
+                        IconButton({ onCopyCode(segment.text); copied = true }, Modifier.size(48.dp)) {
                             Icon(if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy, if (copied) "Copied" else "Copy code", tint = Palette.muted, modifier = Modifier.size(16.dp))
                         }
                     }

@@ -161,7 +161,7 @@ fun SpaceHome(
             }
             onAccount?.let {
                 Box(
-                    Modifier.size(36.dp).clip(CircleShape).background(Palette.accentDeep).clickable(onClick = it)
+                    Modifier.size(48.dp).clip(CircleShape).background(Palette.accentDeep).clickable(onClick = it)
                         .semantics { contentDescription = "Account and settings" },
                     contentAlignment = Alignment.Center,
                 ) {
