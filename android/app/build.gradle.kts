@@ -222,6 +222,17 @@ dependencies {
     baselineProfile(project(":baselineprofile"))
 }
 
+// The consumer side of the baselineprofile plugin: these two live here, on
+// the app that receives the profile, not in :baselineprofile.
+baselineProfile {
+    // Merged straight into app/src/main, replacing whatever was checked in,
+    // rather than left as a build artifact someone has to copy by hand.
+    saveInSrc = true
+    // Only ever regenerated on demand (the CI baseline-profile job), never
+    // as part of an ordinary assembleRelease.
+    automaticGenerationDuringBuild = false
+}
+
 // Prints every screenshot baseline as one small JPEG contact sheet, base64
 // between two marker lines, into the build log. CI runs it after the
 // screenshot step: artifacts cannot be downloaded from where this app is
