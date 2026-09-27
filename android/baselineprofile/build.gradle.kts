@@ -36,11 +36,6 @@ dependencies {
     implementation(libs.androidx.benchmark.macro.junit4)
 }
 
-baselineProfile {
-    // Merged straight into app/src/main, replacing whatever was checked in,
-    // rather than left as a build artifact someone has to copy by hand.
-    saveInSrc = true
-    // No warm-up/baseline-profile-mode iterations: this module only ever
-    // runs to produce app/src/main/baseline-prof.txt, never to measure.
-    automaticGenerationDuringBuild = false
-}
+// saveInSrc and automaticGenerationDuringBuild belong to the consuming app's
+// baselineProfile block, not this producer's (whose extension has no such
+// properties): see app/build.gradle.kts.
