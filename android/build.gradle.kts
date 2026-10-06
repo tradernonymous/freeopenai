@@ -6,4 +6,5 @@ plugins {
     // Applied in app/build.gradle.kts only when google-services.json exists --
     // see the comment there for why push notifications have to be optional.
     alias(libs.plugins.google.services) apply false
+    alias(libs.plugins.android.test) apply false
 }
