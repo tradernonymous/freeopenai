@@ -197,5 +197,5 @@ jobs:
           # The engine's log and Maestro's own debug output (screenshots, UI
           # hierarchy) say why a flow failed; the junit report alone did not.
           path: |
-            .maestro/
+            .maestro/**
             engine.log

@@ -2,8 +2,13 @@ appId: com.neura.os
 ---
 # Chat progress: typing indicator and streaming response
 - launchApp
-- assertVisible:
-    id: "chat_input"
+# The session restore is async after launch (Keystore read on an IO pool), so
+# the sign-in screen can flash first: wait for the composer instead of one
+# immediate assert.
+- extendedWaitUntil:
+    visible:
+      id: "chat_input"
+    timeout: 30000
 - tapOn:
     id: "chat_input"
 - inputText: "Write a short poem about testing"

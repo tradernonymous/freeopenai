@@ -2,8 +2,12 @@ appId: com.neura.os
 ---
 # Navigation: mode switching progress
 - launchApp
-- assertVisible:
-    text: "Chat"
+# Session restore is async after launch (Keystore read on an IO pool), so the
+# sign-in screen can flash first: wait instead of one immediate assert.
+- extendedWaitUntil:
+    visible:
+      text: "Chat"
+    timeout: 30000
 - tapOn:
     text: "Plan"
     optional: true
