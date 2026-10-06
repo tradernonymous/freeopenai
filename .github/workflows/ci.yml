@@ -175,6 +175,16 @@ jobs:
           # action splices script: into its own shell and mangles embedded
           # if/fi and $(...), so the real logic lives in a checked-in file.
           script: bash "$GITHUB_WORKSPACE/.github/scripts/maestro-smoke.sh"
+      # Maestro writes its debug output (failure screenshots, the UI
+      # hierarchy dump) under ~/.maestro/tests/<timestamp>. upload-artifact
+      # receives the path as a string and does not expand "~", so that
+      # directory was silently dropped from every artifact so far (run
+      # 37401119070's zip held only engine.log) exactly when it is needed
+      # most. Copy it into the workspace first.
+      - name: Collect Maestro debug output
+        if: always()
+        run: |
+          cp -r "$HOME/.maestro/tests" .maestro/debug-output || echo "no maestro debug output found"
       - name: Upload Maestro reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -183,7 +193,5 @@ jobs:
           # The engine's log and Maestro's own debug output (screenshots, UI
           # hierarchy) say why a flow failed; the junit report alone did not.
           path: |
-            .maestro/build/reports/
-            .maestro/*.png
+            .maestro/
             engine.log
-            ~/.maestro/tests/

@@ -562,7 +562,7 @@ test('a refused save is reported, to the page and to the model', async () => {
   const ack = await h.mod.memoryTool({ text: 'one more fact' });
   assert.match(ack, /^Error: Memory is full/);
   assert.match(ack, /was not saved/);
-  const dead = await h.mod.upsertFact('x', false);
+  await h.mod.upsertFact('x', false);
   const h2 = memoryHarness({ fetchJson: async () => { throw new Error('down'); } });
   const offline = await h2.mod.upsertFact('x', false);
   assert.deepEqual(offline, { ok: false, error: 'The server did not answer' }, 'a network failure says so too');

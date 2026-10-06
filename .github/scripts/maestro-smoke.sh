@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sanity check before anything else looks at the device: this fails in
+# seconds when the emulator's adb server is not up (config.yaml sends
+# Maestro at the 'adb' from PATH, whose server must already be running),
+# instead of surfacing as "Unable to connect to adb daemon" repeats deep
+# inside the first flow.
+adb devices
 adb install -r "$GITHUB_WORKSPACE/android/app/build/outputs/apk/debug/app-debug.apk"
 # A slow CI emulator can leave a "System UI isn't responding" dialog over
 # everything; close system dialogs before the flows start.

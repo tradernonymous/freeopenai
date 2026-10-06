@@ -40,7 +40,6 @@
       onOpenPane,                 // optional: called when the pane opens (page closes the session panel)
       // Page-scope helper names stay injected: the page's own copies are
       // bare globals, so tests supply them either way.
-      artifactDocument,           // (code) => full document for the frame
       canvasShell,                // () => the .chat-shell element (or null)
     } = deps;
 

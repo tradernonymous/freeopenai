@@ -16,7 +16,7 @@ const {
 } = require('../chatlib.js');
 const fs = require('node:fs');
 const path = require('node:path');
-const { HTML, sourceOf } = require('./helpers/index-html.js');
+const { sourceOf } = require('./helpers/index-html.js');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 
 // Priced models, the way a server provider lists them.

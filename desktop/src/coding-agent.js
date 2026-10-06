@@ -84,7 +84,6 @@
 
   var MAX_ROUNDS = 30;
   var MAX_TOOL_CALLS = 100;
-  var MAX_RETRY = 3;
 
   // --- system prompt ------------------------------------------------------
 

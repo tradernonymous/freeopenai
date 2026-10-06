@@ -413,7 +413,7 @@
   function pastedFile(input) {
     var m = String(input || '').trim().match(/^(?:https?:\/\/)?(?:www\.)?(?:huggingface\.co|hf\.co)\/[^\/?#\s]+\/[^\/?#\s]+\/(?:blob|resolve)\/[^\/?#\s]+\/([^?#\s]+)/i);
     if (!m) return '';
-    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
   }
 
   return {

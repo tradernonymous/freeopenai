@@ -120,7 +120,7 @@ test('NEURA-023: run writes the script through the confined write, runs it, and 
   const writes = [];
   const files = { write: async (p, c) => { writes.push({ p, c }); calls.push('write ' + p); } };
   let fail = false;
-  const runner = async (command, cwd, timeoutMs) => {
+  const runner = async (command) => {
     calls.push(command);
     if (fail && command.startsWith('docker run')) throw new Error('container died');
     return { exitCode: 0, timedOut: false, stdout: '', stderr: '' };

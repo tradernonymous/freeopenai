@@ -235,7 +235,7 @@ describe('coding-agent', () => {
           if (calls === 1) return '```tool\n{"name": "list_files", "args": {"path": ""}}\n```';
           return 'Done listing.';
         },
-        listFiles: async (root, path) => ({
+        listFiles: async () => ({
           entries: [{ name: 'file.txt', dir: false, size: 100 }],
         }),
         onEvent: () => {},

@@ -54,11 +54,11 @@
   }
 
   function readMeta(store) {
-    try { return cleanMeta(JSON.parse((store || globalThis.localStorage).getItem(META_KEY) || '{}')); } catch (e) { return cleanMeta(null); }
+    try { return cleanMeta(JSON.parse((store || globalThis.localStorage).getItem(META_KEY) || '{}')); } catch { return cleanMeta(null); }
   }
 
   function writeMeta(meta, store) {
-    try { (store || globalThis.localStorage).setItem(META_KEY, JSON.stringify(cleanMeta(meta))); } catch (e) { /* storage full: meta is optional */ }
+    try { (store || globalThis.localStorage).setItem(META_KEY, JSON.stringify(cleanMeta(meta))); } catch { /* storage full: meta is optional */ }
   }
 
   function togglePin(meta, id) {

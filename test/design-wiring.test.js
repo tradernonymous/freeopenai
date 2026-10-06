@@ -79,7 +79,6 @@ test('the design modules are the tested ones (UMD, no second copy)', () => {
 
 test('the screen calls only routes the server serves', () => {
   const screen = read('src', 'screens', 'DesignScreen.tsx');
-  const server = fs.readFileSync(path.join(DESKTOP, '..', 'server.js'), 'utf8');
   const calls = [...screen.matchAll(/api\.(designTemplates|designProjects|designCreateProject|designGetProject|designUpdateProject|designGenerate|designExport|designSaveBrand|fetchUrl|providers|models)\b/g)]
     .map((m) => m[1]);
   assert.ok(calls.length >= 6, 'the screen is wired, found ' + calls.length);

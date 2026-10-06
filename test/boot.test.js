@@ -13,12 +13,6 @@ const vm = require('node:vm');
 // So boot the real script against a stub DOM. We don't need the page to work
 // here, only to get through initialization without a ReferenceError.
 
-function inlineScripts(html) {
-  return [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
-    .map((m) => m[1])
-    .filter((code) => code.trim().length > 200);
-}
-
 // Answers every property access with another callable stub, so the script can
 // do document.getElementById('x').classList.toggle(...) without us modelling
 // any of it. Anything numeric-ish returns 0 and anything string-ish '' via the
@@ -79,8 +73,6 @@ function bootSandbox() {
   return sandbox;
 }
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const chatlib = fs.readFileSync(path.join(__dirname, '..', 'chatlib.js'), 'utf8');
 // share-memory.js loads via its own <script src> too, and the page builds its

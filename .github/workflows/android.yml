@@ -247,6 +247,18 @@ jobs:
       # image for fast, low-resource headless CI -- the smoke job stays on
       # API 29 default because that is what actually boots without KVM for
       # a plain launch check, but this needs the higher API regardless.
+      #
+      # The task targets the release build type specifically, not the
+      # umbrella `generateBaselineProfile`: that one also wires up a profile
+      # consumer for the `debug` build type -- which is deliberately
+      # non-debuggable (see app/build.gradle.kts's buildTypes) -- and the
+      # baselineprofile plugin then resolves that consumer against
+      # :baselineprofile for BuildTypeAttr=debug, which the producer
+      # never publishes (it only builds benchmarkRelease /
+      # nonMinifiedRelease / release variants). That is the "No matching
+      # variant" failure the first run of this job died with; the
+      # release-specific task negotiates against the producer's own release
+      # variant and resolves.
       - name: Boot the emulator and record the baseline profile
         timeout-minutes: 25
         uses: reactivecircus/android-emulator-runner@1b48cf25bcdcd1c835908e340039354ff983978a
@@ -256,13 +268,17 @@ jobs:
           target: aosp_atd
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -memory 1536
-          script: cd "$GITHUB_WORKSPACE/android" && gradle :app:generateBaselineProfile
+          script: cd "$GITHUB_WORKSPACE/android" && gradle :app:generateReleaseBaselineProfile
       - name: Print the generated profile
         if: always()
         run: |
-          if [ -s app/src/main/baseline-prof.txt ]; then
+          # The plugin writes the fresh profile (its saveInSrc default) for
+          # the release build type here, not into src/main -- src/main is
+          # the hand-committed file and is updated from what this prints.
+          generated=app/src/release/generated/baselineProfiles/baseline-prof.txt
+          if [ -s "$generated" ]; then
             echo "NEURA-PROFILE-BEGIN"
-            cat app/src/main/baseline-prof.txt
+            cat "$generated"
             echo "NEURA-PROFILE-END"
           else
             echo "No baseline-prof.txt was produced."
@@ -271,7 +287,7 @@ jobs:
         if: always()
         with:
           name: baseline-profile
-          path: android/app/src/main/baseline-prof.txt
+          path: android/app/src/release/generated/baselineProfiles/baseline-prof.txt
           retention-days: 14
           if-no-files-found: ignore
 

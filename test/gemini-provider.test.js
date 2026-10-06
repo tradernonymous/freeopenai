@@ -1,7 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
-const { LLM_PROVIDERS, createRequestHandler, clearModelCache, clearImageDiscoveryCache } = require('../server.js');
+const { LLM_PROVIDERS } = require('../server.js');
 
 test('the gemini slot is declared with the shape the server relies on', () => {
   const provider = LLM_PROVIDERS.gemini;

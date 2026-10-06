@@ -4,7 +4,6 @@
 const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 const assert = require('node:assert/strict');
 const hub = require('../hub.js');
 
@@ -13,7 +12,6 @@ const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 const appJs = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
 const js = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
-const hubCss = fs.readFileSync(path.join(ROOT, 'hub.css'), 'utf8');
 
 test('a reply reads like a plan when it has steps', () => {
   assert.equal(hub.looksLikePlan('1. Add a test\n2. Write the code'), true);

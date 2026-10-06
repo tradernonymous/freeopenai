@@ -1,7 +1,9 @@
+        // eslint-disable-next-line no-unused-vars -- driven by index.html onclick
 function updateNavActive(btn) {
             document.querySelectorAll('.top-nav-link').forEach(b => b.classList.remove('active'));
             if (btn) btn.classList.add('active');
         }
+        // eslint-disable-next-line no-unused-vars -- index.html onmouseenter
         function showChatHistory() {
             const dd = document.getElementById('chatHistoryDropdown');
             if (dd) {
@@ -11,6 +13,7 @@ function updateNavActive(btn) {
                 dd.classList.add('open');
             }
         }
+        // eslint-disable-next-line no-unused-vars -- index.html onmouseleave
         function hideChatHistory() {
             const dd = document.getElementById('chatHistoryDropdown');
             if (dd) dd.classList.remove('open');
@@ -188,11 +191,12 @@ function updateNavActive(btn) {
             try {
                 localStorage.setItem(key, value);
                 return true;
-            } catch (e) {
+            } catch {
                 return false;
             }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange; extracted by test/storage-refusal.test.js
         function setSkillsEnabled(on) {
             skillsEnabled = !!on;
             rememberPreference('freeopenaiSkills', skillsEnabled ? '1' : '0');
@@ -222,6 +226,7 @@ function updateNavActive(btn) {
             if (window.NeuraOSHub) window.NeuraOSHub.syncMode(selectedMode);
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/storage-refusal.test.js
         function cycleMode() {
             const idx = MODES.findIndex((m) => m.id === selectedMode);
             selectedMode = MODES[(idx + 1) % MODES.length].id;
@@ -904,6 +909,7 @@ function updateNavActive(btn) {
         });
         transcriptController.attach();
 
+        // eslint-disable-next-line no-unused-vars -- extracted and driven by test/transcript-scroll-wiring.test.js
         function updateScrollBottomPill() {
             transcriptController.updateScrollBottomPill();
         }
@@ -911,10 +917,12 @@ function updateNavActive(btn) {
         // Off-screen bubbles are laid out lazily, so the scroll height is still
         // moving after a write that lands on a stale maximum -- which is how a
         // jump to the newest output stops a few lines short.
+        // eslint-disable-next-line no-unused-vars -- extracted and driven by test/transcript-scroll-wiring.test.js
         function pinTranscriptToBottom() {
             transcriptController.pinToBottom();
         }
 
+        // eslint-disable-next-line no-unused-vars -- extracted and driven by test/transcript-scroll-wiring.test.js
         function setTranscriptPinned(pinned) {
             transcriptController.setPinned(pinned);
         }
@@ -965,13 +973,11 @@ function updateNavActive(btn) {
         const attachmentCost = document.getElementById('attachmentCost');
         const imageLightbox = document.getElementById('imageLightbox');
         const lightboxImg = document.getElementById('lightboxImg');
-        const lightboxDownload = document.getElementById('lightboxDownload');
         const githubConfirmOverlay = document.getElementById('githubConfirmOverlay');
         const attachTrigger = document.getElementById('attachTrigger');
         const attachMenu = document.getElementById('attachMenu');
         const skillMenuList = document.getElementById('skillMenuList');
         const skillSearch = document.getElementById('skillSearch');
-        const skillBar = document.getElementById('skillBar');
         const fileInput = document.getElementById('fileInput');
         const views = {
             chat: document.getElementById('viewChat'),
@@ -1298,6 +1304,7 @@ function updateNavActive(btn) {
         // that did it. Each rail chip's data-section names the panel's
         // data-tab -- the same slug the heading id also carries, kept for the
         // scroll-margin polish once a panel is visible.
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/ui-controls.test.js
         function jumpToSettingsSection(slug) {
             const wanted = String(slug || '');
             const panels = document.querySelectorAll('.settings-tab-panel');
@@ -1407,6 +1414,7 @@ function updateNavActive(btn) {
             showStatus('success', 'Model: ' + modelLabel.textContent);
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange; extracted by test/storage-refusal.test.js
         function selectEffort(value) {
             selectedEffort = isValidEffort(value) ? value : DEFAULT_EFFORT;
             rememberPreference('puterChatEffort', selectedEffort);
@@ -1447,6 +1455,7 @@ function updateNavActive(btn) {
             }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function focusEffort() {
             const select = document.getElementById('effortSelect');
             if (select && !select.hidden && typeof select.focus === 'function') select.focus();
@@ -1504,6 +1513,7 @@ function updateNavActive(btn) {
             document.querySelectorAll('.menu-trigger-btn').forEach((btn) => btn.classList.toggle('signed-in', signedIn));
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function handleAuthClick() {
             if (!puterReady) { showStatus('error', 'Puter.js not loaded'); return; }
             try {
@@ -1673,6 +1683,7 @@ function updateNavActive(btn) {
             return (opt && opt.dataset.account) || '';
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function githubLoadFile() {
             const repo = document.getElementById('githubRepoSelect').value;
             const path = document.getElementById('githubPathInput').value.trim();
@@ -1693,6 +1704,7 @@ function updateNavActive(btn) {
             }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function githubCommit() {
             const repo = document.getElementById('githubRepoSelect').value;
             const path = document.getElementById('githubPathInput').value.trim();
@@ -1991,6 +2003,7 @@ function updateNavActive(btn) {
             });
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function addMcpServerFromForm() {
             const nameInput = document.getElementById('mcpServerName');
             const urlInput = document.getElementById('mcpServerUrl');
@@ -2851,7 +2864,7 @@ function updateNavActive(btn) {
                     .slice(0, 20);
                 skillUseLog = Object.fromEntries(kept);
                 localStorage.setItem(SKILL_USE_KEY, JSON.stringify(skillUseLog));
-            } catch (e) {
+            } catch {
                 // A browser refusing storage must not break the turn that
                 // recorded it.
             }
@@ -2963,6 +2976,7 @@ function updateNavActive(btn) {
         // The rules live in chatlib (routeStep) so they can be tested without a
         // page. This is the wiring: what the loop knows about a step, and what it
         // does when the cheaper model turns out not to be able to take it.
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         function setRoutingEnabled(on) {
             routingMode = on ? 'auto' : 'off';
             try {
@@ -3033,6 +3047,7 @@ function updateNavActive(btn) {
         }
 
         // --- The reasoning summary, on or off ---
+        // eslint-disable-next-line no-unused-vars -- index.html onchange; its source span is read by test/todos-panel-wiring.test.js
         function setReasoningVisible(on) {
             reasoningVisible = !!on;
             try {
@@ -3083,6 +3098,7 @@ function updateNavActive(btn) {
         // clearTaskList() drops what is finished; clearTaskList(true) drops
         // everything. Clearing a plan that is half done is the destructive one,
         // so it is not the behaviour of the plain call.
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function clearTaskList(all) {
             const next = normalizeTaskGraph(taskGraph);
             next.tasks = all ? [] : next.tasks.filter((task) => task.status !== 'done');
@@ -3253,7 +3269,7 @@ function updateNavActive(btn) {
         // one billing error doesn't become one per model.
         const providersSuspended = new Set();
 
-        function suspendProvider(detail) {
+        function suspendProvider() {
             if (providersSuspended.has(selectedProvider)) return;
             providersSuspended.add(selectedProvider);
             const label = (providerInfo[selectedProvider] && providerInfo[selectedProvider].label) || selectedProvider;
@@ -3673,7 +3689,7 @@ function updateNavActive(btn) {
                 } else if (res.status === 403 || res.status === 402 || res.status === 404) {
                     // Account-level refusals apply to every model, so removing
                     // them one at a time would spend a failed request per model.
-                    suspendProvider(detail);
+                    suspendProvider();
                 }
                 // Name the model that actually refused. forgetRefusedModel has
                 // already moved the selection on, so the message has to explain
@@ -3739,7 +3755,7 @@ function updateNavActive(btn) {
                     const next = forgetRefusedModel(modelId, detail);
                     if (next && attempt < MAX_MODEL_REFUSAL_RETRIES) continue;
                 } else if (res.status === 403 || res.status === 402 || res.status === 404) {
-                    suspendProvider(detail);
+                    suspendProvider();
                 }
                 const err = new Error(detail);
                 err.statusCode = res.status;
@@ -4551,6 +4567,7 @@ function updateNavActive(btn) {
 
         function toggleImageMode() { setImageMode(!imageMode); }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         function setArenaMode(on) {
             arenaMode = !!on;
             const box = document.getElementById('arenaModeSwitch');
@@ -4573,12 +4590,14 @@ function updateNavActive(btn) {
         // the time the first picture comes back. The status line says what
         // changed, because a chip lighting up in the composer is a small enough
         // change to miss from the middle of the screen.
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/experience-polish.test.js
         function startImageTurn() {
             if (!imageMode) toggleImageMode();
             if (chatInput && typeof chatInput.focus === 'function') chatInput.focus();
             showStatus('info', 'Image mode on — describe the picture you want');
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/experience-polish.test.js
         function startPlanTurn() {
             if (selectedMode !== 'plan') {
                 selectedMode = 'plan';
@@ -4596,6 +4615,7 @@ function updateNavActive(btn) {
         // that can take seconds — so the wait is announced before it starts
         // rather than after it ends. Without this, the first thing a new reader
         // sees on clicking "Add a skill" is nothing at all.
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; matched by test/experience-polish.test.js
         async function startSkillBrowse() {
             showStatus('info', 'Loading the skill library…');
             try {
@@ -4838,7 +4858,7 @@ function updateNavActive(btn) {
                 if (attachedImageFile) {
                     let source = '';
                     try {
-                        source = await imageEditSource(attachedImageFile, controller.signal);
+                        source = await imageEditSource(attachedImageFile);
                     } catch (error) {
                         removeTypingIndicator();
                         if (error && error.name === 'AbortError') {
@@ -5282,7 +5302,7 @@ function updateNavActive(btn) {
         // The source for an image edit. An attachment is re-encoded to fit the
         // endpoint; the request always carries the source, so the model is
         // never asked to imagine what "the attached image" looked like.
-        async function imageEditSource(attachedFile, signal) {
+        async function imageEditSource(attachedFile) {
             if (!attachedFile) throw new Error('no image to edit');
             const dataUrl = await imageDataUrlForRequest(attachedFile);
             if (!dataUrl) throw new Error('that image could not be read — try a smaller one');
@@ -6244,6 +6264,7 @@ function updateNavActive(btn) {
                 .filter(Boolean);
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function copyLightboxImage() {
             const src = lightboxImg.src;
             try {
@@ -6332,11 +6353,13 @@ function updateNavActive(btn) {
             canvas.addEventListener('pointerleave', () => { down = false; });
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function setMaskBrush(px) {
             maskBrush = px;
             showStatus('info', 'Brush: ' + px + 'px');
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function clearMask() {
             const canvas = document.getElementById('maskCanvas');
             if (!canvas || !editState) return;
@@ -6385,6 +6408,7 @@ function updateNavActive(btn) {
             }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function submitImageEdit() {
             const typed = document.getElementById('imageEditPrompt').value.trim();
             if (!typed) { showStatus('error', 'Describe the edit first'); return; }
@@ -6817,8 +6841,6 @@ function updateNavActive(btn) {
             if (overlay && typeof overlay.remove === 'function') overlay.remove();
         }
 
-        const CANVAS_REACT_MARKER = CanvasArtifacts.REACT_MARKER;
-
         // ---- thin delegates: the names the page's markup and code call ----
 
         // Build the document a block runs in: a plain wrapper so a fragment
@@ -6887,6 +6909,7 @@ function updateNavActive(btn) {
             updateCanvasFrame();
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function openSelectedCanvasBlock() {
             const select = document.getElementById('canvasSelect');
             if (!select || select.value === '') return;
@@ -6965,7 +6988,7 @@ function updateNavActive(btn) {
             let api;
             try {
                 api = await ensureMermaid();
-            } catch (error) {
+            } catch {
                 holder.hidden = true;
                 showStatus('error', 'The diagram engine failed to load; the code is untouched.');
                 return;
@@ -6978,7 +7001,7 @@ function updateNavActive(btn) {
                 wrap.className = 'diagram-svg';
                 wrap.innerHTML = result.svg;
                 holder.appendChild(wrap);
-            } catch (error) {
+            } catch {
                 holder.hidden = true;
                 showStatus('error', 'Mermaid could not draw that block; the code is untouched.');
             }
@@ -7137,16 +7160,6 @@ function updateNavActive(btn) {
             }, 1200);
         }
 
-        // The whole exchange as markdown, for pasting into an issue or a doc.
-        function copyConversation(button) {
-            if (!messages.length) {
-                showStatus('error', 'Nothing to copy yet');
-                return;
-            }
-            const convo = conversations.find((c) => c.id === activeConversationId);
-            copyText(conversationToMarkdown(messages, convo && convo.title), button);
-        }
-
         // Forking splits this thread at the message the reader clicked: the new
         // chat keeps everything through it and stops there, becoming the
         // starting point for an alternate continuation. The original stays
@@ -7293,6 +7306,7 @@ function updateNavActive(btn) {
             sendButton.disabled = isTyping ? false : !ta.value.trim();
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onkeydown
         function handleKeyDown(e) {
             if (e.key === 'Escape' && isTyping) { e.preventDefault(); stopGeneration(); return; }
             if ((e.ctrlKey || e.metaKey) && String(e.key || '').toLowerCase() === 'g') {
@@ -7309,6 +7323,7 @@ function updateNavActive(btn) {
             }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; driven by tools/browser-smoke.js
         function toggleAttachMenu() {
             if (attachMenu.classList.contains('open')) closeAttachMenu();
             else openAttachMenu();
@@ -7369,6 +7384,7 @@ function updateNavActive(btn) {
         // file becomes. Filtering "Files" by the extensions the app accepted is what
         // made .py, .html, .css, .env, .toml, Makefile and Dockerfile unselectable --
         // so Files opens unfiltered, and whatever arrives is classified by what it is.
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/attachments.test.js
         function selectAttachKind(kind) {
             closeAttachMenu();
             fileInput.accept = kind === 'image'
@@ -7441,6 +7457,7 @@ function updateNavActive(btn) {
         // text if the bytes decode as text. The old version asked the menu item
         // instead, so a PDF opened from Files was refused for arriving through the
         // wrong door and a .py opened from Documents likewise.
+        // eslint-disable-next-line no-unused-vars -- index.html onchange; extracted by test/attachments.test.js
         async function handleFileSelect(input) {
             const file = input.files && input.files[0];
             input.value = '';
@@ -7555,6 +7572,7 @@ function updateNavActive(btn) {
             updateEffortPicker();
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         function setAutoRetry(on) {
             autoRetryEnabled = !!on;
             try { if (typeof localStorage !== 'undefined') localStorage.setItem('puterChatAutoRetry', autoRetryEnabled ? '1' : '0'); } catch { /* private mode */ }
@@ -7563,6 +7581,7 @@ function updateNavActive(btn) {
         // The free-only switch changes what the picker shows, so the rows have to
         // be rebuilt on the spot -- and the choice has to survive a reload, which
         // is what the storage key is for.
+        // eslint-disable-next-line no-unused-vars -- index.html onchange; matched by test/free-picker-wiring.test.js
         function setFreeModelsOnly(on) {
             freeModelsOnly = !!on;
             try { if (typeof localStorage !== 'undefined') localStorage.setItem('freeai4uFreeModelsOnly', freeModelsOnly ? '1' : '0'); } catch { /* private mode */ }
@@ -7573,6 +7592,7 @@ function updateNavActive(btn) {
             showStatus('info', freeModelsOnly ? 'Showing free models only' : 'Showing every model, free or paid');
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         function setCompactNotices(on) {
             compactNotices = !!on;
             try {
@@ -7655,13 +7675,6 @@ function updateNavActive(btn) {
                     localStorage.setItem('puterChatTheme', stored);
                 }
             } catch { /* private mode */ }
-        }
-
-        function toggleTheme() {
-            const current = (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function' && localStorage.getItem('puterChatTheme')) || 'dark';
-            const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
-            applyTheme(next);
-            showStatus('success', 'Theme: ' + next);
         }
 
         // The appearance picker.
@@ -8391,6 +8404,7 @@ function updateNavActive(btn) {
         // share), so choosing a different one here mints a new link rather
         // than pretending the old one's expiry moved: the previous link is
         // revoked first, exactly as if Revoke had been tapped.
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         async function changeShareExpiration() {
             if (shareMemory.activeShare().id) await shareMemory.revoke();
             await publishShareLink();
@@ -8400,11 +8414,13 @@ function updateNavActive(btn) {
             document.getElementById('shareOverlay').classList.remove('open');
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function copyShareLink() {
             const { url } = shareMemory.activeShare();
             if (url) copyText(url, document.getElementById('shareCopyBtn'));
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         async function revokeShareLink() {
             if (!shareMemory.activeShare().id) return;
             const revoked = await shareMemory.revoke();
@@ -8456,6 +8472,7 @@ function updateNavActive(btn) {
             if (sw) sw.checked = shareMemory.onForChat(activeConversationId);
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onchange
         function setMemoryForChat(on) {
             shareMemory.setForChat(activeConversationId, on);
             showStatus('info', on ? 'Memory offered to this chat' : 'Memory off for this chat');
@@ -8540,6 +8557,7 @@ function updateNavActive(btn) {
             if (!result.ok) showStatus('error', result.error || 'Could not save that');
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function addMemoryFactFromInput() {
             const input = document.getElementById('memoryAddInput');
             if (!input || !input.value.trim()) return;
@@ -8551,6 +8569,7 @@ function updateNavActive(btn) {
             await shareMemory.deleteFact(text);
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick; extracted by test/share-memory.test.js
         async function clearAllMemoryFacts() {
             await shareMemory.clearAllFacts();
         }
@@ -8618,6 +8637,7 @@ function updateNavActive(btn) {
             else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
         }
 
+        // eslint-disable-next-line no-unused-vars -- index.html onclick
         function refreshPage() { showStatus('info', 'Refreshing...'); location.reload(); }
 // ============================================================
 // PHASE 1: Service Worker Registration

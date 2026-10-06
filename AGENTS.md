@@ -49,6 +49,17 @@ release, the exe to `desktop-latest`.
 - A user-supplied URL is parsed with `new URL()` and its host checked on
   **every redirect hop**, not just the first.
 
+## Module boundaries that look like duplication
+
+`agent-sessions.js` has its own `parseArgs` (rejects top-level Arrays) and
+`hashCall` (sha256) instead of reusing chatlib's `parseToolArgs`,
+`canonicalToolArgs` and `toolCallKey`. This is deliberate, not drift: agent
+sessions are a long-lived on-disk state machine and store `hashCall` output in
+saved state, so its behaviour must never change; chatlib's helpers are ephemeral
+per-call utilities with different semantics. Stored sessions would break if the
+export format moved under chatlib's feet. Before "deduping" these, read this
+file: a past cleanup attempt was reverted for changing hash output.
+
 ## How to work here
 
 - Read before you edit: `search_files`/`grep` for the thing, then read the file.

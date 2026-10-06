@@ -77,7 +77,7 @@
   function readPinned(key, store) {
     try {
       return storage(store).getItem(key) === '1';
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -85,7 +85,7 @@
   function writePinned(key, value, store) {
     try {
       storage(store).setItem(key, value ? '1' : '0');
-    } catch (e) {
+    } catch {
       /* A rail that forgets its pin is still a usable rail. */
     }
   }
@@ -93,7 +93,7 @@
   function readTool(store) {
     try {
       return cleanTool(storage(store).getItem(TOOL_KEY));
-    } catch (e) {
+    } catch {
       return DEFAULT_TOOL;
     }
   }
@@ -101,7 +101,7 @@
   function writeTool(id, store) {
     try {
       storage(store).setItem(TOOL_KEY, cleanTool(id));
-    } catch (e) {
+    } catch {
       /* see writePinned */
     }
   }

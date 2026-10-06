@@ -334,9 +334,24 @@ async function main() {
         const session = await (async () => {
           const shell = el('#viewChat .chat-shell');
           if (!shell || typeof toggleSessionPanel !== 'function' || typeof showSessionTab !== 'function') return null;
-          // The session drawer and its scrim animate independently; allow one full
-          // transition plus a frame before measuring geometry on slower runners.
-          const settle = () => new Promise((done) => setTimeout(done, 500));
+          // The session drawer and its scrim animate over 200ms, but a loaded
+          // runner can start the transition after any fixed timer fires -- which
+          // is how a panel read once lands mid-slide. Wait out a full
+          // transition, then poll until two consecutive reads of the panel
+          // agree, and only settle once the geometry has stopped moving.
+          const settle = async () => {
+            const started = Date.now();
+            let last = null;
+            for (;;) {
+              await new Promise((done) => setTimeout(done, 60));
+              const now = box('#sessionPanel');
+              const elapsed = Date.now() - started;
+              if (now && last && ['left', 'right', 'top', 'bottom', 'width', 'height', 'opacity']
+                .every((key) => now[key] === last[key]) && elapsed >= 300) return;
+              last = now;
+              if (elapsed > 2000) return;
+            }
+          };
           const card = el('#viewChat .chat-card');
           const width = () => (card ? Math.round(card.getBoundingClientRect().width) : null);
           const isOpen = () => !shell.classList.contains('session-hidden');

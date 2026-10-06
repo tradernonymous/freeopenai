@@ -48,15 +48,15 @@ describe('remote-handoff', () => {
     const mockApi = { buildRun: async () => ({ id: 'build-1', status: 'running' }), buildEvents: () => '' };
     await handoff.startHandoff('/tmp', 'fix the bug', {
       api: mockApi,
-      packageWorkspace: async (root) => {
+      packageWorkspace: async () => {
         order.push('package');
         return { path: '/tmp/workspace.tar', name: 'workspace.tar' };
       },
-      uploadToEngine: async (path, name) => {
+      uploadToEngine: async () => {
         order.push('upload');
         return { url: 'https://engine/uploaded' };
       },
-      createBuildSession: async (plan, upload) => {
+      createBuildSession: async () => {
         order.push('create');
         return { id: 'build-1', status: 'running' };
       },

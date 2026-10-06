@@ -25,6 +25,12 @@ appId: com.neura.os
           id: "login_username"
       - eraseText: 40
       - inputText: "maestro"
+      # The password field sits under the once-open keyboard: the sign-in
+      # column scrolls under the IME (imePadding as well), so Compose stops
+      # exposing login_password in the hierarchy it reports until the
+      # keyboard is gone -- CI (37401119070) failed here with "Element not
+      # found: login_password". Close it before reaching that far down.
+      - hideKeyboard
       - tapOn:
           id: "login_password"
       - inputText: "maestro-ci-only"
