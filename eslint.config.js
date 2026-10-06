@@ -1,3 +1,5 @@
+const globals = require('globals');
+
 module.exports = [
   {
     ignores: ['node_modules/**', 'index.html', '.worktrees/**', 'desktop/dist/**', 'desktop/src-tauri/target/**', 'desktop/src-tauri/gen/**'],
@@ -21,6 +23,8 @@ module.exports = [
         TextDecoder: 'readonly',
         TextEncoder: 'readonly',
         URLSearchParams: 'readonly',
+        // Same deal: Node's undici and the browser both ship a global FormData.
+        FormData: 'readonly',
         fetch: 'readonly',
         AbortController: 'readonly',
         setTimeout: 'readonly',
@@ -97,70 +101,8 @@ module.exports = [
     files: ['app.js'],
     languageOptions: {
       globals: {
-        window: 'readonly',
-        document: 'readonly',
-        navigator: 'readonly',
-        self: 'readonly',
-        caches: 'readonly',
-        btoa: 'readonly',
-        atob: 'readonly',
-        XMLSerializer: 'readonly',
-        Image: 'readonly',
-        WebSocket: 'readonly',
-        setInterval: 'readonly',
-        clearInterval: 'readonly',
-        ResizeObserver: 'readonly',
-        createImageBitmap: 'readonly',
-        ClipboardItem: 'readonly',
-        confirm: 'readonly',
-        prompt: 'readonly',
+        ...globals.browser,
         mermaid: 'readonly',
-        event: 'readonly',
-        location: 'readonly',
-        localStorage: 'readonly',
-        requestAnimationFrame: 'readonly',
-        fetch: 'readonly',
-        URL: 'readonly',
-        Blob: 'readonly',
-        FormData: 'readonly',
-        File: 'readonly',
-        FileReader: 'readonly',
-        crypto: 'readonly',
-        sessionStorage: 'readonly',
-        history: 'readonly',
-        screen: 'readonly',
-        CustomEvent: 'readonly',
-        Event: 'readonly',
-        HTMLElement: 'readonly',
-        Element: 'readonly',
-        Node: 'readonly',
-        NodeList: 'readonly',
-        HTMLCollection: 'readonly',
-        DocumentFragment: 'readonly',
-        Text: 'readonly',
-        Comment: 'readonly',
-        MutationObserver: 'readonly',
-        IntersectionObserver: 'readonly',
-        PerformanceObserver: 'readonly',
-        requestIdleCallback: 'readonly',
-        cancelIdleCallback: 'readonly',
-        structuredClone: 'readonly',
-        Performance: 'readonly',
-        DOMParser: 'readonly',
-        Range: 'readonly',
-        Selection: 'readonly',
-        getComputedStyle: 'readonly',
-        scrollTo: 'readonly',
-        scrollBy: 'readonly',
-        open: 'readonly',
-        close: 'readonly',
-        postMessage: 'readonly',
-        addEventListener: 'readonly',
-        removeEventListener: 'readonly',
-        dispatchEvent: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        console: 'readonly',
         Math: 'readonly',
         Date: 'readonly',
         JSON: 'readonly',
@@ -455,86 +397,6 @@ module.exports = [
     },
   },
   {
-    // Inline diffs: DOM manipulation, uses document
-    files: ['inline-diffs.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-      },
-    },
-  },
-  {
-    // Live presence: WebSocket, document, window, setInterval
-    files: ['live-presence.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        WebSocket: 'readonly',
-        setInterval: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        fetch: 'readonly',
-      },
-    },
-  },
-  {
-    // Live preview: document, window
-    files: ['live-preview.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        Blob: 'readonly',
-        URL: 'readonly',
-      },
-    },
-  },
-  {
-    // Magnetic effects: document
-    files: ['magnetic-effects.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-      },
-    },
-  },
-  {
-    // Mermaid canvas: document, window, mermaid, prompt, confirm, Image, XMLSerializer, btoa
-    files: ['mermaid-canvas.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        mermaid: 'readonly',
-        prompt: 'readonly',
-        confirm: 'readonly',
-        Image: 'readonly',
-        XMLSerializer: 'readonly',
-        btoa: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        fetch: 'readonly',
-      },
-    },
-  },
-  {
-    // Rich context menus: document, window, navigator, confirm
-    files: ['rich-context-menus.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        navigator: 'readonly',
-        confirm: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-      },
-    },
-  },
-  {
     // Service worker: self, caches
     files: ['sw.js'],
     languageOptions: {
@@ -545,22 +407,6 @@ module.exports = [
         Promise: 'readonly',
         Response: 'readonly',
         Request: 'readonly',
-      },
-    },
-  },
-  {
-    // Performance module: IntersectionObserver, Worker and rAF-gated lazy
-    // effects -- all browser-only, loaded via <script> like the rest.
-    files: ['performance-optimized.js'],
-    languageOptions: {
-      globals: {
-        document: 'readonly',
-        window: 'readonly',
-        requestAnimationFrame: 'readonly',
-        cancelAnimationFrame: 'readonly',
-        MutationObserver: 'readonly',
-        IntersectionObserver: 'readonly',
-        Worker: 'readonly',
       },
     },
   },

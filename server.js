@@ -310,16 +310,17 @@ async function retryProviderRequest(providerId, attempt, meta = {}) {
     // is the fact that tells an operator how long the provider wanted to be
     // left alone -- which is what /api/llm/providers reports and what the
     // client uses to steer clear of a provider still cooling down.
+    const retryAfterMs =
+      result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
+        ? parseRetryAfterMs(result.headers)
+        : result && typeof result.retryAfterMs === 'number'
+          ? result.retryAfterMs
+          : undefined;
     recordProviderAttempt(providerId, {
       ms: Date.now() - startedAt,
       status,
       model: meta.model,
-      retryAfterMs:
-        result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
-          ? parseRetryAfterMs(result.headers)
-          : result && typeof result.retryAfterMs === 'number'
-            ? result.retryAfterMs
-            : undefined,
+      retryAfterMs,
     });
     // A timeout we imposed (providerFetch's own deadline) is a budget spent,
     // not a transient refusal to retry through.
@@ -331,12 +332,6 @@ async function retryProviderRequest(providerId, attempt, meta = {}) {
     if (isQuotaExhausted(packetErrorMessage(result))) return result;
     if (!isRetryableStatus(status)) return result;
     if (tryNum >= maxAttempts - 1) break;
-    const retryAfterMs =
-      result && typeof result.headers === 'object' && typeof result.headers.get === 'function'
-        ? parseRetryAfterMs(result.headers)
-        : result && typeof result.retryAfterMs === 'number'
-          ? result.retryAfterMs
-          : undefined;
     // A provider's own wait wins; otherwise grow our backoff, capped so a long
     // run of refusals never sleeps past the hosting platform's own patience
     // (OpenCode caps its no-header delay at 30s too).
@@ -404,12 +399,24 @@ function clearModelCache() {
   modelCache.clear();
 }
 
-function readJsonBody(req, maxBytes, cb) {
+// When opts.onTooLarge is given, an oversized body answers with that response
+// instead of dropping the socket, and every later event is ignored so the
+// callback can never fire twice.
+function readJsonBody(req, maxBytes, cb, opts) {
+  opts = opts || {};
   let size = 0;
+  let dead = false;
   const chunks = [];
   req.on('data', (chunk) => {
+    if (dead) return;
     size += chunk.length;
     if (size > maxBytes) {
+      if (opts.onTooLarge) {
+        dead = true;
+        chunks.length = 0;
+        opts.onTooLarge();
+        return;
+      }
       req.destroy();
       cb(new Error('Body too large'));
       return;
@@ -417,13 +424,16 @@ function readJsonBody(req, maxBytes, cb) {
     chunks.push(chunk);
   });
   req.on('end', () => {
+    if (dead) return;
     try {
       cb(null, JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
     } catch (err) {
       cb(err);
     }
   });
-  req.on('error', cb);
+  req.on('error', (err) => {
+    if (!dead) cb(err);
+  });
 }
 
 function clientIp(req) {
@@ -2394,45 +2404,27 @@ function evictSharesToCap() {
   let overflow = shareStore.size - SHARE_MAX_CONVERSATIONS;
   for (let i = 0; i < overflow; i++) shareStore.delete(shareStore.keys().next().value);
   if (!shareStorePath()) return;
-  while (shareStore.size && JSON.stringify(Object.fromEntries(shareStore)).length > shareStoreMaxBytes()) {
-    shareStore.delete(shareStore.keys().next().value);
+  // The on-disk payload is `{"id":entry,...}`: its length is 1 + the sum of
+  // each member's framing (two quotes, a colon, a comma) plus the entry's own
+  // JSON -- the same bytes JSON.stringify would emit, since an entry's value
+  // serializes identically inside or outside the wrapping object. Sizing once
+  // and subtracting makes the budget check arithmetic instead of a full
+  // re-serialize per eviction, while evicting the same oldest-first order
+  // (Map insertion order is share age).
+  const memberBytes = (id, entry) => id.length + 4 + JSON.stringify(entry).length;
+  let bytes = 1;
+  for (const [id, entry] of shareStore) bytes += memberBytes(id, entry);
+  while (shareStore.size && bytes > shareStoreMaxBytes()) {
+    const oldest = shareStore.keys().next().value;
+    bytes -= memberBytes(oldest, shareStore.get(oldest));
+    shareStore.delete(oldest);
   }
 }
 
 loadShareStore();
 
-function readShareBody(req, res, cb) {
-  let size = 0;
-  let dead = false;
-  const chunks = [];
-  req.on('data', (chunk) => {
-    if (dead) return;
-    size += chunk.length;
-    if (size > SHARE_BODY_MAX_CHARS + 64 * 1024) {
-      // Answer with a reason -- not a dropped connection -- and ignore every
-      // event after this: the callback must never fire twice.
-      dead = true;
-      chunks.length = 0;
-      sendJson(res, 413, { error: 'Conversation too large to share' });
-      return;
-    }
-    chunks.push(chunk);
-  });
-  req.on('end', () => {
-    if (dead) return;
-    try {
-      cb(null, JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
-    } catch (err) {
-      cb(err);
-    }
-  });
-  req.on('error', () => {
-    if (!dead) cb(new Error('Request failed'));
-  });
-}
-
 function handleSharePublish(req, res) {
-  readShareBody(req, res, (err, body) => {
+  readJsonBody(req, SHARE_BODY_MAX_CHARS + 64 * 1024, (err, body) => {
     if (err) return sendJson(res, 400, { error: 'Invalid request' });
     const messages = Array.isArray(body && body.messages) ? body.messages : null;
     if (!messages || !messages.length) return sendJson(res, 400, { error: 'Nothing to share — the conversation is empty' });
@@ -2448,6 +2440,9 @@ function handleSharePublish(req, res) {
     evictSharesToCap();
     scheduleShareFlush();
     sendJson(res, 200, { id, url: '/s/' + id, expiresAt });
+  }, {
+    // An oversized share answers with a reason instead of a dropped socket.
+    onTooLarge: () => sendJson(res, 413, { error: 'Conversation too large to share' }),
   });
 }
 
@@ -2672,10 +2667,6 @@ function discoveryFor(id) {
   return hit.model;
 }
 
-function discoveredImageModel(id) {
-  return discoveryFor(id) || '';
-}
-
 // A discovery read is a lookup in front of a picture the user is waiting for, so
 // it gets a shorter leash than the picker's own catalogue read: five seconds is
 // already a long time for a GET, and the draw behind it is the point of the wait.
@@ -2764,7 +2755,9 @@ function imageStoreFor(id) {
   // A model read from the provider's own catalogue rides on the store, so every
   // reader of "which model would this service draw with" -- the order, the
   // report, the draw -- answers with the same one.
-  const discovered = discoveredImageModel(id);
+  // discoveryFor answers null (nothing discovered) or the model id; this caller
+  // wants '' instead of null, so every falsy read collapses to the empty string.
+  const discovered = discoveryFor(id) || '';
   if (declared.image) return discovered ? { ...declared.image, discoveredModel: discovered } : declared.image;
   // Speech and search services are not image services at any variable: their
   // "models" are transcription and ranking engines, and a key for them is not a
@@ -3182,26 +3175,18 @@ function resolveImageSize(store, requested, label) {
 }
 
 // The multipart body an OpenAI-shaped edits endpoint wants: file parts for the
-// picture and its mask, fields for the rest. Built per attempt because the
-// boundary is the framing, and a retry must not reuse the framing of a request
-// that was refused.
-function imageEditMultipart(args) {
+// picture and its mask, fields for the rest. Node's own FormData builds the
+// boundary framing (and fetch sets the matching Content-Type itself), so the
+// old hand-rolled framing is gone.
+function imageEditForm(args) {
   const { image, mask, prompt, model, extra } = args;
-  const boundary = '----freeopenai' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const parts = [];
-  const filePart = (name, filename, file) => {
-    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
-    parts.push(file.bytes);
-    parts.push(Buffer.from('\r\n'));
-  };
-  const field = (name, value) => parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
-  filePart('image', 'image.png', image);
-  if (mask) filePart('mask', 'mask.png', mask);
-  field('prompt', prompt);
-  field('model', model);
-  for (const [name, value] of Object.entries(extra)) field(name, value);
-  parts.push(Buffer.from(`--${boundary}--\r\n`));
-  return { boundary, body: Buffer.concat(parts) };
+  const form = new FormData();
+  form.set('image', new Blob([image.bytes], { type: image.contentType }), 'image.png');
+  if (mask) form.set('mask', new Blob([mask.bytes], { type: mask.contentType }), 'mask.png');
+  form.set('prompt', prompt);
+  form.set('model', model);
+  for (const [name, value] of Object.entries(extra)) form.set(name, value);
+  return form;
 }
 
 // One request, in whichever shape the chosen provider speaks, normalized to the
@@ -3277,12 +3262,12 @@ async function drawImage(args) {
     };
     const multipartAttempt = (withExtra) => {
       const fields = withExtra ? { ...(declaredSize ? { size: declaredSize } : {}), ...extra } : (declaredSize ? { size: declaredSize } : {});
-      const built = imageEditMultipart({ image, mask, prompt, model: useModel, extra: fields });
+      const built = imageEditForm({ image, mask, prompt, model: useModel, extra: fields });
       return fetch(base + (store.editPath || '/images/edits'), {
         method: 'POST',
         signal,
-        headers: { ...auth, 'Content-Type': 'multipart/form-data; boundary=' + built.boundary },
-        body: built.body,
+        headers: auth,
+        body: built,
       });
     };
 
@@ -3466,21 +3451,16 @@ async function imageBytesFor(value, label) {
     throw new Error(`Invalid ${label} image — expected a data URL or an http(s) link.`);
   }
   // Redirects are followed by hand so every hop's addresses are checked again.
+  const guard = {
+    invalid: `Invalid ${label} image — expected a data URL or an http(s) link.`,
+    scheme: `Invalid ${label} image — expected a data URL or an http(s) link.`,
+    resolve: `Could not resolve the host for that ${label} image`,
+    nonPublic: `That ${label} image address is not readable from here`,
+  };
   let current = new URL(raw);
   let fetched = null;
   for (let hop = 0; hop < 5 && !fetched; hop++) {
-    if (current.protocol !== 'http:' && current.protocol !== 'https:') {
-      throw new Error(`Invalid ${label} image — expected a data URL or an http(s) link.`);
-    }
-    let addresses;
-    try {
-      addresses = await lookupAllAddresses(current.hostname);
-    } catch {
-      throw new Error(`Could not resolve the host for that ${label} image`);
-    }
-    if (!addresses.length || addresses.some(isNonPublicAddress)) {
-      throw new Error(`That ${label} image address is not readable from here`);
-    }
+    await assertPublicHttpUrl(current.href, guard);
     const res = await fetch(current.href, { redirect: 'manual' });
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location) current = new URL(location, current);
@@ -3902,16 +3882,12 @@ function providerTimeoutMs() {
   };
 }
 
-// Most use "Authorization: Bearer <key>", but not all -- authScheme and
-// authHeader exist for a provider that wants a different scheme ("Token"),
-// a bare key with no scheme, or its own header name entirely. A keyless
-// self-hosted gateway (OmniRoute) sends no auth header at all rather than a
-// bare "Bearer ".
+// Every provider speaks "Authorization: Bearer <key>" (no provider sets any
+// other scheme or header name). A keyless self-hosted gateway (OmniRoute)
+// sends no auth header at all rather than a bare "Bearer ".
 function providerAuthHeaders(provider, req) {
   const extra = typeof provider.headers === 'function' ? provider.headers(req) : {};
-  const headerName = provider.authHeader || 'Authorization';
-  const scheme = provider.authScheme === undefined ? 'Bearer' : provider.authScheme;
-  const auth = provider.key ? { [headerName]: scheme ? `${scheme} ${provider.key}` : provider.key } : {};
+  const auth = provider.key ? { Authorization: `Bearer ${provider.key}` } : {};
   return { ...auth, 'Content-Type': 'application/json', ...extra };
 }
 
@@ -5462,9 +5438,30 @@ function lookupAllAddresses(hostname) {
   });
 }
 
-// Read a public page for the build agent. Redirects are followed by hand so each
-// hop's host is checked again -- a public URL that redirects to 169.254.169.254
-// is the classic way past a check made only on the first address.
+// The shared skeleton behind readPublicPage, imageBytesFor and
+// assertMcpUrlIsPublic: parse a url, require an http(s) scheme, resolve it and
+// require every resulting address to be public. Each caller keeps its own
+// wording (invalid/scheme/resolve/nonPublic); anything a caller does beyond
+// this -- timeouts, headers, size caps -- stays local to that caller.
+async function assertPublicHttpUrl(raw, wording) {
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch {
+    throw new Error(wording.invalid);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(wording.scheme);
+  let addresses;
+  try {
+    addresses = await lookupAllAddresses(parsed.hostname);
+  } catch {
+    throw new Error(wording.resolve);
+  }
+  if (!addresses.length || addresses.some(isNonPublicAddress)) throw new Error(wording.nonPublic);
+  return parsed;
+}
+
+// Read a public page for the build agent.
 async function readPublicPage(raw) {
   let current;
   try {
@@ -5473,14 +5470,15 @@ async function readPublicPage(raw) {
     throw new Error('A valid http(s) url is required');
   }
   for (let hop = 0; hop < 5; hop++) {
-    if (current.protocol !== 'http:' && current.protocol !== 'https:') throw new Error('Only http(s) pages can be read');
-    let addresses;
-    try {
-      addresses = await lookupAllAddresses(current.hostname);
-    } catch {
-      throw new Error('Could not resolve that host');
-    }
-    if (!addresses.length || addresses.some(isNonPublicAddress)) throw new Error('That address is not readable from here');
+    // Redirects are followed by hand so each hop's host is checked again -- a
+    // public URL that redirects to 169.254.169.254 is the classic way past a
+    // check made only on the first address.
+    await assertPublicHttpUrl(current.href, {
+      invalid: 'Only http(s) pages can be read',
+      scheme: 'Only http(s) pages can be read',
+      resolve: 'Could not resolve that host',
+      nonPublic: 'That address is not readable from here',
+    });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
     try {
@@ -5589,24 +5587,12 @@ async function mcpHandshake(url) {
 // Resolves a user-supplied MCP server URL the same way readPublicPage does:
 // scheme-checked, then every address it resolves to must be public.
 async function assertMcpUrlIsPublic(raw) {
-  let parsed;
-  try {
-    parsed = new URL(String(raw || '').trim());
-  } catch {
-    throw new Error('A valid http(s) MCP server URL is required');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Only http(s) MCP servers can be reached');
-  }
-  let addresses;
-  try {
-    addresses = await lookupAllAddresses(parsed.hostname);
-  } catch {
-    throw new Error('Could not resolve that MCP server host');
-  }
-  if (!addresses.length || addresses.some(isNonPublicAddress)) {
-    throw new Error('That MCP server address is not reachable from here');
-  }
+  const parsed = await assertPublicHttpUrl(raw, {
+    invalid: 'A valid http(s) MCP server URL is required',
+    scheme: 'Only http(s) MCP servers can be reached',
+    resolve: 'Could not resolve that MCP server host',
+    nonPublic: 'That MCP server address is not reachable from here',
+  });
   return parsed.href;
 }
 
@@ -6248,14 +6234,6 @@ function createRequestHandler(root) {
 
 if (require.main === module) {
   const server = http.createServer(createRequestHandler(rootDir));
-  
-  // Initialize WebSocket presence server with auth
-  try {
-    console.log('[WS] Presence server initialized');
-  } catch (e) {
-    console.warn('[WS] Failed to initialize:', e.message);
-  }
-  
   server.listen(port, () => console.log(`Serving on port ${port}`));
 }
 

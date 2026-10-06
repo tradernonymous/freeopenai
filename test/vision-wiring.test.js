@@ -70,8 +70,12 @@ function baseDeps(overrides = {}) {
     // Reached only when a provider refuses a model mid-stream; a stub keeps the
     // sandbox honest about it rather than letting a ReferenceError hide in a
     // path this file does not exercise.
+    // Reached only when a provider refuses a model mid-stream; a stub keeps the
+    // sandbox honest about it rather than letting a ReferenceError hide in a
+    // path this file does not exercise.
     forgetRefusedModel: () => null,
     finalizePartial: () => {},
+    retryWaitAfterAbort: () => Promise.resolve(),
     localStorage: { setItem: (k, v) => writes.push([k, v]) },
     rememberPreference: (k, v) => { writes.push([k, v]); return true; },
     showStatus: (kind, text) => status.push(`${kind}: ${text}`),

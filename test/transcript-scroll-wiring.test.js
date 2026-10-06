@@ -81,8 +81,20 @@ function harness({ pinned = true, typing = false, grows = 0 } = {}) {
     requestAnimationFrame: (fn) => { fn(); },
     document: { getElementById: (id) => (id === 'scrollBottom' ? pill : null) },
   };
+  // Page-scope app.js creates this once (the `const transcriptController =`
+  // block) and the extracted wrappers close over it, so the harness supplies
+  // the same real composition the page does.
+  const transcriptController = require('../transcript-controller.js').createTranscriptController({
+    element: transcript,
+    pill,
+    initialPinned: pinned,
+    documentRef: deps.document,
+    requestAnimationFrame: (fn) => { fn(); },
+    isTyping: () => typing,
+  });
+  deps.transcriptController = transcriptController;
   const loaded = loadFromIndex(NAMES, deps);
-  return { ...loaded, deps, transcript, pill, label, classes, appended };
+  return { ...loaded, transcriptController, deps, transcript, pill, label, classes, appended };
 }
 
 test('the extracted source is the shipped one, and the sandbox covers it', () => {
@@ -102,12 +114,12 @@ test('a detached transcript is left where the reader put it', () => {
   const before = h.transcript.scrollTop;
   h.appendToTranscript({}, 'follow');
   assert.equal(h.transcript.scrollTop, before, 'this is the bug: a streamed chunk used to drag the reader down');
-  assert.equal(h.deps.unreadWhileDetached, 1);
+  assert.equal(h.transcriptController.unread, 1);
   assert.equal(h.classes.has('visible'), true);
   assert.equal(h.label.textContent, '1 new');
 
   h.appendToTranscript({}, 'system');
-  assert.equal(h.deps.unreadWhileDetached, 2);
+  assert.equal(h.transcriptController.unread, 2);
   assert.equal(h.label.textContent, '2 new');
 });
 
@@ -117,17 +129,17 @@ test('the reader\'s own message and the typing indicator are not output they mis
   // for what it produces.
   h.appendToTranscript({}, 'own-message');
   assert.equal(h.transcript.scrollTop, h.transcript.scrollHeight, 'your own message lands on screen');
-  assert.equal(h.deps.unreadWhileDetached, 0, 'and it is not counted as something you missed');
+  assert.equal(h.transcriptController.unread, 0, 'and it is not counted as something you missed');
   // The state follows the scroll in the same turn. It used to wait for the
   // scroll event, which cannot fire until this function returns -- so the pill
   // sat over a transcript that was already at the bottom.
-  assert.equal(h.deps.transcriptPinned, true, 'landing on the newest output re-pins');
+  assert.equal(h.transcriptController.pinned, true, 'landing on the newest output re-pins');
   assert.equal(h.classes.has('visible'), false, 'and takes the pill away with it');
 
   // Detach again, then let a placeholder that removes itself arrive.
-  h.deps.transcriptPinned = false;
+  h.transcriptController.setPinned(false);
   h.appendToTranscript({}, 'indicator');
-  assert.equal(h.deps.unreadWhileDetached, 0);
+  assert.equal(h.transcriptController.unread, 0);
 });
 
 test('a streamed reply that is already on screen obeys the pin too', () => {
@@ -135,7 +147,7 @@ test('a streamed reply that is already on screen obeys the pin too', () => {
   h.scrollTranscript('follow');
   assert.equal(h.transcript.scrollTop, h.transcript.scrollHeight);
 
-  h.deps.transcriptPinned = false;
+  h.transcriptController.setPinned(false);
   const before = h.transcript.scrollTop;
   h.scrollTranscript('follow');
   assert.equal(h.transcript.scrollTop, before, 'the flush interval must not fight the reader');
@@ -150,7 +162,9 @@ test('the pill counts what is arriving while the turn still runs', () => {
 
   // With a count in hand, the count wins: it answers whether it is worth going
   // back down.
-  h.deps.unreadWhileDetached = 3;
+  // With a count in hand, the count wins: it answers whether it is worth going
+  // back down.
+  for (let i = 0; i < 3; i++) h.appendToTranscript({}, 'follow');
   h.updateScrollBottomPill();
   assert.equal(h.label.textContent, '3 new');
 });
@@ -161,8 +175,8 @@ test('jumping back down clears the count and hides the pill', () => {
   assert.equal(h.classes.has('visible'), true);
 
   h.jumpToNewest();
-  assert.equal(h.deps.transcriptPinned, true);
-  assert.equal(h.deps.unreadWhileDetached, 0);
+  assert.equal(h.transcriptController.pinned, true);
+  assert.equal(h.transcriptController.unread, 0);
   assert.equal(h.transcript.scrollTop, h.transcript.scrollHeight);
   assert.equal(h.classes.has('visible'), false, 'the way back is gone once you are back');
 });
@@ -177,7 +191,7 @@ test('scrolling back to the bottom yourself re-pins, and scrolling away detaches
 
   h.transcript.scrollTop = h.transcript.scrollHeight - h.transcript.clientHeight;
   h.setTranscriptPinned(transcriptAtBottom(h.transcript.scrollTop, h.transcript.scrollHeight, h.transcript.clientHeight));
-  assert.equal(h.deps.transcriptPinned, true);
+  assert.equal(h.transcriptController.pinned, true);
   assert.equal(h.classes.has('visible'), false);
   // And a transcript too short to scroll never reads as detached in the first
   // place, or the first few messages of a conversation would stop following.
@@ -219,8 +233,10 @@ test('a rotation keeps a reader who was at the bottom at the bottom', () => {
   assert.match(TRANSCRIPT_MODULE, /else if \(Date\.now\(\) < layoutSettlingUntil\) return;/);
   // ...and the write waits for the layout it describes.
   assert.match(TRANSCRIPT_MODULE, /if \(resizeTimer\) cancel\(resizeTimer\);[\s\S]{0,400}resizeTimer = 0/);
-  // And the page delegates to it rather than keeping a second copy.
-  assert.match(APP_JS, /transcriptController\.handleResize\(\)/);
+  // And the page keeps no second copy: the module attaches its own resize
+  // listener and app.js never calls handleResize.
+  assert.match(TRANSCRIPT_MODULE, /'resize', handleResize/);
+  assert.doesNotMatch(APP_JS, /handleResize/);
 });
 
 test('the markup carries the id and the label the wiring looks for', () => {
@@ -231,13 +247,10 @@ test('the markup carries the id and the label the wiring looks for', () => {
   assert.match(HTML, /class="scroll-bottom-label"/);
   assert.match(HTML, /onclick="jumpToNewest\(\)"/);
 
-  // And the lookup is for the id the markup has.
-  const asked = [];
+  // And the pill still fills: the wrapper delegates into the controller with
+  // #scrollBottom as its pill, and the label text comes from it.
   const h = harness({ pinned: false });
-  h.deps.document.getElementById = (id) => {
-    asked.push(id);
-    return { classList: { toggle() {} }, querySelector: () => null };
-  };
   h.updateScrollBottomPill();
-  assert.deepEqual(asked, ['scrollBottom']);
+  assert.equal(h.classes.has('visible'), true, 'detached readers get the pill');
+  assert.match(h.label.textContent, /^(Newest|New output|\d+ new)$/);
 });

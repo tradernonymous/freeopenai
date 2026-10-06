@@ -21,11 +21,6 @@
     <script src="hub.js" defer></script>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="phase1-zen.css">
-    <link rel="stylesheet" href="inline-diffs.css">
-    <link rel="stylesheet" href="live-presence.css">
-    <link rel="stylesheet" href="rich-context-menus.css">
-    <link rel="stylesheet" href="magnetic-effects.css">
-    <link rel="stylesheet" href="performance-optimized.css">
     <!-- After the inline styles so the mode switch and hub panels can build on them. -->
     <link rel="stylesheet" href="hub.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -78,7 +73,7 @@
             <button class="icon-btn" type="button" onclick="openPalette()" title="Command palette" aria-label="Command palette">
                 <i class="fas fa-magnifying-glass"></i>
             </button>
-            <button class="icon-btn" type="button" onclick="toggleHelp()" title="Help" aria-label="Help">
+            <button class="icon-btn" type="button" onclick="openHelp()" title="Help" aria-label="Help">
                 <i class="fas fa-question-circle"></i>
             </button>
         </div>
@@ -119,7 +114,7 @@
                             <button class="icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh" onclick="refreshPage()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-.34"/><path d="M20.49 15a9 9 0 0 1-14.85.34"/></svg>
                             </button>
-                            <button class="icon-btn" title="Help" aria-label="Help" onclick="toggleHelp()">
+                            <button class="icon-btn" title="Help" aria-label="Help" onclick="openHelp()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             </button>
                             <button class="icon-btn" id="themeToggle" title="Appearance" aria-label="Appearance" aria-haspopup="menu" aria-expanded="false" onclick="toggleThemeMenu(event)">
@@ -705,7 +700,7 @@
                     <li><strong>Free tier</strong> — Generous free usage limits</li>
                     <li><strong>Palette</strong> — Ctrl+P jumps to any model or action; Enter runs, Esc closes</li>
                     <li><strong>Interrupt</strong> — Esc stops a running reply; Enter sends</li>
-                    <li><strong>Editing</strong> — Ctrl+A/E move, Ctrl+K/U/W delete, Alt+letter words, Ctrl+G stops</li>
+                    <li><strong>Editing</strong> — Ctrl+A/E move, Ctrl+K/U/W delete, Ctrl+G stops</li>
                     <li><strong>Gallery</strong> — Every generated image lands in the Gallery view, newest first</li>
                 </ul>
             </div>
@@ -786,11 +781,6 @@
          (Appearance, Settings, Session & Todos). Command palette, its one
          row with no other touch-friendly entry point, moved to the top nav. -->
 
-    <script src="inline-diffs.js"></script>
-    <script src="live-presence.js"></script>
-    <script src="rich-context-menus.js"></script>
-    <script src="magnetic-effects.js"></script>
-    <script src="performance-optimized.js"></script>
     
     
     

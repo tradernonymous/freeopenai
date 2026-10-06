@@ -117,6 +117,7 @@ test('the rail shows the named panel and hides the others, and marks its chip ac
       },
     },
   };
+  deps.refreshProviderHealth = () => {};
   assertSandboxCovers(['jumpToSettingsSection'], deps);
   const { jumpToSettingsSection } = loadFromIndex(['jumpToSettingsSection'], deps);
 

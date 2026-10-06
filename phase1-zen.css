@@ -188,16 +188,6 @@ body.zen-mode main {
     overflow: hidden;
 }
 
-/* ---- Glassmorphic Panels ---- */
-.glass-panel {
-    background: var(--glass-bg);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--glass-border);
-    border-radius: 16px;
-    box-shadow: var(--glass-shadow);
-}
-
 /* ---- Session Panel: Glassmorphic ---- */
 .session-panel {
     background: var(--glass-bg) !important;
@@ -316,45 +306,6 @@ body.zen-mode main {
     font-size: 11px;
     color: var(--text-muted);
     font-family: monospace;
-}
-
-/* ---- Provider Health Badge ---- */
-.provider-health-badge {
-    position: fixed;
-    bottom: 16px;
-    right: 16px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--glass-bg);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--glass-border);
-    border-radius: 8px;
-    font-size: 12px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all var(--zen-transition);
-    z-index: 100;
-}
-
-.provider-health-badge:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text);
-}
-
-.provider-health-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #22c55e;
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
 }
 
 /* ---- Status Bar: Minimal ---- */
@@ -571,6 +522,11 @@ body.zen-mode main {
 .health-dot.health-limited {
     background: #f59e0b;
     animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 .health-dot.health-error {

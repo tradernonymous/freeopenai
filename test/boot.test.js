@@ -87,6 +87,8 @@ const chatlib = fs.readFileSync(path.join(__dirname, '..', 'chatlib.js'), 'utf8'
 // one instance in top-level scope. canvas-artifacts.js is the same pattern.
 const shareMemoryLib = fs.readFileSync(path.join(__dirname, '..', 'share-memory.js'), 'utf8');
 const canvasArtifactsLib = fs.readFileSync(path.join(__dirname, '..', 'canvas-artifacts.js'), 'utf8');
+// transcript-controller.js publishes canvasArtifacts' NeuraOSTranscript before app.js -- mirror the page order below.
+const transcriptModuleLib = fs.readFileSync(path.join(__dirname, '..', 'transcript-controller.js'), 'utf8');
 
 test('app.js contains the main application script', () => {
   assert.ok(appJs.length > 1000, 'app.js should contain the main application code');
@@ -100,6 +102,7 @@ test('the page initializes without a temporal-dead-zone error', () => {
   vm.runInContext(chatlib, context);
   vm.runInContext(shareMemoryLib, context);
   vm.runInContext(canvasArtifactsLib, context);
+  vm.runInContext(transcriptModuleLib, context);
 
   let thrown = null;
   try {

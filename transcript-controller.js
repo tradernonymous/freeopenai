@@ -1,29 +1,21 @@
 'use strict';
 
 (function attachTranscriptModule(root, factory) {
-  if (typeof module !== 'undefined' && module.exports) module.exports = factory();
-  else root.NeuraOSTranscript = factory();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function transcriptFactory() {
-  const TRANSCRIPT_BOTTOM_SLACK_PX = 120;
-  const TRANSCRIPT_JUMP_SOURCES = ['own-message', 'user-request'];
-  const TRANSCRIPT_QUIET_SOURCES = ['own-message', 'indicator', 'user-request'];
-
-  function transcriptAtBottom(scrollTop, scrollHeight, clientHeight, slack = TRANSCRIPT_BOTTOM_SLACK_PX) {
-    const top = Number(scrollTop) || 0;
-    const height = Number(scrollHeight) || 0;
-    const view = Number(clientHeight) || 0;
-    if (height <= view) return true;
-    return height - top - view <= Math.max(0, Number(slack) || 0);
-  }
-
-  function shouldFollowTranscript(source, pinned) {
-    if (TRANSCRIPT_JUMP_SOURCES.includes(String(source || ''))) return true;
-    return pinned === true;
-  }
-
-  function announcesUnread(source) {
-    return !TRANSCRIPT_QUIET_SOURCES.includes(String(source || ''));
-  }
+  // The scroll policy has one home, chatlib.js. Node (tests) reads its exports
+  // directly; the page loads chatlib.js before this file (index.html), which
+  // publishes the same names on the global object, so the factory resolves the
+  // policy from whichever source the environment offers.
+  const chat = (typeof module !== 'undefined' && module.exports) ? require('./chatlib.js') : root;
+  if (typeof module !== 'undefined' && module.exports) module.exports = factory(chat);
+  else root.NeuraOSTranscript = factory(chat);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function transcriptFactory(policy) {
+  // These are chatlib's policy bindings under local names, not copies.
+  const TRANSCRIPT_BOTTOM_SLACK_PX = policy.TRANSCRIPT_BOTTOM_SLACK_PX;
+  const TRANSCRIPT_JUMP_SOURCES = policy.TRANSCRIPT_JUMP_SOURCES;
+  const TRANSCRIPT_QUIET_SOURCES = policy.TRANSCRIPT_QUIET_SOURCES;
+  const transcriptAtBottom = policy.transcriptAtBottom;
+  const shouldFollowTranscript = policy.shouldFollowTranscript;
+  const announcesUnread = policy.announcesUnread;
 
   // Owns the transcript's mutable scroll state and its DOM seam. The page keeps
   // the public function names that old callers use, but they now delegate to one

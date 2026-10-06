@@ -893,161 +893,49 @@ function updateNavActive(btn) {
         // jump-to-newest control to read. The rules live in chatlib.js so they
         // can be tested without a browser; this is the one place they touch the
         // DOM.
-        let transcriptPinned = true;
-        let unreadWhileDetached = 0;
-        // The browser module is the state owner. The old local variables and
-        // branches below remain as a compatibility fallback for a cached page
-        // or a test harness that only loads chatlib.js.
-        const transcriptController = typeof NeuraOSTranscript !== 'undefined'
-            ? NeuraOSTranscript.createTranscriptController({
-                element: chatMessages,
-                pill: document.getElementById('scrollBottom'),
-                windowRef: window,
-                documentRef: document,
-                isTyping: () => isTyping,
-            })
-            : null;
-        if (transcriptController) transcriptController.attach();
+        // The browser module is the state owner; transcript-controller.js loads
+        // before this script, so the controller is always available here.
+        const transcriptController = NeuraOSTranscript.createTranscriptController({
+            element: chatMessages,
+            pill: document.getElementById('scrollBottom'),
+            windowRef: window,
+            documentRef: document,
+            isTyping: () => isTyping,
+        });
+        transcriptController.attach();
 
         function updateScrollBottomPill() {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.updateScrollBottomPill();
-                return;
-            }
-            const pill = document.getElementById('scrollBottom');
-            if (!pill) return;
-            pill.classList.toggle('visible', !transcriptPinned);
-            const label = pill.querySelector('.scroll-bottom-label');
-            if (!label) return;
-            // A count answers the only question at that moment -- is it worth
-            // going back down -- so it is used whenever there is one to give.
-            label.textContent = unreadWhileDetached > 0
-                ? unreadWhileDetached + ' new'
-                : (isTyping ? 'New output' : 'Newest');
+            transcriptController.updateScrollBottomPill();
         }
 
         // Off-screen bubbles are laid out lazily, so the scroll height is still
         // moving after a write that lands on a stale maximum -- which is how a
-        // jump to the newest output stops a few lines short. The second write is
-        // on the next frame, when the layout it depended on exists, and it
-        // re-checks the pin first so a reader who grabbed the scrollbar in
-        // between keeps their place.
+        // jump to the newest output stops a few lines short.
         function pinTranscriptToBottom() {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.pinToBottom();
-                return;
-            }
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-            if (typeof requestAnimationFrame !== 'function') return;
-            let tries = 0;
-            const settle = () => {
-                if (!transcriptPinned) return;
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-                const gap = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
-                // Writing the maximum can itself reveal more layout above it,
-                // which moves the maximum. Repeat while it is still moving, with
-                // a hard stop so this can never spin.
-                if (gap > 4 && ++tries < 12) requestAnimationFrame(settle);
-            };
-            requestAnimationFrame(settle);
+            transcriptController.pinToBottom();
         }
 
         function setTranscriptPinned(pinned) {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.setPinned(pinned);
-                return;
-            }
-            if (pinned === transcriptPinned) return;
-            transcriptPinned = pinned;
-            if (pinned) unreadWhileDetached = 0;
-            updateScrollBottomPill();
+            transcriptController.setPinned(pinned);
         }
 
         // Everything that lands in the transcript goes through here, so whether
         // an arrival is allowed to drag the reader is a decision rather than an
         // accident of which function appended it.
         function appendToTranscript(el, source) {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                return transcriptController.append(el, source);
-            }
-            const detached = !transcriptPinned;
-            chatMessages.appendChild(el);
-            if (detached && announcesUnread(source)) unreadWhileDetached += 1;
-            if (shouldFollowTranscript(source, transcriptPinned)) {
-                // A jump source moves the reader, so the state moves with them.
-                // The scroll event that would normally notice cannot run until
-                // after this function returns, and until it does the pill would
-                // sit there claiming output already on screen.
-                unreadWhileDetached = 0;
-                transcriptPinned = true;
-                pinTranscriptToBottom();
-            }
-            updateScrollBottomPill();
-            return el;
+            return transcriptController.append(el, source);
         }
 
         // Text growing inside a bubble that is already on screen: pinned keeps
         // up with it, detached is left where the reader put it.
         function scrollTranscript(source) {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.scroll(source);
-                return;
-            }
-            if (shouldFollowTranscript(source, transcriptPinned)) chatMessages.scrollTop = chatMessages.scrollHeight;
+            transcriptController.scroll(source);
         }
 
         // Back to the newest output, and out of the detached state.
         function jumpToNewest() {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.jumpToNewest();
-                return;
-            }
-            unreadWhileDetached = 0;
-            transcriptPinned = true;
-            pinTranscriptToBottom();
-            updateScrollBottomPill();
+            transcriptController.jumpToNewest();
         }
-
-        // While a re-layout is settling. The layout itself fires scroll events,
-        // and a clamped scroll position reads as "the reader scrolled away" when
-        // nothing touched the scrollbar -- so those are ignored.
-        let layoutSettlingUntil = 0;
-
-        chatMessages.addEventListener('scroll', () => {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.handleScroll();
-                return;
-            }
-            const atBottom = transcriptAtBottom(chatMessages.scrollTop, chatMessages.scrollHeight, chatMessages.clientHeight);
-            if (atBottom) unreadWhileDetached = 0;
-            else if (Date.now() < layoutSettlingUntil) return;
-            setTranscriptPinned(atBottom);
-        });
-
-        // A rotation or a resized window re-lays the transcript out, and a reader
-        // who was pinned has no way to know it happened -- they just find
-        // themselves looking at the middle of an old reply. The pin is read
-        // before the re-layout, because afterwards the answer is the wrong one.
-        // The write waits for the layout it describes: the first resize event
-        // arrives before it.
-        let resizeSettle = 0;
-        window.addEventListener('resize', () => {
-            if (typeof transcriptController !== 'undefined' && transcriptController) {
-                transcriptController.handleResize();
-                return;
-            }
-            const wasPinned = transcriptPinned;
-            layoutSettlingUntil = Date.now() + 600;
-            if (resizeSettle) clearTimeout(resizeSettle);
-            resizeSettle = setTimeout(() => {
-                resizeSettle = 0;
-                if (wasPinned) {
-                    transcriptPinned = true;
-                    pinTranscriptToBottom();
-                }
-                updateScrollBottomPill();
-            }, 150);
-        });
 
         // Keyboard-shrinks of the visual viewport (pinning the newest message
         // above the keys, toggling the body's keyboard-open class) are owned by
@@ -1405,13 +1293,6 @@ function updateNavActive(btn) {
             if (name === 'gallery') renderGallery();
         }
 
-        // Kept as a thin alias: the command palette's own action list (below)
-        // still calls it by this name, from before the drawer it used to also
-        // close was removed.
-        function switchViewFromDrawer(name) {
-            switchView(name);
-        }
-
         // The settings rail is navigation, not filtering: clicking a chip shows
         // that section's panel and hides every other one, and marks the chip
         // that did it. Each rail chip's data-section names the panel's
@@ -1427,6 +1308,7 @@ function updateNavActive(btn) {
             buttons.forEach((btn) => {
                 btn.classList.toggle('active', btn.getAttribute('data-section') === wanted);
             });
+            if (wanted === 'health') refreshProviderHealth();
         }
 
         function toggleModelDropdown() {
@@ -3415,7 +3297,8 @@ function updateNavActive(btn) {
         // Health and free-tier usage come from the endpoint the picker already
         // uses, at most once a minute: cheap, no model call, and it is what lets
         // the app say "this provider is out of allowance" before the user finds
-        // out mid-task.
+        // out mid-task. It also paints the provider health cards in Settings,
+        // which is what the "Refresh Status" button there re-runs it for.
         let providerHealthFetchedAt = 0;
         const providerHealthNotesShown = new Set();
 
@@ -3428,6 +3311,21 @@ function updateNavActive(btn) {
                 all.forEach((p) => {
                     if (p && p.id && providerInfo[p.id]) {
                         providerInfo[p.id] = { ...providerInfo[p.id], freeTier: p.freeTier, health: p.health };
+                    }
+                    const statusEl = document.getElementById(p.id + 'Status');
+                    if (!statusEl) return;
+                    const dot = statusEl.querySelector('.health-dot');
+                    const label = statusEl.querySelector('.health-label');
+                    if (!dot || !label) return;
+                    if (p.ready) {
+                        dot.className = 'health-dot health-ready';
+                        label.textContent = 'Ready';
+                    } else if (p.rateLimited) {
+                        dot.className = 'health-dot health-limited';
+                        label.textContent = 'Rate Limited';
+                    } else {
+                        dot.className = 'health-dot health-error';
+                        label.textContent = 'Offline';
                     }
                 });
             } catch { /* a health read that fails changes nothing */ }
@@ -3662,6 +3560,21 @@ function updateNavActive(btn) {
         // One call site for "ask a model", so the rest of the app doesn't care
         // which service is answering. askModel is the model routed for this one
         // step, or null to use the model the user chose.
+        // Shared by the one-retry paths in callModel and streamProviderChat:
+        // resolves after the rate-limit delay, unless the run was aborted
+        // first -- in which case it rejects with the abort error instead of
+        // leaving the timer dangling.
+        function retryWaitAfterAbort(signal) {
+            return new Promise((resolve, reject) => {
+                if (signal?.aborted) { reject(abortError()); return; }
+                const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
+                signal?.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    reject(abortError());
+                }, { once: true });
+            });
+        }
+
         async function callModel(convo, extra = {}, signal = null, askModel = null) {
             if (selectedProvider === PUTER_PROVIDER) {
                 // askModel is honoured here too. It used to be ignored on this
@@ -3700,14 +3613,7 @@ function updateNavActive(btn) {
                     body: JSON.stringify(payload),
                     ...(signal ? { signal } : {}),
                 });
-                const retryWait = () => new Promise((resolve, reject) => {
-                    if (signal?.aborted) { reject(abortError()); return; }
-                    const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
-                    signal?.addEventListener('abort', () => {
-                        clearTimeout(timer);
-                        reject(abortError());
-                    }, { once: true });
-                });
+                const retryWait = () => retryWaitAfterAbort(signal);
                 let res;
                 try {
                     res = await send();
@@ -3815,14 +3721,7 @@ function updateNavActive(btn) {
                     showStatus('info', isRateLimitError(probe)
                         ? 'The provider is rate limiting — waiting a moment, then retrying'
                         : 'The provider answered with a server error — waiting a moment, then retrying');
-                    await new Promise((resolve, reject) => {
-                        if (signal?.aborted) { reject(abortError()); return; }
-                        const timer = setTimeout(resolve, RATE_LIMIT_BASE_DELAY_MS * 2);
-                        signal?.addEventListener('abort', () => {
-                            clearTimeout(timer);
-                            reject(abortError());
-                        }, { once: true });
-                    });
+                    await retryWaitAfterAbort(signal);
                     res = await fetch('/api/llm/chat?provider=' + encodeURIComponent(selectedProvider), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -4526,15 +4425,6 @@ function updateNavActive(btn) {
             switchView('chat');
             window.print();
         }
-
-        async function appSignOut() {
-            try {
-                await fetch('/api/logout', { method: 'POST' });
-            } finally {
-                location.href = '/login.html';
-            }
-        }
-
 
         function clearAllHistory() {
             if (!confirm('Delete every saved chat? This cannot be undone.')) return;
@@ -7413,36 +7303,6 @@ function updateNavActive(btn) {
             // Keep browser-native Ctrl/Cmd+A/C/V behavior. Shift+Space is also
             // ordinary input (useful for deliberate spaces in the prompt).
             if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v'].includes(String(e.key || '').toLowerCase())) return;
-            if (e.altKey && !e.ctrlKey && !e.metaKey) {
-                const ta = e.target;
-                const k = String(e.key || '').toLowerCase();
-                const word = (dir) => {
-                    const v = ta.value;
-                    let p = ta.selectionStart;
-                    if (dir < 0) {
-                        while (p > 0 && /\s/.test(v[p - 1])) p--;
-                        while (p > 0 && !/\s/.test(v[p - 1])) p--;
-                    } else {
-                        while (p < v.length && /\s/.test(v[p])) p++;
-                        while (p < v.length && !/\s/.test(v[p])) p++;
-                    }
-                    try { ta.setSelectionRange(p, p); } catch { /* ignore */ }
-                };
-                if (k === 'b') { e.preventDefault(); word(-1); return; }
-                if (k === 'f') { e.preventDefault(); word(1); return; }
-                if (k === 'd') {
-                    e.preventDefault();
-                    const s = ta.selectionStart;
-                    const v = ta.value;
-                    let p = s;
-                    while (p < v.length && /\s/.test(v[p])) p++;
-                    while (p < v.length && !/\s/.test(v[p])) p++;
-                    ta.value = v.slice(0, s) + v.slice(p);
-                    autoResize(ta);
-                    try { ta.setSelectionRange(s, s); } catch { /* ignore */ }
-                    return;
-                }
-            }
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
@@ -8725,7 +8585,6 @@ function updateNavActive(btn) {
             }, 2500);
         }
 
-        function toggleHelp() { openHelp(); }
         function openHelp() {
             lastFocusedBeforeModal = document.activeElement;
             helpOverlay.classList.add('open');
@@ -8776,11 +8635,11 @@ if ('serviceWorker' in navigator) {
 // ============================================================
 var paletteCommands = [
     { id: 'new-chat', icon: 'fa-plus', title: 'New Chat', desc: 'Start a fresh conversation', shortcut: 'Ctrl+N', action: function() { startNewConversation(); } },
-    { id: 'settings', icon: 'fa-cog', title: 'Settings', desc: 'Configure NeuraOS', shortcut: 'Ctrl+,', action: function() { switchViewFromDrawer('settings'); } },
-    { id: 'gallery', icon: 'fa-images', title: 'Gallery', desc: 'View generated images', shortcut: 'Ctrl+G', action: function() { switchViewFromDrawer('gallery'); } },
-    { id: 'build', icon: 'fa-hammer', title: 'Build', desc: 'Build mode', shortcut: 'Ctrl+B', action: function() { switchViewFromDrawer('build'); } },
+    { id: 'settings', icon: 'fa-cog', title: 'Settings', desc: 'Configure NeuraOS', shortcut: 'Ctrl+,', action: function() { switchView('settings'); } },
+    { id: 'gallery', icon: 'fa-images', title: 'Gallery', desc: 'View generated images', shortcut: 'Ctrl+G', action: function() { switchView('gallery'); } },
+    { id: 'build', icon: 'fa-hammer', title: 'Build', desc: 'Build mode', shortcut: 'Ctrl+B', action: function() { switchView('build'); } },
     { id: 'share', icon: 'fa-share', title: 'Share Chat', desc: 'Create a shareable link', shortcut: 'Ctrl+Shift+S', action: function() { shareConversation(); } },
-    { id: 'help', icon: 'fa-question', title: 'Help', desc: 'How to use NeuraOS', shortcut: 'Ctrl+/', action: function() { toggleHelp(); } },
+    { id: 'help', icon: 'fa-question', title: 'Help', desc: 'How to use NeuraOS', shortcut: 'Ctrl+/', action: function() { openHelp(); } },
     { id: 'theme', icon: 'fa-moon', title: 'Toggle Theme', desc: 'Switch dark/light mode', shortcut: 'Ctrl+Shift+T', action: function() { toggleThemeMenu(event); } },
     { id: 'export-pdf', icon: 'fa-file-pdf', title: 'Export as PDF', desc: 'Save chat as PDF', shortcut: '', action: function() { exportChatPdf(); } },
     { id: 'clear-history', icon: 'fa-trash', title: 'Clear History', desc: 'Delete all conversations', shortcut: '', action: function() { clearAllHistory(); } }
@@ -8888,58 +8747,3 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ============================================================
-// PHASE 1: Provider Health Dashboard
-// ============================================================
-var providerHealthState = {};
-
-function refreshProviderHealth() {
-    var providers = ['nara', 'openrouter', 'puter'];
-    
-    providers.forEach(function(provider) {
-        var statusEl = document.getElementById(provider + 'Status');
-        if (!statusEl) return;
-        
-        var dot = statusEl.querySelector('.health-dot');
-        var label = statusEl.querySelector('.health-label');
-        
-        // Set to checking state
-        dot.className = 'health-dot health-unknown';
-        label.textContent = 'Checking...';
-        
-        // Check provider status via server endpoint
-        fetch('/api/llm/providers')
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                var p = data.find(function(item) { return item.id === provider; });
-                if (p) {
-                    if (p.ready) {
-                        dot.className = 'health-dot health-ready';
-                        label.textContent = 'Ready';
-                    } else if (p.rateLimited) {
-                        dot.className = 'health-dot health-limited';
-                        label.textContent = 'Rate Limited';
-                    } else {
-                        dot.className = 'health-dot health-error';
-                        label.textContent = 'Offline';
-                    }
-                } else {
-                    dot.className = 'health-dot health-unknown';
-                    label.textContent = 'Unknown';
-                }
-            })
-            .catch(function() {
-                dot.className = 'health-dot health-error';
-                label.textContent = 'Error';
-            });
-    });
-}
-
-// Auto-refresh health on Settings view
-var originalJumpToSettingsSection = window.jumpToSettingsSection;
-window.jumpToSettingsSection = function(section) {
-    if (originalJumpToSettingsSection) originalJumpToSettingsSection(section);
-    if (section === 'health') {
-        refreshProviderHealth();
-    }
-};
