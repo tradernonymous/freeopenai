@@ -4,6 +4,15 @@ appId: com.neura.os
 # every flow that looked for chat_input failed on it. CI starts an engine on
 # the runner (10.0.2.2 from the emulator) with this throwaway account.
 - launchApp
+# # The sign-in screen must be up before the `when:` below is evaluated:
+# that check polls for ~6s on a fresh runner, and an emulator still doing
+# first-launch work skips the whole sign-in block in that window -- no
+# credentials were ever typed, and the final chat_input wait failed against
+# the login screen (run 37405186453). Wait for the screen itself first.
+- extendedWaitUntil:
+    visible:
+      id: "login_submit"
+    timeout: 45000
 # The CI emulator sometimes raises "System UI isn't responding" over the app.
 - runFlow:
     when:

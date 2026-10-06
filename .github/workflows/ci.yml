@@ -184,7 +184,11 @@ jobs:
       - name: Collect Maestro debug output
         if: always()
         run: |
-          cp -r "$HOME/.maestro/tests" .maestro/debug-output || echo "no maestro debug output found"
+          mkdir -p .maestro/debug-output
+          if ! cp -r "$HOME/.maestro/tests/." .maestro/debug-output/; then
+            echo "no maestro debug output found; ~/.maestro contains:"; ls -la "$HOME/.maestro" | head -8
+          fi
+          find .maestro/debug-output -type f | head -8
       - name: Upload Maestro reports
         if: always()
         uses: actions/upload-artifact@v4
